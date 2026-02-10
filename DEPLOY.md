@@ -15,7 +15,7 @@
 Скрипт `scripts/publish_to_server.sh` теперь работает **без sudo**:
 
 1. Проверяет, что папка `WEB_ROOT` существует и доступна на запись для `SSH_USER`
-2. Копирует `site/*` в `WEB_ROOT` через `rsync --delete`
+2. Копирует `site/*` в `WEB_ROOT` через `rsync --delete` (или через tar-over-ssh fallback, если на сервере нет rsync)
 3. Проверяет наличие `${WEB_ROOT}/index.html`
 
 Если деплой падает на правах доступа, проверьте на сервере:

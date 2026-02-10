@@ -50,7 +50,12 @@ if ! ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "test -w '${WEB_ROOT}'"; then
 fi
 
 echo "[2/3] Uploading site files (without sudo)..."
-rsync -avz --delete -e "ssh -p ${SERVER_PORT} -o StrictHostKeyChecking=accept-new" site/ "$SSH_TARGET:${WEB_ROOT}/"
+if ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "command -v rsync >/dev/null 2>&1"; then
+  rsync -avz --delete -e "ssh -p ${SERVER_PORT} -o StrictHostKeyChecking=accept-new" site/ "$SSH_TARGET:${WEB_ROOT}/"
+else
+  echo "Remote rsync not found, using tar-over-ssh fallback..."
+  tar -C site -czf - . | ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "tar -xzf - -C '${WEB_ROOT}'"
+fi
 
 echo "[3/3] Verifying index file on server..."
 ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "test -f '${WEB_ROOT}/index.html'"
