@@ -1,81 +1,69 @@
-# Публикация страницы на вашем сервере (без туннеля)
+# Публикация приложения на вашем сервере
 
-Туннель нужен только для временных демо. Для постоянного внешнего доступа лучше размещать статику на вашем сервере.
+Ниже — рабочий путь без туннелей: выкладка на ваш Linux-сервер и публикация через Nginx.
 
-## 1) Подготовить сервер
+## Что уже добавлено в репозиторий
 
-Нужны:
+- Готовый Nginx-конфиг: `deploy/nginx/ai-orchestrator.conf`
+- Скрипт автодеплоя по SSH: `scripts/publish_to_server.sh`
 
-- Linux-сервер с публичным IP
-- домен (опционально, но рекомендуется)
-- установленный Nginx
+## 1) Что нужно на сервере
 
-## 2) Загрузить страницу на сервер
+- Ubuntu/Debian сервер с публичным IP
+- SSH-доступ пользователем с `sudo`
+- Открытый порт 80 в firewall/security-group
 
-В репозитории страница лежит в `site/index.html`.
-
-Скопируйте её в веб-директорию сервера:
-
-```bash
-sudo mkdir -p /var/www/ai-orchestrator/site
-sudo cp site/index.html /var/www/ai-orchestrator/site/index.html
-```
-
-## 3) Настроить Nginx
-
-Пример конфига `/etc/nginx/sites-available/ai-orchestrator`:
-
-```nginx
-server {
-    listen 80;
-    server_name your-domain.com;
-
-    root /var/www/ai-orchestrator/site;
-    index index.html;
-
-    location / {
-        try_files $uri $uri/ =404;
-    }
-}
-```
-
-Активировать сайт:
+## 2) Первый деплой (из этого репозитория)
 
 ```bash
-sudo ln -s /etc/nginx/sites-available/ai-orchestrator /etc/nginx/sites-enabled/ai-orchestrator
-sudo nginx -t
-sudo systemctl reload nginx
+SERVER_HOST=<IP_СЕРВЕРА> \
+SERVER_USER=<SSH_ПОЛЬЗОВАТЕЛЬ> \
+SERVER_PORT=22 \
+SERVER_NAME=<ДОМЕН_ИЛИ__> \
+./scripts/publish_to_server.sh
 ```
 
-После этого страница будет доступна снаружи по адресу:
+Пример:
 
-- `http://your-domain.com`
+```bash
+SERVER_HOST=203.0.113.10 \
+SERVER_USER=ubuntu \
+SERVER_PORT=22 \
+SERVER_NAME=app.example.com \
+./scripts/publish_to_server.sh
+```
 
-## 4) Включить HTTPS (рекомендуется)
+Что делает скрипт:
 
-Если домен направлен на сервер, подключите TLS:
+1. Копирует `site/` на сервер в `/var/www/ai-orchestrator/site`
+2. Устанавливает/обновляет Nginx-конфиг
+3. Проверяет конфиг (`nginx -t`)
+4. Перезагружает Nginx
+
+После этого сайт доступен снаружи по адресу сервера (`http://IP`) или домена.
+
+## 3) HTTPS (обязательно для production)
+
+Когда домен уже смотрит на ваш сервер:
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d your-domain.com
+sudo certbot --nginx -d <ВАШ_ДОМЕН>
 ```
 
-## 5) Обновление страницы
+## 4) Обновление после изменений
 
-При изменениях достаточно заново скопировать `site/index.html` и перезагрузить Nginx:
+После правок в `site/index.html` просто снова запустите:
 
 ```bash
-sudo cp site/index.html /var/www/ai-orchestrator/site/index.html
-sudo systemctl reload nginx
+SERVER_HOST=<IP_СЕРВЕРА> SERVER_USER=<SSH_ПОЛЬЗОВАТЕЛЬ> ./scripts/publish_to_server.sh
 ```
 
----
-
-## Быстрая локальная проверка перед деплоем
+## 5) Локальная проверка перед выкладкой
 
 ```bash
 python -m http.server 4173 -d site
 ```
 
-Проверка в браузере: `http://localhost:4173`.
+Открыть: `http://localhost:4173`.

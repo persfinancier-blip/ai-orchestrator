@@ -1,0 +1,35 @@
+name: Deploy public site
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["work", "main"]
+    paths:
+      - "site/**"
+      - "deploy/nginx/**"
+      - "scripts/publish_to_server.sh"
+      - ".github/workflows/deploy-site.yml"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ secrets.SSH_HOST != '' && secrets.SSH_USER != '' && secrets.SSH_PRIVATE_KEY != '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p "${{ secrets.SSH_PORT || '22' }}" "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy site to server
+        env:
+          SERVER_HOST: ${{ secrets.SSH_HOST }}
+          SERVER_USER: ${{ secrets.SSH_USER }}
+          SERVER_PORT: ${{ secrets.SSH_PORT || '22' }}
+          SERVER_NAME: ${{ secrets.SERVER_NAME || '_' }}
+        run: ./scripts/publish_to_server.sh
