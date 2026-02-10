@@ -5,7 +5,7 @@
 ## Обязательные GitHub Secrets
 
 - `SSH_HOST` (пример: `155.212.162.184`)
-- `SSH_USER` (пример: `admin`)
+- `SSH_USER` (для вашего сервера: `sourcecraft`)
 - `SSH_PORT` (обычно `22`)
 - `SSH_PRIVATE_KEY`
 - `WEB_ROOT` (для вашего сервера: `/sourcecraft.dev/app/ai-orchestrator`)

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Usage:
-#   CONFIRM_DEPLOY=YES SERVER_HOST=1.2.3.4 SERVER_USER=admin WEB_ROOT=/sourcecraft.dev/app/ai-orchestrator ./scripts/publish_to_server.sh
+#   CONFIRM_DEPLOY=YES SERVER_HOST=1.2.3.4 SERVER_USER=sourcecraft WEB_ROOT=/sourcecraft.dev/app/ai-orchestrator ./scripts/publish_to_server.sh
 # Optional:
 #   SERVER_PORT=22
 
@@ -14,7 +14,7 @@ fi
 
 CONFIRM_DEPLOY="${CONFIRM_DEPLOY:-}"
 SERVER_HOST="${SERVER_HOST:-}"
-SERVER_USER="${SERVER_USER:-admin}"
+SERVER_USER="${SERVER_USER:-sourcecraft}"
 SERVER_PORT="${SERVER_PORT:-22}"
 WEB_ROOT="${WEB_ROOT:-/sourcecraft.dev/app/ai-orchestrator}"
 
