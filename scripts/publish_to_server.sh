@@ -2,45 +2,46 @@
 set -euo pipefail
 
 # Usage:
-#   SERVER_HOST=1.2.3.4 SERVER_USER=ubuntu ./scripts/publish_to_server.sh
+#   CONFIRM_DEPLOY=YES SERVER_HOST=155.212.162.184 SERVER_USER=sourcecraft SERVER_PORT=22 WEB_ROOT=/sourcecraft.dev/app/ai-orchestrator ./scripts/publish_to_server.sh
 # Optional:
-#   SERVER_PORT=22 SERVER_NAME=example.com
+#   DEPLOY_DIR=core/orchestrator/modules/advertising/interface/dist
 
+CONFIRM_DEPLOY="${CONFIRM_DEPLOY:-}"
 SERVER_HOST="${SERVER_HOST:-}"
-SERVER_USER="${SERVER_USER:-ubuntu}"
+SERVER_USER="${SERVER_USER:-sourcecraft}"
 SERVER_PORT="${SERVER_PORT:-22}"
-SERVER_NAME="${SERVER_NAME:-_}"
+WEB_ROOT="${WEB_ROOT:-/sourcecraft.dev/app/ai-orchestrator}"
+DEPLOY_DIR="${DEPLOY_DIR:-core/orchestrator/modules/advertising/interface/dist}"
+
+if [[ "$CONFIRM_DEPLOY" != "YES" ]]; then
+  echo "ERROR: set CONFIRM_DEPLOY=YES" >&2
+  exit 1
+fi
 
 if [[ -z "$SERVER_HOST" ]]; then
   echo "ERROR: SERVER_HOST is required" >&2
   exit 1
 fi
 
+if [[ ! -d "$DEPLOY_DIR" ]]; then
+  echo "ERROR: deploy directory '$DEPLOY_DIR' not found. Run build first." >&2
+  exit 1
+fi
+
 SSH_TARGET="${SERVER_USER}@${SERVER_HOST}"
 SSH_OPTS=( -p "$SERVER_PORT" -o StrictHostKeyChecking=accept-new )
 
-echo "[1/5] Creating target directories..."
-ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "sudo mkdir -p /var/www/ai-orchestrator/site /etc/nginx/sites-available /etc/nginx/sites-enabled"
+echo "Target server: ${SSH_TARGET}:${SERVER_PORT}"
+echo "Web root: ${WEB_ROOT}"
+echo "Deploy dir: ${DEPLOY_DIR}"
 
-echo "[2/5] Uploading static site..."
-rsync -avz --delete -e "ssh -p ${SERVER_PORT} -o StrictHostKeyChecking=accept-new" site/ "$SSH_TARGET:/tmp/ai-orchestrator-site/"
-ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "sudo rsync -av --delete /tmp/ai-orchestrator-site/ /var/www/ai-orchestrator/site/"
+echo "[1/3] Ensuring target directory exists and is writable..."
+ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "mkdir -p '${WEB_ROOT}' && test -w '${WEB_ROOT}'"
 
-echo "[3/5] Preparing nginx config..."
-TMP_CONF="$(mktemp)"
-sed "s/server_name _;/server_name ${SERVER_NAME};/" deploy/nginx/ai-orchestrator.conf > "$TMP_CONF"
-scp -P "$SERVER_PORT" -o StrictHostKeyChecking=accept-new "$TMP_CONF" "$SSH_TARGET:/tmp/ai-orchestrator.conf"
-rm -f "$TMP_CONF"
+echo "[2/3] Uploading build artifacts via tar-over-ssh..."
+tar -C "$DEPLOY_DIR" -czf - . | ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "tar -xzf - -C '${WEB_ROOT}'"
 
-ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "sudo mv /tmp/ai-orchestrator.conf /etc/nginx/sites-available/ai-orchestrator && sudo ln -sfn /etc/nginx/sites-available/ai-orchestrator /etc/nginx/sites-enabled/ai-orchestrator"
+echo "[3/3] Verifying deployed entrypoint..."
+ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "test -f '${WEB_ROOT}/index.html'"
 
-echo "[4/5] Installing nginx if missing..."
-ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "if ! command -v nginx >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y nginx rsync; fi"
-
-echo "[5/5] Validating and reloading nginx..."
-ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "sudo nginx -t && sudo systemctl reload nginx"
-
-echo "Done. Open: http://${SERVER_HOST}/"
-if [[ "$SERVER_NAME" != "_" ]]; then
-  echo "If DNS is configured: http://${SERVER_NAME}/"
-fi
+echo "Done: http://${SERVER_HOST}/"

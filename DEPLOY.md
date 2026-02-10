@@ -1,69 +1,44 @@
-# Публикация приложения на вашем сервере
+# Deploy to production server
 
-Ниже — рабочий путь без туннелей: выкладка на ваш Linux-сервер и публикация через Nginx.
+Target server setup:
 
-## Что уже добавлено в репозиторий
+- `SSH_HOST=155.212.162.184`
+- `SSH_USER=sourcecraft`
+- `SSH_PORT=22`
+- `WEB_ROOT=/sourcecraft.dev/app/ai-orchestrator`
+- Apache serves this folder (`/var/www/html` is symlinked to it)
 
-- Готовый Nginx-конфиг: `deploy/nginx/ai-orchestrator.conf`
-- Скрипт автодеплоя по SSH: `scripts/publish_to_server.sh`
+## Required GitHub Secrets
 
-## 1) Что нужно на сервере
+- `SSH_HOST`
+- `SSH_USER`
+- `SSH_PORT`
+- `SSH_PRIVATE_KEY`
+- `WEB_ROOT`
 
-- Ubuntu/Debian сервер с публичным IP
-- SSH-доступ пользователем с `sudo`
-- Открытый порт 80 в firewall/security-group
+## Deployment model
 
-## 2) Первый деплой (из этого репозитория)
+- Trigger only: `workflow_dispatch`
+- Branch allowed for deploy: `main` only (workflow explicitly fails if launched from another branch)
+- Build happens in Actions (`./scripts/build_site.sh`)
+- Only build artifacts are uploaded:
+  - `core/orchestrator/modules/advertising/interface/dist`
+- Upload mechanism: `tar-over-ssh`
+- `sudo` is not used
 
-```bash
-SERVER_HOST=<IP_СЕРВЕРА> \
-SERVER_USER=<SSH_ПОЛЬЗОВАТЕЛЬ> \
-SERVER_PORT=22 \
-SERVER_NAME=<ДОМЕН_ИЛИ__> \
-./scripts/publish_to_server.sh
-```
+## How to run deploy
 
-Пример:
+1. Push/merge changes to `main`.
+2. Open GitHub → `Actions` → `Deploy site`.
+3. Click `Run workflow` on branch `main`.
+4. Wait for green status.
 
-```bash
-SERVER_HOST=203.0.113.10 \
-SERVER_USER=ubuntu \
-SERVER_PORT=22 \
-SERVER_NAME=app.example.com \
-./scripts/publish_to_server.sh
-```
+## Post-deploy verification
 
-Что делает скрипт:
-
-1. Копирует `site/` на сервер в `/var/www/ai-orchestrator/site`
-2. Устанавливает/обновляет Nginx-конфиг
-3. Проверяет конфиг (`nginx -t`)
-4. Перезагружает Nginx
-
-После этого сайт доступен снаружи по адресу сервера (`http://IP`) или домена.
-
-## 3) HTTPS (обязательно для production)
-
-Когда домен уже смотрит на ваш сервер:
+Workflow checks:
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d <ВАШ_ДОМЕН>
+curl http://$SSH_HOST/
 ```
 
-## 4) Обновление после изменений
-
-После правок в `site/index.html` просто снова запустите:
-
-```bash
-SERVER_HOST=<IP_СЕРВЕРА> SERVER_USER=<SSH_ПОЛЬЗОВАТЕЛЬ> ./scripts/publish_to_server.sh
-```
-
-## 5) Локальная проверка перед выкладкой
-
-```bash
-python -m http.server 4173 -d site
-```
-
-Открыть: `http://localhost:4173`.
+Expected response code: `HTTP 200`.

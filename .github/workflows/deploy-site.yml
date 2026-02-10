@@ -1,35 +1,76 @@
-name: Deploy public site
+name: Deploy site
 
 on:
   workflow_dispatch:
-  push:
-    branches: ["work", "main"]
-    paths:
-      - "site/**"
-      - "deploy/nginx/**"
-      - "scripts/publish_to_server.sh"
-      - ".github/workflows/deploy-site.yml"
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    if: ${{ secrets.SSH_HOST != '' && secrets.SSH_USER != '' && secrets.SSH_PRIVATE_KEY != '' }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Ensure main branch
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::Deployment is allowed only from main branch."
+            exit 1
+          fi
+
+      - name: Check required secrets
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          WEB_ROOT: ${{ secrets.WEB_ROOT }}
+        run: |
+          missing=0
+          for key in SSH_HOST SSH_USER SSH_PRIVATE_KEY WEB_ROOT; do
+            if [ -z "${!key}" ]; then
+              echo "::error::Missing required secret: $key"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build production site
+        run: ./scripts/build_site.sh
+
       - name: Setup SSH key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -p "${{ secrets.SSH_PORT || '22' }}" "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "${SSH_PORT:-22}" "$SSH_HOST" >> ~/.ssh/known_hosts
 
-      - name: Deploy site to server
+      - name: Deploy build to server
         env:
+          CONFIRM_DEPLOY: YES
           SERVER_HOST: ${{ secrets.SSH_HOST }}
           SERVER_USER: ${{ secrets.SSH_USER }}
-          SERVER_PORT: ${{ secrets.SSH_PORT || '22' }}
-          SERVER_NAME: ${{ secrets.SERVER_NAME || '_' }}
+          SERVER_PORT: ${{ secrets.SSH_PORT }}
+          WEB_ROOT: ${{ secrets.WEB_ROOT }}
+          DEPLOY_DIR: core/orchestrator/modules/advertising/interface/dist
         run: ./scripts/publish_to_server.sh
+
+      - name: Check public URL
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: |
+          code=$(curl -sS -o /tmp/site.html -w '%{http_code}' "http://${SSH_HOST}/")
+          if [ "$code" != "200" ]; then
+            echo "::error::Expected HTTP 200, got $code"
+            exit 1
+          fi
