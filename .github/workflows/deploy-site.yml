@@ -23,9 +23,10 @@ jobs:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          WEB_ROOT: ${{ secrets.WEB_ROOT }}
         run: |
           missing=0
-          for key in SSH_HOST SSH_USER SSH_PRIVATE_KEY; do
+          for key in SSH_HOST SSH_USER SSH_PRIVATE_KEY WEB_ROOT; do
             if [ -z "${!key}" ]; then
               echo "::error::Missing required GitHub secret: $key"
               missing=1
@@ -46,7 +47,7 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -p "${SSH_PORT:-22}" "$SSH_HOST" >> ~/.ssh/known_hosts
 
-      - name: Deploy site to server (Apache /var/www/html)
+      - name: Deploy site to server (no sudo)
         env:
           CONFIRM_DEPLOY: YES
           SERVER_HOST: ${{ secrets.SSH_HOST }}
@@ -58,14 +59,9 @@ jobs:
       - name: Verify site from internet (HTTP 200)
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
-          SERVER_NAME: ${{ secrets.SERVER_NAME }}
         run: |
           set -e
-          TARGET_HOST="$SSH_HOST"
-          if [ -n "$SERVER_NAME" ] && [ "$SERVER_NAME" != "prod" ] && [ "$SERVER_NAME" != "_" ] && [[ "$SERVER_NAME" == *.* ]]; then
-            TARGET_HOST="$SERVER_NAME"
-          fi
-          TARGET="http://${TARGET_HOST}/"
+          TARGET="http://${SSH_HOST}/"
           echo "Checking $TARGET"
           for i in 1 2 3 4 5; do
             code=$(curl -sS -o /tmp/site.html -w '%{http_code}' "$TARGET" || true)
@@ -82,11 +78,8 @@ jobs:
       - name: Deployment summary
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
-          SERVER_NAME: ${{ secrets.SERVER_NAME }}
+          WEB_ROOT: ${{ secrets.WEB_ROOT }}
         run: |
-          TARGET_HOST="$SSH_HOST"
-          if [ -n "$SERVER_NAME" ] && [ "$SERVER_NAME" != "prod" ] && [ "$SERVER_NAME" != "_" ] && [[ "$SERVER_NAME" == *.* ]]; then
-            TARGET_HOST="$SERVER_NAME"
-          fi
           echo "Deployed successfully."
-          echo "Open: http://${TARGET_HOST}/"
+          echo "Web root: $WEB_ROOT"
+          echo "Open: http://${SSH_HOST}/"

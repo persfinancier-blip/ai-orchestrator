@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # Usage:
-#   CONFIRM_DEPLOY=YES SERVER_HOST=1.2.3.4 SERVER_USER=admin ./scripts/publish_to_server.sh
+#   CONFIRM_DEPLOY=YES SERVER_HOST=1.2.3.4 SERVER_USER=admin WEB_ROOT=/sourcecraft.dev/app/ai-orchestrator ./scripts/publish_to_server.sh
 # Optional:
-#   SERVER_PORT=22 WEB_ROOT=/var/www/html
+#   SERVER_PORT=22
 
 DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-}"
 if [[ -n "$DEPLOY_ENV_FILE" && -f "$DEPLOY_ENV_FILE" ]]; then
@@ -16,7 +16,7 @@ CONFIRM_DEPLOY="${CONFIRM_DEPLOY:-}"
 SERVER_HOST="${SERVER_HOST:-}"
 SERVER_USER="${SERVER_USER:-admin}"
 SERVER_PORT="${SERVER_PORT:-22}"
-WEB_ROOT="${WEB_ROOT:-/var/www/html}"
+WEB_ROOT="${WEB_ROOT:-/sourcecraft.dev/app/ai-orchestrator}"
 
 if [[ "$CONFIRM_DEPLOY" != "YES" ]]; then
   echo "ERROR: deployment is blocked by default." >&2
@@ -40,20 +40,13 @@ SSH_OPTS=( -p "$SERVER_PORT" -o StrictHostKeyChecking=accept-new )
 echo "Target server: ${SSH_TARGET}:${SERVER_PORT}"
 echo "Web root: ${WEB_ROOT}"
 
-echo "[1/5] Ensuring web root exists..."
-ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "sudo mkdir -p '${WEB_ROOT}'"
+echo "[1/3] Ensuring web root exists and writable for current user..."
+ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "mkdir -p '${WEB_ROOT}' && test -w '${WEB_ROOT}'"
 
-echo "[2/5] Uploading site files..."
-rsync -avz --delete -e "ssh -p ${SERVER_PORT} -o StrictHostKeyChecking=accept-new" site/ "$SSH_TARGET:/tmp/ai-orchestrator-site/"
-ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "sudo rsync -av --delete /tmp/ai-orchestrator-site/ '${WEB_ROOT}/'"
+echo "[2/3] Uploading site files (without sudo)..."
+rsync -avz --delete -e "ssh -p ${SERVER_PORT} -o StrictHostKeyChecking=accept-new" site/ "$SSH_TARGET:${WEB_ROOT}/"
 
-echo "[3/5] Ensuring Apache is installed and enabled..."
-ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "if ! command -v apache2 >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y apache2 rsync; fi"
-
-echo "[4/5] Validating Apache config..."
-ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "sudo apache2ctl configtest"
-
-echo "[5/5] Reloading Apache..."
-ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "sudo systemctl enable apache2 >/dev/null 2>&1 || true; sudo systemctl reload apache2 || sudo systemctl restart apache2"
+echo "[3/3] Verifying index file on server..."
+ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "test -f '${WEB_ROOT}/index.html'"
 
 echo "Done. Open: http://${SERVER_HOST}/"

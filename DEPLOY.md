@@ -1,29 +1,22 @@
-# Публикация страницы на вашем сервере (Apache)
+# Публикация страницы на вашем сервере (Apache, без sudo)
 
-Цель: после деплоя страница из `site/index.html` должна открываться по `http://<SSH_HOST>` на 80 порту.
+Цель: после деплоя страница из `site/index.html` открывается по `http://<SSH_HOST>` на 80 порту.
 
-## Какие секреты нужны в GitHub
+## Обязательные GitHub Secrets
 
-Обязательные:
+- `SSH_HOST` (пример: `155.212.162.184`)
+- `SSH_USER` (пример: `admin`)
+- `SSH_PORT` (обычно `22`)
+- `SSH_PRIVATE_KEY`
+- `WEB_ROOT` (для вашего сервера: `/sourcecraft.dev/app/ai-orchestrator`)
 
-- `SSH_HOST` — IP сервера (пример: `155.212.162.184`)
-- `SSH_USER` — SSH-пользователь (пример: `admin`)
-- `SSH_PRIVATE_KEY` — приватный ключ для входа по SSH
+## Что делает деплой
 
-Опциональные:
+Скрипт `scripts/publish_to_server.sh` теперь работает **без sudo**:
 
-- `SSH_PORT` — SSH порт (по умолчанию `22`)
-- `WEB_ROOT` — куда копировать сайт (по умолчанию `/var/www/html`)
-- `SERVER_NAME` — домен для внешней проверки (если нет домена, не заполняйте)
-
-## Что делает деплой теперь
-
-Скрипт `scripts/publish_to_server.sh`:
-
-1. Копирует `site/*` в `/var/www/html/` (или в `WEB_ROOT`)
-2. Убеждается, что `apache2` установлен
-3. Проверяет конфиг Apache (`apache2ctl configtest`)
-4. Перезагружает Apache (`reload`/`restart`)
+1. Проверяет, что папка `WEB_ROOT` существует и доступна на запись для `SSH_USER`
+2. Копирует `site/*` в `WEB_ROOT` через `rsync --delete`
+3. Проверяет наличие `${WEB_ROOT}/index.html`
 
 ## Запуск
 
@@ -31,15 +24,15 @@
 2. Выберите `Deploy public site`
 3. Нажмите `Run workflow`
 
-## Автоматическая проверка после деплоя
+## Автопроверка после деплоя
 
-Workflow делает `curl` по реальному URL:
+Workflow проверяет только реальный URL по IP:
 
-- если `SERVER_NAME` не задан (или мусор вроде `prod`) → проверяет `http://$SSH_HOST/`
-- если `SERVER_NAME` задан корректным доменом/IP → проверяет `http://$SERVER_NAME/`
+- `http://$SSH_HOST/`
 
-Если код ответа не `HTTP 200` — workflow падает с ошибкой.
+Если не `HTTP 200`, workflow падает.
 
-## Безопасность
+## Примечание про Apache
 
-Секреты храните только в GitHub Secrets, не в репозитории.
+Раз у вас `/var/www/html` уже симлинк на `/sourcecraft.dev/app/ai-orchestrator`,
+достаточно копировать в `WEB_ROOT=/sourcecraft.dev/app/ai-orchestrator`.
