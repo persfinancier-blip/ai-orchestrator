@@ -41,7 +41,13 @@ echo "Target server: ${SSH_TARGET}:${SERVER_PORT}"
 echo "Web root: ${WEB_ROOT}"
 
 echo "[1/3] Ensuring web root exists and writable for current user..."
-ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "mkdir -p '${WEB_ROOT}' && test -w '${WEB_ROOT}'"
+ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "mkdir -p '${WEB_ROOT}'"
+if ! ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "test -w '${WEB_ROOT}'"; then
+  echo "ERROR: '${WEB_ROOT}' is not writable by ${SERVER_USER} (no sudo mode)." >&2
+  echo "Check ownership/permissions on server:" >&2
+  echo "  ls -ld '${WEB_ROOT}' && id" >&2
+  exit 1
+fi
 
 echo "[2/3] Uploading site files (without sudo)..."
 rsync -avz --delete -e "ssh -p ${SERVER_PORT} -o StrictHostKeyChecking=accept-new" site/ "$SSH_TARGET:${WEB_ROOT}/"

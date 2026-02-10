@@ -18,6 +18,15 @@
 2. Копирует `site/*` в `WEB_ROOT` через `rsync --delete`
 3. Проверяет наличие `${WEB_ROOT}/index.html`
 
+Если деплой падает на правах доступа, проверьте на сервере:
+
+```bash
+ls -ld /sourcecraft.dev/app /sourcecraft.dev/app/ai-orchestrator
+id
+```
+
+Пользователь `SSH_USER` должен иметь запись в `WEB_ROOT`.
+
 ## Запуск
 
 1. GitHub → `Actions`
