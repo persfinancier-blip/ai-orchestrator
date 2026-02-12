@@ -27,7 +27,6 @@
 <main class="desk-root">
   <header>
     <h1>Пространство</h1>
-    <div class="sub">3D-граф сущностей по выбранным метрикам</div>
   </header>
 
   <section class="layout">
@@ -43,7 +42,6 @@
   .desk-root{padding:18px;}
   header{display:flex;flex-direction:column;gap:3px;margin-bottom:12px;}
   h1{margin:0;font-size:24px;font-weight:650;letter-spacing:.01em;}
-  .sub{color:#64748b;font-size:12px;}
   .layout{display:flex;flex-direction:column;gap:14px;}
   :global(.panel){background:#fff;border:1px solid #e8edf5;border-radius:18px;padding:12px;box-shadow:0 10px 30px rgba(15,23,42,.05);transition:all .2s ease;}
   .toast{position:fixed;right:20px;bottom:18px;background:#0f172a;color:#fff;padding:10px 14px;border-radius:12px;box-shadow:0 10px 25px rgba(0,0,0,.15);animation:fade .25s ease;}

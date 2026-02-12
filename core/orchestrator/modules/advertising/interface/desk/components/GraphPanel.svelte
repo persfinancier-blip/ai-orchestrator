@@ -2,183 +2,216 @@
   import { onDestroy, onMount } from 'svelte';
   import * as THREE from 'three';
   import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-  import type { BuyerPoint, ColorField, EntityMode, MeasureField, Mode3D, PeriodMode, SimilarityEntity } from '../data/mockGraph';
-  import { DATA_FIELDS, MEASURE_FIELDS, formatFieldTitle, generateBuyerCloud, getMeasure } from '../data/mockGraph';
+  import type { DatasetId, FieldDef } from '../data/showcase';
+  import { DATASETS, FIELDS, fieldLabel } from '../data/showcase';
+  import type { BuyerPoint, MeasureField, SimilarityEntity } from '../data/mockGraph';
+  import { generateBuyerCloud, generateSimilarityData, getMeasure } from '../data/mockGraph';
 
   export let entities: SimilarityEntity[] = [];
 
-  type Preset = { name: string; x: MeasureField; y: MeasureField; z: MeasureField; colorBy: ColorField; sizeBy: MeasureField };
+  type PeriodMode = '7 дней' | '14 дней' | '30 дней' | 'Даты';
+  type FilterType = 'date' | 'text' | 'number';
+  type DateOperator = 'с' | 'по';
+  type TextOperator = 'равно' | 'не равно' | 'содержит' | 'не содержит' | 'в списке';
+  type NumberOperator = '>' | '<' | '≥' | '≤' | 'между';
 
-  const presets: Preset[] = [
-    { name: 'Попадание по входам', x: 'revenue', y: 'spend', z: 'search_share', colorBy: 'entry_gap', sizeBy: 'orders' },
-    { name: 'Эффективность', x: 'revenue', y: 'spend', z: 'roi', colorBy: 'drr', sizeBy: 'orders' },
-    { name: 'Конверсия', x: 'clicks', y: 'orders', z: 'cr2', colorBy: 'roi', sizeBy: 'revenue' },
-  ];
+  type PanelFilter = {
+    id: string;
+    filterType: FilterType;
+    fieldCode: string;
+    operator: DateOperator | TextOperator | NumberOperator;
+    valueA: string;
+    valueB: string;
+  };
 
-  let selectedPreset = presets[1].name;
-  let entityMode: EntityMode = 'Артикулы (SKU)';
-  let showBuyers = true;
-  let showAds = true;
+  type PanelSettings = {
+    id: string;
+    name: string;
+    entityField: string;
+    layers: DatasetId[];
+    axisX: MeasureField;
+    axisY: MeasureField;
+    axisZ: MeasureField;
+    period: PeriodMode;
+    fromDate: string;
+    toDate: string;
+    filters: PanelFilter[];
+    demoMode: boolean;
+  };
 
-  let axisX: MeasureField = presets[1].x;
-  let axisY: MeasureField = presets[1].y;
-  let axisZ: MeasureField = presets[1].z;
-  let colorBy: ColorField = presets[1].colorBy;
-  let sizeBy: MeasureField = presets[1].sizeBy;
+  const STORAGE_KEY = 'desk-space-settings-v1';
+
+  let settingsList: PanelSettings[] = [];
+  let selectedSettingId = '';
+
+  let entityFieldCode = 'sku';
+  let activeLayers: DatasetId[] = ['sales_fact', 'ads'];
+
+  let axisX: MeasureField = 'revenue';
+  let axisY: MeasureField = 'spend';
+  let axisZ: MeasureField = 'roi';
 
   let period: PeriodMode = '30 дней';
   let fromDate = '2026-02-01';
   let toDate = '2026-02-28';
 
-  let filterCategory = 'Все';
-  let filterSubject = 'Все';
-  let filterBrand = 'Все';
-  let filterRkType = 'Все';
-  let minRevenue = 0;
-  let maxDrr = 100;
-
+  let filters: PanelFilter[] = [];
   let demoMode = true;
-  let mode: Mode3D = '3D';
   let search = '';
 
   let container3d: HTMLDivElement;
-  let canvas2d: HTMLCanvasElement;
-  let panel: HTMLDivElement;
   let searchInput: HTMLInputElement;
-  let ctx: CanvasRenderingContext2D;
-
-  let width = 960;
-  let height = 560;
-  let scale2d = 1;
-  let panX = width / 2;
-  let panY = height / 2;
-  let dragging = false;
-  let dragStart = { x: 0, y: 0 };
 
   const buyersFull = generateBuyerCloud(220);
   const buyersDemo = generateBuyerCloud(40);
 
   let sourceEntities: SimilarityEntity[] = [];
-  let transformed: SimilarityEntity[] = [];
-  let filtered: SimilarityEntity[] = [];
+  let filteredEntities: SimilarityEntity[] = [];
   let projected: Array<SimilarityEntity & { px: number; py: number; pz: number }> = [];
-  let categoryOptions: string[] = ['Все'];
-  let subjectOptions: string[] = ['Все'];
-  let brandOptions: string[] = ['Все'];
-  let rkTypeOptions: string[] = ['Все'];
+
+  let tooltip = { visible: false, x: 0, y: 0, lines: [] as string[] };
+
+  const allEntityFields = filterFields('entity', 'dimension', 'string');
+
+  let layerFieldCodes = new Set<string>();
+  let entityFields: FieldDef[] = [];
+  let axisFields: FieldDef[] = [];
+  let textFilterFields: FieldDef[] = [];
+  let numberFilterFields: FieldDef[] = [];
+  let dateFilterFields: FieldDef[] = [];
+
+  $: layerFieldCodes = new Set(FIELDS.filter((field) => field.datasetIds.some((datasetId) => activeLayers.includes(datasetId))).map((field) => field.code));
+  $: entityFields = allEntityFields.filter((field) => layerFieldCodes.has(field.code));
+  $: axisFields = filterFields('axis', 'measure', 'number').filter((field) => layerFieldCodes.has(field.code));
+  $: textFilterFields = filterFields('filter', 'dimension', 'string').filter((field) => layerFieldCodes.has(field.code));
+  $: numberFilterFields = filterFields('filter', 'measure', 'number').filter((field) => layerFieldCodes.has(field.code));
+  $: dateFilterFields = filterFields('filter', 'time', 'date').filter((field) => layerFieldCodes.has(field.code));
+
+  $: if (!axisFields.find((f) => f.code === axisX) && axisFields[0]) axisX = axisFields[0].code as MeasureField;
+  $: if (!axisFields.find((f) => f.code === axisY) && axisFields[1]) axisY = axisFields[1].code as MeasureField;
+  $: if (!axisFields.find((f) => f.code === axisZ) && axisFields[2]) axisZ = axisFields[2].code as MeasureField;
+  $: if (!entityFields.find((field) => field.code === entityFieldCode)) entityFieldCode = entityFields[0]?.code ?? 'sku';
 
   $: sourceEntities = demoMode
     ? [...entities.filter((entity) => entity.type === 'item').slice(0, 10), ...entities.filter((entity) => entity.type === 'campaign').slice(0, 10)]
     : entities;
 
-  $: categoryOptions = uniqueValues('category');
-  $: subjectOptions = uniqueValues('subject');
-  $: brandOptions = uniqueValues('brand');
-  $: rkTypeOptions = uniqueValues('rkType');
+  $: filteredEntities = applyFilters(sourceEntities);
+  $: projected = projectEntities(filteredEntities);
+  $: rebuild3d();
 
-  $: transformed = transformEntities(sourceEntities);
-  $: filtered = applyFilters(transformed);
-  $: projected = projectEntities(filtered);
-  $: if (mode === '2D') draw2d();
-  $: if (mode === '3D') rebuild3d();
-
-  function uniqueValues(field: 'category' | 'subject' | 'brand' | 'rkType'): string[] {
-    if (!sourceEntities || sourceEntities.length === 0) return ['Все'];
-    return ['Все', ...Array.from(new Set(sourceEntities.map((entity) => String(entity[field]))))];
+  function filterFields(role: 'entity' | 'axis' | 'filter', fieldType: FieldDef['fieldType'], valueType: FieldDef['valueType']): FieldDef[] {
+    return FIELDS.filter(
+      (field) => field.allowedRoles.includes(role) && field.fieldType === fieldType && field.valueType === valueType
+    );
   }
 
-  function aggregateBy(field: 'subject' | 'category' | 'brand', label: string, list: SimilarityEntity[]): SimilarityEntity[] {
-    const campaigns = list.filter((e) => e.type === 'campaign');
-    const items = list.filter((e) => e.type === 'item');
-    const groups = new Map<string, SimilarityEntity[]>();
-    items.forEach((item) => {
-      const key = item[field];
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key)?.push(item);
-    });
-
-    const aggregated = Array.from(groups.entries()).map(([key, group], idx) => {
-      const avg = (measure: MeasureField): number => group.reduce((sum, entity) => sum + entity.measures[measure], 0) / group.length;
-      return {
-        ...group[0],
-        id: `${label}-${idx + 1}`,
-        name: `${key} (${group.length})`,
-        sku: '',
-        campaign_id: '',
-        subject: field === 'subject' ? key : group[0].subject,
-        category: field === 'category' ? key : group[0].category,
-        brand: field === 'brand' ? key : group[0].brand,
-        measures: {
-          revenue: Math.round(avg('revenue')),
-          orders: Math.round(avg('orders')),
-          spend: Math.round(avg('spend')),
-          drr: Number(avg('drr').toFixed(2)),
-          roi: Number(avg('roi').toFixed(2)),
-          cr0: Number(avg('cr0').toFixed(2)),
-          cr1: Number(avg('cr1').toFixed(2)),
-          cr2: Number(avg('cr2').toFixed(2)),
-          clicks: Math.round(avg('clicks')),
-          search_share: Number(avg('search_share').toFixed(2)),
-          shelf_share: Number(avg('shelf_share').toFixed(2)),
-          stock_days: Math.round(avg('stock_days')),
-          entry_gap: Number(avg('entry_gap').toFixed(2)),
-        },
-      };
-    });
-
-    return [...aggregated, ...campaigns];
-  }
-
-  function transformEntities(list: SimilarityEntity[]): SimilarityEntity[] {
-    if (entityMode === 'Рекламные кампании (РК)') return list.filter((e) => e.type === 'campaign');
-    if (entityMode === 'Предметы') return aggregateBy('subject', 'SUB', list);
-    if (entityMode === 'Категории') return aggregateBy('category', 'CAT', list);
-    if (entityMode === 'Бренды') return aggregateBy('brand', 'BR', list);
-    return list;
+  function entityValue(entity: SimilarityEntity, code: string): string {
+    if (code === 'sku') return entity.sku || entity.id;
+    if (code === 'subject') return entity.subject;
+    if (code === 'category') return entity.category;
+    if (code === 'brand') return entity.brand;
+    if (code === 'campaign_id') return entity.campaign_id || entity.id;
+    if (code === 'entry_point') return entity.entry_point;
+    if (code === 'keyword_cluster') return entity.keyword_cluster;
+    if (code === 'search_query') return entity.search_query;
+    return entity.name;
   }
 
   function inPeriod(date: string): boolean {
-    if (period === 'Выбрать даты') return date >= fromDate && date <= toDate;
+    if (period === 'Даты') return date >= fromDate && date <= toDate;
     const day = Number(date.slice(-2));
     if (period === '7 дней') return day >= 22;
     if (period === '14 дней') return day >= 15;
     return true;
   }
 
+  function allowsEntityByLayer(entity: SimilarityEntity): boolean {
+    const wantsSales = activeLayers.includes('sales_fact');
+    const wantsAds = activeLayers.includes('ads');
+    if (wantsSales && wantsAds) return true;
+    if (wantsSales && entity.type === 'item') return true;
+    if (wantsAds && entity.type === 'campaign') return true;
+    if (wantsSales && wantsAds === false && entity.type === 'campaign' && entityFieldCode !== 'campaign_id') return false;
+    return false;
+  }
+
+  function measureValue(entity: SimilarityEntity, code: string): number {
+    return getMeasure(entity, code as MeasureField);
+  }
+
+  function checkFilter(entity: SimilarityEntity, filter: PanelFilter): boolean {
+    if (filter.filterType === 'date') {
+      const value = entity.date;
+      const start = filter.valueA;
+      if (!start) return true;
+      if (filter.operator === 'с') return value >= start;
+      return value <= start;
+    }
+
+    if (filter.filterType === 'text') {
+      const raw = entityValue(entity, filter.fieldCode).toLowerCase();
+      const valueA = filter.valueA.toLowerCase();
+      const list = filter.valueA
+        .split(',')
+        .map((item) => item.trim().toLowerCase())
+        .filter(Boolean);
+
+      if (filter.operator === 'равно') return raw === valueA;
+      if (filter.operator === 'не равно') return raw !== valueA;
+      if (filter.operator === 'содержит') return raw.includes(valueA);
+      if (filter.operator === 'не содержит') return !raw.includes(valueA);
+      return list.includes(raw);
+    }
+
+    const value = measureValue(entity, filter.fieldCode);
+    const numberA = Number(filter.valueA);
+    const numberB = Number(filter.valueB);
+    if (Number.isNaN(numberA)) return true;
+
+    if (filter.operator === '>') return value > numberA;
+    if (filter.operator === '<') return value < numberA;
+    if (filter.operator === '≥') return value >= numberA;
+    if (filter.operator === '≤') return value <= numberA;
+    if (Number.isNaN(numberB)) return true;
+    return value >= Math.min(numberA, numberB) && value <= Math.max(numberA, numberB);
+  }
+
   function applyFilters(list: SimilarityEntity[]): SimilarityEntity[] {
     const query = search.trim().toLowerCase();
     return list.filter((entity) => {
+      if (!allowsEntityByLayer(entity)) return false;
       if (!inPeriod(entity.date)) return false;
-      if (filterCategory !== 'Все' && entity.category !== filterCategory) return false;
-      if (filterSubject !== 'Все' && entity.subject !== filterSubject) return false;
-      if (filterBrand !== 'Все' && entity.brand !== filterBrand) return false;
-      if (filterRkType !== 'Все' && entity.rkType !== filterRkType) return false;
-      if (entity.measures.revenue < minRevenue) return false;
-      if (entity.measures.drr > maxDrr) return false;
+      if (!checkEntityMode(entity)) return false;
       if (query && !entity.name.toLowerCase().includes(query) && !entity.id.toLowerCase().includes(query)) return false;
-      if (!showAds && entity.type !== 'campaign') return false;
-      if (!showAds && entity.type === 'campaign') return false;
+      if (filters.some((filter) => !checkFilter(entity, filter))) return false;
       return true;
     });
   }
 
+  function checkEntityMode(entity: SimilarityEntity): boolean {
+    if (entityFieldCode === 'campaign_id') return entity.type === 'campaign';
+    return true;
+  }
+
   function projectEntities(list: SimilarityEntity[]): Array<SimilarityEntity & { px: number; py: number; pz: number }> {
-    const xVals = list.map((e) => getMeasure(e, axisX));
-    const yVals = list.map((e) => getMeasure(e, axisY));
-    const zVals = list.map((e) => getMeasure(e, axisZ));
+    if (list.length === 0) return [];
+    const xVals = list.map((e) => measureValue(e, axisX));
+    const yVals = list.map((e) => measureValue(e, axisY));
+    const zVals = list.map((e) => measureValue(e, axisZ));
 
-    const minX = Math.min(...xVals, 0);
-    const maxX = Math.max(...xVals, 1);
-    const minY = Math.min(...yVals, 0);
-    const maxY = Math.max(...yVals, 1);
-    const minZ = Math.min(...zVals, 0);
-    const maxZ = Math.max(...zVals, 1);
+    const minX = Math.min(...xVals);
+    const maxX = Math.max(...xVals);
+    const minY = Math.min(...yVals);
+    const maxY = Math.max(...yVals);
+    const minZ = Math.min(...zVals);
+    const maxZ = Math.max(...zVals);
 
-    return list.map((e) => ({
-      ...e,
-      px: normalize(getMeasure(e, axisX), minX, maxX),
-      py: normalize(getMeasure(e, axisY), minY, maxY),
-      pz: normalize(getMeasure(e, axisZ), minZ, maxZ),
+    return list.map((entity) => ({
+      ...entity,
+      px: normalize(measureValue(entity, axisX), minX, maxX),
+      py: normalize(measureValue(entity, axisY), minY, maxY),
+      pz: normalize(measureValue(entity, axisZ), minZ, maxZ),
     }));
   }
 
@@ -186,95 +219,20 @@
     return ((value - min) / Math.max(max - min, 0.0001) - 0.5) * 180;
   }
 
-  function applyPreset(name: string): void {
-    const preset = presets.find((p) => p.name === name);
-    if (!preset) return;
-    axisX = preset.x;
-    axisY = preset.y;
-    axisZ = preset.z;
-    colorBy = preset.colorBy;
-    sizeBy = preset.sizeBy;
+  function formatDate(value: string): string {
+    const [year, month, day] = value.split('-');
+    if (!year || !month || !day) return value;
+    return `${day}.${month}.${year}`;
   }
 
   function formatTooltip(entity: SimilarityEntity): string[] {
     return [
       entity.name,
+      `Тип: ${entity.type === 'campaign' ? 'РК' : 'Товар'}`,
       `ДРР ${entity.measures.drr}% · ROI ${entity.measures.roi} · CR2 ${entity.measures.cr2}%`,
       `Выручка ${entity.measures.revenue.toLocaleString('ru-RU')} ₽ · Расход ${entity.measures.spend.toLocaleString('ru-RU')} ₽`,
+      `Дата: ${formatDate(entity.date)}`,
     ];
-  }
-
-  function getColor(entity: SimilarityEntity & { px: number; py: number; pz: number }, min: number, max: number): THREE.Color {
-    if (colorBy === 'entry_point') {
-      if (entity.entry_point === 'Поиск') return new THREE.Color('#2563eb');
-      if (entity.entry_point === 'Полка') return new THREE.Color('#16a34a');
-      return new THREE.Color('#f97316');
-    }
-    const value = getMeasure(entity, colorBy);
-    const t = (value - min) / Math.max(max - min, 0.0001);
-    return new THREE.Color(`hsl(${(1 - t) * 140}, 65%, 48%)`);
-  }
-
-  function getSize(entity: SimilarityEntity & { px: number; py: number; pz: number }): number {
-    return 0.65 + Math.min(1.8, Math.sqrt(getMeasure(entity, sizeBy)) / 130);
-  }
-
-  let tooltip = { visible: false, x: 0, y: 0, lines: [] as string[] };
-
-  function ensureCtx(): void {
-    if (canvas2d && !ctx) ctx = canvas2d.getContext('2d') as CanvasRenderingContext2D;
-  }
-
-  function draw2d(): void {
-    ensureCtx();
-    if (!ctx || mode !== '2D') return;
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = '#f8fbff';
-    ctx.fillRect(0, 0, width, height);
-
-    const cVals = projected.map((e) => (colorBy === 'entry_point' ? 0 : getMeasure(e, colorBy)));
-    const min = Math.min(...cVals, 0);
-    const max = Math.max(...cVals, 1);
-
-    projected.forEach((entity) => {
-      const x = entity.px * scale2d + panX;
-      const y = entity.py * scale2d + panY;
-      const r = 3 + getSize(entity) * 3;
-      ctx.beginPath();
-      ctx.fillStyle = getColor(entity, min, max).getStyle();
-      if (entity.type === 'campaign') {
-        ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); ctx.closePath();
-      } else {
-        ctx.arc(x, y, r, 0, Math.PI * 2);
-      }
-      ctx.fill();
-    });
-  }
-
-  function pick2d(mx: number, my: number): (SimilarityEntity & { px: number; py: number; pz: number }) | null {
-    let best: (SimilarityEntity & { px: number; py: number; pz: number }) | null = null;
-    let bestD = Infinity;
-    projected.forEach((entity) => {
-      const x = entity.px * scale2d + panX;
-      const y = entity.py * scale2d + panY;
-      const d = Math.hypot(mx - x, my - y);
-      if (d < bestD && d < 14) { best = entity; bestD = d; }
-    });
-    return best;
-  }
-
-  function onMove2d(event: MouseEvent): void {
-    if (mode !== '2D') return;
-    const rect = canvas2d.getBoundingClientRect();
-    const mx = event.clientX - rect.left;
-    const my = event.clientY - rect.top;
-    const picked = pick2d(mx, my);
-    if (picked) tooltip = { visible: true, x: mx + 12, y: my + 12, lines: formatTooltip(picked) };
-    else tooltip.visible = false;
-    if (dragging) {
-      panX = event.clientX - dragStart.x;
-      panY = event.clientY - dragStart.y;
-    }
   }
 
   let renderer: THREE.WebGLRenderer;
@@ -291,6 +249,9 @@
   let renderEntities: Array<SimilarityEntity & { px: number; py: number; pz: number }> = [];
 
   function init3d(): void {
+    const width = container3d.clientWidth;
+    const height = 560;
+
     scene = new THREE.Scene();
     scene.background = new THREE.Color('#f8fbff');
     camera = new THREE.PerspectiveCamera(52, width / height, 0.1, 1800);
@@ -313,6 +274,8 @@
     scene.add(vectors);
 
     renderer.domElement.addEventListener('mousemove', onMove3d);
+    renderer.domElement.addEventListener('click', onClick3d);
+
     animate();
   }
 
@@ -324,13 +287,13 @@
   }
 
   function rebuild3d(): void {
-    if (mode !== '3D' || !scene) return;
+    if (!scene) return;
     clearMesh(buyersMesh);
     clearMesh(entitiesMesh);
     vectors.clear();
 
-    renderPoints = showBuyers ? (demoMode ? buyersDemo.points : buyersFull.points) : [];
-    renderEntities = showAds ? projected : [];
+    renderPoints = activeLayers.includes('sales_fact') ? (demoMode ? buyersDemo.points : buyersFull.points) : [];
+    renderEntities = projected;
 
     if (renderPoints.length > 0) {
       buyersMesh = new THREE.InstancedMesh(
@@ -339,14 +302,15 @@
         renderPoints.length
       );
       const d = new THREE.Object3D();
-      renderPoints.forEach((p, i) => { d.position.set(p.x, p.y, p.z); d.updateMatrix(); buyersMesh.setMatrixAt(i, d.matrix); });
+      renderPoints.forEach((point, index) => {
+        d.position.set(point.x, point.y, point.z);
+        d.updateMatrix();
+        buyersMesh.setMatrixAt(index, d.matrix);
+      });
       scene.add(buyersMesh);
     }
 
     if (renderEntities.length > 0) {
-      const cVals = renderEntities.map((e) => (colorBy === 'entry_point' ? 0 : getMeasure(e, colorBy)));
-      const min = Math.min(...cVals, 0);
-      const max = Math.max(...cVals, 1);
       entitiesMesh = new THREE.InstancedMesh(
         new THREE.OctahedronGeometry(1.05, 0),
         new THREE.MeshBasicMaterial({ vertexColors: true }),
@@ -354,23 +318,25 @@
       );
       entitiesMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(renderEntities.length * 3), 3);
       const d = new THREE.Object3D();
-      renderEntities.forEach((e, i) => {
-        d.position.set(e.px, e.py, e.pz);
-        const s = getSize(e);
-        d.scale.set(s, s, s);
+
+      renderEntities.forEach((entity, index) => {
+        d.position.set(entity.px, entity.py, entity.pz);
+        d.scale.set(entity.type === 'campaign' ? 1.7 : 1.25, entity.type === 'campaign' ? 1.7 : 1.25, entity.type === 'campaign' ? 1.7 : 1.25);
         d.rotation.set(0.2, 0.5, 0.1);
         d.updateMatrix();
-        entitiesMesh.setMatrixAt(i, d.matrix);
-        entitiesMesh.setColorAt(i, getColor(e, min, max));
+        entitiesMesh.setMatrixAt(index, d.matrix);
 
-        const cluster = (demoMode ? buyersDemo.clusters : buyersFull.clusters).find((c) => c.name === e.targetCluster);
-        if (cluster) {
-          const start = new THREE.Vector3(e.px, e.py, e.pz);
-          const end = new THREE.Vector3(cluster.center.x, cluster.center.y, cluster.center.z);
+        const color = entity.type === 'campaign' ? new THREE.Color('#1e40af') : new THREE.Color('#22c55e');
+        entitiesMesh.setColorAt(index, color);
+
+        const targetCluster = (demoMode ? buyersDemo.clusters : buyersFull.clusters).find((cluster) => cluster.name === entity.targetCluster);
+        if (targetCluster && activeLayers.includes('ads')) {
+          const start = new THREE.Vector3(entity.px, entity.py, entity.pz);
+          const end = new THREE.Vector3(targetCluster.center.x, targetCluster.center.y, targetCluster.center.z);
           const dist = start.distanceTo(end);
-          const t = Math.min(1, dist / 130);
-          const color = new THREE.Color(`hsl(${(1 - t) * 120}, 70%, 45%)`);
-          vectors.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([start, end]), new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.65 })));
+          const tone = Math.min(1, dist / 130);
+          const lineColor = new THREE.Color(`hsl(${(1 - tone) * 120}, 70%, 45%)`);
+          vectors.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([start, end]), new THREE.LineBasicMaterial({ color: lineColor, transparent: true, opacity: 0.65 })));
         }
       });
       scene.add(entitiesMesh);
@@ -378,15 +344,35 @@
   }
 
   function onMove3d(event: MouseEvent): void {
-    if (mode !== '3D' || !entitiesMesh) return;
+    if (!entitiesMesh) return;
     const rect = renderer.domElement.getBoundingClientRect();
     ndc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     ndc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     raycaster.setFromCamera(ndc, camera);
     const hit = raycaster.intersectObject(entitiesMesh, true)[0];
     if (hit && hit.instanceId !== undefined) {
-      tooltip = { visible: true, x: event.clientX - rect.left + 12, y: event.clientY - rect.top + 12, lines: formatTooltip(renderEntities[hit.instanceId]) };
-    } else tooltip.visible = false;
+      tooltip = {
+        visible: true,
+        x: event.clientX - rect.left + 12,
+        y: event.clientY - rect.top + 12,
+        lines: formatTooltip(renderEntities[hit.instanceId]),
+      };
+    } else {
+      tooltip.visible = false;
+    }
+  }
+
+  function onClick3d(event: MouseEvent): void {
+    if (!entitiesMesh) return;
+    const rect = renderer.domElement.getBoundingClientRect();
+    ndc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    ndc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(ndc, camera);
+    const hit = raycaster.intersectObject(entitiesMesh, true)[0];
+    if (hit && hit.instanceId !== undefined) {
+      const entity = renderEntities[hit.instanceId];
+      console.info('Выбрана точка', { id: entity.id, name: entity.name, тип: entity.type === 'campaign' ? 'РК' : 'Товар' });
+    }
   }
 
   function animate(): void {
@@ -401,72 +387,195 @@
     anim = requestAnimationFrame(animate);
   }
 
+  function onResize(): void {
+    if (!renderer || !camera || !container3d) return;
+    const width = container3d.clientWidth;
+    const height = 560;
+    renderer.setSize(width, height);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+  }
+
   function resetView(): void {
-    if (mode === '2D') {
-      scale2d = 1; panX = width / 2; panY = height / 2; return;
-    }
     camera.position.set(0, 80, 210);
     controls.target.set(0, 0, 0);
     controls.update();
   }
 
-  function onResize(): void {
-    const rect = panel.getBoundingClientRect();
-    width = Math.max(760, Math.floor(rect.width - 380));
-    height = 560;
-    if (renderer && camera) {
-      renderer.setSize(width, height);
-      camera.aspect = width / height;
-      camera.updateProjectionMatrix();
+  function addLayer(): void {
+    const next = DATASETS.find((dataset) => !activeLayers.includes(dataset.id));
+    if (!next) return;
+    activeLayers = [...activeLayers, next.id];
+  }
+
+  function removeLayer(layerId: DatasetId): void {
+    if (activeLayers.length <= 1) return;
+    activeLayers = activeLayers.filter((id) => id !== layerId);
+  }
+
+  function addFilter(filterType: FilterType): void {
+    const id = `${Date.now()}-${Math.random()}`;
+    if (filterType === 'text') {
+      filters = [...filters, { id, filterType, fieldCode: textFilterFields[0]?.code ?? 'subject', operator: 'содержит', valueA: '', valueB: '' }];
+      return;
+    }
+    if (filterType === 'number') {
+      filters = [...filters, { id, filterType, fieldCode: numberFilterFields[0]?.code ?? 'revenue', operator: '>', valueA: '', valueB: '' }];
+      return;
+    }
+    filters = [...filters, { id, filterType, fieldCode: dateFilterFields[0]?.code ?? 'date', operator: 'с', valueA: fromDate, valueB: '' }];
+  }
+
+  function updateFilter(id: string, patch: Partial<PanelFilter>): void {
+    filters = filters.map((filter) => (filter.id === id ? { ...filter, ...patch } : filter));
+  }
+
+  function removeFilter(id: string): void {
+    filters = filters.filter((filter) => filter.id !== id);
+  }
+
+  function onFilterFieldChange(id: string, event: Event): void {
+    updateFilter(id, { fieldCode: (event.currentTarget as HTMLSelectElement).value });
+  }
+
+  function onFilterDateOperatorChange(id: string, event: Event): void {
+    updateFilter(id, { operator: (event.currentTarget as HTMLSelectElement).value as DateOperator });
+  }
+
+  function onFilterTextOperatorChange(id: string, event: Event): void {
+    updateFilter(id, { operator: (event.currentTarget as HTMLSelectElement).value as TextOperator });
+  }
+
+  function onFilterNumberOperatorChange(id: string, event: Event): void {
+    updateFilter(id, { operator: (event.currentTarget as HTMLSelectElement).value as NumberOperator });
+  }
+
+  function onFilterValueAChange(id: string, event: Event): void {
+    updateFilter(id, { valueA: (event.currentTarget as HTMLInputElement).value });
+  }
+
+  function onFilterValueBChange(id: string, event: Event): void {
+    updateFilter(id, { valueB: (event.currentTarget as HTMLInputElement).value });
+  }
+
+  function readSettings(): void {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      settingsList = raw ? (JSON.parse(raw) as PanelSettings[]) : [];
+    } catch {
+      settingsList = [];
     }
   }
 
-  function onKey(event: KeyboardEvent): void {
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
-      event.preventDefault(); searchInput.focus(); searchInput.select();
-    }
+  function writeSettings(): void {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(settingsList));
+  }
+
+  function snapshot(name: string): PanelSettings {
+    return {
+      id: `${Date.now()}-${Math.random()}`,
+      name,
+      entityField: entityFieldCode,
+      layers: [...activeLayers],
+      axisX,
+      axisY,
+      axisZ,
+      period,
+      fromDate,
+      toDate,
+      filters: structuredClone(filters),
+      demoMode,
+    };
+  }
+
+  function saveCurrent(): void {
+    const typedName = window.prompt('Название настройки', `Настройка ${settingsList.length + 1}`)?.trim();
+    const name = typedName || `Настройка ${settingsList.length + 1}`;
+    const item = snapshot(name);
+    settingsList = [item, ...settingsList].slice(0, 20);
+    selectedSettingId = item.id;
+    writeSettings();
+  }
+
+  function applySettings(item: PanelSettings): void {
+    entityFieldCode = item.entityField;
+    activeLayers = item.layers;
+    axisX = item.axisX;
+    axisY = item.axisY;
+    axisZ = item.axisZ;
+    period = item.period;
+    fromDate = item.fromDate;
+    toDate = item.toDate;
+    filters = structuredClone(item.filters);
+    demoMode = item.demoMode;
+  }
+
+  function onSettingChange(): void {
+    const found = settingsList.find((item) => item.id === selectedSettingId);
+    if (found) applySettings(found);
+  }
+
+  function removeSetting(): void {
+    if (!selectedSettingId) return;
+    settingsList = settingsList.filter((item) => item.id !== selectedSettingId);
+    selectedSettingId = '';
+    writeSettings();
+  }
+
+  function resetPanel(): void {
+    entityFieldCode = 'sku';
+    activeLayers = ['sales_fact', 'ads'];
+    axisX = 'revenue';
+    axisY = 'spend';
+    axisZ = 'roi';
+    period = '30 дней';
+    fromDate = '2026-02-01';
+    toDate = '2026-02-28';
+    filters = [];
+    demoMode = true;
+    search = '';
+    resetView();
   }
 
   onMount(() => {
-    onResize();
+    if (!entities || entities.length === 0) {
+      entities = generateSimilarityData(200, 80);
+    }
     init3d();
+    readSettings();
     window.addEventListener('resize', onResize);
-    window.addEventListener('keydown', onKey);
+    window.addEventListener('keydown', onHotKey);
   });
 
+  function onHotKey(event: KeyboardEvent): void {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      searchInput?.focus();
+    }
+  }
+
   onDestroy(() => {
-    window.removeEventListener('resize', onResize);
-    window.removeEventListener('keydown', onKey);
     cancelAnimationFrame(anim);
+    window.removeEventListener('resize', onResize);
+    window.removeEventListener('keydown', onHotKey);
     renderer?.dispose();
+    controls?.dispose();
   });
 </script>
 
-<section class="panel graph-root" bind:this={panel}>
+<section class="graph-root panel">
   <div class="header">
     <h2>Пространство</h2>
-    <p>3D-граф сущностей по выбранным метрикам</p>
   </div>
 
   <div class="content">
     <div class="graph-wrap">
       <div class="status">
-        Поля: {DATA_FIELDS.length} · Показано точек: {projected.length} · X: {formatFieldTitle(axisX)} · Y: {formatFieldTitle(axisY)} · Z: {formatFieldTitle(axisZ)}
+        Точек: {projected.length} · Слои: {activeLayers.map((layer) => DATASETS.find((item) => item.id === layer)?.name).join(', ')} ·
+        Оси: {fieldLabel(axisX)} / {fieldLabel(axisY)} / {fieldLabel(axisZ)}
       </div>
       <div class="stage">
-        {#if mode === '2D'}
-          <canvas
-            bind:this={canvas2d}
-            width={width}
-            height={height}
-            on:mousedown={(e) => { dragging = true; dragStart = { x: e.clientX - panX, y: e.clientY - panY }; }}
-            on:mousemove={onMove2d}
-            on:mouseup={() => { dragging = false; }}
-            on:wheel|preventDefault={(e) => { scale2d = Math.max(0.2, Math.min(4, scale2d * (e.deltaY > 0 ? 0.9 : 1.1))); }}
-          />
-        {:else}
-          <div bind:this={container3d} class="scene" />
-        {/if}
+        <div bind:this={container3d} class="scene" />
         {#if tooltip.visible}
           <div class="tooltip" style={`left:${tooltip.x}px;top:${tooltip.y}px`}>
             {#each tooltip.lines as line}<div>{line}</div>{/each}
@@ -477,71 +586,133 @@
 
     <aside class="control-panel">
       <section class="section">
-        <h4>Точки</h4>
-        <label>Точки на графе
-          <select bind:value={entityMode}>
-            <option>Артикулы (SKU)</option>
-            <option>Предметы</option>
-            <option>Категории</option>
-            <option>Бренды</option>
-            <option>Рекламные кампании (РК)</option>
-          </select>
-        </label>
-        <label><input type="checkbox" bind:checked={demoMode} /> Демо-режим (10 SKU + 10 РК)</label>
+        <h4>Настройки</h4>
+        <small>Позволяет сохранить текущую конфигурацию панели.</small>
+        <select bind:value={selectedSettingId} on:change={onSettingChange}>
+          <option value="">Выберите сохранённую настройку</option>
+          {#each settingsList as setting}
+            <option value={setting.id}>{setting.name}</option>
+          {/each}
+        </select>
+        <div class="row-buttons">
+          <button on:click={saveCurrent}>Сохранить текущую</button>
+          <button on:click={removeSetting} disabled={!selectedSettingId}>Удалить</button>
+          <button on:click={resetPanel}>Сбросить</button>
+        </div>
+        <label class="demo-toggle"><input type="checkbox" bind:checked={demoMode} /> Демо-режим</label>
       </section>
 
       <section class="section">
-        <h4>Слои</h4>
-        <label><input type="checkbox" bind:checked={showBuyers} /> Покупатели (факт)</label>
-        <label><input type="checkbox" bind:checked={showAds} /> Реклама (управление)</label>
+        <h4>Точки на графе</h4>
+        <small>Определяет, что является отдельной точкой в пространстве.</small>
+        <select bind:value={entityFieldCode}>
+          {#each entityFields as field}
+            <option value={field.code}>{field.name}</option>
+          {/each}
+        </select>
+      </section>
+
+      <section class="section">
+        <h4>Набор данных</h4>
+        <small>Определяет, из каких источников берутся метрики.</small>
+        <div class="layer-list">
+          {#each activeLayers as layer}
+            <div class="layer-item">
+              <span>{DATASETS.find((dataset) => dataset.id === layer)?.name}</span>
+              <button on:click={() => removeLayer(layer)} disabled={activeLayers.length <= 1}>Удалить</button>
+            </div>
+          {/each}
+        </div>
+        <button on:click={addLayer} disabled={activeLayers.length === DATASETS.length}>+ Добавить слой</button>
       </section>
 
       <section class="section">
         <h4>Координаты</h4>
+        <small>Определяет, какие числовые показатели формируют 3D-пространство.</small>
         <label>Ось X
-          <select bind:value={axisX}>{#each MEASURE_FIELDS as f}<option value={f.key}>{f.title}</option>{/each}</select>
+          <select bind:value={axisX}>{#each axisFields as field}<option value={field.code}>{field.name}</option>{/each}</select>
         </label>
         <label>Ось Y
-          <select bind:value={axisY}>{#each MEASURE_FIELDS as f}<option value={f.key}>{f.title}</option>{/each}</select>
+          <select bind:value={axisY}>{#each axisFields as field}<option value={field.code}>{field.name}</option>{/each}</select>
         </label>
         <label>Ось Z
-          <select bind:value={axisZ}>{#each MEASURE_FIELDS as f}<option value={f.key}>{f.title}</option>{/each}</select>
+          <select bind:value={axisZ}>{#each axisFields as field}<option value={field.code}>{field.name}</option>{/each}</select>
         </label>
-        <small>Оси принимают только числовые метрики</small>
-        <label>Окраска по
-          <select bind:value={colorBy}>
-            {#each MEASURE_FIELDS as f}<option value={f.key}>{f.title}</option>{/each}
-            <option value="entry_point">Точка входа</option>
-          </select>
-        </label>
-        <label>Размер по
-          <select bind:value={sizeBy}>{#each MEASURE_FIELDS as f}<option value={f.key}>{f.title}</option>{/each}</select>
-        </label>
-        <label>Режим
-          <select bind:value={mode}><option>2D</option><option>3D</option></select>
-        </label>
-        <label>Пресет
-          <select bind:value={selectedPreset} on:change={() => applyPreset(selectedPreset)}>{#each presets as p}<option>{p.name}</option>{/each}</select>
-        </label>
+        <small>Оси принимают только числовые метрики.</small>
       </section>
 
       <section class="section">
         <h4>Период и фильтры</h4>
+        <small>Ограничивает данные, которые участвуют в расчётах.</small>
+
         <label>Период
           <select bind:value={period}>
-            <option>7 дней</option><option>14 дней</option><option>30 дней</option><option>Выбрать даты</option>
+            <option>7 дней</option>
+            <option>14 дней</option>
+            <option>30 дней</option>
+            <option>Даты</option>
           </select>
         </label>
-        {#if period === 'Выбрать даты'}
-          <div class="dates"><input type="date" bind:value={fromDate} /><input type="date" bind:value={toDate} /></div>
+
+        {#if period === 'Даты'}
+          <div class="dates">
+            <input type="date" bind:value={fromDate} />
+            <input type="date" bind:value={toDate} />
+          </div>
         {/if}
-        <label>Категория <select bind:value={filterCategory}>{#each categoryOptions as o}<option>{o}</option>{/each}</select></label>
-        <label>Предмет <select bind:value={filterSubject}>{#each subjectOptions as o}<option>{o}</option>{/each}</select></label>
-        <label>Бренд <select bind:value={filterBrand}>{#each brandOptions as o}<option>{o}</option>{/each}</select></label>
-        <label>Тип РК <select bind:value={filterRkType}>{#each rkTypeOptions as o}<option>{o}</option>{/each}</select></label>
-        <label>Выручка &gt; <input type="number" min="0" bind:value={minRevenue} /></label>
-        <label>ДРР &lt; <input type="number" min="0" max="100" bind:value={maxDrr} /></label>
+
         <input bind:this={searchInput} bind:value={search} placeholder="Поиск SKU / РК" />
+
+        <div class="row-buttons">
+          <button on:click={() => addFilter('date')}>+ Добавить фильтр даты</button>
+          <button on:click={() => addFilter('text')}>+ Добавить текстовый фильтр</button>
+          <button on:click={() => addFilter('number')}>+ Добавить числовой фильтр</button>
+        </div>
+
+        {#each filters as filter}
+          <div class="filter-item">
+            <div class="filter-head">Фильтр: {filter.filterType === 'date' ? 'Дата' : filter.filterType === 'text' ? 'Текст' : 'Число'}</div>
+            {#if filter.filterType === 'date'}
+              <select bind:value={filter.fieldCode} on:change={(event) => onFilterFieldChange(filter.id, event)}>
+                {#each dateFilterFields as field}<option value={field.code}>{field.name}</option>{/each}
+              </select>
+              <select bind:value={filter.operator} on:change={(event) => onFilterDateOperatorChange(filter.id, event)}>
+                <option>с</option>
+                <option>по</option>
+              </select>
+              <input type="date" bind:value={filter.valueA} on:input={(event) => onFilterValueAChange(filter.id, event)} />
+            {:else if filter.filterType === 'text'}
+              <select bind:value={filter.fieldCode} on:change={(event) => onFilterFieldChange(filter.id, event)}>
+                {#each textFilterFields as field}<option value={field.code}>{field.name}</option>{/each}
+              </select>
+              <select bind:value={filter.operator} on:change={(event) => onFilterTextOperatorChange(filter.id, event)}>
+                <option>равно</option>
+                <option>не равно</option>
+                <option>содержит</option>
+                <option>не содержит</option>
+                <option>в списке</option>
+              </select>
+              <input type="text" bind:value={filter.valueA} placeholder="Значение" on:input={(event) => onFilterValueAChange(filter.id, event)} />
+            {:else}
+              <select bind:value={filter.fieldCode} on:change={(event) => onFilterFieldChange(filter.id, event)}>
+                {#each numberFilterFields as field}<option value={field.code}>{field.name}</option>{/each}
+              </select>
+              <select bind:value={filter.operator} on:change={(event) => onFilterNumberOperatorChange(filter.id, event)}>
+                <option>&gt;</option>
+                <option>&lt;</option>
+                <option>≥</option>
+                <option>≤</option>
+                <option>между</option>
+              </select>
+              <input type="number" bind:value={filter.valueA} placeholder="Значение" on:input={(event) => onFilterValueAChange(filter.id, event)} />
+              {#if filter.operator === 'между'}
+                <input type="number" bind:value={filter.valueB} placeholder="И" on:input={(event) => onFilterValueBChange(filter.id, event)} />
+              {/if}
+            {/if}
+            <button on:click={() => removeFilter(filter.id)}>Удалить фильтр</button>
+          </div>
+        {/each}
+
         <button on:click={resetView}>Сбросить вид</button>
       </section>
     </aside>
@@ -551,19 +722,24 @@
 <style>
   .graph-root { display:flex; flex-direction:column; gap:10px; }
   .header h2 { margin:0; font-size:24px; }
-  .header p { margin:0; color:#64748b; font-size:12px; }
-  .content { display:grid; grid-template-columns: minmax(0, 1fr) 340px; gap:12px; }
+  .content { display:grid; grid-template-columns:minmax(0,1fr) 360px; gap:12px; align-items:stretch; }
   .graph-wrap { min-width:0; }
   .status { font-size:12px; color:#64748b; margin-bottom:6px; }
   .stage { position:relative; }
-  canvas, .scene { width:100%; height:560px; border:1px solid #e2e8f0; border-radius:16px; background:#f8fbff; }
-  .control-panel { border:1px solid #e2e8f0; border-radius:14px; padding:10px; background:#fbfdff; display:flex; flex-direction:column; gap:10px; }
+  .scene { width:100%; height:560px; border:1px solid #e2e8f0; border-radius:16px; background:#f8fbff; }
+  .control-panel { height:560px; border:1px solid #e2e8f0; border-radius:14px; padding:10px; background:#fbfdff; display:flex; flex-direction:column; gap:10px; overflow:auto; }
   .section { border:1px solid #e7edf6; border-radius:10px; padding:8px; display:flex; flex-direction:column; gap:6px; }
-  .section h4 { margin:0; font-size:12px; color:#334155; }
-  .section label { display:flex; justify-content:space-between; align-items:center; gap:6px; font-size:12px; color:#334155; }
-  .section select,.section input,.section button { border:1px solid #dbe4f0; border-radius:10px; padding:6px 8px; background:#fff; font-size:12px; }
+  .section h4 { margin:0; font-size:13px; color:#334155; }
+  .section label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:#334155; }
+  .section select, .section input, .section button { border:1px solid #dbe4f0; border-radius:10px; padding:6px 8px; background:#fff; font-size:12px; }
   .section button { cursor:pointer; }
+  .section button:disabled { opacity:.5; cursor:not-allowed; }
   .dates { display:flex; gap:6px; }
   .tooltip { position:absolute; pointer-events:none; background:rgba(15,23,42,.94); color:#f8fafc; font-size:12px; padding:10px; border-radius:10px; max-width:360px; }
-  small { color:#64748b; font-size:11px; }
+  .row-buttons { display:flex; flex-wrap:wrap; gap:6px; }
+  .layer-list, .filter-item { display:flex; flex-direction:column; gap:6px; }
+  .layer-item { display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:12px; }
+  .filter-head { font-size:11px; color:#64748b; }
+  .demo-toggle { display:flex; flex-direction:row; align-items:center; gap:6px; }
+  small { color:#64748b; font-size:11px; line-height:1.3; }
 </style>
