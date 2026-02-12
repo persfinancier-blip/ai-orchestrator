@@ -489,7 +489,8 @@
   }
 
   function saveCurrent(): void {
-    const name = `Настройка ${settingsList.length + 1}`;
+    const typedName = window.prompt('Название настройки', `Настройка ${settingsList.length + 1}`)?.trim();
+    const name = typedName || `Настройка ${settingsList.length + 1}`;
     const item = snapshot(name);
     settingsList = [item, ...settingsList].slice(0, 20);
     selectedSettingId = item.id;
