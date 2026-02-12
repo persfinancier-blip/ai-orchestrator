@@ -29,7 +29,7 @@
     </div>
     <div class="block"><h4>3) KPI / Условия</h4><label>ДРР &gt; <input type="number" bind:value={state.conditionDrr} /></label><label>ROI &lt; <input type="number" step="0.1" bind:value={state.conditionRoi} /></label><label>Остатки (дни) &gt; <input type="number" bind:value={state.conditionStockDays} /></label></div>
     <div class="block"><h4>4) Действие</h4><select bind:value={state.action}><option>Создать SPS/SPM</option><option>Изменить ставки</option><option>Изменить бюджет</option><option>Остановить РК</option></select></div>
-    <div class="block"><h4>5) Расписание</h4><select bind:value={state.schedule}><option>15m</option><option>1h</option><option>6h</option><option>24h</option></select></div>
+    <div class="block"><h4>5) Расписание</h4><select bind:value={state.schedule}><option value="15m">15 мин</option><option value="1h">1 час</option><option value="6h">6 часов</option><option value="24h">24 часа</option></select></div>
     <div class="block run"><h4>6) Запуск / Превью</h4><button on:click={onPreview}>Превью</button><button class="primary" on:click={onRun}>Запуск</button></div>
   </div>
 

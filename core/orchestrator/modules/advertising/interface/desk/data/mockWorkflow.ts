@@ -20,10 +20,10 @@ export type CommandLogItem = {
   status: 'СИМУЛЯЦИЯ';
 };
 
-export const dataCloudOptions = ['Витрина рекламы за день', 'Типология покупателей v2', 'Граф точек входа', 'KPI SKU по рекламе'];
+export const dataCloudOptions = ['Витрина рекламы за день', 'Типология покупателей', 'Граф точек входа', 'KPI по рекламе SKU'];
 
 export const initialWorkflow: WorkflowState = {
-  workflowName: 'Сценарий desk A',
+  workflowName: 'Сценарий A',
   dataCloud: dataCloudOptions[0],
   filters: [
     { id: 'f1', field: 'subject', operator: 'IN', value: 'Кроссовки' },

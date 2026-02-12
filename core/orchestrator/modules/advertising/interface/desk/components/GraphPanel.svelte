@@ -1,229 +1,270 @@
 <script lang="ts">
-  import { createEventDispatcher, onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import * as THREE from 'three';
   import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-  import type {
-    BuyerCluster,
-    BuyerPoint,
-    ColorMetric,
-    LevelMode,
-    Mode3D,
-    PeriodMode,
-    SimilarityEntity,
-    SizeMetric,
-  } from '../data/mockGraph';
-  import { aggregateItemsByLevel, formatMetricLabel, generateBuyerCloud, metricValue } from '../data/mockGraph';
+  import type { BuyerPoint, ColorField, EntityMode, MeasureField, Mode3D, PeriodMode, SimilarityEntity } from '../data/mockGraph';
+  import { DATA_FIELDS, MEASURE_FIELDS, aggregateBySubject, formatFieldTitle, generateBuyerCloud, getMeasure } from '../data/mockGraph';
 
   export let entities: SimilarityEntity[] = [];
 
-  const dispatch = createEventDispatcher();
+  type Preset = {
+    name: string;
+    x: MeasureField;
+    y: MeasureField;
+    z: MeasureField;
+    colorBy: ColorField;
+    sizeBy: MeasureField;
+  };
+
+  const presets: Preset[] = [
+    { name: 'Попадание по входам', x: 'revenue', y: 'spend', z: 'search_share', colorBy: 'entry_gap', sizeBy: 'orders' },
+    { name: 'Эффективность', x: 'revenue', y: 'spend', z: 'roi', colorBy: 'drr', sizeBy: 'orders' },
+    { name: 'Конверсия', x: 'clicks', y: 'orders', z: 'cr2', colorBy: 'roi', sizeBy: 'revenue' },
+  ];
+
+  let selectedPreset = presets[1].name;
+  let entityMode: EntityMode = 'SKU';
+  let showBuyers = true;
+  let showAds = true;
+
+  let axisX: MeasureField = presets[1].x;
+  let axisY: MeasureField = presets[1].y;
+  let axisZ: MeasureField = presets[1].z;
+
+  let colorBy: ColorField = presets[1].colorBy;
+  let sizeBy: MeasureField = presets[1].sizeBy;
+
+  let period: PeriodMode = '30 дней';
+  let fromDate = '2026-02-01';
+  let toDate = '2026-02-28';
+
+  let filterCategory = 'Все';
+  let filterSubject = 'Все';
+  let filterBrand = 'Все';
+  let filterRkType = 'Все';
+  let filterEntryPoint = 'Все';
+  let minRevenue = 0;
+  let maxDrr = 100;
 
   let mode: Mode3D = '3D';
-  let level: LevelMode = 'SKU';
-  let period: PeriodMode = '30 дней';
-  let colorBy: ColorMetric = 'DRR';
-  let sizeBy: SizeMetric = 'Sales';
-
-  let showBuyers = true;
-  let showCampaigns = true;
-  let showVectors = true;
-  let nearestLimit = 50;
   let search = '';
 
-  let panel: HTMLDivElement;
+  let container3d: HTMLDivElement;
   let canvas2d: HTMLCanvasElement;
+  let panel: HTMLDivElement;
   let searchInput: HTMLInputElement;
+  let ctx: CanvasRenderingContext2D;
 
   let width = 980;
-  let height = 540;
-  let ctx: CanvasRenderingContext2D;
+  let height = 560;
   let scale2d = 1;
   let panX = width / 2;
   let panY = height / 2;
   let dragging = false;
   let dragStart = { x: 0, y: 0 };
 
-  let selectedId = '';
-  let hovered: SimilarityEntity | null = null;
-  let tooltip = { visible: false, x: 0, y: 0, entity: null as SimilarityEntity | null };
+  const buyers = generateBuyerCloud(220);
 
-  const cloud = generateBuyerCloud(220);
-  const buyerClusters = cloud.clusters;
-  const buyerPoints = cloud.points;
+  $: categoryOptions = uniqueValues('category');
+  $: subjectOptions = uniqueValues('subject');
+  $: brandOptions = uniqueValues('brand');
+  $: rkTypeOptions = uniqueValues('rkType');
+  $: entryPointOptions = uniqueValues('entry_point');
 
-  $: base = aggregateItemsByLevel(entities, level);
-  $: filtered = filterEntities(base);
-  $: visible = applyCampaignLimit(filtered);
-  $: draw2d();
+  $: transformed = transformEntities();
+  $: filtered = applyFilters(transformed);
+  $: projected = projectEntities(filtered);
+  $: if (mode === '2D') draw2d();
   $: if (mode === '3D') rebuild3d();
 
-  function filterEntities(list: SimilarityEntity[]): SimilarityEntity[] {
-    const q = search.trim().toLowerCase();
+  function uniqueValues(field: 'category' | 'subject' | 'brand' | 'rkType' | 'entry_point'): string[] {
+    return ['Все', ...Array.from(new Set(entities.map((entity) => String(entity[field]))))];
+  }
+
+  function transformEntities(): SimilarityEntity[] {
+    if (entityMode === 'Рекламная кампания (РК)') return entities.filter((entity) => entity.type === 'campaign');
+    if (entityMode === 'Предмет') return aggregateBySubject(entities).filter((entity) => entity.type === 'item' || entity.type === 'campaign');
+    return entities;
+  }
+
+  function inPeriod(date: string): boolean {
+    if (period === 'Выбрать даты') return date >= fromDate && date <= toDate;
+    const day = Number(date.slice(-2));
+    if (period === '7 дней') return day >= 22;
+    if (period === '14 дней') return day >= 15;
+    return true;
+  }
+
+  function applyFilters(list: SimilarityEntity[]): SimilarityEntity[] {
+    const query = search.trim().toLowerCase();
     return list.filter((entity) => {
-      if (entity.type === 'campaign' && !showCampaigns) return false;
-      if (q && !entity.name.toLowerCase().includes(q) && !entity.id.toLowerCase().includes(q)) return false;
+      if (!showAds && entity.type !== 'campaign' && entity.type !== 'item') return false;
+      if (query && !entity.name.toLowerCase().includes(query) && !entity.id.toLowerCase().includes(query)) return false;
+      if (!inPeriod(entity.date)) return false;
+      if (filterCategory !== 'Все' && entity.category !== filterCategory) return false;
+      if (filterSubject !== 'Все' && entity.subject !== filterSubject) return false;
+      if (filterBrand !== 'Все' && entity.brand !== filterBrand) return false;
+      if (filterRkType !== 'Все' && entity.rkType !== filterRkType) return false;
+      if (filterEntryPoint !== 'Все' && entity.entry_point !== filterEntryPoint) return false;
+      if (entity.measures.revenue < minRevenue) return false;
+      if (entity.measures.drr > maxDrr) return false;
+      if (!showAds) return false;
       return true;
     });
   }
 
-  function applyCampaignLimit(list: SimilarityEntity[]): SimilarityEntity[] {
-    const items = list.filter((e) => e.type === 'item');
-    const campaigns = list
-      .filter((e) => e.type === 'campaign')
-      .sort((a, b) => (b.matchScore ?? 0) - (a.matchScore ?? 0))
-      .slice(0, nearestLimit);
-    return [...items, ...campaigns];
+  function projectEntities(list: SimilarityEntity[]): Array<SimilarityEntity & { px: number; py: number; pz: number }> {
+    const xVals = list.map((entity) => getMeasure(entity, axisX));
+    const yVals = list.map((entity) => getMeasure(entity, axisY));
+    const zVals = list.map((entity) => getMeasure(entity, axisZ));
+
+    const minX = Math.min(...xVals, 0);
+    const maxX = Math.max(...xVals, 1);
+    const minY = Math.min(...yVals, 0);
+    const maxY = Math.max(...yVals, 1);
+    const minZ = Math.min(...zVals, 0);
+    const maxZ = Math.max(...zVals, 1);
+
+    return list.map((entity) => ({
+      ...entity,
+      px: normalize(getMeasure(entity, axisX), minX, maxX),
+      py: normalize(getMeasure(entity, axisY), minY, maxY),
+      pz: normalize(getMeasure(entity, axisZ), minZ, maxZ),
+    }));
   }
 
-  function worldToScreen(x: number, y: number): { x: number; y: number } {
-    return { x: x * scale2d + panX, y: y * scale2d + panY };
+  function normalize(value: number, min: number, max: number): number {
+    return ((value - min) / Math.max(max - min, 0.0001) - 0.5) * 180;
   }
 
-  function colorFor(v: number): string {
-    const n = Math.max(0, Math.min(1, v));
-    const h = 220 - n * 180;
-    return `hsl(${h}, 64%, 56%)`;
+  function applyPreset(name: string): void {
+    const preset = presets.find((item) => item.name === name);
+    if (!preset) return;
+    axisX = preset.x;
+    axisY = preset.y;
+    axisZ = preset.z;
+    colorBy = preset.colorBy;
+    sizeBy = preset.sizeBy;
   }
 
-  function ensure2dCtx(): void {
+  function getColor(entity: SimilarityEntity & { px: number; py: number; pz: number }, min: number, max: number): THREE.Color {
+    if (colorBy === 'entry_point') {
+      if (entity.entry_point === 'Поиск') return new THREE.Color('#2563eb');
+      if (entity.entry_point === 'Полка') return new THREE.Color('#16a34a');
+      return new THREE.Color('#f97316');
+    }
+    const value = getMeasure(entity, colorBy);
+    const t = (value - min) / Math.max(max - min, 0.0001);
+    return new THREE.Color(`hsl(${(1 - t) * 140}, 65%, 48%)`);
+  }
+
+  function getSize(entity: SimilarityEntity & { px: number; py: number; pz: number }): number {
+    return 0.6 + Math.min(1.8, Math.sqrt(getMeasure(entity, sizeBy)) / 130);
+  }
+
+  function formatTooltip(entity: SimilarityEntity): string[] {
+    return [
+      entity.name,
+      entity.type === 'campaign' ? 'Рекламная кампания' : entityMode,
+      `ДРР ${entity.measures.drr}% · ROI ${entity.measures.roi} · CR2 ${entity.measures.cr2}%`,
+      `Выручка ${entity.measures.revenue.toLocaleString('ru-RU')} ₽ · Расход ${entity.measures.spend.toLocaleString('ru-RU')} ₽`,
+    ];
+  }
+
+  let tooltip = { visible: false, x: 0, y: 0, lines: [] as string[] };
+  let hovered: (SimilarityEntity & { px: number; py: number; pz: number }) | null = null;
+
+  // 2D
+  function ensureCtx(): void {
     if (canvas2d && !ctx) ctx = canvas2d.getContext('2d') as CanvasRenderingContext2D;
   }
 
   function draw2d(): void {
-    ensure2dCtx();
-    if (mode !== '2D' || !ctx) return;
+    ensureCtx();
+    if (!ctx || mode !== '2D') return;
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = '#f8fbff';
     ctx.fillRect(0, 0, width, height);
 
-    const values = visible.map((e) => metricValue(e, colorBy));
-    const min = Math.min(...values, 0);
-    const max = Math.max(...values, 1);
+    const colorVals = projected.map((entity) => (colorBy === 'entry_point' ? 0 : getMeasure(entity, colorBy as MeasureField)));
+    const min = Math.min(...colorVals, 0);
+    const max = Math.max(...colorVals, 1);
 
-    visible.forEach((point) => {
-      const pos = worldToScreen(point.x, point.y);
-      const m = metricValue(point, colorBy);
-      const normalized = (m - min) / Math.max(max - min, 0.001);
-      const sizeV = metricValue(point, sizeBy);
-      const r = 4 + Math.min(18, Math.sqrt(sizeV) / 20);
-      const selected = selectedId === point.id;
+    projected.forEach((entity) => {
+      const sx = entity.px * scale2d + panX;
+      const sy = entity.py * scale2d + panY;
+      const size = 3 + getSize(entity) * 3;
+      const color = getColor(entity, min, max).getStyle();
 
       ctx.beginPath();
-      ctx.fillStyle = colorFor(normalized);
-      if (point.type === 'campaign') {
-        ctx.moveTo(pos.x, pos.y - r);
-        ctx.lineTo(pos.x + r, pos.y);
-        ctx.lineTo(pos.x, pos.y + r);
-        ctx.lineTo(pos.x - r, pos.y);
+      ctx.fillStyle = color;
+      if (entity.type === 'campaign') {
+        ctx.moveTo(sx, sy - size);
+        ctx.lineTo(sx + size, sy);
+        ctx.lineTo(sx, sy + size);
+        ctx.lineTo(sx - size, sy);
         ctx.closePath();
       } else {
-        ctx.arc(pos.x, pos.y, r, 0, Math.PI * 2);
+        ctx.arc(sx, sy, size, 0, Math.PI * 2);
       }
       ctx.fill();
-
-      if (selected) {
-        ctx.strokeStyle = '#0f172a';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-      }
     });
   }
 
-  function pick2d(mx: number, my: number): SimilarityEntity | null {
-    let best: SimilarityEntity | null = null;
-    let bestD = Infinity;
-    visible.forEach((entity) => {
-      const p = worldToScreen(entity.x, entity.y);
-      const d = Math.hypot(mx - p.x, my - p.y);
-      if (d < bestD && d < 20) {
+  function pick2d(mx: number, my: number): (SimilarityEntity & { px: number; py: number; pz: number }) | null {
+    let best: (SimilarityEntity & { px: number; py: number; pz: number }) | null = null;
+    let bestDist = Infinity;
+    projected.forEach((entity) => {
+      const sx = entity.px * scale2d + panX;
+      const sy = entity.py * scale2d + panY;
+      const dist = Math.hypot(mx - sx, my - sy);
+      if (dist < bestDist && dist < 16) {
         best = entity;
-        bestD = d;
+        bestDist = dist;
       }
     });
     return best;
   }
 
-  function selectEntity(entity: SimilarityEntity): void {
-    selectedId = entity.id;
-    dispatch('selectEntity', entity);
-    highlightCluster(entity.clusterName);
-    updateMeshes();
-  }
-
-  function on2dWheel(e: WheelEvent): void {
-    if (mode !== '2D') return;
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    scale2d = Math.max(0.25, Math.min(3.3, scale2d * delta));
-  }
-
-  function on2dMouseDown(e: MouseEvent): void {
-    if (mode !== '2D') return;
-    dragging = true;
-    dragStart = { x: e.clientX - panX, y: e.clientY - panY };
-  }
-
-  function on2dMouseMove(e: MouseEvent): void {
+  function onCanvasMove(event: MouseEvent): void {
     if (mode !== '2D') return;
     const rect = canvas2d.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
+    const mx = event.clientX - rect.left;
+    const my = event.clientY - rect.top;
     const picked = pick2d(mx, my);
-
-    hovered = picked;
     if (picked) {
-      tooltip = { visible: true, x: mx + 12, y: my + 12, entity: picked };
-    } else {
-      tooltip.visible = false;
-    }
-
+      hovered = picked;
+      tooltip = { visible: true, x: mx + 12, y: my + 12, lines: formatTooltip(picked) };
+    } else tooltip.visible = false;
     if (dragging) {
-      panX = e.clientX - dragStart.x;
-      panY = e.clientY - dragStart.y;
+      panX = event.clientX - dragStart.x;
+      panY = event.clientY - dragStart.y;
     }
   }
 
-  function on2dMouseUp(e: MouseEvent): void {
-    if (mode !== '2D') return;
-    dragging = false;
-    const rect = canvas2d.getBoundingClientRect();
-    const picked = pick2d(e.clientX - rect.left, e.clientY - rect.top);
-    if (picked) selectEntity(picked);
-  }
-
+  // 3D
   let renderer: THREE.WebGLRenderer;
   let scene: THREE.Scene;
   let camera: THREE.PerspectiveCamera;
   let controls: OrbitControls;
-  let animationId = 0;
-  let raycaster = new THREE.Raycaster();
-  let mouseNdc = new THREE.Vector2();
-  let container3d: HTMLDivElement;
-
   let buyerMesh: THREE.InstancedMesh;
-  let itemMesh: THREE.InstancedMesh;
-  let campaignMesh: THREE.InstancedMesh;
-  let vectorGroup = new THREE.Group();
-  let clusterHighlight = new THREE.Mesh(
-    new THREE.SphereGeometry(8, 18, 18),
-    new THREE.MeshBasicMaterial({ color: '#22c55e', wireframe: true, transparent: true, opacity: 0.55 })
-  );
+  let entityMesh: THREE.InstancedMesh;
+  let vectors = new THREE.Group();
+  let anim = 0;
+  const raycaster = new THREE.Raycaster();
+  const ndc = new THREE.Vector2();
 
   let buyerVisible: BuyerPoint[] = [];
-  let itemsVisible: SimilarityEntity[] = [];
-  let campaignsVisible: SimilarityEntity[] = [];
+  let entityVisible: Array<SimilarityEntity & { px: number; py: number; pz: number }> = [];
 
   function init3d(): void {
     scene = new THREE.Scene();
     scene.background = new THREE.Color('#f8fbff');
-
-    camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 1400);
-    camera.position.set(0, 60, 180);
-
-    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    camera = new THREE.PerspectiveCamera(52, width / height, 0.1, 1800);
+    camera.position.set(0, 80, 210);
+    renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(width, height);
-    container3d.innerHTML = '';
     container3d.appendChild(renderer.domElement);
 
     controls = new OrbitControls(camera, renderer.domElement);
@@ -231,21 +272,14 @@
     controls.dampingFactor = 0.08;
 
     scene.add(new THREE.AmbientLight('#ffffff', 0.95));
-    const directional = new THREE.DirectionalLight('#ffffff', 0.45);
-    directional.position.set(50, 90, 60);
-    scene.add(directional);
+    const light = new THREE.DirectionalLight('#ffffff', 0.38);
+    light.position.set(80, 120, 75);
+    scene.add(light);
+    scene.add(new THREE.GridHelper(260, 16, '#d6deea', '#eaf0f7'));
+    scene.add(vectors);
 
-    const grid = new THREE.GridHelper(260, 16, '#dbe4f0', '#eaf0f7');
-    scene.add(grid);
-
-    clusterHighlight.visible = false;
-    scene.add(clusterHighlight);
-
-    scene.add(vectorGroup);
-
-    renderer.domElement.addEventListener('mousemove', on3dMouseMove);
-    renderer.domElement.addEventListener('click', on3dClick);
-
+    renderer.domElement.addEventListener('mousemove', onMove3d);
+    renderer.domElement.addEventListener('wheel', () => {}, { passive: true });
     animate();
   }
 
@@ -256,180 +290,92 @@
     (mesh.material as THREE.Material).dispose();
   }
 
-  function colorMetric(entity: SimilarityEntity, min: number, max: number): THREE.Color {
-    const value = metricValue(entity, colorBy);
-    const t = (value - min) / Math.max(max - min, 0.001);
-    return new THREE.Color(colorFor(t));
-  }
-
-  function sizeMetric(entity: SimilarityEntity): number {
-    const value = metricValue(entity, sizeBy);
-    return 0.65 + Math.min(1.6, Math.sqrt(value) / 120);
-  }
-
   function rebuild3d(): void {
     if (mode !== '3D' || !scene) return;
-
     clearMesh(buyerMesh);
-    clearMesh(itemMesh);
-    clearMesh(campaignMesh);
-    vectorGroup.clear();
+    clearMesh(entityMesh);
+    vectors.clear();
 
-    const values = visible.map((e) => metricValue(e, colorBy));
-    const min = Math.min(...values, 0);
-    const max = Math.max(...values, 1);
+    buyerVisible = showBuyers ? buyers.points : [];
+    entityVisible = showAds ? projected : [];
 
-    buyerVisible = showBuyers ? buyerPoints : [];
-    itemsVisible = visible.filter((e) => e.type === 'item');
-    campaignsVisible = visible.filter((e) => e.type === 'campaign');
-
-    if (showBuyers) {
+    if (buyerVisible.length > 0) {
       buyerMesh = new THREE.InstancedMesh(
-        new THREE.SphereGeometry(0.85, 6, 6),
-        new THREE.MeshBasicMaterial({ color: '#86efac', transparent: true, opacity: 0.23 }),
+        new THREE.SphereGeometry(0.7, 6, 6),
+        new THREE.MeshBasicMaterial({ color: '#60a5fa', transparent: true, opacity: 0.2 }),
         buyerVisible.length
       );
       const dummy = new THREE.Object3D();
       buyerVisible.forEach((point, i) => {
         dummy.position.set(point.x, point.y, point.z);
-        dummy.scale.setScalar(1);
         dummy.updateMatrix();
         buyerMesh.setMatrixAt(i, dummy.matrix);
       });
-      buyerMesh.instanceMatrix.needsUpdate = true;
       scene.add(buyerMesh);
     }
 
-    if (itemsVisible.length > 0) {
-      itemMesh = new THREE.InstancedMesh(
-        new THREE.SphereGeometry(1, 8, 8),
+    if (entityVisible.length > 0) {
+      const colorVals = entityVisible.map((entity) => (colorBy === 'entry_point' ? 0 : getMeasure(entity, colorBy as MeasureField)));
+      const min = Math.min(...colorVals, 0);
+      const max = Math.max(...colorVals, 1);
+      entityMesh = new THREE.InstancedMesh(
+        new THREE.OctahedronGeometry(1.05, 0),
         new THREE.MeshBasicMaterial({ vertexColors: true }),
-        itemsVisible.length
+        entityVisible.length
       );
-      itemMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(itemsVisible.length * 3), 3);
+      entityMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(entityVisible.length * 3), 3);
       const dummy = new THREE.Object3D();
-      itemsVisible.forEach((item, i) => {
-        dummy.position.set(item.x, item.y, item.z);
-        const s = sizeMetric(item);
-        dummy.scale.set(s, s, s);
+      entityVisible.forEach((entity, i) => {
+        dummy.position.set(entity.px, entity.py, entity.pz);
+        const scale = getSize(entity);
+        dummy.scale.set(scale, scale, scale);
+        dummy.rotation.set(0.2, 0.5, 0.1);
         dummy.updateMatrix();
-        itemMesh.setMatrixAt(i, dummy.matrix);
-        itemMesh.setColorAt(i, colorMetric(item, min, max));
+        entityMesh.setMatrixAt(i, dummy.matrix);
+        entityMesh.setColorAt(i, getColor(entity, min, max));
+
+        const cluster = buyers.clusters.find((c) => c.name === entity.targetCluster);
+        if (cluster) {
+          const start = new THREE.Vector3(entity.px, entity.py, entity.pz);
+          const end = new THREE.Vector3(cluster.center.x, cluster.center.y, cluster.center.z);
+          const dist = start.distanceTo(end);
+          const t = Math.min(1, dist / 130);
+          const color = new THREE.Color(`hsl(${(1 - t) * 120}, 70%, 45%)`);
+          const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([start, end]), new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.65 }));
+          vectors.add(line);
+        }
       });
-      itemMesh.instanceMatrix.needsUpdate = true;
-      scene.add(itemMesh);
+      scene.add(entityMesh);
     }
-
-    if (campaignsVisible.length > 0) {
-      campaignMesh = new THREE.InstancedMesh(
-        new THREE.OctahedronGeometry(1.1, 0),
-        new THREE.MeshBasicMaterial({ vertexColors: true }),
-        campaignsVisible.length
-      );
-      campaignMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(campaignsVisible.length * 3), 3);
-      const dummy = new THREE.Object3D();
-      campaignsVisible.forEach((campaign, i) => {
-        dummy.position.set(campaign.x, campaign.y, campaign.z);
-        const s = sizeMetric(campaign);
-        dummy.scale.set(s, s, s);
-        dummy.rotation.set(0.2, 0.4, 0.1);
-        dummy.updateMatrix();
-        campaignMesh.setMatrixAt(i, dummy.matrix);
-        campaignMesh.setColorAt(i, colorMetric(campaign, min, max));
-      });
-      campaignMesh.instanceMatrix.needsUpdate = true;
-      scene.add(campaignMesh);
-    }
-
-    if (showVectors) {
-      campaignsVisible.forEach((campaign) => {
-        const cluster = buyerClusters.find((x) => x.name === campaign.targetCluster);
-        if (!cluster) return;
-        const start = new THREE.Vector3(campaign.x, campaign.y, campaign.z);
-        const end = new THREE.Vector3(cluster.center.x, cluster.center.y, cluster.center.z);
-        const dist = start.distanceTo(end);
-        const t = Math.min(1, dist / 120);
-        const color = new THREE.Color(`hsl(${(1 - t) * 120}, 70%, 45%)`);
-
-        const line = new THREE.Line(
-          new THREE.BufferGeometry().setFromPoints([start, end]),
-          new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.72 })
-        );
-        vectorGroup.add(line);
-
-        const dir = end.clone().sub(start).normalize();
-        const arrow = new THREE.ArrowHelper(dir, end.clone().add(dir.clone().multiplyScalar(-6)), 5, color.getHex(), 2.3, 1.4);
-        vectorGroup.add(arrow);
-      });
-    }
-
-    updateMeshes();
   }
 
-  function updateMeshes(): void {
-    if (mode !== '3D') return;
-    if (itemMesh) itemMesh.material.opacity = showCampaigns ? 0.95 : 0.85;
-    if (campaignMesh) campaignMesh.visible = showCampaigns;
-    if (buyerMesh) buyerMesh.visible = showBuyers;
-    vectorGroup.visible = showVectors;
-
-    if (!selectedId) return;
-    const selected = visible.find((e) => e.id === selectedId);
-    if (!selected) return;
-    highlightCluster(selected.clusterName);
-  }
-
-  function highlightCluster(name: string): void {
-    const cluster = buyerClusters.find((entry) => entry.name === name);
-    if (!cluster) {
-      clusterHighlight.visible = false;
-      return;
-    }
-    clusterHighlight.position.set(cluster.center.x, cluster.center.y, cluster.center.z);
-    clusterHighlight.visible = true;
-  }
-
-  function resolveEntityFromHit(intersections: THREE.Intersection[]): SimilarityEntity | null {
-    const hit = intersections.find((entry) => entry.object === itemMesh || entry.object === campaignMesh);
-    if (!hit || hit.instanceId === undefined) return null;
-    if (hit.object === itemMesh) return itemsVisible[hit.instanceId] ?? null;
-    if (hit.object === campaignMesh) return campaignsVisible[hit.instanceId] ?? null;
-    return null;
-  }
-
-  function on3dMouseMove(event: MouseEvent): void {
-    if (mode !== '3D') return;
+  function onMove3d(event: MouseEvent): void {
+    if (mode !== '3D' || !entityMesh) return;
     const rect = renderer.domElement.getBoundingClientRect();
-    mouseNdc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-    mouseNdc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-
-    raycaster.setFromCamera(mouseNdc, camera);
-    const intersects = raycaster.intersectObjects([itemMesh, campaignMesh].filter(Boolean), true);
-    const picked = resolveEntityFromHit(intersects);
-    if (picked) {
-      hovered = picked;
-      tooltip = { visible: true, x: event.clientX - rect.left + 12, y: event.clientY - rect.top + 12, entity: picked };
+    ndc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    ndc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(ndc, camera);
+    const hits = raycaster.intersectObject(entityMesh, true);
+    const hit = hits[0];
+    if (hit && hit.instanceId !== undefined) {
+      const entity = entityVisible[hit.instanceId];
+      hovered = entity;
+      tooltip = { visible: true, x: event.clientX - rect.left + 12, y: event.clientY - rect.top + 12, lines: formatTooltip(entity) };
     } else {
-      hovered = null;
       tooltip.visible = false;
     }
-  }
-
-  function on3dClick(): void {
-    if (!hovered) return;
-    selectEntity(hovered);
   }
 
   function animate(): void {
     controls?.update();
     if (buyerMesh) {
       const dist = camera.position.length();
-      if (dist > 290) buyerMesh.count = Math.floor(buyerVisible.length * 0.25);
-      else if (dist > 220) buyerMesh.count = Math.floor(buyerVisible.length * 0.55);
+      if (dist > 300) buyerMesh.count = Math.floor(buyerVisible.length * 0.28);
+      else if (dist > 230) buyerMesh.count = Math.floor(buyerVisible.length * 0.58);
       else buyerMesh.count = buyerVisible.length;
     }
     renderer?.render(scene, camera);
-    animationId = requestAnimationFrame(animate);
+    anim = requestAnimationFrame(animate);
   }
 
   function resetView(): void {
@@ -439,27 +385,27 @@
       panY = height / 2;
       return;
     }
-    camera.position.set(0, 60, 180);
+    camera.position.set(0, 80, 210);
     controls.target.set(0, 0, 0);
     controls.update();
   }
 
-  function onKeydown(event: KeyboardEvent): void {
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
-      event.preventDefault();
-      searchInput?.focus();
-      searchInput?.select();
-    }
-  }
-
   function onResize(): void {
     const rect = panel.getBoundingClientRect();
-    width = Math.max(800, Math.floor(rect.width - 24));
-    height = 540;
-    if (mode === '3D' && renderer && camera) {
+    width = Math.max(900, Math.floor(rect.width - 24));
+    height = 560;
+    if (renderer && camera) {
       renderer.setSize(width, height);
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
+    }
+  }
+
+  function onKey(event: KeyboardEvent): void {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      searchInput.focus();
+      searchInput.select();
     }
   }
 
@@ -467,48 +413,112 @@
     onResize();
     init3d();
     window.addEventListener('resize', onResize);
-    window.addEventListener('keydown', onKeydown);
+    window.addEventListener('keydown', onKey);
   });
 
   onDestroy(() => {
     window.removeEventListener('resize', onResize);
-    window.removeEventListener('keydown', onKeydown);
-    renderer?.domElement.removeEventListener('mousemove', on3dMouseMove);
-    renderer?.domElement.removeEventListener('click', on3dClick);
-    cancelAnimationFrame(animationId);
+    window.removeEventListener('keydown', onKey);
+    cancelAnimationFrame(anim);
     renderer?.dispose();
   });
 </script>
 
-<section class="panel similarity-map" bind:this={panel}>
-  <div class="topbar">
-    <label>Уровень
-      <select bind:value={level}><option>SKU</option><option>Предмет</option></select>
-    </label>
-    <label>Период
-      <select bind:value={period}><option>7 дней</option><option>14 дней</option><option>30 дней</option></select>
-    </label>
-    <label>Режим
-      <select bind:value={mode}><option>2D</option><option>3D</option></select>
-    </label>
-    <label>Цвет по
-      <select bind:value={colorBy}><option value="DRR">ДРР</option><option value="ROI">ROI</option><option value="CR2">CR2</option><option value="Spend">Расход</option><option value="EntryPoint(SearchShare)">Доля поиска</option><option value="SegmentShare">Доля сегментов</option></select>
-    </label>
-    <label>Размер по
-      <select bind:value={sizeBy}><option value="Sales">Выручка</option><option value="Spend">Расход</option><option value="Orders">Заказы</option></select>
-    </label>
-    <label class="toggle"><input type="checkbox" bind:checked={showBuyers} /> Покупатели</label>
-    <label class="toggle"><input type="checkbox" bind:checked={showCampaigns} /> РК</label>
-    <label class="toggle"><input type="checkbox" bind:checked={showVectors} /> Векторы</label>
-    <label>Ближайшие РК
-      <select bind:value={nearestLimit}><option value={10}>10</option><option value={25}>25</option><option value={50}>50</option><option value={100}>100</option></select>
-    </label>
-    <input bind:this={searchInput} bind:value={search} placeholder="Поиск SKU / РК" />
-    <button class="ghost" on:click={resetView}>Сбросить вид</button>
+<section class="panel graph-root" bind:this={panel}>
+  <div class="controls">
+    <div class="group">
+      <h4>Пресет</h4>
+      <select bind:value={selectedPreset} on:change={() => applyPreset(selectedPreset)}>
+        {#each presets as preset}<option>{preset.name}</option>{/each}
+      </select>
+    </div>
+
+    <div class="group">
+      <h4>Точки графа</h4>
+      <label>Сущность
+        <select bind:value={entityMode}>
+          <option>SKU</option>
+          <option>Предмет</option>
+          <option>Рекламная кампания (РК)</option>
+        </select>
+      </label>
+      <div class="checks">
+        <label><input type="checkbox" bind:checked={showBuyers} /> Покупатели (факт)</label>
+        <label><input type="checkbox" bind:checked={showAds} /> Реклама (управление)</label>
+      </div>
+    </div>
+
+    <div class="group">
+      <h4>Оси</h4>
+      <label>Ось X
+        <select bind:value={axisX}>{#each MEASURE_FIELDS as field}<option value={field.key}>{field.title}</option>{/each}</select>
+      </label>
+      <small>Только числовые метрики</small>
+      <label>Ось Y
+        <select bind:value={axisY}>{#each MEASURE_FIELDS as field}<option value={field.key}>{field.title}</option>{/each}</select>
+      </label>
+      <small>Только числовые метрики</small>
+      <label>Ось Z
+        <select bind:value={axisZ}>{#each MEASURE_FIELDS as field}<option value={field.key}>{field.title}</option>{/each}</select>
+      </label>
+      <small>Только числовые метрики</small>
+    </div>
+
+    <div class="group">
+      <h4>Вид</h4>
+      <label>Окраска по
+        <select bind:value={colorBy}>
+          {#each MEASURE_FIELDS as field}<option value={field.key}>{field.title}</option>{/each}
+          <option value="entry_point">Точка входа</option>
+        </select>
+      </label>
+      <label>Размер по
+        <select bind:value={sizeBy}>{#each MEASURE_FIELDS as field}<option value={field.key}>{field.title}</option>{/each}</select>
+      </label>
+      <label>Режим
+        <select bind:value={mode}><option>2D</option><option>3D</option></select>
+      </label>
+    </div>
+
+    <div class="group">
+      <h4>Период</h4>
+      <select bind:value={period}>
+        <option>7 дней</option>
+        <option>14 дней</option>
+        <option>30 дней</option>
+        <option>Выбрать даты</option>
+      </select>
+      {#if period === 'Выбрать даты'}
+        <div class="dates">
+          <input type="date" bind:value={fromDate} />
+          <input type="date" bind:value={toDate} />
+        </div>
+      {/if}
+    </div>
+
+    <div class="group">
+      <h4>Фильтры</h4>
+      <div class="chips">
+        <label>Категория <select bind:value={filterCategory}>{#each categoryOptions as opt}<option>{opt}</option>{/each}</select></label>
+        <label>Предмет <select bind:value={filterSubject}>{#each subjectOptions as opt}<option>{opt}</option>{/each}</select></label>
+        <label>Бренд <select bind:value={filterBrand}>{#each brandOptions as opt}<option>{opt}</option>{/each}</select></label>
+        <label>Тип РК <select bind:value={filterRkType}>{#each rkTypeOptions as opt}<option>{opt}</option>{/each}</select></label>
+        <label>Точка входа <select bind:value={filterEntryPoint}>{#each entryPointOptions as opt}<option>{opt}</option>{/each}</select></label>
+      </div>
+      <div class="numbers">
+        <label>Выручка &gt; <input type="number" min="0" bind:value={minRevenue} /></label>
+        <label>ДРР &lt; <input type="number" min="0" max="100" bind:value={maxDrr} /></label>
+      </div>
+    </div>
+
+    <div class="group search">
+      <input bind:this={searchInput} bind:value={search} placeholder="Поиск SKU / РК" />
+      <button on:click={resetView}>Сбросить вид</button>
+    </div>
   </div>
 
   <div class="status">
-    Покупатели: {showBuyers ? buyerPoints.length : 0} · Сущности: {visible.length} · Режим: {mode} · Цвет: {formatMetricLabel(colorBy)} · Размер: {formatMetricLabel(sizeBy)}
+    Поля: {DATA_FIELDS.length} · Показано точек: {projected.length} · X: {formatFieldTitle(axisX)} · Y: {formatFieldTitle(axisY)} · Z: {formatFieldTitle(axisZ)}
   </div>
 
   <div class="stage">
@@ -517,48 +527,41 @@
         bind:this={canvas2d}
         width={width}
         height={height}
-        on:wheel|preventDefault={on2dWheel}
-        on:mousedown={on2dMouseDown}
-        on:mousemove={on2dMouseMove}
-        on:mouseup={on2dMouseUp}
-        on:mouseleave={() => { dragging = false; tooltip.visible = false; }}
+        on:mousedown={(event) => { dragging = true; dragStart = { x: event.clientX - panX, y: event.clientY - panY }; }}
+        on:mousemove={onCanvasMove}
+        on:mouseup={() => { dragging = false; }}
+        on:wheel|preventDefault={(e) => { scale2d = Math.max(0.2, Math.min(4, scale2d * (e.deltaY > 0 ? 0.9 : 1.1))); }}
       />
     {:else}
-      <div bind:this={container3d} class="scene3d" />
+      <div bind:this={container3d} class="scene" />
     {/if}
 
-    {#if tooltip.visible && tooltip.entity}
+    {#if tooltip.visible}
       <div class="tooltip" style={`left:${tooltip.x}px;top:${tooltip.y}px`}>
-        <div class="name">{tooltip.entity.name}</div>
-        <div>{tooltip.entity.type === 'item' ? 'Товар' : 'Рекламная кампания'}</div>
-        <div>ДРР {tooltip.entity.metrics.DRR}% · ROI {tooltip.entity.metrics.ROI} · CR2 {tooltip.entity.metrics.CR2}%</div>
-        <div>Выручка {tooltip.entity.metrics.sales.toLocaleString('ru-RU')} ₽ · Расход {tooltip.entity.metrics.spend.toLocaleString('ru-RU')} ₽</div>
+        {#each tooltip.lines as line}<div>{line}</div>{/each}
       </div>
     {/if}
   </div>
 </section>
 
 <style>
-  .similarity-map { display:flex; flex-direction:column; gap:8px; }
-  .topbar { display:flex; flex-wrap:wrap; gap:10px; font-size:12px; color:#475569; align-items:center; }
-  .topbar label { display:flex; align-items:center; gap:6px; }
-  .toggle { background:#f8fbff; border:1px solid #e2e8f0; border-radius:10px; padding:4px 8px; }
-  select,input { border:1px solid #dbe4f0; border-radius:10px; padding:5px 8px; background:#fff; }
-  input { min-width:150px; }
-  .ghost { border:1px solid #dbe4f0; background:#fff; border-radius:10px; padding:6px 10px; color:#334155; }
+  .graph-root { display:flex; flex-direction:column; gap:10px; }
+  .controls { display:grid; grid-template-columns:repeat(3, minmax(240px, 1fr)); gap:10px; }
+  .group { border:1px solid #e2e8f0; border-radius:12px; padding:8px; background:#fbfdff; display:flex; flex-direction:column; gap:6px; }
+  .group h4 { margin:0; font-size:12px; color:#475569; }
+  .group label { display:flex; justify-content:space-between; align-items:center; gap:6px; font-size:12px; color:#334155; }
+  .group select, .group input { border:1px solid #dbe4f0; border-radius:10px; padding:5px 8px; font-size:12px; background:#fff; }
+  .checks { display:flex; gap:10px; }
+  .checks label { font-size:12px; }
+  small { color:#64748b; font-size:11px; }
+  .chips { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  .numbers { display:flex; gap:8px; }
+  .search { grid-column: span 3; display:flex; flex-direction:row; align-items:center; }
+  .search input { flex:1; }
+  .search button { border:1px solid #cbd5e1; border-radius:10px; background:#fff; padding:7px 12px; }
+  .dates { display:flex; gap:6px; }
   .status { font-size:12px; color:#64748b; }
-  .stage { position:relative; width:100%; }
-  canvas,.scene3d { width:100%; height:540px; border:1px solid #e2e8f0; border-radius:16px; background:#f9fbff; }
-  .tooltip {
-    position:absolute;
-    pointer-events:none;
-    background:rgba(15,23,42,.92);
-    color:#f8fafc;
-    border-radius:12px;
-    padding:10px 12px;
-    font-size:12px;
-    max-width:320px;
-    box-shadow:0 10px 24px rgba(15,23,42,.2);
-  }
-  .tooltip .name { font-weight:600; margin-bottom:3px; }
+  .stage { position:relative; }
+  canvas, .scene { width:100%; height:560px; border:1px solid #e2e8f0; border-radius:16px; background:#f8fbff; }
+  .tooltip { position:absolute; pointer-events:none; background:rgba(15,23,42,.94); color:#f8fafc; font-size:12px; padding:10px; border-radius:10px; max-width:360px; }
 </style>
