@@ -1,0 +1,13 @@
+# Node
+**/node_modules/
+
+# Build artifacts
+core/orchestrator/modules/advertising/interface/dist/
+
+# Local env
+/deploy/server.env
+
+# OS/editor
+.DS_Store
+*.swp
+*.tmp
