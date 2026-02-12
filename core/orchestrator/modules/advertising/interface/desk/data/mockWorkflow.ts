@@ -7,7 +7,7 @@ export type WorkflowState = {
   conditionDrr: number;
   conditionRoi: number;
   conditionStockDays: number;
-  action: 'Create SPS/SPM' | 'Change bids' | 'Change budget' | 'Pause campaign';
+  action: 'Создать SPS/SPM' | 'Изменить ставки' | 'Изменить бюджет' | 'Остановить РК';
   schedule: '15m' | '1h' | '6h' | '24h';
 };
 
@@ -17,13 +17,13 @@ export type CommandLogItem = {
   workflowName: string;
   action: string;
   affectedCount: number;
-  status: 'SIMULATED';
+  status: 'СИМУЛЯЦИЯ';
 };
 
-export const dataCloudOptions = ['ad_mart_daily', 'customer_typology_v2', 'entry_point_graph', 'sku_ads_kpi'];
+export const dataCloudOptions = ['Витрина рекламы за день', 'Типология покупателей v2', 'Граф точек входа', 'KPI SKU по рекламе'];
 
 export const initialWorkflow: WorkflowState = {
-  workflowName: 'Desk Flow A',
+  workflowName: 'Сценарий desk A',
   dataCloud: dataCloudOptions[0],
   filters: [
     { id: 'f1', field: 'subject', operator: 'IN', value: 'Кроссовки' },
@@ -32,7 +32,7 @@ export const initialWorkflow: WorkflowState = {
   conditionDrr: 18,
   conditionRoi: 1.2,
   conditionStockDays: 30,
-  action: 'Change bids',
+  action: 'Изменить ставки',
   schedule: '1h',
 };
 
@@ -44,18 +44,18 @@ export function generatePivotRows(count = 20): Array<Record<string, string | num
     drr: Number((5 + Math.random() * 30).toFixed(2)),
     roi: Number((0.6 + Math.random() * 2.8).toFixed(2)),
     stockDays: Math.round(8 + Math.random() * 80),
-    entryPoint: ['Search', 'Shelf', 'Category'][i % 3],
-    targetSegment: ['premium', 'price-sensitive', 'спорт'][i % 3],
+    entryPoint: ['Поиск', 'Полка', 'Категория'][i % 3],
+    targetSegment: ['Премиум', 'Чувствительные к цене', 'Спорт'][i % 3],
   }));
 }
 
 export function newLog(workflowName: string, action: string, affectedCount: number): CommandLogItem {
   return {
     id: String(Date.now() + Math.random()),
-    time: new Date().toLocaleTimeString(),
+    time: new Date().toLocaleDateString('ru-RU') + ' ' + new Date().toLocaleTimeString('ru-RU'),
     workflowName,
     action,
     affectedCount,
-    status: 'SIMULATED',
+    status: 'СИМУЛЯЦИЯ',
   };
 }
