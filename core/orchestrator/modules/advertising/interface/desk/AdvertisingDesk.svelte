@@ -26,8 +26,8 @@
 
 <main class="desk-root">
   <header>
-    <h1>Диспетчерская служба рекламы</h1>
-    <div class="sub">Кто наш покупатель vs куда стреляем рекламой</div>
+    <h1>Пространство</h1>
+    <div class="sub">3D-граф сущностей по выбранным метрикам</div>
   </header>
 
   <section class="layout">

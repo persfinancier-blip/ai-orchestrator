@@ -1,5 +1,5 @@
 export type EntityType = 'item' | 'campaign';
-export type EntityMode = 'SKU' | 'Предмет' | 'Рекламная кампания (РК)';
+export type EntityMode = 'Артикулы (SKU)' | 'Предметы' | 'Категории' | 'Бренды' | 'Рекламные кампании (РК)';
 export type PeriodMode = '7 дней' | '14 дней' | '30 дней' | 'Выбрать даты';
 export type Mode3D = '2D' | '3D';
 
@@ -28,7 +28,7 @@ export type DataField = {
 };
 
 export const DATA_FIELDS: DataField[] = [
-  { key: 'sku', title: 'SKU', kind: 'dimension' },
+  { key: 'sku', title: 'Артикул (SKU)', kind: 'dimension' },
   { key: 'subject', title: 'Предмет', kind: 'dimension' },
   { key: 'campaign_id', title: 'ID РК', kind: 'dimension' },
   { key: 'entry_point', title: 'Точка входа', kind: 'dimension' },
