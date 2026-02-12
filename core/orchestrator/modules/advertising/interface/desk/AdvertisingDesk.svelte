@@ -13,6 +13,7 @@
   let commandLog: CommandLogItem[] = [];
   let previewRows = generatePivotRows(20);
   let toast = '';
+  let affectedEstimate = 0;
 
   function onSelectNode(e: CustomEvent<GraphNode>): void {
     selectedNode = e.detail;
@@ -26,10 +27,11 @@
 
   function preview(): void {
     previewRows = generatePivotRows(20);
+    affectedEstimate = 80 + Math.round(Math.random() * 1200);
   }
 
   function runFlow(): void {
-    const affected = 120 + Math.round(Math.random() * 900);
+    const affected = affectedEstimate || (120 + Math.round(Math.random() * 900));
     commandLog = [newLog(workflow.workflowName, workflow.action, affected), ...commandLog].slice(0, 10);
     toast = 'Simulated run created';
     setTimeout(() => (toast = ''), 1600);
@@ -53,7 +55,7 @@
   <section class="layout">
     <div class="left">
       <GraphPanel allNodes={graph.nodes} allEdges={graph.edges} {mode} on:selectNode={onSelectNode} />
-      <WorkflowCanvas state={workflow} {commandLog} {previewRows} onPreview={preview} onRun={runFlow} />
+      <WorkflowCanvas state={workflow} {commandLog} {previewRows} {affectedEstimate} onPreview={preview} onRun={runFlow} />
     </div>
     <InspectorPanel {selectedNode} onAddToDataCloud={addToCloud} />
   </section>

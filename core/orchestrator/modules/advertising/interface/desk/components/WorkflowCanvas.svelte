@@ -7,6 +7,7 @@
   export let previewRows: Array<Record<string, string | number>> = [];
   export let onPreview: () => void = () => {};
   export let onRun: () => void = () => {};
+  export let affectedEstimate = 0;
 
   function addFilter(): void {
     state.filters = [...state.filters, { id: String(Date.now()), field: 'skuId', operator: 'IN', value: 'SKU-100001' }];
@@ -32,6 +33,7 @@
     <div class="block run"><h4>6) Run / Preview</h4><button on:click={onPreview}>Preview</button><button class="primary" on:click={onRun}>Run</button></div>
   </div>
 
+  <div class="estimate">Estimated affected SKU: <strong>{affectedEstimate}</strong></div>
   <PivotPreview rows={previewRows} />
 
   <div class="log">
@@ -50,6 +52,7 @@
   .row { display:grid; grid-template-columns:1fr 100px 1fr 28px; gap:6px; }
   .run button { margin-right:8px; }
   .primary { background:#0f172a; color:#fff; }
+  .estimate{font-size:12px;color:#475569;margin:8px 0;}
   .log { margin-top:10px; border-top:1px solid #eef2f7; padding-top:10px; }
   .log-row { font-size:12px; color:#475569; margin-bottom:6px; }
 </style>
