@@ -7,15 +7,15 @@
 
 <section class="pivot">
   <div class="filters">
-    <input bind:value={q} placeholder="Search SKU" />
-    <label>DRR ≤ {drrMax}% <input type="range" min="5" max="35" bind:value={drrMax} /></label>
+    <input bind:value={q} placeholder="Поиск SKU" />
+    <label>ДРР ≤ {drrMax}% <input type="range" min="5" max="35" bind:value={drrMax} /></label>
   </div>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>SKU</th><th>Spend</th><th>Orders</th><th>DRR</th><th>ROI</th><th>StockDays</th><th>EntryPoint</th><th>TargetSegment</th></tr></thead>
+      <thead><tr><th>SKU</th><th>Расход</th><th>Заказы</th><th>ДРР</th><th>ROI</th><th>Остатки (дни)</th><th>Точка входа</th><th>Сегмент</th></tr></thead>
       <tbody>
         {#each filtered as r}
-          <tr><td>{r.sku}</td><td>{r.spend}</td><td>{r.orders}</td><td>{r.drr}</td><td>{r.roi}</td><td>{r.stockDays}</td><td>{r.entryPoint}</td><td>{r.targetSegment}</td></tr>
+          <tr><td>{r.sku}</td><td>{Number(r.spend).toLocaleString('ru-RU')} ₽</td><td>{r.orders}</td><td>{r.drr}</td><td>{r.roi}</td><td>{r.stockDays}</td><td>{r.entryPoint}</td><td>{r.targetSegment}</td></tr>
         {/each}
       </tbody>
     </table>

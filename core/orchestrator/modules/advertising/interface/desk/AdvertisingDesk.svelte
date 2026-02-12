@@ -2,62 +2,58 @@
   import GraphPanel from './components/GraphPanel.svelte';
   import WorkflowCanvas from './components/WorkflowCanvas.svelte';
   import InspectorPanel from './components/InspectorPanel.svelte';
-  import type { GraphNode, LodMode } from './data/mockGraph';
-  import { generateMockGraph } from './data/mockGraph';
+  import type { SimilarityEntity } from './data/mockGraph';
+  import { generateSimilarityData, nearestOpposite } from './data/mockGraph';
   import { initialWorkflow, generatePivotRows, newLog, type CommandLogItem } from './data/mockWorkflow';
 
-  const graph = generateMockGraph(2000);
-  let selectedNode: GraphNode | null = null;
-  let mode: LodMode = 'SKU';
+  const entities = generateSimilarityData(200, 80);
+  let selectedEntity: SimilarityEntity | null = null;
   let workflow = structuredClone(initialWorkflow);
   let commandLog: CommandLogItem[] = [];
   let previewRows = generatePivotRows(20);
   let toast = '';
   let affectedEstimate = 0;
+  let nearest: SimilarityEntity[] = [];
+  let farthest: SimilarityEntity[] = [];
 
-  function onSelectNode(e: CustomEvent<GraphNode>): void {
-    selectedNode = e.detail;
+  function onSelectEntity(e: CustomEvent<SimilarityEntity>): void {
+    selectedEntity = e.detail;
+    nearest = nearestOpposite(selectedEntity, entities, 10, false);
+    farthest = selectedEntity.type === 'item' ? nearestOpposite(selectedEntity, entities, 10, true) : [];
   }
 
-  function addToCloud(node: GraphNode): void {
-    workflow.filters = [...workflow.filters, { id: String(Date.now()), field: 'skuId', operator: 'IN', value: node.skuId ?? node.id }];
-    toast = `${node.label} added to Data Cloud`;
-    setTimeout(() => (toast = ''), 1400);
+  function createCloud(): void {
+    if (!selectedEntity) return;
+    toast = `Создано облако данных из ${selectedEntity.id}`;
+    console.info('mock-cloud-created', { id: selectedEntity.id, at: new Date().toLocaleString('ru-RU') });
+    setTimeout(() => (toast = ''), 1500);
   }
 
   function preview(): void {
     previewRows = generatePivotRows(20);
-    affectedEstimate = 80 + Math.round(Math.random() * 1200);
+    affectedEstimate = 90 + Math.round(Math.random() * 1100);
   }
 
   function runFlow(): void {
     const affected = affectedEstimate || (120 + Math.round(Math.random() * 900));
     commandLog = [newLog(workflow.workflowName, workflow.action, affected), ...commandLog].slice(0, 10);
-    toast = 'Simulated run created';
-    setTimeout(() => (toast = ''), 1600);
+    toast = 'Сформирован тестовый запуск';
+    setTimeout(() => (toast = ''), 1400);
   }
 </script>
 
 <main class="desk-root">
   <header>
-    <h1>Advertising Control Desk</h1>
-    <div class="mode">
-      <label>Level of detail</label>
-      <select bind:value={mode}>
-        <option>SKU</option>
-        <option>Предмет</option>
-        <option>Campaign ID</option>
-        <option>Entry points</option>
-      </select>
-    </div>
+    <h1>Диспетчерская служба рекламы</h1>
+    <div class="sub">Кто наш покупатель vs куда стреляем рекламой</div>
   </header>
 
   <section class="layout">
     <div class="left">
-      <GraphPanel allNodes={graph.nodes} allEdges={graph.edges} {mode} on:selectNode={onSelectNode} />
+      <GraphPanel {entities} on:selectEntity={onSelectEntity} />
       <WorkflowCanvas state={workflow} {commandLog} {previewRows} {affectedEstimate} onPreview={preview} onRun={runFlow} />
     </div>
-    <InspectorPanel {selectedNode} onAddToDataCloud={addToCloud} />
+    <InspectorPanel {selectedEntity} {nearest} {farthest} onCreateCloud={createCloud} />
   </section>
 
   {#if toast}<div class="toast">{toast}</div>{/if}
@@ -66,10 +62,9 @@
 <style>
   :global(body){margin:0;font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f4f6fa;color:#0f172a;}
   .desk-root{padding:18px;}
-  header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;}
+  header{display:flex;flex-direction:column;gap:3px;margin-bottom:12px;}
   h1{margin:0;font-size:24px;font-weight:650;letter-spacing:.01em;}
-  .mode{display:flex;gap:8px;align-items:center;color:#64748b;font-size:12px;}
-  .mode select{border:1px solid #dbe4f0;border-radius:10px;padding:6px 10px;background:#fff;}
+  .sub{color:#64748b;font-size:12px;}
   .layout{display:grid;grid-template-columns:1fr 320px;gap:14px;}
   .left{display:flex;flex-direction:column;gap:14px;}
   :global(.panel){background:#fff;border:1px solid #e8edf5;border-radius:18px;padding:12px;box-shadow:0 10px 30px rgba(15,23,42,.05);transition:all .2s ease;}
