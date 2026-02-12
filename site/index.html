@@ -1,112 +1,17 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AI Orchestrator — Публичная страница</title>
+  <title>AI Orchestrator Site</title>
   <style>
-    :root {
-      --bg: #f4f7fb;
-      --text: #0f172a;
-      --muted: #475569;
-      --accent: #1d4ed8;
-      --card: #ffffff;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      color: var(--text);
-      background: radial-gradient(circle at 15% 10%, #dbeafe 0%, var(--bg) 40%, var(--bg) 100%);
-    }
-    .container {
-      max-width: 960px;
-      margin: 0 auto;
-      padding: 72px 20px 48px;
-    }
-    .badge {
-      display: inline-block;
-      font-size: 12px;
-      letter-spacing: 0.12em;
-      color: var(--accent);
-      background: #dbeafe;
-      border-radius: 999px;
-      padding: 8px 12px;
-      margin-bottom: 20px;
-      font-weight: 700;
-    }
-    h1 {
-      margin: 0;
-      font-size: clamp(32px, 6vw, 60px);
-      line-height: 1.06;
-      max-width: 780px;
-    }
-    p.lead {
-      margin-top: 20px;
-      max-width: 760px;
-      color: var(--muted);
-      font-size: 20px;
-      line-height: 1.6;
-    }
-    .cards {
-      margin-top: 36px;
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 16px;
-    }
-    .card {
-      background: var(--card);
-      border: 1px solid #dbe3ef;
-      border-radius: 16px;
-      padding: 18px;
-      box-shadow: 0 12px 40px rgba(15, 23, 42, 0.06);
-    }
-    .card h3 { margin: 0 0 10px; font-size: 18px; }
-    .card p { margin: 0; color: var(--muted); line-height: 1.5; }
-    .cta {
-      margin-top: 38px;
-      display: inline-block;
-      text-decoration: none;
-      padding: 14px 20px;
-      background: var(--accent);
-      color: #fff;
-      border-radius: 12px;
-      font-weight: 600;
-    }
-    footer {
-      margin-top: 42px;
-      color: #64748b;
-      font-size: 14px;
-    }
+    body{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;padding:40px;background:#f6f8fb;color:#0f172a}
+    a{display:inline-block;padding:12px 16px;border-radius:10px;border:1px solid #dbe4f0;background:#fff;text-decoration:none;color:#0f172a}
   </style>
 </head>
 <body>
-  <div class="container">
-    <span class="badge">AI ORCHESTRATOR · PUBLIC PAGE</span>
-    <h1>Публичная демо-страница готова для внешнего доступа</h1>
-    <p class="lead">
-      Это стартовая страница проекта. Её можно открыть из браузера по внешней ссылке и использовать как
-      точку входа для презентации AI Orchestrator клиентам, команде и партнёрам.
-    </p>
-
-    <div class="cards">
-      <section class="card">
-        <h3>Быстрый запуск</h3>
-        <p>Поднимается одной командой через локальный HTTP-сервер.</p>
-      </section>
-      <section class="card">
-        <h3>Внешний доступ</h3>
-        <p>Для публикации наружу подключается туннель (например, cloudflared или ngrok).</p>
-      </section>
-      <section class="card">
-        <h3>Готово к расширению</h3>
-        <p>Можно добавлять блоки, ссылки на разделы продукта и форму обратной связи.</p>
-      </section>
-    </div>
-
-    <a class="cta" href="https://github.com/" target="_blank" rel="noreferrer">Перейти к репозиторию</a>
-
-    <footer>© AI Orchestrator</footer>
-  </div>
+  <h1>AI Orchestrator</h1>
+  <p>Open UI prototype:</p>
+  <a href="../core/orchestrator/modules/advertising/interface/index.html#desk">Advertising Desk</a>
 </body>
 </html>

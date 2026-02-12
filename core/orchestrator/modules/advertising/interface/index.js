@@ -28,3 +28,5 @@ export { default as GroupContextMenu } from './components/actions/GroupContextMe
 export { default as SyncStatusBadge } from './components/status/SyncStatusBadge.svelte';
 export { default as ErrorTooltip } from './components/status/ErrorTooltip.svelte';
 export { default as DraftChangesBanner } from './components/status/DraftChangesBanner.svelte';
+// Advertising desk
+export { default as AdvertisingDesk } from './desk/AdvertisingDesk.svelte';
