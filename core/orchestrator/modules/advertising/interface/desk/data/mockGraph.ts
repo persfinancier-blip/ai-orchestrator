@@ -14,6 +14,7 @@ export type MeasureField =
   | 'cr1'
   | 'cr2'
   | 'clicks'
+  | 'position'
   | 'search_share'
   | 'shelf_share'
   | 'stock_days'
@@ -60,6 +61,8 @@ export type SimilarityEntity = {
   sku: string;
   subject: string;
   campaign_id: string;
+  keyword_cluster: string;
+  search_query: string;
   entry_point: 'Поиск' | 'Полка' | 'Категория';
   segment: 'Премиум' | 'Чувствительные к цене' | 'Импульсные';
   brand: string;
@@ -92,6 +95,7 @@ const categories = ['Одежда', 'Обувь', 'Спорт', 'Дом'];
 const segments = ['Премиум', 'Чувствительные к цене', 'Импульсные'] as const;
 const entryPoints = ['Поиск', 'Полка', 'Категория'] as const;
 const rkTypes = ['Поиск', 'Каталог', 'Авто'] as const;
+const keywordClusters = ['Брендовый спрос', 'Конкурентный спрос', 'Высокая маржинальность', 'Широкий охват'];
 
 const buyerClusters: BuyerCluster[] = [
   { id: 'c1', name: 'Рациональные покупатели', center: { x: -58, y: 36, z: 20 } },
@@ -128,6 +132,7 @@ function metricProfile(distanceToCluster: number): Record<MeasureField, number> 
   const cr0 = clamp(cr1 * rnd(1.2, 1.6), 0.4, 35);
   const searchShare = clamp(0.2 + clusterFactor * 0.75 + rnd(-0.08, 0.08), 0, 1);
   const shelfShare = clamp(1 - searchShare + rnd(-0.05, 0.05), 0, 1);
+  const position = clamp(3 + (1 - clusterFactor) * 42 + rnd(-4, 4), 1, 60);
   const stockDays = Math.round(clamp(8 + (1 - clusterFactor) * 70 + rnd(-5, 8), 3, 120));
   const entryGap = Math.abs(searchShare - shelfShare) * 100;
 
@@ -141,6 +146,7 @@ function metricProfile(distanceToCluster: number): Record<MeasureField, number> 
     cr1: Number(cr1.toFixed(2)),
     cr2: Number(cr2.toFixed(2)),
     clicks: Math.round(clicks),
+    position: Number(position.toFixed(2)),
     search_share: Number((searchShare * 100).toFixed(2)),
     shelf_share: Number((shelfShare * 100).toFixed(2)),
     stock_days: stockDays,
@@ -159,6 +165,8 @@ function buildItem(i: number): SimilarityEntity {
     sku: `SKU-${100000 + i}`,
     subject: subjects[i % subjects.length],
     campaign_id: '',
+    keyword_cluster: keywordClusters[i % keywordClusters.length],
+    search_query: `запрос ${1 + (i % 30)}`,
     entry_point: entryPoints[i % entryPoints.length],
     segment: segments[i % segments.length],
     brand: brands[i % brands.length],
@@ -194,6 +202,8 @@ function buildCampaign(i: number): SimilarityEntity {
     sku: '',
     subject: subjects[i % subjects.length],
     campaign_id: `CMP-${1000 + i}`,
+    keyword_cluster: keywordClusters[i % keywordClusters.length],
+    search_query: `рк запрос ${1 + (i % 25)}`,
     entry_point: entryPoints[i % entryPoints.length],
     segment: segments[i % segments.length],
     brand: brands[i % brands.length],
@@ -266,6 +276,7 @@ export function aggregateBySubject(entities: SimilarityEntity[]): SimilarityEnti
         cr1: Number(avg('cr1').toFixed(2)),
         cr2: Number(avg('cr2').toFixed(2)),
         clicks: Math.round(avg('clicks')),
+        position: Number(avg('position').toFixed(2)),
         search_share: Number(avg('search_share').toFixed(2)),
         shelf_share: Number(avg('shelf_share').toFixed(2)),
         stock_days: Math.round(avg('stock_days')),
