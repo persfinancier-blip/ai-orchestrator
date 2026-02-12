@@ -36,7 +36,7 @@
     if (!network) {
       network = new Network(container, { nodes, edges }, {
         physics: { stabilization: false, barnesHut: { springLength: 90 } },
-        interaction: { hover: true, multiselect: false, zoomView: true, dragView: true },
+        interaction: { hover: true, multiselect: false, zoomView: true, dragView: false },
       });
       network.on('click', (params) => {
         if (!params.nodes?.length) return;
@@ -70,7 +70,7 @@
     if (e.code === 'Space' && network) network.setOptions({ interaction: { dragView: true } });
   }
   function onKeyup(e: KeyboardEvent): void {
-    if (e.code === 'Space' && network) network.setOptions({ interaction: { dragView: true } });
+    if (e.code === 'Space' && network) network.setOptions({ interaction: { dragView: false } });
   }
 
   onMount(() => {
@@ -88,11 +88,12 @@
   <div class="bar">
     <div>Nodes: {view.nodes.length} | Edges: {view.edges.length} | Mode: {mode}</div>
     <div class="controls">
-      <input id="desk-node-search" bind:value={query} on:change={focusByQuery} placeholder="Search SKU/keyword/campaign (Ctrl+K)" />
+      <input id="desk-node-search" bind:value={query} on:change={focusByQuery} placeholder="Search SKU/keyword/campaign (Ctrl/Cmd+K)" />
       <button on:click={focusByQuery}>Focus</button>
     </div>
   </div>
   <div bind:this={container} class="graph-canvas" />
+  <div class="hint">Space + drag = pan · scroll = zoom</div>
   <div class="legend">
     <span><i style="background:#6ecf6a"></i>SKU</span>
     <span><i style="background:#b7dcff"></i>Типология</span>
@@ -110,6 +111,7 @@
   input { border:1px solid #e2e8f0; border-radius:10px; padding:6px 10px; width:260px; }
   button { border:1px solid #dbe4f0; background:#fff; border-radius:10px; padding:6px 10px; }
   .graph-canvas { height: 380px; border:1px solid #e2e8f0; border-radius:16px; background:#fbfdff; }
+  .hint{font-size:12px;color:#64748b;}
   .legend { display:flex; gap:14px; flex-wrap:wrap; font-size:12px; color:#475569; }
   .legend i { width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:6px; }
 </style>
