@@ -8,8 +8,8 @@
 </script>
 
 <nav class="top-nav">
-  <a href="#desk" class:active={route === 'desk'}>Advertising Desk</a>
-  <a href="#legacy" class:active={route === 'legacy'}>Legacy Dashboard</a>
+  <a href="#desk" class:active={route === 'desk'}>Пространство</a>
+  <a href="#legacy" class:active={route === 'legacy'}>Классический дашборд</a>
 </nav>
 
 {#if route === 'legacy'}

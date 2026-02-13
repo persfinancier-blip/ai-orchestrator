@@ -1,10 +1,8 @@
 <script lang="ts">
   import GraphPanel from './components/GraphPanel.svelte';
   import WorkflowCanvas from './components/WorkflowCanvas.svelte';
-  import { generateSimilarityData } from './data/mockGraph';
   import { initialWorkflow, generatePivotRows, newLog, type CommandLogItem } from './data/mockWorkflow';
 
-  const entities = generateSimilarityData(200, 80);
   let workflow = structuredClone(initialWorkflow);
   let commandLog: CommandLogItem[] = [];
   let previewRows = generatePivotRows(20);
@@ -26,11 +24,11 @@
 
 <main class="desk-root">
   <header>
-    <h1>Пространство</h1>
+    <h1>AI Orchestrator</h1>
   </header>
 
   <section class="layout">
-    <GraphPanel {entities} />
+    <GraphPanel />
     <WorkflowCanvas state={workflow} {commandLog} {previewRows} {affectedEstimate} onPreview={preview} onRun={runFlow} />
   </section>
 
