@@ -6,6 +6,7 @@
   import { DATASETS, FIELDS, fieldLabel } from '../data/showcase';
   import type { BuyerPoint, MeasureField, SimilarityEntity } from '../data/mockGraph';
   import { generateBuyerCloud, generateSimilarityData, getMeasure } from '../data/mockGraph';
+  import { mapApiPoint, type SpaceApiPoint } from '../data/spaceApi';
 
   export let entities: SimilarityEntity[] = [];
 
@@ -58,6 +59,7 @@
   let filters: PanelFilter[] = [];
   let demoMode = true;
   let search = '';
+  let dataWarning = '';
 
   let container3d: HTMLDivElement;
   let searchInput: HTMLInputElement;
@@ -183,7 +185,8 @@
       if (!allowsEntityByLayer(entity)) return false;
       if (!inPeriod(entity.date)) return false;
       if (!checkEntityMode(entity)) return false;
-      if (query && !entity.name.toLowerCase().includes(query) && !entity.id.toLowerCase().includes(query)) return false;
+      const currentText = entityValue(entity, entityFieldCode).toLowerCase();
+      if (query && !currentText.includes(query)) return false;
       if (filters.some((filter) => !checkFilter(entity, filter))) return false;
       return true;
     });
@@ -434,6 +437,19 @@
     filters = filters.filter((filter) => filter.id !== id);
   }
 
+  function onFilterTypeChange(id: string, event: Event): void {
+    const nextType = (event.currentTarget as HTMLSelectElement).value as FilterType;
+    if (nextType === 'date') {
+      updateFilter(id, { filterType: nextType, fieldCode: dateFilterFields[0]?.code ?? 'date', operator: 'с', valueA: fromDate, valueB: '' });
+      return;
+    }
+    if (nextType === 'number') {
+      updateFilter(id, { filterType: nextType, fieldCode: numberFilterFields[0]?.code ?? 'revenue', operator: '>', valueA: '', valueB: '' });
+      return;
+    }
+    updateFilter(id, { filterType: nextType, fieldCode: textFilterFields[0]?.code ?? 'subject', operator: 'содержит', valueA: '', valueB: '' });
+  }
+
   function onFilterFieldChange(id: string, event: Event): void {
     updateFilter(id, { fieldCode: (event.currentTarget as HTMLSelectElement).value });
   }
@@ -522,6 +538,23 @@
     writeSettings();
   }
 
+
+  async function loadFromApi(): Promise<void> {
+    try {
+      const response = await fetch('/ai-orchestrator/api/space?period=30');
+      if (!response.ok) throw new Error('bad response');
+      const payload = (await response.json()) as { points: SpaceApiPoint[] };
+      if (!payload?.points?.length) throw new Error('empty');
+      entities = payload.points.map(mapApiPoint);
+      dataWarning = '';
+    } catch {
+      dataWarning = 'Нет данных. Проверьте подключение к витрине.';
+      if (!entities || entities.length === 0) {
+        entities = generateSimilarityData(200, 80);
+      }
+    }
+  }
+
   function resetPanel(): void {
     entityFieldCode = 'sku';
     activeLayers = ['sales_fact', 'ads'];
@@ -538,11 +571,9 @@
   }
 
   onMount(() => {
-    if (!entities || entities.length === 0) {
-      entities = generateSimilarityData(200, 80);
-    }
     init3d();
     readSettings();
+    loadFromApi();
     window.addEventListener('resize', onResize);
     window.addEventListener('keydown', onHotKey);
   });
@@ -564,18 +595,15 @@
 </script>
 
 <section class="graph-root panel">
-  <div class="header">
-    <h2>Пространство</h2>
-  </div>
-
   <div class="content">
+    <div class="title-row">
+      <h2>Пространство</h2>
+      <div class="status">Точек: {projected.length} · Слои: {activeLayers.map((layer) => DATASETS.find((item) => item.id === layer)?.name).join(', ')} · Оси: {fieldLabel(axisX)} / {fieldLabel(axisY)} / {fieldLabel(axisZ)}</div>
+    </div>
     <div class="graph-wrap">
-      <div class="status">
-        Точек: {projected.length} · Слои: {activeLayers.map((layer) => DATASETS.find((item) => item.id === layer)?.name).join(', ')} ·
-        Оси: {fieldLabel(axisX)} / {fieldLabel(axisY)} / {fieldLabel(axisZ)}
-      </div>
       <div class="stage">
         <div bind:this={container3d} class="scene" />
+        {#if dataWarning}<div class="warning">{dataWarning}</div>{/if}
         {#if tooltip.visible}
           <div class="tooltip" style={`left:${tooltip.x}px;top:${tooltip.y}px`}>
             {#each tooltip.lines as line}<div>{line}</div>{/each}
@@ -661,17 +689,18 @@
           </div>
         {/if}
 
-        <input bind:this={searchInput} bind:value={search} placeholder="Поиск SKU / РК" />
+        <input bind:this={searchInput} bind:value={search} placeholder="Поиск по выбранной сущности" />
 
-        <div class="row-buttons">
-          <button on:click={() => addFilter('date')}>+ Добавить фильтр даты</button>
-          <button on:click={() => addFilter('text')}>+ Добавить текстовый фильтр</button>
-          <button on:click={() => addFilter('number')}>+ Добавить числовой фильтр</button>
-        </div>
+        <button on:click={() => addFilter('text')}>+ Добавить фильтр</button>
 
         {#each filters as filter}
           <div class="filter-item">
             <div class="filter-head">Фильтр: {filter.filterType === 'date' ? 'Дата' : filter.filterType === 'text' ? 'Текст' : 'Число'}</div>
+            <select bind:value={filter.filterType} on:change={(event) => onFilterTypeChange(filter.id, event)}>
+              <option value="date">Дата</option>
+              <option value="text">Текст</option>
+              <option value="number">Число</option>
+            </select>
             {#if filter.filterType === 'date'}
               <select bind:value={filter.fieldCode} on:change={(event) => onFilterFieldChange(filter.id, event)}>
                 {#each dateFilterFields as field}<option value={field.code}>{field.name}</option>{/each}
@@ -721,10 +750,11 @@
 
 <style>
   .graph-root { display:flex; flex-direction:column; gap:10px; }
-  .header h2 { margin:0; font-size:24px; }
+  .title-row { grid-column:1 / -1; display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:2px; }
+  .title-row h2 { margin:0; font-size:24px; }
   .content { display:grid; grid-template-columns:minmax(0,1fr) 360px; gap:12px; align-items:stretch; }
   .graph-wrap { min-width:0; }
-  .status { font-size:12px; color:#64748b; margin-bottom:6px; }
+  .status { font-size:12px; color:#64748b; text-align:right; }
   .stage { position:relative; }
   .scene { width:100%; height:560px; border:1px solid #e2e8f0; border-radius:16px; background:#f8fbff; }
   .control-panel { height:560px; border:1px solid #e2e8f0; border-radius:14px; padding:10px; background:#fbfdff; display:flex; flex-direction:column; gap:10px; overflow:auto; }
@@ -736,6 +766,7 @@
   .section button:disabled { opacity:.5; cursor:not-allowed; }
   .dates { display:flex; gap:6px; }
   .tooltip { position:absolute; pointer-events:none; background:rgba(15,23,42,.94); color:#f8fafc; font-size:12px; padding:10px; border-radius:10px; max-width:360px; }
+  .warning { position:absolute; left:12px; bottom:12px; background:#fff7ed; color:#9a3412; border:1px solid #fdba74; border-radius:10px; padding:8px 10px; font-size:12px; }
   .row-buttons { display:flex; flex-wrap:wrap; gap:6px; }
   .layer-list, .filter-item { display:flex; flex-direction:column; gap:6px; }
   .layer-item { display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:12px; }
@@ -743,3 +774,4 @@
   .demo-toggle { display:flex; flex-direction:row; align-items:center; gap:6px; }
   small { color:#64748b; font-size:11px; line-height:1.3; }
 </style>
+
