@@ -42,8 +42,6 @@
   let axisX = '';
   let axisY = '';
   let axisZ = '';
-  // раньше было showPlanes — теперь это "каркас"
-  let showPlanes = true;
 
   let period: PeriodMode = '30 дней';
   let fromDate = '';
@@ -80,7 +78,8 @@
   // группа "геометрии пространства" (теперь в ней каркас)
   const planeGroup = new THREE.Group();
   const edgeLabelGroup = new THREE.Group();
-
+  let axisLabels: CSS2DObject[] = [];
+  let cornerFrame: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | null = null;
   let cornerFrame: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | null = null;
   
   let axisLabels: CSS2DObject[] = [];
@@ -356,33 +355,45 @@ function disposeAxisLabels(): void {
 
 function createAxisLabel(text: string, isMax = false): CSS2DObject {
   const el = document.createElement('div');
-  el.className = `cube-edge-label${isMax ? ' max' : ''}`;
+
+  // инлайн-стили = не зависит от svelte-scoped CSS
+  el.style.pointerEvents = 'none';
+  el.style.userSelect = 'none';
+  el.style.whiteSpace = 'nowrap';
+  el.style.fontFamily = 'Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial';
+  el.style.fontSize = '12px';
+  el.style.fontWeight = '700';
+  el.style.padding = '4px 8px';
+  el.style.borderRadius = '10px';
+  el.style.boxShadow = '0 8px 24px rgba(15, 23, 42, 0.12)';
+  el.style.background = 'rgba(255, 255, 255, 0.92)';
+  el.style.border = '1px solid rgba(226, 232, 240, 0.95)';
+  el.style.color = 'rgba(15, 23, 42, 0.92)';
+
+  if (isMax) {
+    el.style.color = 'rgba(30, 64, 175, 0.98)';
+    el.style.borderColor = 'rgba(191, 219, 254, 0.98)';
+    el.style.background = 'rgba(239, 246, 255, 0.95)';
+  }
+
   el.textContent = text;
   return new CSS2DObject(el);
 }
 
 function rebuildPlanes(list: SpacePoint[]): void {
-  // Теперь здесь НЕ куб, а "угол" из 3 плоскостей: XY (пол), XZ, YZ
   planeGroup.clear();
-  disposeWireframe();
+  disposeCornerFrame();
   disposeAxisLabels();
-
-  if (!showPlanes) return;
 
   const bbox = normalizeBBox(list);
 
-  // точки "нуля" и концов осей (как ты рисовал желтым/зелёным)
   const A = new THREE.Vector3(bbox.minX, bbox.minY, bbox.minZ);
   const Bx = new THREE.Vector3(bbox.maxX, bbox.minY, bbox.minZ);
   const By = new THREE.Vector3(bbox.minX, bbox.maxY, bbox.minZ);
   const Bz = new THREE.Vector3(bbox.minX, bbox.minY, bbox.maxZ);
 
-  // Рёбра 3 прямоугольников:
-  // XY на z=min
   const Cxy = new THREE.Vector3(bbox.maxX, bbox.maxY, bbox.minZ);
-  // XZ на y=min
   const Cxz = new THREE.Vector3(bbox.maxX, bbox.minY, bbox.maxZ);
-  // YZ на x=min
   const Cyz = new THREE.Vector3(bbox.minX, bbox.maxY, bbox.maxZ);
 
   const segments: Array<[THREE.Vector3, THREE.Vector3]> = [
@@ -393,23 +404,20 @@ function rebuildPlanes(list: SpacePoint[]): void {
     [By, A],
 
     // XZ (y=min)
-    [A, Bx],     // общая
+    [A, Bx],
     [Bx, Cxz],
     [Cxz, Bz],
     [Bz, A],
 
     // YZ (x=min)
-    [A, By],     // общая
+    [A, By],
     [By, Cyz],
     [Cyz, Bz],
     [Bz, A]
   ];
 
-  // Собираем геометрию линий
   const vertices: number[] = [];
-  for (const [p1, p2] of segments) {
-    vertices.push(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
-  }
+  for (const [p1, p2] of segments) vertices.push(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
 
   const geom = new THREE.BufferGeometry();
   geom.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
@@ -418,20 +426,15 @@ function rebuildPlanes(list: SpacePoint[]): void {
   cornerFrame = new THREE.LineSegments(geom, mat);
   planeGroup.add(cornerFrame);
 
-  // ---- Подписи (жёлтые) и максимумы (зелёные) ----
+  // подписи (середина осей)
   const xName = fieldName(axisX || '—');
   const yName = fieldName(axisY || '—');
   const zName = fieldName(axisZ || '—');
-
-  const xMax = axisX ? calcMax(list, axisX) : NaN;
-  const yMax = axisY ? calcMax(list, axisY) : NaN;
-  const zMax = axisZ ? calcMax(list, axisZ) : NaN;
 
   const midX = A.clone().lerp(Bx, 0.5);
   const midY = A.clone().lerp(By, 0.5);
   const midZ = A.clone().lerp(Bz, 0.5);
 
-  // подписи по центру осей
   const lx = createAxisLabel(xName);
   lx.position.copy(midX);
 
@@ -442,13 +445,17 @@ function rebuildPlanes(list: SpacePoint[]): void {
   lz.position.copy(midZ);
 
   // max на концах осей
-  const mx = createAxisLabel(`${formatValueByMetric(axisX, xMax)}`, true);
+  const xMax = axisX ? calcMax(list, axisX) : NaN;
+  const yMax = axisY ? calcMax(list, axisY) : NaN;
+  const zMax = axisZ ? calcMax(list, axisZ) : NaN;
+
+  const mx = createAxisLabel(formatValueByMetric(axisX, xMax), true);
   mx.position.copy(Bx);
 
-  const my = createAxisLabel(`${formatValueByMetric(axisY, yMax)}`, true);
+  const my = createAxisLabel(formatValueByMetric(axisY, yMax), true);
   my.position.copy(By);
 
-  const mz = createAxisLabel(`${formatValueByMetric(axisZ, zMax)}`, true);
+  const mz = createAxisLabel(formatValueByMetric(axisZ, zMax), true);
   mz.position.copy(Bz);
 
   axisLabels = [lx, ly, lz, mx, my, mz];
@@ -537,6 +544,46 @@ function rebuildPlanes(list: SpacePoint[]): void {
     if (metricCode === 'roi') return maxValue.toFixed(2).replace('.', ',');
 
     return formatNumberHuman(maxValue);
+  }
+
+function disposeAxisLabels(): void {
+  for (const l of axisLabels) edgeLabelGroup.remove(l);
+  axisLabels = [];
+}
+
+function createAxisLabel(text: string, isMax = false): CSS2DObject {
+  const el = document.createElement('div');
+
+  // инлайн-стили => не зависят от svelte-scoped CSS
+  el.style.pointerEvents = 'none';
+  el.style.userSelect = 'none';
+  el.style.whiteSpace = 'nowrap';
+  el.style.fontFamily = 'Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial';
+  el.style.fontSize = '12px';
+  el.style.fontWeight = '700';
+  el.style.padding = '4px 8px';
+  el.style.borderRadius = '10px';
+  el.style.boxShadow = '0 8px 24px rgba(15, 23, 42, 0.12)';
+  el.style.background = 'rgba(255, 255, 255, 0.92)';
+  el.style.border = '1px solid rgba(226, 232, 240, 0.95)';
+  el.style.color = 'rgba(15, 23, 42, 0.92)';
+
+  if (isMax) {
+    el.style.color = 'rgba(30, 64, 175, 0.98)';
+    el.style.borderColor = 'rgba(191, 219, 254, 0.98)';
+    el.style.background = 'rgba(239, 246, 255, 0.95)';
+  }
+
+  el.textContent = text;
+  return new CSS2DObject(el);
+}
+
+  function disposeCornerFrame(): void {
+    if (!cornerFrame) return;
+    planeGroup.remove(cornerFrame);
+    cornerFrame.geometry.dispose();
+    cornerFrame.material.dispose();
+    cornerFrame = null;
   }
 
   function disposeEdgeLabels(): void {
@@ -943,21 +990,25 @@ function rebuildPlanes(list: SpacePoint[]): void {
     window.addEventListener('keydown', onHotKey);
   });
 
-  onDestroy(() => {
-    unsub();
-    cancelAnimationFrame(anim);
-    window.removeEventListener('resize', onResize);
-    window.removeEventListener('keydown', onHotKey);
+onDestroy(() => {
+  unsub();
+  cancelAnimationFrame(anim);
+  window.removeEventListener('resize', onResize);
+  window.removeEventListener('keydown', onHotKey);
 
-    disposeEdgeLabels();
-    disposeWireframe();
+  disposeEdgeLabels();
+  disposeWireframe();
 
-    renderer?.domElement?.removeEventListener('mousemove', onMove3d);
+  // ✅ ВОТ ЭТИ 2 СТРОКИ ДОБАВЬ
+  disposeAxisLabels();
+  disposeCornerFrame();
 
-    renderer?.dispose();
-    controls?.dispose();
-    labelRenderer?.domElement?.remove();
-  });
+  renderer?.domElement?.removeEventListener('mousemove', onMove3d);
+
+  renderer?.dispose();
+  controls?.dispose();
+  labelRenderer?.domElement?.remove();
+});
 </script>
 
 <section class="graph-root panel">
@@ -1047,7 +1098,6 @@ function rebuildPlanes(list: SpacePoint[]): void {
             {#each axisFields as field}<option value={field.code}>{field.name}</option>{/each}
           </select>
         </label>
-        <label class="toggle"><input type="checkbox" bind:checked={showPlanes} /> Каркас</label>
       </section>
 
       <section class="section">
