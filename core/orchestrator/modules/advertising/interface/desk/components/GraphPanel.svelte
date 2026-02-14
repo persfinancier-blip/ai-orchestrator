@@ -253,7 +253,7 @@
     await tick();
 
     scene = new SpaceScene(
-      { fieldName, getFields: () => fieldsAll() as any },
+      { fieldName, getFields: () => fieldsAll() },
       { onTooltip: (t) => (tooltip = t), onAxisRemove }
     );
 
