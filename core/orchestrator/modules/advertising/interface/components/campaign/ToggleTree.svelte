@@ -49,7 +49,7 @@
         
         {#if item.value && item.children && item.children.length > 0}
           <div class="toggle-children">
-            <ToggleTree 
+            <svelte:self 
               items={item.children}
               path={[...path, item.id]}
               on:toggle
@@ -67,7 +67,7 @@
           
           {#if (item.value === 'manual' || (item.value !== 'single' && item.value)) && item.children}
             <div class="radio-children">
-              <ToggleTree 
+              <svelte:self 
                 items={item.children}
                 path={[...path, item.id]}
                 on:toggle
@@ -79,7 +79,7 @@
         <div class="group-section">
           <div class="group-label">{item.label}</div>
           <div class="group-children">
-            <ToggleTree 
+            <svelte:self 
               items={item.children}
               path={[...path, item.id]}
               on:toggle
@@ -162,4 +162,5 @@
   .group-children {
     margin-left: 24px;
   }
+
 </style>
