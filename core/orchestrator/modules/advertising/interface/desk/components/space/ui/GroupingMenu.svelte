@@ -21,12 +21,75 @@
     { id: 'manual', name: 'Ручной' }
   ];
 
-  $: availableFields = cfg.principle === 'efficiency' ? numberFields : cfg.principle === 'behavior' ? textFields : [];
-  $: canPickFields = cfg.principle !== 'proximity';
+  // ---- smart labels
+  const CODE_ALIASES: Record<string, string> = {
+    sku: 'Артикул',
+    campaign_id: 'Кампания',
+    keyword: 'Ключевое слово',
+    query: 'Поисковый запрос',
+    phrase: 'Поисковая фраза',
+    product_id: 'Товар',
+    brand: 'Бренд',
+    category: 'Категория',
+
+    revenue: 'Выручка',
+    spend: 'Расход',
+    cost: 'Стоимость',
+    budget: 'Бюджет',
+    profit: 'Прибыль',
+    margin: 'Маржа',
+    orders: 'Заказы',
+    clicks: 'Клики',
+    views: 'Показы',
+    impressions: 'Показы',
+    ctr: 'CTR',
+    cpc: 'CPC',
+    cpm: 'CPM',
+    roi: 'ROI',
+    drr: 'ДРР',
+    cr: 'Конверсия'
+  };
+
+  function titleFromCode(code: string): string {
+    const c = String(code ?? '').trim();
+    if (!c) return '—';
+
+    if (CODE_ALIASES[c]) return CODE_ALIASES[c];
+
+    const norm = c.replace(/[_-]+/g, ' ').trim();
+    const pretty = norm.charAt(0).toUpperCase() + norm.slice(1);
+    return pretty;
+  }
+
+  function fieldTitle(f: ShowcaseField): string {
+    const name = String((f as any)?.name ?? '').trim();
+    if (name && name !== f.code) return name;
+    return titleFromCode(f.code);
+  }
+
+  function groupForNumber(code: string): string {
+    const c = code.toLowerCase();
+    if (/(revenue|spend|cost|budget|profit|margin|price|gmv|turnover)/.test(c)) return 'Деньги';
+    if (/(roi|drr|ctr|cr|conversion|rate|share|percent|pct)/.test(c)) return 'Эффективность';
+    if (/(orders|order|qty|quantity|units)/.test(c)) return 'Заказы';
+    if (/(click|view|impression|reach|traffic)/.test(c)) return 'Трафик';
+    return 'Другое';
+  }
+
+  function groupForText(code: string): string {
+    const c = code.toLowerCase();
+    if (/(query|keyword|phrase|search)/.test(c)) return 'Поиск';
+    if (/(campaign|adgroup|ad_group)/.test(c)) return 'Реклама';
+    if (/(sku|product|item|offer)/.test(c)) return 'Товар';
+    if (/(brand|category|catalog)/.test(c)) return 'Каталог';
+    return 'Другое';
+  }
+
+  function sortByTitle(a: ShowcaseField, b: ShowcaseField): number {
+    return fieldTitle(a).localeCompare(fieldTitle(b), 'ru');
+  }
 
   function toggleField(code: string): void {
-    if (!canPickFields) return;
-
     const cur = new Set(cfg.featureFields);
     if (cur.has(code)) cur.delete(code);
     else {
@@ -39,9 +102,43 @@
   function setPrinciple(p: GroupingPrinciple): void {
     cfg = { ...cfg, principle: p, featureFields: [] };
   }
+
+  $: canPickFields = cfg.principle !== 'proximity';
+
+  $: availableFields =
+    cfg.principle === 'efficiency'
+      ? [...numberFields].sort(sortByTitle)
+      : cfg.principle === 'behavior'
+        ? [...textFields].sort(sortByTitle)
+        : [];
+
+  $: grouped = (() => {
+    const m = new Map<string, ShowcaseField[]>();
+    for (const f of availableFields) {
+      const group = cfg.principle === 'efficiency' ? groupForNumber(f.code) : groupForText(f.code);
+      if (!m.has(group)) m.set(group, []);
+      m.get(group)!.push(f);
+    }
+    const order =
+      cfg.principle === 'efficiency'
+        ? ['Деньги', 'Эффективность', 'Заказы', 'Трафик', 'Другое']
+        : ['Поиск', 'Реклама', 'Товар', 'Каталог', 'Другое'];
+
+    const res: Array<{ title: string; items: ShowcaseField[] }> = [];
+    for (const key of order) {
+      const items = m.get(key);
+      if (items?.length) res.push({ title: key, items: items.sort(sortByTitle) });
+    }
+    // на всякий — если появились неизвестные группы
+    for (const [k, items] of m.entries()) {
+      if (order.includes(k)) continue;
+      if (items.length) res.push({ title: k, items: items.sort(sortByTitle) });
+    }
+    return res;
+  })();
 </script>
 
-<div class="menu-pop pick" style="top: 56px; right: 368px; width: 340px;">
+<div class="menu-pop pick" style="top: 56px; right: 368px; width: 360px;">
   <div class="menu-title">Формирование групп</div>
 
   <div class="row">
@@ -77,12 +174,18 @@
       <span class="hint">({cfg.featureFields.length}/3)</span>
     </div>
 
-    <div class="list">
-      {#each availableFields as f (f.code)}
-        <button class="item" on:click={() => toggleField(f.code)} style="opacity:1;">
-          <span class="name">{f.name}</span>
-          <span class="tag">{cfg.featureFields.includes(f.code) ? 'выбрано' : ' '}</span>
-        </button>
+    <div class="list" style="max-height: 260px;">
+      {#each grouped as g (g.title)}
+        <div style="margin-top:10px; font-size:11px; font-weight:800; color: rgba(15,23,42,.75);">
+          {g.title}
+        </div>
+
+        {#each g.items as f (f.code)}
+          <button class="item" on:click={() => toggleField(f.code)} style="opacity:1;">
+            <span class="name">{fieldTitle(f)}</span>
+            <span class="tag">{cfg.featureFields.includes(f.code) ? 'выбрано' : ' '}</span>
+          </button>
+        {/each}
       {/each}
     </div>
   {/if}
