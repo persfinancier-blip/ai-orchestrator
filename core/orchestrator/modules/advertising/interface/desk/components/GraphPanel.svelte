@@ -84,9 +84,14 @@
   let saveDatasetName = '';
 
   // ---- store
-  let showcase = get(showcaseStore);
+  type ShowcaseSafe = { fields: ShowcaseField[]; rows: ShowcaseRow[]; datasets: any[] };
+  
+  const EMPTY_SHOWCASE: ShowcaseSafe = { fields: [], rows: [], datasets: [] };
+  
+  let showcase: ShowcaseSafe = (get(showcaseStore) as any) ?? EMPTY_SHOWCASE;
+  
   const unsub = showcaseStore.subscribe((value) => {
-    showcase = value;
+    showcase = ((value as any) ?? EMPTY_SHOWCASE) as ShowcaseSafe;
     ensureDefaults();
   });
 
@@ -122,8 +127,14 @@
   const ndc = new THREE.Vector2();
 
   // ---- fields
-  function availableFields(kind: ShowcaseField['kind']): ShowcaseField[] {
-    return showcase.fields.filter((field) => field.kind === kind && field.datasetIds.some((id) => activeLayers.includes(id)));
+  function availableFields(kind: ShowcaseField['kind'], role: 'entity' | 'axis' | 'filter'): ShowcaseField[] {
+    const fields = showcase?.fields ?? [];
+    return fields.filter(
+      (field) =>
+        field.kind === kind &&
+        field.roles?.includes(role) &&
+        (field.datasetIds ?? []).some((id) => activeLayers.includes(id))
+    );
   }
 
   $: textFieldsAll = availableFields('text');
@@ -141,7 +152,7 @@
   $: coordPickList = canAddCoord ? coordFieldsAll : [];
 
   // ---- rows/points
-  $: filteredRows = applyRowsFilter(showcase.rows);
+  $: filteredRows = applyRowsFilter(showcase?.rows ?? []);
   $: points = buildPoints(filteredRows, selectedEntityFields, axisX, axisY, axisZ);
   $: rebuildScene(points);
 
