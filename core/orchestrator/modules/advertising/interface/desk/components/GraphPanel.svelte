@@ -572,6 +572,7 @@
   onMount(() => {
     init3d();
     ensureDefaults();
+    rebuildScene();
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       panelSettingsList = raw ? JSON.parse(raw) : [];
