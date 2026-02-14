@@ -328,8 +328,8 @@
 
     {#if showPickDataMenu}
       <PickDataMenu
-        textFields={textFieldsAll as any}
-        coordFields={coordFieldsAll as any}
+        textFields={textFieldsAll}
+        coordFields={coordFieldsAll}
         bind:selectedEntityFields
         bind:axisX
         bind:axisY
