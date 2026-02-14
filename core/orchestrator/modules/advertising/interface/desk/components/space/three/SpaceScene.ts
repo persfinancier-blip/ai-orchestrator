@@ -2,16 +2,14 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 
+import type { ShowcaseField } from '../../data/showcaseStore';
 import type { SpacePoint } from '../types';
-import type { ShowcaseField } from '../../data/showcaseStore';
-import type { ShowcaseField } from '../../data/showcaseStore';
 import { buildBBox, normalizeBBox, calcMax, sanitizePoints, formatValueByMetric } from '../pipeline';
 
 export type SpaceSceneTheme = {
   bg: string;
   edge: string;
-  circleColor?: string;
-  diamondColor?: string;
+  pointColor?: string;
 };
 
 export type SpaceSceneDeps = {
@@ -42,18 +40,15 @@ export class SpaceScene {
   private cornerFrame: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | null = null;
   private axisLabelObjects: CSS2DObject[] = [];
 
-  private circleMesh?: THREE.InstancedMesh;
-  private diamondMesh?: THREE.InstancedMesh;
-  private circlePoints: SpacePoint[] = [];
-  private diamondPoints: SpacePoint[] = [];
+  private pointsMesh?: THREE.InstancedMesh;
+  private renderPoints: SpacePoint[] = [];
 
   private anim = 0;
 
   private theme: Required<SpaceSceneTheme> = {
     bg: '#ffffff',
     edge: '#334155',
-    circleColor: '#22c55e',
-    diamondColor: '#1d4ed8'
+    pointColor: '#22c55e'
   };
 
   private raycaster = new THREE.Raycaster();
@@ -114,11 +109,17 @@ export class SpaceScene {
     this.theme = {
       bg: theme.bg,
       edge: theme.edge,
-      circleColor: theme.circleColor ?? this.theme.circleColor,
-      diamondColor: theme.diamondColor ?? this.theme.diamondColor
+      pointColor: theme.pointColor ?? this.theme.pointColor
     };
 
     if (this.scene) this.scene.background = new THREE.Color(this.theme.bg);
+
+    // если mesh уже создан — обновим материал
+    if (this.pointsMesh) {
+      const mat = this.pointsMesh.material as THREE.MeshBasicMaterial;
+      mat.color = new THREE.Color(this.theme.pointColor);
+    }
+
     this.rebuildPlanesForCurrentPoints();
   }
 
@@ -149,48 +150,27 @@ export class SpaceScene {
 
     this.scene.background = new THREE.Color(this.theme.bg);
 
-    this.clearMesh(this.circleMesh);
-    this.clearMesh(this.diamondMesh);
-    this.circleMesh = undefined;
-    this.diamondMesh = undefined;
+    this.clearMesh(this.pointsMesh);
+    this.pointsMesh = undefined;
 
     const renderable = sanitizePoints(points);
-    this.circlePoints = renderable.filter((p) => p.sourceField !== 'campaign_id');
-    this.diamondPoints = renderable.filter((p) => p.sourceField === 'campaign_id');
+    this.renderPoints = renderable;
 
-    if (this.circlePoints.length) {
-      this.circleMesh = new THREE.InstancedMesh(
-        new THREE.SphereGeometry(1.45, 10, 10),
-        new THREE.MeshBasicMaterial({ color: this.theme.circleColor }),
-        this.circlePoints.length
+    if (this.renderPoints.length) {
+      this.pointsMesh = new THREE.InstancedMesh(
+        new THREE.SphereGeometry(1.55, 10, 10),
+        new THREE.MeshBasicMaterial({ color: this.theme.pointColor }),
+        this.renderPoints.length
       );
 
       const o = new THREE.Object3D();
-      this.circlePoints.forEach((point, idx) => {
+      this.renderPoints.forEach((point, idx) => {
         o.position.set(point.x, point.y, point.z);
         o.updateMatrix();
-        this.circleMesh!.setMatrixAt(idx, o.matrix);
+        this.pointsMesh!.setMatrixAt(idx, o.matrix);
       });
 
-      this.scene.add(this.circleMesh);
-    }
-
-    if (this.diamondPoints.length) {
-      this.diamondMesh = new THREE.InstancedMesh(
-        new THREE.OctahedronGeometry(1.9, 0),
-        new THREE.MeshBasicMaterial({ color: this.theme.diamondColor }),
-        this.diamondPoints.length
-      );
-
-      const o = new THREE.Object3D();
-      this.diamondPoints.forEach((point, idx) => {
-        o.position.set(point.x, point.y, point.z);
-        o.rotation.set(0.2, 0.5, 0.1);
-        o.updateMatrix();
-        this.diamondMesh!.setMatrixAt(idx, o.matrix);
-      });
-
-      this.scene.add(this.diamondMesh);
+      this.scene.add(this.pointsMesh);
     }
 
     this.rebuildPlanes(renderable);
@@ -212,8 +192,7 @@ export class SpaceScene {
 
     this.renderer?.domElement?.removeEventListener('mousemove', this.onMove3d);
 
-    this.clearMesh(this.circleMesh);
-    this.clearMesh(this.diamondMesh);
+    this.clearMesh(this.pointsMesh);
 
     this.renderer?.dispose();
     this.controls?.dispose();
@@ -321,8 +300,7 @@ export class SpaceScene {
   }
 
   private rebuildPlanesForCurrentPoints(): void {
-    const all = [...this.circlePoints, ...this.diamondPoints];
-    this.rebuildPlanes(all);
+    this.rebuildPlanes(this.renderPoints);
   }
 
   private rebuildPlanes(list: SpacePoint[]): void {
@@ -405,16 +383,14 @@ export class SpaceScene {
     this.ndc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(this.ndc, this.camera);
 
-    const hitCircle = this.circleMesh ? this.raycaster.intersectObject(this.circleMesh, true)[0] : undefined;
-    const hitDiamond = this.diamondMesh ? this.raycaster.intersectObject(this.diamondMesh, true)[0] : undefined;
+    const hit = this.pointsMesh ? this.raycaster.intersectObject(this.pointsMesh, true)[0] : undefined;
 
-    const hit = hitCircle || hitDiamond;
     if (!hit || hit.instanceId === undefined) {
       this.cb.onTooltip({ visible: false, x: 0, y: 0, lines: [] });
       return;
     }
 
-    const point = hitCircle ? this.circlePoints[hit.instanceId] : this.diamondPoints[hit.instanceId];
+    const point = this.renderPoints[hit.instanceId];
     if (!point) return;
 
     this.cb.onTooltip({
