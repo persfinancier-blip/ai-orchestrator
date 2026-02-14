@@ -35,7 +35,9 @@
 
   const STORAGE_KEY = 'desk-space-settings-v2';
 
+  // UI блока "Набор данных" больше нет — но слои можно оставить фиксированными (оба источника включены).
   let activeLayers: DatasetId[] = ['sales_fact', 'ads'];
+
   let selectedEntityFields: string[] = ['sku', 'campaign_id'];
   let axisX = '';
   let axisY = '';
@@ -83,7 +85,6 @@
   const raycaster = new THREE.Raycaster();
   const ndc = new THREE.Vector2();
 
-  // Для обновления ориентации подписей при вращении камеры
   type EdgeLabelItem = { mesh: THREE.Mesh; pos: THREE.Vector3; dir: THREE.Vector3; offset: number };
   let edgeLabels: EdgeLabelItem[] = [];
   let lastEdgeParams:
@@ -216,17 +217,7 @@
       });
     });
 
-    const coords = projectPoints(result, xCode, yCode, zCode);
-    const uniqueTotal = entityFields.reduce(
-      (sum, field) => sum + new Set(rows.map((r) => String((r as Record<string, unknown>)[field] ?? '')).filter(Boolean)).size,
-      0
-    );
-    console.log('[Пространство] пересчет', {
-      поля: entityFields,
-      уникальных: uniqueTotal,
-      первыеТочки: coords.slice(0, 3).map((p) => ({ id: p.id, x: p.x, y: p.y, z: p.z }))
-    });
-    return coords;
+    return projectPoints(result, xCode, yCode, zCode);
   }
 
   function projectPoints(list: SpacePoint[], xCode: string, yCode: string, zCode: string): SpacePoint[] {
@@ -482,8 +473,6 @@
     return formatNumberHuman(maxValue);
   }
 
-  // ====== EDGE LABELS (параллельно ребру, крупно, центр ребра) ======
-
   function disposeEdgeLabels(): void {
     for (const item of edgeLabels) {
       const mesh = item.mesh;
@@ -498,10 +487,7 @@
     edgeLabelGroup.clear();
   }
 
-  function makeTextPlane(
-    text: string,
-    opts: { fontSize?: number; padding?: number; worldScale?: number } = {}
-  ): THREE.Mesh {
+  function makeTextPlane(text: string, opts: { fontSize?: number; padding?: number; worldScale?: number } = {}): THREE.Mesh {
     const fontSize = opts.fontSize ?? 70;
     const padding = opts.padding ?? 22;
     const worldScale = opts.worldScale ?? 0.22;
@@ -523,7 +509,6 @@
     canvas.height = h;
 
     ctx.clearRect(0, 0, w, h);
-
     ctx.font = `${fontSize}px Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial`;
     ctx.fillStyle = '#0f172a';
     ctx.textBaseline = 'middle';
@@ -540,16 +525,14 @@
       transparent: true,
       depthTest: false,
       depthWrite: false,
-      side: THREE.DoubleSide // <-- ВАЖНО: чтобы подпись была видна с обеих сторон при вращении
+      side: THREE.DoubleSide
     });
 
     const planeW = w * worldScale;
     const planeH = h * worldScale;
 
     const geometry = new THREE.PlaneGeometry(planeW, planeH);
-    const mesh = new THREE.Mesh(geometry, material);
-
-    return mesh;
+    return new THREE.Mesh(geometry, material);
   }
 
   function orientParallelToEdge(mesh: THREE.Mesh, pos: THREE.Vector3, edgeDir: THREE.Vector3, offset: number): void {
@@ -558,11 +541,8 @@
     const dir = edgeDir.clone().normalize();
     const toCam = camera.position.clone().sub(pos).normalize();
 
-    // берём компоненту к камере, перпендикулярную ребру
     const yAxis = toCam.clone().sub(dir.clone().multiplyScalar(toCam.dot(dir))).normalize();
-    if (!Number.isFinite(yAxis.x) || yAxis.length() < 1e-6) {
-      yAxis.set(0, 1, 0);
-    }
+    if (!Number.isFinite(yAxis.x) || yAxis.length() < 1e-6) yAxis.set(0, 1, 0);
 
     const zAxis = new THREE.Vector3().crossVectors(dir, yAxis).normalize();
     const xAxis = dir;
@@ -571,7 +551,7 @@
     mesh.quaternion.setFromRotationMatrix(m);
 
     mesh.position.copy(pos);
-    mesh.position.add(yAxis.clone().multiplyScalar(offset)); // отрыв от ребра
+    mesh.position.add(yAxis.clone().multiplyScalar(offset));
   }
 
   function updateEdgeLabels(params: {
@@ -587,18 +567,15 @@
     if (!scene || !camera) return;
 
     lastEdgeParams = params;
-
     disposeEdgeLabels();
 
     const { bbox, pointsList, xMetric, yMetric, zMetric, xName, yName, zName } = params;
 
-    // Базовый угол (нижний-ближний) — от него идут рёбра X/Y/Z
     const A = new THREE.Vector3(bbox.minX, bbox.minY, bbox.minZ);
     const Bx = new THREE.Vector3(bbox.maxX, bbox.minY, bbox.minZ);
     const By = new THREE.Vector3(bbox.minX, bbox.maxY, bbox.minZ);
     const Bz = new THREE.Vector3(bbox.minX, bbox.minY, bbox.maxZ);
 
-    // Середины рёбер (строго центр ребра)
     const midX = A.clone().lerp(Bx, 0.5);
     const midY = A.clone().lerp(By, 0.5);
     const midZ = A.clone().lerp(Bz, 0.5);
@@ -607,7 +584,6 @@
     const dirY = By.clone().sub(A).normalize();
     const dirZ = Bz.clone().sub(A).normalize();
 
-    // offset делаем зависимым от размера куба, чтобы не “улетало” и не “влипало”
     const spanX = Math.max(0.001, bbox.maxX - bbox.minX);
     const spanY = Math.max(0.001, bbox.maxY - bbox.minY);
     const spanZ = Math.max(0.001, bbox.maxZ - bbox.minZ);
@@ -618,8 +594,7 @@
 
     if (xMetric) {
       const xMax = calcMax(pointsList, xMetric);
-      const text = `${xName} · 0 — ${formatValueByMetric(xMetric, xMax)}`;
-      const mesh = makeTextPlane(text, commonStyle);
+      const mesh = makeTextPlane(`${xName} · 0 — ${formatValueByMetric(xMetric, xMax)}`, commonStyle);
       orientParallelToEdge(mesh, midX, dirX, offset);
       edgeLabelGroup.add(mesh);
       edgeLabels.push({ mesh, pos: midX, dir: dirX, offset });
@@ -627,8 +602,7 @@
 
     if (yMetric) {
       const yMax = calcMax(pointsList, yMetric);
-      const text = `${yName} · 0 — ${formatValueByMetric(yMetric, yMax)}`;
-      const mesh = makeTextPlane(text, commonStyle);
+      const mesh = makeTextPlane(`${yName} · 0 — ${formatValueByMetric(yMetric, yMax)}`, commonStyle);
       orientParallelToEdge(mesh, midY, dirY, offset);
       edgeLabelGroup.add(mesh);
       edgeLabels.push({ mesh, pos: midY, dir: dirY, offset });
@@ -636,8 +610,7 @@
 
     if (zMetric) {
       const zMax = calcMax(pointsList, zMetric);
-      const text = `${zName} · 0 — ${formatValueByMetric(zMetric, zMax)}`;
-      const mesh = makeTextPlane(text, commonStyle);
+      const mesh = makeTextPlane(`${zName} · 0 — ${formatValueByMetric(zMetric, zMax)}`, commonStyle);
       orientParallelToEdge(mesh, midZ, dirZ, offset);
       edgeLabelGroup.add(mesh);
       edgeLabels.push({ mesh, pos: midZ, dir: dirZ, offset });
@@ -646,12 +619,8 @@
 
   function updateEdgeLabelOrientations(): void {
     if (!camera) return;
-    for (const item of edgeLabels) {
-      orientParallelToEdge(item.mesh, item.pos, item.dir, item.offset);
-    }
+    for (const item of edgeLabels) orientParallelToEdge(item.mesh, item.pos, item.dir, item.offset);
   }
-
-  // ====== SCENE BUILD ======
 
   function clearMesh(mesh?: THREE.InstancedMesh): void {
     if (!mesh || !scene) return;
@@ -765,9 +734,7 @@
 
   function animate(): void {
     controls?.update();
-
     updateEdgeLabelOrientations();
-
     renderer?.render(scene, camera);
     labelRenderer?.render(scene, camera);
     anim = requestAnimationFrame(animate);
@@ -787,16 +754,6 @@
     camera.position.set(0, 80, 220);
     controls.target.set(0, 0, 0);
     controls.update();
-  }
-
-  function addLayer(): void {
-    const next = showcase.datasets.find((dataset) => !activeLayers.includes(dataset.id));
-    if (next) activeLayers = [...activeLayers, next.id];
-  }
-
-  function removeLayer(layerId: DatasetId): void {
-    if (activeLayers.length <= 1) return;
-    activeLayers = activeLayers.filter((id) => id !== layerId);
   }
 
   function onAddEntityFieldChange(event: Event): void {
@@ -1000,17 +957,7 @@
         </label>
       </section>
 
-      <section class="section">
-        <h4>Набор данных</h4>
-        <small>Из каких источников берутся метрики.</small>
-        {#each activeLayers as layer}
-          <div class="layer-item">
-            <span>{showcase.datasets.find((dataset) => dataset.id === layer)?.name}</span>
-            <button on:click={() => removeLayer(layer)} disabled={activeLayers.length <= 1}>Удалить</button>
-          </div>
-        {/each}
-        <button on:click={addLayer} disabled={activeLayers.length === showcase.datasets.length}>+ Добавить слой</button>
-      </section>
+      <!-- УДАЛЕНО: блок "Набор данных" -->
 
       <section class="section">
         <h4>Координаты</h4>
@@ -1105,7 +1052,6 @@
   .chips { display:flex; flex-wrap:wrap; gap:6px; }
   .chip { display:inline-flex; align-items:center; gap:6px; border:1px solid #dbe4f0; border-radius:999px; padding:4px 8px; background:#f8fbff; font-size:12px; }
   .chip button { border:none; background:transparent; cursor:pointer; padding:0; line-height:1; }
-  .layer-item { display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:12px; }
   .filter-item { display:flex; flex-direction:column; gap:6px; border:1px solid #e2e8f0; border-radius:10px; padding:6px; }
   .tooltip { position:absolute; pointer-events:none; background:rgba(15,23,42,.94); color:#f8fafc; font-size:12px; padding:10px; border-radius:10px; max-width:360px; }
   .empty-hint { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); background:#fff; border:1px dashed #94a3b8; color:#334155; border-radius:10px; padding:10px 12px; font-size:13px; }
