@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import * as THREE from 'three';
   import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+  import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
   import { get } from 'svelte/store';
   import { showcaseStore, fieldName, type DatasetId, type ShowcaseField, type ShowcaseRow } from '../data/showcaseStore';
 
@@ -37,6 +38,7 @@
   let axisX = '';
   let axisY = '';
   let axisZ = '';
+  let showPlanes = true;
   let period: PeriodMode = '30 дней';
   let fromDate = '';
   let toDate = '';
@@ -70,6 +72,8 @@
   let circleMesh: THREE.InstancedMesh | undefined;
   let diamondMesh: THREE.InstancedMesh | undefined;
   let axesHelper: THREE.AxesHelper | undefined;
+  let labelRenderer: CSS2DRenderer | undefined;
+  const planeGroup = new THREE.Group();
   let circlePoints: SpacePoint[] = [];
   let diamondPoints: SpacePoint[] = [];
   let anim = 0;
@@ -294,6 +298,69 @@
     }));
   }
 
+  function normalizeBBox(list: SpacePoint[]): BBox {
+    if (!list.length) return { minX: -1, maxX: 1, minY: -1, maxY: 1, minZ: -1, maxZ: 1 };
+    const bbox = buildBBox(list);
+    const spanX = bbox.maxX - bbox.minX;
+    const spanY = bbox.maxY - bbox.minY;
+    const spanZ = bbox.maxZ - bbox.minZ;
+    if (spanX < 0.001 && spanY < 0.001 && spanZ < 0.001) {
+      const cx = (bbox.minX + bbox.maxX) / 2;
+      const cy = (bbox.minY + bbox.maxY) / 2;
+      const cz = (bbox.minZ + bbox.maxZ) / 2;
+      return { minX: cx - 1, maxX: cx + 1, minY: cy - 1, maxY: cy + 1, minZ: cz - 1, maxZ: cz + 1 };
+    }
+    return bbox;
+  }
+
+  function makePlaneLabel(text: string, x: number, y: number, z: number): CSS2DObject {
+    const el = document.createElement('div');
+    el.className = 'plane-label';
+    el.textContent = text;
+    const obj = new CSS2DObject(el);
+    obj.position.set(x, y, z);
+    return obj;
+  }
+
+  function rebuildPlanes(list: SpacePoint[]): void {
+    planeGroup.clear();
+    if (!showPlanes) return;
+
+    const bbox = normalizeBBox(list);
+    const widthX = Math.max(2, bbox.maxX - bbox.minX);
+    const widthY = Math.max(2, bbox.maxY - bbox.minY);
+    const widthZ = Math.max(2, bbox.maxZ - bbox.minZ);
+    const centerX = (bbox.minX + bbox.maxX) / 2;
+    const centerY = (bbox.minY + bbox.maxY) / 2;
+    const centerZ = (bbox.minZ + bbox.maxZ) / 2;
+
+    const matXY = new THREE.MeshBasicMaterial({ color: '#94a3b8', transparent: true, opacity: 0.1, side: THREE.DoubleSide, depthWrite: false });
+    const matXZ = new THREE.MeshBasicMaterial({ color: '#9ca3af', transparent: true, opacity: 0.1, side: THREE.DoubleSide, depthWrite: false });
+    const matYZ = new THREE.MeshBasicMaterial({ color: '#a5b4fc', transparent: true, opacity: 0.1, side: THREE.DoubleSide, depthWrite: false });
+
+    const planeXY = new THREE.Mesh(new THREE.PlaneGeometry(widthX, widthY), matXY);
+    planeXY.position.set(centerX, centerY, bbox.minZ);
+    planeGroup.add(planeXY);
+
+    const planeXZ = new THREE.Mesh(new THREE.PlaneGeometry(widthX, widthZ), matXZ);
+    planeXZ.rotation.x = -Math.PI / 2;
+    planeXZ.position.set(centerX, bbox.minY, centerZ);
+    planeGroup.add(planeXZ);
+
+    const planeYZ = new THREE.Mesh(new THREE.PlaneGeometry(widthY, widthZ), matYZ);
+    planeYZ.rotation.y = Math.PI / 2;
+    planeYZ.position.set(bbox.minX, centerY, centerZ);
+    planeGroup.add(planeYZ);
+
+    const xName = fieldName(axisX || '—');
+    const yName = fieldName(axisY || '—');
+    const zName = fieldName(axisZ || '—');
+
+    planeGroup.add(makePlaneLabel(`${xName} × ${yName}`, centerX, centerY, bbox.minZ + 0.25));
+    planeGroup.add(makePlaneLabel(`${xName} × ${zName}`, centerX, bbox.minY + 0.25, centerZ));
+    planeGroup.add(makePlaneLabel(`${yName} × ${zName}`, bbox.minX + 0.25, centerY, centerZ));
+  }
+
   function init3d(): void {
     const width = container3d.clientWidth;
     const height = 560;
@@ -304,6 +371,7 @@
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(width, height);
+    labelRenderer?.setSize(width, height);
     container3d.innerHTML = '';
     container3d.appendChild(renderer.domElement);
 
@@ -318,6 +386,16 @@
     scene.add(new THREE.GridHelper(260, 16, '#d6deea', '#eaf0f7'));
     axesHelper = new THREE.AxesHelper(60);
     scene.add(axesHelper);
+    scene.add(planeGroup);
+
+    labelRenderer = new CSS2DRenderer();
+    labelRenderer.setSize(width, height);
+    labelRenderer.domElement.style.position = 'absolute';
+    labelRenderer.domElement.style.left = '0';
+    labelRenderer.domElement.style.top = '0';
+    labelRenderer.domElement.style.pointerEvents = 'none';
+    labelRenderer.domElement.className = 'label-layer';
+    container3d.appendChild(labelRenderer.domElement);
 
     renderer.domElement.addEventListener('mousemove', onMove3d);
     animate();
@@ -375,10 +453,12 @@
 
     if (entityFields.length === 0) {
       debugRenderedCount = 0;
+      rebuildPlanes([]);
       fitCameraToPoints([]);
       return;
     }
 
+    rebuildPlanes(renderablePoints);
     fitCameraToPoints(renderablePoints);
   }
 
@@ -424,6 +504,7 @@
   function animate(): void {
     controls?.update();
     renderer?.render(scene, camera);
+    labelRenderer?.render(scene, camera);
     anim = requestAnimationFrame(animate);
   }
 
@@ -432,6 +513,7 @@
     const width = container3d.clientWidth;
     const height = 560;
     renderer.setSize(width, height);
+    labelRenderer?.setSize(width, height);
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
   }
@@ -582,6 +664,7 @@
     window.removeEventListener('keydown', onHotKey);
     renderer?.dispose();
     controls?.dispose();
+    labelRenderer?.domElement?.remove();
   });
 </script>
 
@@ -671,6 +754,7 @@
         <label>Ось Z
           <select bind:value={axisZ}><option value="">Не выбрано</option>{#each axisFields as field}<option value={field.code}>{field.name}</option>{/each}</select>
         </label>
+        <label class="toggle"><input type="checkbox" bind:checked={showPlanes} /> Плоскости</label>
       </section>
 
       <section class="section">
@@ -728,7 +812,7 @@
   .content { display:grid; grid-template-columns:minmax(0,1fr) 360px; gap:12px; align-items:stretch; }
   .graph-wrap { min-width:0; }
   .stage { position:relative; min-height:560px; }
-  .scene { width:100%; height:100%; min-height:560px; border:1px solid #e2e8f0; border-radius:16px; background:#f8fbff; }
+  .scene { position:relative; width:100%; height:100%; min-height:560px; border:1px solid #e2e8f0; border-radius:16px; background:#f8fbff; overflow:hidden; }
   .debug { position:absolute; left:10px; top:10px; z-index:3; background:rgba(15,23,42,.82); color:#f8fafc; font-size:11px; border-radius:10px; padding:8px 10px; line-height:1.4; pointer-events:none; max-width:400px; }
   .control-panel { height:560px; border:1px solid #e2e8f0; border-radius:14px; padding:10px; background:#fbfdff; display:flex; flex-direction:column; gap:10px; overflow:auto; }
   .section { border:1px solid #e7edf6; border-radius:10px; padding:8px; display:flex; flex-direction:column; gap:6px; }
@@ -746,5 +830,7 @@
   .filter-item { display:flex; flex-direction:column; gap:6px; border:1px solid #e2e8f0; border-radius:10px; padding:6px; }
   .tooltip { position:absolute; pointer-events:none; background:rgba(15,23,42,.94); color:#f8fafc; font-size:12px; padding:10px; border-radius:10px; max-width:360px; }
   .empty-hint { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); background:#fff; border:1px dashed #94a3b8; color:#334155; border-radius:10px; padding:10px 12px; font-size:13px; }
+  :global(.plane-label) { background:rgba(15,23,42,.7); color:#f8fafc; border-radius:8px; padding:3px 7px; font-size:11px; white-space:nowrap; }
+  .toggle { flex-direction:row; align-items:center; gap:6px; }
   small { color:#64748b; font-size:11px; line-height:1.3; }
 </style>
