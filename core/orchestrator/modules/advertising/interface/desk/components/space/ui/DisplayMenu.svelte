@@ -1,9 +1,9 @@
 <script lang="ts">
   import type { DatasetPreset, VisualScheme } from '../types';
+  import ColorPickerPopover from './ColorPickerPopover.svelte';
 
   export let visualBg: string;
   export let visualEdge: string;
-  export let pointColor: string;
 
   export let visualSchemes: VisualScheme[] = [];
   export let selectedVisualId = '';
@@ -22,40 +22,15 @@
 
   export let onResetView: () => void;
 
-  let bgPickerEl: HTMLInputElement | null = null;
-  let edgePickerEl: HTMLInputElement | null = null;
-  let pointPickerEl: HTMLInputElement | null = null;
+  type PickerKind = 'bg' | 'cube' | null;
+  let picker: PickerKind = null;
 
-  function openPicker(kind: 'bg' | 'edge' | 'point'): void {
-    if (kind === 'bg') bgPickerEl?.click();
-    if (kind === 'edge') edgePickerEl?.click();
-    if (kind === 'point') pointPickerEl?.click();
+  function open(k: PickerKind): void {
+    picker = k;
   }
 
-  function normalizeHex(input: string): string {
-    const s = String(input ?? '').trim().toLowerCase();
-    const m = s.match(/^#?([0-9a-f]{6})$/);
-    if (m) return `#${m[1]}`;
-    const m3 = s.match(/^#?([0-9a-f]{3})$/);
-    if (m3) {
-      const a = m3[1];
-      return `#${a[0]}${a[0]}${a[1]}${a[1]}${a[2]}${a[2]}`;
-    }
-    return input; // если человек печатает — не ломаем ввод на лету
-  }
-
-  function onHex(kind: 'bg' | 'edge' | 'point', e: Event): void {
-    const v = normalizeHex((e.currentTarget as HTMLInputElement).value);
-    if (kind === 'bg') visualBg = v;
-    if (kind === 'edge') visualEdge = v;
-    if (kind === 'point') pointColor = v;
-  }
-
-  function onPicker(kind: 'bg' | 'edge' | 'point', e: Event): void {
-    const v = (e.currentTarget as HTMLInputElement).value;
-    if (kind === 'bg') visualBg = v;
-    if (kind === 'edge') visualEdge = v;
-    if (kind === 'point') pointColor = v;
+  function close(): void {
+    picker = null;
   }
 </script>
 
@@ -64,68 +39,34 @@
 
   <div class="row">
     <div class="label">Фон</div>
-
     <div class="color-row">
-      <button class="swatch-btn" type="button" on:click={() => openPicker('bg')} aria-label="Выбрать цвет фона">
+      <button class="swatch-btn" type="button" on:click={() => open('bg')} aria-label="Выбрать цвет фона">
         <span class="swatch" style={`background:${visualBg};`} />
       </button>
-
-      <input
-        bind:this={bgPickerEl}
-        class="color-hidden"
-        type="color"
-        value={visualBg}
-        on:input={(e) => onPicker('bg', e)}
-        tabindex="-1"
-        aria-hidden="true"
-      />
-
-      <input class="hex" spellcheck="false" value={visualBg} on:input={(e) => onHex('bg', e)} />
+      <input class="hex" spellcheck="false" bind:value={visualBg} />
     </div>
+
+    {#if picker === 'bg'}
+      <div class="picker-slot">
+        <ColorPickerPopover title="Цвет фона" bind:value={visualBg} onClose={close} />
+      </div>
+    {/if}
   </div>
 
   <div class="row">
-    <div class="label">Рёбра</div>
-
+    <div class="label">Куб</div>
     <div class="color-row">
-      <button class="swatch-btn" type="button" on:click={() => openPicker('edge')} aria-label="Выбрать цвет рёбер">
+      <button class="swatch-btn" type="button" on:click={() => open('cube')} aria-label="Выбрать цвет куба">
         <span class="swatch" style={`background:${visualEdge};`} />
       </button>
-
-      <input
-        bind:this={edgePickerEl}
-        class="color-hidden"
-        type="color"
-        value={visualEdge}
-        on:input={(e) => onPicker('edge', e)}
-        tabindex="-1"
-        aria-hidden="true"
-      />
-
-      <input class="hex" spellcheck="false" value={visualEdge} on:input={(e) => onHex('edge', e)} />
+      <input class="hex" spellcheck="false" bind:value={visualEdge} />
     </div>
-  </div>
 
-  <div class="row">
-    <div class="label">Точки</div>
-
-    <div class="color-row">
-      <button class="swatch-btn" type="button" on:click={() => openPicker('point')} aria-label="Выбрать цвет точек">
-        <span class="swatch" style={`background:${pointColor};`} />
-      </button>
-
-      <input
-        bind:this={pointPickerEl}
-        class="color-hidden"
-        type="color"
-        value={pointColor}
-        on:input={(e) => onPicker('point', e)}
-        tabindex="-1"
-        aria-hidden="true"
-      />
-
-      <input class="hex" spellcheck="false" value={pointColor} on:input={(e) => onHex('point', e)} />
-    </div>
+    {#if picker === 'cube'}
+      <div class="picker-slot">
+        <ColorPickerPopover title="Цвет куба" bind:value={visualEdge} onClose={close} />
+      </div>
+    {/if}
   </div>
 
   <div class="sep" />
@@ -167,6 +108,15 @@
 </div>
 
 <style>
+  .row { position: relative; }
+
+  .color-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    width: 100%;
+  }
+
   .swatch-btn {
     border: 0;
     padding: 0;
@@ -180,16 +130,16 @@
   .swatch {
     width: 34px;
     height: 34px;
-    border-radius: 10px;
-    box-shadow: 0 10px 26px rgba(15, 23, 42, 0.10);
+    border-radius: 12px;
+    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
     border: 1px solid rgba(15, 23, 42, 0.08);
   }
 
-  .color-hidden {
+  .picker-slot {
     position: absolute;
-    width: 1px;
-    height: 1px;
-    opacity: 0;
-    pointer-events: none;
+    right: 0;
+    top: 46px;
+    width: 0;
+    height: 0;
   }
 </style>
