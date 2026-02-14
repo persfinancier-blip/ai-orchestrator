@@ -485,7 +485,6 @@
   // ====== EDGE LABELS (параллельно ребру, крупно, центр ребра) ======
 
   function disposeEdgeLabels(): void {
-    // убираем со сцены + освобождаем текстуры/материалы
     for (const item of edgeLabels) {
       const mesh = item.mesh;
       const mat = mesh.material as THREE.MeshBasicMaterial;
@@ -505,14 +504,13 @@
   ): THREE.Mesh {
     const fontSize = opts.fontSize ?? 70;
     const padding = opts.padding ?? 22;
-    const worldScale = opts.worldScale ?? 0.22; // <-- увеличивай, если ещё крупнее нужно
+    const worldScale = opts.worldScale ?? 0.22;
 
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     if (!ctx) {
-      // fallback: маленькая пустая плоскость
       const geo = new THREE.PlaneGeometry(10, 3);
-      const mat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthTest: false });
+      const mat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthTest: false, side: THREE.DoubleSide });
       return new THREE.Mesh(geo, mat);
     }
 
@@ -524,10 +522,8 @@
     canvas.width = w;
     canvas.height = h;
 
-    // прозрачный фон
     ctx.clearRect(0, 0, w, h);
 
-    // текст
     ctx.font = `${fontSize}px Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial`;
     ctx.fillStyle = '#0f172a';
     ctx.textBaseline = 'middle';
@@ -536,15 +532,17 @@
     const texture = new THREE.CanvasTexture(canvas);
     texture.needsUpdate = true;
     texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.anisotropy = renderer ? Math.min(8, renderer.capabilities.getMaxAnisotropy()) : 1;
 
     const material = new THREE.MeshBasicMaterial({
       map: texture,
       transparent: true,
       depthTest: false,
-      depthWrite: false
+      depthWrite: false,
+      side: THREE.DoubleSide // <-- ВАЖНО: чтобы подпись была видна с обеих сторон при вращении
     });
 
-    // размеры плоскости в мире
     const planeW = w * worldScale;
     const planeH = h * worldScale;
 
@@ -554,20 +552,20 @@
     return mesh;
   }
 
-  // ориентируем плоскость параллельно ребру + “читабельно” к камере
   function orientParallelToEdge(mesh: THREE.Mesh, pos: THREE.Vector3, edgeDir: THREE.Vector3, offset: number): void {
     if (!camera) return;
 
+    const dir = edgeDir.clone().normalize();
     const toCam = camera.position.clone().sub(pos).normalize();
 
     // берём компоненту к камере, перпендикулярную ребру
-    const yAxis = toCam.clone().sub(edgeDir.clone().multiplyScalar(toCam.dot(edgeDir))).normalize();
+    const yAxis = toCam.clone().sub(dir.clone().multiplyScalar(toCam.dot(dir))).normalize();
     if (!Number.isFinite(yAxis.x) || yAxis.length() < 1e-6) {
       yAxis.set(0, 1, 0);
     }
 
-    const zAxis = new THREE.Vector3().crossVectors(edgeDir, yAxis).normalize();
-    const xAxis = edgeDir;
+    const zAxis = new THREE.Vector3().crossVectors(dir, yAxis).normalize();
+    const xAxis = dir;
 
     const m = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
     mesh.quaternion.setFromRotationMatrix(m);
@@ -600,7 +598,7 @@
     const By = new THREE.Vector3(bbox.minX, bbox.maxY, bbox.minZ);
     const Bz = new THREE.Vector3(bbox.minX, bbox.minY, bbox.maxZ);
 
-    // Середины рёбер
+    // Середины рёбер (строго центр ребра)
     const midX = A.clone().lerp(Bx, 0.5);
     const midY = A.clone().lerp(By, 0.5);
     const midZ = A.clone().lerp(Bz, 0.5);
@@ -609,10 +607,14 @@
     const dirY = By.clone().sub(A).normalize();
     const dirZ = Bz.clone().sub(A).normalize();
 
-    // чем больше — тем дальше от ребра (чтобы не “влипало”)
-    const offset = 10;
+    // offset делаем зависимым от размера куба, чтобы не “улетало” и не “влипало”
+    const spanX = Math.max(0.001, bbox.maxX - bbox.minX);
+    const spanY = Math.max(0.001, bbox.maxY - bbox.minY);
+    const spanZ = Math.max(0.001, bbox.maxZ - bbox.minZ);
+    const maxSpan = Math.max(spanX, spanY, spanZ);
+    const offset = Math.max(4, Math.min(14, maxSpan * 0.06));
 
-    const commonStyle = { fontSize: 84, worldScale: 0.20 }; // <-- КРУПНОТА тут
+    const commonStyle = { fontSize: 84, worldScale: 0.20 };
 
     if (xMetric) {
       const xMax = calcMax(pointsList, xMetric);
@@ -642,7 +644,6 @@
     }
   }
 
-  // обновляем ориентацию каждый кадр (камера вращается — подписи перестраиваются)
   function updateEdgeLabelOrientations(): void {
     if (!camera) return;
     for (const item of edgeLabels) {
@@ -715,7 +716,6 @@
     rebuildPlanes(renderablePoints);
     fitCameraToPoints(renderablePoints);
 
-    // подписи осей по рёбрам — завязаны на bbox
     const bbox = normalizeBBox(renderablePoints);
     updateEdgeLabels({
       bbox,
@@ -766,7 +766,6 @@
   function animate(): void {
     controls?.update();
 
-    // обновляем ориентацию подписей под текущую камеру
     updateEdgeLabelOrientations();
 
     renderer?.render(scene, camera);
