@@ -1,0 +1,162 @@
+:root {
+  --bg: #f6f8fc;
+  --panel: #ffffff;
+  --text: #0f172a;
+  --muted: #64748b;
+  --border: #e5eaf1;
+  --ring: rgba(37, 99, 235, 0.35);
+  --shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+  --radius: 16px;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  line-height: 1.35;
+}
+
+/* Headings: readable, not huge */
+h1,
+h2,
+h3,
+h4 {
+  margin: 0 0 10px 0;
+  letter-spacing: 0.01em;
+}
+h1 {
+  font-size: 22px;
+  font-weight: 750;
+}
+h2 {
+  font-size: 18px;
+  font-weight: 700;
+}
+h3 {
+  font-size: 15px;
+  font-weight: 700;
+}
+h4 {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+/* Panels */
+.panel,
+[class*='panel'],
+aside,
+section {
+  border-radius: var(--radius);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+
+/* Controls */
+button,
+select,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text);
+  border-radius: 999px;
+  padding: 7px 10px;
+  cursor: pointer;
+  transition: transform 0.04s ease, background 0.12s ease, border-color 0.12s ease;
+}
+
+button:hover {
+  background: #f8fafc;
+}
+
+button:active {
+  transform: translateY(1px);
+}
+
+button:focus-visible,
+select:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+select,
+input,
+textarea {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: #fff;
+}
+
+/* Tables (витрина данных) */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+th,
+td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  font-size: 12px;
+}
+
+th {
+  color: var(--muted);
+  background: #f8fafc;
+  font-weight: 700;
+}
+
+tr:hover td {
+  background: #fbfdff;
+}
+
+/* “Плашки”/tooltip/debug: делаем читаемо, не ядовито */
+.tooltip,
+[class*='tooltip'],
+[class*='debug'],
+.toast,
+[class*='toast'] {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+/* Если у tooltip чёрный фон — смягчим */
+.tooltip,
+[class*='tooltip'] {
+  background: rgba(15, 23, 42, 0.92);
+  color: #fff;
+  border-radius: 12px;
+  padding: 10px 12px;
+  box-shadow: 0 14px 40px rgba(15, 23, 42, 0.22);
+  max-width: 380px;
+}
+
+/* Ссылки/мелкий текст */
+small,
+.muted,
+[class*='muted'] {
+  color: var(--muted);
+}
