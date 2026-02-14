@@ -10,6 +10,7 @@ export type SpacePoint = {
   x: number;
   y: number;
   z: number;
+  color?: string;
 };
 
 export type BBox = {
