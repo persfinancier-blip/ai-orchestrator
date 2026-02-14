@@ -889,6 +889,88 @@
     controls?.dispose();
     labelRenderer?.domElement?.remove();
   });
+
+  function createEdgeLabel(text: string, isMax = false): CSS2DObject {
+  const el = document.createElement('div');
+  el.className = `cube-edge-label${isMax ? ' max' : ''}`;
+  el.textContent = text;
+  return new CSS2DObject(el);
+  }
+
+function addCubeWireframe(
+  scene: THREE.Scene,
+  size: number
+): THREE.LineSegments<THREE.EdgesGeometry, THREE.LineBasicMaterial> {
+  const geom = new THREE.EdgesGeometry(new THREE.BoxGeometry(size, size, size));
+  const mat = new THREE.LineBasicMaterial({ color: 0x334155 }); // тёмно-серый
+  const lines = new THREE.LineSegments(geom, mat);
+  scene.add(lines);
+  return lines;
+  }
+
+  const cubeSize = 1; // или твой реальный размер (если уже есть переменная — используй её)
+  addCubeWireframe(scene, cubeSize);
+  
+  addCubeAxisLabels({
+    scene,
+    size: cubeSize,
+    xTitle: 'Выручка',
+    yTitle: 'Заказы',
+    zTitle: 'Расход',
+    xMax: 999, // сюда подставим реальный max (ниже объясню)
+    yMax: 999,
+    zMax: 999,
+  });
+
+function addCubeAxisLabels(opts: {
+  scene: THREE.Scene;
+  size: number;
+  xTitle: string;
+  yTitle: string;
+  zTitle: string;
+  xMax: string | number;
+  yMax: string | number;
+  zMax: string | number;
+  }): void {
+  const { scene, size, xTitle, yTitle, zTitle, xMax, yMax, zMax } = opts;
+
+  const h = size / 2;
+
+  // Выбираем “нижний-левый-дальний” угол как "0"
+  const origin = new THREE.Vector3(-h, -h, -h);
+
+  // Концы осей
+  const xEnd = new THREE.Vector3(+h, -h, -h);
+  const yEnd = new THREE.Vector3(-h, +h, -h);
+  const zEnd = new THREE.Vector3(-h, -h, +h);
+
+  // Середины осей (рёбра)
+  const xMid = origin.clone().lerp(xEnd, 0.5);
+  const yMid = origin.clone().lerp(yEnd, 0.5);
+  const zMid = origin.clone().lerp(zEnd, 0.5);
+
+  // Подписи по центру ребра
+  const lx = createEdgeLabel(xTitle);
+  lx.position.copy(xMid);
+
+  const ly = createEdgeLabel(yTitle);
+  ly.position.copy(yMid);
+
+  const lz = createEdgeLabel(zTitle);
+  lz.position.copy(zMid);
+
+  // Максимумы на концах
+  const mx = createEdgeLabel(`${xTitle}: ${xMax}`, true);
+  mx.position.copy(xEnd);
+
+  const my = createEdgeLabel(`${yTitle}: ${yMax}`, true);
+  my.position.copy(yEnd);
+
+  const mz = createEdgeLabel(`${zTitle}: ${zMax}`, true);
+  mz.position.copy(zEnd);
+
+  scene.add(lx, ly, lz, mx, my, mz);
+  }
 </script>
 
 <section class="graph-root panel">
@@ -1058,4 +1140,24 @@
   :global(.plane-label) { background:rgba(15,23,42,.7); color:#f8fafc; border-radius:8px; padding:3px 7px; font-size:11px; white-space:nowrap; }
   .toggle { flex-direction:row; align-items:center; gap:6px; }
   small { color:#64748b; font-size:11px; line-height:1.3; }
+  .cube-edge-label {
+  pointer-events: none;
+  user-select: none;
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(15, 23, 42, 0.92);
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  border-radius: 10px;
+  padding: 4px 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  white-space: nowrap;
+  }
+
+.cube-edge-label.max {
+  color: rgba(30, 64, 175, 0.95);
+  border-color: rgba(191, 219, 254, 0.95);
+  }
 </style>
+
+
