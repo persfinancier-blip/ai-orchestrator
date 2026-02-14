@@ -58,6 +58,7 @@
 
   let showDisplayMenu = false;
   let showPickDataMenu = false;
+  let showGroupingMenu = false;
 
   let showSaveVisualModal = false;
   let saveVisualName = '';
@@ -71,8 +72,6 @@
   let bboxLabel = '—';
 
   let scene: SpaceScene | null = null;
-
-  let showGroupingMenu = false;
 
   let grouping: GroupingConfig = {
     enabled: false,
@@ -136,11 +135,10 @@
     dateFields: dateFieldsAll
   });
 
-  // ---- clustering cache
-  let cachedLabels: Int32Array | null = null;
-  let cachedCounts: Map<number, number> | null = null;
-  let cachedKey = '';
-  let cachedAxisKey = '';
+  // ---- FIXED caching: Map(point.id -> clusterId)
+  let fixedAssign: Map<string, number> = new Map();
+  let fixedCounts: Map<number, number> = new Map();
+  let fixedConfigKey = '';
 
   function colorForCluster(id: number): string {
     if (id < 0) return '#94a3b8';
@@ -148,7 +146,13 @@
     return `hsl(${hue} 70% 45%)`;
   }
 
-  function makeClusterKey(cfg: GroupingConfig): string {
+  function getTextValue(p: SpacePoint, field: string): string {
+    // behavior: максимально стабильная строка (для групп, полученных из text-полей)
+    if (p.sourceField === field) return p.label ?? '';
+    return '';
+  }
+
+  function makeFixedConfigKey(cfg: GroupingConfig): string {
     return [
       cfg.enabled ? '1' : '0',
       cfg.principle,
@@ -159,27 +163,11 @@
       cfg.wY.toFixed(2),
       cfg.wZ.toFixed(2),
       String(cfg.minClusterSize),
-      cfg.recompute,
-      String(clusterSeed) // manual trigger
+      cfg.recompute
     ].join('::');
   }
 
-  function getTextValue(p: SpacePoint, field: string): string {
-    // для behavior: берём “label” и мета-ключи максимально стабильно
-    // metrics для text полей обычно пустые => используем label / id / sourceField как fallback
-    const m = (p as any)?.metrics ?? {};
-    const v = m?.[field];
-    if (typeof v === 'string') return v;
-    // если вдруг кто-то положил текст прямо в metrics как number/string
-    if (v != null) return String(v);
-
-    // fallback: если выбран field совпадает с sourceField, label содержит значение группы
-    if (p.sourceField === field) return p.label;
-
-    return '';
-  }
-
-  function computeClusters(input: SpacePoint[]): { labels: Int32Array; counts: Map<number, number> } {
+  function computeClustersNow(input: SpacePoint[]): { labels: Int32Array; counts: Map<number, number> } {
     const vecs = buildFeatureVec3({
       points: input,
       cfg: grouping,
@@ -197,66 +185,89 @@
       const id = labels[i];
       counts.set(id, (counts.get(id) ?? 0) + 1);
     }
-
     return { labels, counts };
   }
 
+  function rebuildFixedAssignments(input: SpacePoint[]): void {
+    const res = computeClustersNow(input);
+
+    const assign = new Map<string, number>();
+    for (let i = 0; i < input.length; i += 1) assign.set(input[i].id, res.labels[i]);
+
+    fixedAssign = assign;
+    fixedCounts = res.counts;
+    fixedConfigKey = makeFixedConfigKey(grouping);
+  }
+
   function applyClustering(input: SpacePoint[]): SpacePoint[] {
-    if (!grouping.enabled) {
-      cachedLabels = null;
-      cachedCounts = null;
-      cachedKey = '';
-      cachedAxisKey = '';
-      return input.map((p) => ({ ...p, color: undefined }));
+    if (!grouping.enabled) return input.map((p) => ({ ...p, color: undefined }));
+
+    // ---- FIXED
+    if (grouping.recompute === 'fixed') {
+      const cfgKey = makeFixedConfigKey(grouping);
+
+      // если конфиг изменился — очищаем (иначе будет путаница)
+      if (cfgKey !== fixedConfigKey) {
+        fixedAssign = new Map();
+        fixedCounts = new Map();
+        fixedConfigKey = cfgKey;
+      }
+
+      // если ещё нет групп — построим один раз
+      if (fixedAssign.size === 0 && input.length) rebuildFixedAssignments(input);
+
+      return input.map((p) => {
+        const id = fixedAssign.get(p.id);
+        const clusterId = typeof id === 'number' ? id : -1;
+
+        const size = fixedCounts.get(clusterId) ?? 0;
+        const effectiveId = clusterId >= 0 && size < grouping.minClusterSize ? -1 : clusterId;
+
+        return { ...p, color: colorForCluster(effectiveId) };
+      });
     }
 
-    const key = makeClusterKey(grouping);
-    const axisKey = `${axisX}::${axisY}::${axisZ}`;
+    // ---- MANUAL
+    if (grouping.recompute === 'manual') {
+      // пересчёт только после кнопки
+      if (clusterSeed > 0) {
+        rebuildFixedAssignments(input);
+        clusterSeed = 0;
+      }
 
-    const needRecomputeAuto = grouping.recompute === 'auto';
-    const needRecomputeManual = grouping.recompute === 'manual';
-    const needRecomputeFixed = grouping.recompute === 'fixed';
+      return input.map((p) => {
+        const id = fixedAssign.get(p.id);
+        const clusterId = typeof id === 'number' ? id : -1;
 
-    // fixed: не пересчитывать при смене осей/поиска/периода, только если:
-    // - кэш пуст (первое включение)
-    // - или пользователь нажал "пересчитать" (clusterSeed изменился)
-    const fixedShouldRecompute = needRecomputeFixed && (!cachedLabels || key !== cachedKey);
+        const size = fixedCounts.get(clusterId) ?? 0;
+        const effectiveId = clusterId >= 0 && size < grouping.minClusterSize ? -1 : clusterId;
 
-    // manual: пересчёт только по кнопке (clusterSeed меняет key)
-    const manualShouldRecompute = needRecomputeManual && (!cachedLabels || key !== cachedKey);
-
-    // auto: пересчёт при любом изменении key или если длина изменилась
-    const autoShouldRecompute =
-      needRecomputeAuto &&
-      (!cachedLabels || key !== cachedKey || axisKey !== cachedAxisKey || cachedLabels.length !== input.length);
-
-    const shouldRecompute = autoShouldRecompute || manualShouldRecompute || fixedShouldRecompute;
-
-    if (shouldRecompute) {
-      const res = computeClusters(input);
-      cachedLabels = res.labels;
-      cachedCounts = res.counts;
-      cachedKey = key;
-      cachedAxisKey = axisKey;
+        return { ...p, color: colorForCluster(effectiveId) };
+      });
     }
 
-    const labels = cachedLabels;
-    const counts = cachedCounts;
-
-    if (!labels || !counts || labels.length !== input.length) {
-      return input.map((p) => ({ ...p, color: '#94a3b8' }));
-    }
+    // ---- AUTO
+    // auto: просто пересчитываем каждый раз на текущих входных данных
+    const res = computeClustersNow(input);
 
     return input.map((p, i) => {
-      const id = labels[i];
-      const size = counts.get(id) ?? 0;
-      const effectiveId = id >= 0 && size < grouping.minClusterSize ? -1 : id;
+      const clusterId = res.labels[i];
+      const size = res.counts.get(clusterId) ?? 0;
+      const effectiveId = clusterId >= 0 && size < grouping.minClusterSize ? -1 : clusterId;
       return { ...p, color: colorForCluster(effectiveId) };
     });
   }
 
   function recomputeClusters(): void {
-    clusterSeed += 1;
+    // fixed/manual используют один и тот же механизм “пересчитать”
+    if (grouping.recompute === 'fixed') {
+      rebuildFixedAssignments(points);
+      return;
+    }
+    if (grouping.recompute === 'manual') {
+      clusterSeed += 1;
+      return;
+    }
   }
 
   // ---- render reactive
@@ -399,11 +410,10 @@
     const t = e.target as Node | null;
     if (!t) return;
 
-    // любой .menu-pop (display/pick/grouping) считаем меню
     const menus = Array.from(document.querySelectorAll('.menu-pop')) as HTMLElement[];
     const inMenu = menus.some((m) => m.contains(t));
-
     const inBtns = (document.querySelector('.hud')?.contains(t) ?? false);
+
     if (!inMenu && !inBtns) closeAllMenus();
   }
 
@@ -425,7 +435,6 @@
     scene?.resize(560);
   }
 
-  // ---- mount/unmount
   onMount(async () => {
     loadStorages();
     await tick();
@@ -461,7 +470,6 @@
     scene = null;
   });
 
-  // ---- breadcrumbs/labels
   $: selectedCrumbs = selectedEntityFields.map((c) => ({ code: c, name: fieldName(c) }));
   $: axesLabel = `Оси: ${fieldName(axisX || '—')} / ${fieldName(axisY || '—')} / ${fieldName(axisZ || '—')}`;
 </script>
@@ -809,7 +817,7 @@
 
   :global(.modal) {
     width: min(520px, calc(100vw - 24px));
-    background: rgba(255,  255, 255, 0.92);
+    background: rgba(255, 255, 255, 0.92);
     border-radius: 18px;
     padding: 14px;
     box-shadow: 0 30px 80px rgba(15, 23, 42, 0.24);
