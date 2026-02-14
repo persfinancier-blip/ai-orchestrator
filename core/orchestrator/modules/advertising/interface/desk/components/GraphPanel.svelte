@@ -1,3 +1,4 @@
+<!-- core/orchestrator/modules/advertising/interface/desk/components/GraphPanel.svelte -->
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import * as THREE from 'three';
@@ -35,14 +36,15 @@
 
   const STORAGE_KEY = 'desk-space-settings-v2';
 
-  // UI блока "Набор данных" больше нет — но слои можно оставить фиксированными (оба источника включены).
   let activeLayers: DatasetId[] = ['sales_fact', 'ads'];
 
   let selectedEntityFields: string[] = ['sku', 'campaign_id'];
   let axisX = '';
   let axisY = '';
   let axisZ = '';
+  // раньше было showPlanes — теперь это "каркас"
   let showPlanes = true;
+
   let period: PeriodMode = '30 дней';
   let fromDate = '';
   let toDate = '';
@@ -75,8 +77,11 @@
   let diamondMesh: THREE.InstancedMesh | undefined;
   let labelRenderer: CSS2DRenderer | undefined;
 
+  // группа "геометрии пространства" (теперь в ней каркас)
   const planeGroup = new THREE.Group();
-  const edgeLabelGroup = new THREE.Group(); // подписи рёбер
+  const edgeLabelGroup = new THREE.Group();
+
+  let wireframeLines: THREE.LineSegments<THREE.EdgesGeometry, THREE.LineBasicMaterial> | null = null;
 
   let circlePoints: SpacePoint[] = [];
   let diamondPoints: SpacePoint[] = [];
@@ -333,61 +338,38 @@
     return obj;
   }
 
+  function disposeWireframe(): void {
+    if (!wireframeLines) return;
+    planeGroup.remove(wireframeLines);
+    wireframeLines.geometry.dispose();
+    wireframeLines.material.dispose();
+    wireframeLines = null;
+  }
+
   function rebuildPlanes(list: SpacePoint[]): void {
+    // Теперь здесь НЕ плоскости, а каркас пространства
     planeGroup.clear();
+    disposeWireframe();
     if (!showPlanes) return;
 
     const bbox = normalizeBBox(list);
-    const widthX = Math.max(2, bbox.maxX - bbox.minX);
-    const widthY = Math.max(2, bbox.maxY - bbox.minY);
-    const widthZ = Math.max(2, bbox.maxZ - bbox.minZ);
+
+    const sizeX = Math.max(2, bbox.maxX - bbox.minX);
+    const sizeY = Math.max(2, bbox.maxY - bbox.minY);
+    const sizeZ = Math.max(2, bbox.maxZ - bbox.minZ);
+
     const centerX = (bbox.minX + bbox.maxX) / 2;
     const centerY = (bbox.minY + bbox.maxY) / 2;
     const centerZ = (bbox.minZ + bbox.maxZ) / 2;
 
-    const matXY = new THREE.MeshBasicMaterial({
-      color: '#94a3b8',
-      transparent: true,
-      opacity: 0.1,
-      side: THREE.DoubleSide,
-      depthWrite: false
-    });
-    const matXZ = new THREE.MeshBasicMaterial({
-      color: '#9ca3af',
-      transparent: true,
-      opacity: 0.1,
-      side: THREE.DoubleSide,
-      depthWrite: false
-    });
-    const matYZ = new THREE.MeshBasicMaterial({
-      color: '#a5b4fc',
-      transparent: true,
-      opacity: 0.1,
-      side: THREE.DoubleSide,
-      depthWrite: false
-    });
+    const geom = new THREE.EdgesGeometry(new THREE.BoxGeometry(sizeX, sizeY, sizeZ));
+    const mat = new THREE.LineBasicMaterial({ color: 0x334155 });
+    wireframeLines = new THREE.LineSegments(geom, mat);
+    wireframeLines.position.set(centerX, centerY, centerZ);
+    planeGroup.add(wireframeLines);
 
-    const planeXY = new THREE.Mesh(new THREE.PlaneGeometry(widthX, widthY), matXY);
-    planeXY.position.set(centerX, centerY, bbox.minZ);
-    planeGroup.add(planeXY);
-
-    const planeXZ = new THREE.Mesh(new THREE.PlaneGeometry(widthX, widthZ), matXZ);
-    planeXZ.rotation.x = -Math.PI / 2;
-    planeXZ.position.set(centerX, bbox.minY, centerZ);
-    planeGroup.add(planeXZ);
-
-    const planeYZ = new THREE.Mesh(new THREE.PlaneGeometry(widthY, widthZ), matYZ);
-    planeYZ.rotation.y = Math.PI / 2;
-    planeYZ.position.set(bbox.minX, centerY, centerZ);
-    planeGroup.add(planeYZ);
-
-    const xName = fieldName(axisX || '—');
-    const yName = fieldName(axisY || '—');
-    const zName = fieldName(axisZ || '—');
-
-    planeGroup.add(makePlaneLabel(`${xName} × ${yName}`, centerX, centerY, bbox.minZ + 0.25));
-    planeGroup.add(makePlaneLabel(`${xName} × ${zName}`, centerX, bbox.minY + 0.25, centerZ));
-    planeGroup.add(makePlaneLabel(`${yName} × ${zName}`, bbox.minX + 0.25, centerY, centerZ));
+    // Лейблы плоскостей можно убрать, чтобы не мешали (оставляем только edge labels)
+    // planeGroup.add(makePlaneLabel(...)) — не добавляем
   }
 
   function init3d(): void {
@@ -884,93 +866,14 @@
     window.removeEventListener('keydown', onHotKey);
 
     disposeEdgeLabels();
+    disposeWireframe();
+
+    renderer?.domElement?.removeEventListener('mousemove', onMove3d);
 
     renderer?.dispose();
     controls?.dispose();
     labelRenderer?.domElement?.remove();
   });
-
-  function createEdgeLabel(text: string, isMax = false): CSS2DObject {
-  const el = document.createElement('div');
-  el.className = `cube-edge-label${isMax ? ' max' : ''}`;
-  el.textContent = text;
-  return new CSS2DObject(el);
-  }
-
-function addCubeWireframe(
-  scene: THREE.Scene,
-  size: number
-): THREE.LineSegments<THREE.EdgesGeometry, THREE.LineBasicMaterial> {
-  const geom = new THREE.EdgesGeometry(new THREE.BoxGeometry(size, size, size));
-  const mat = new THREE.LineBasicMaterial({ color: 0x334155 }); // тёмно-серый
-  const lines = new THREE.LineSegments(geom, mat);
-  scene.add(lines);
-  return lines;
-  }
-
-  const cubeSize = 1; // или твой реальный размер (если уже есть переменная — используй её)
-  addCubeWireframe(scene, cubeSize);
-  
-  addCubeAxisLabels({
-    scene,
-    size: cubeSize,
-    xTitle: 'Выручка',
-    yTitle: 'Заказы',
-    zTitle: 'Расход',
-    xMax: 999, // сюда подставим реальный max (ниже объясню)
-    yMax: 999,
-    zMax: 999,
-  });
-
-function addCubeAxisLabels(opts: {
-  scene: THREE.Scene;
-  size: number;
-  xTitle: string;
-  yTitle: string;
-  zTitle: string;
-  xMax: string | number;
-  yMax: string | number;
-  zMax: string | number;
-  }): void {
-  const { scene, size, xTitle, yTitle, zTitle, xMax, yMax, zMax } = opts;
-
-  const h = size / 2;
-
-  // Выбираем “нижний-левый-дальний” угол как "0"
-  const origin = new THREE.Vector3(-h, -h, -h);
-
-  // Концы осей
-  const xEnd = new THREE.Vector3(+h, -h, -h);
-  const yEnd = new THREE.Vector3(-h, +h, -h);
-  const zEnd = new THREE.Vector3(-h, -h, +h);
-
-  // Середины осей (рёбра)
-  const xMid = origin.clone().lerp(xEnd, 0.5);
-  const yMid = origin.clone().lerp(yEnd, 0.5);
-  const zMid = origin.clone().lerp(zEnd, 0.5);
-
-  // Подписи по центру ребра
-  const lx = createEdgeLabel(xTitle);
-  lx.position.copy(xMid);
-
-  const ly = createEdgeLabel(yTitle);
-  ly.position.copy(yMid);
-
-  const lz = createEdgeLabel(zTitle);
-  lz.position.copy(zMid);
-
-  // Максимумы на концах
-  const mx = createEdgeLabel(`${xTitle}: ${xMax}`, true);
-  mx.position.copy(xEnd);
-
-  const my = createEdgeLabel(`${yTitle}: ${yMax}`, true);
-  my.position.copy(yEnd);
-
-  const mz = createEdgeLabel(`${zTitle}: ${zMax}`, true);
-  mz.position.copy(zEnd);
-
-  scene.add(lx, ly, lz, mx, my, mz);
-  }
 </script>
 
 <section class="graph-root panel">
@@ -1039,8 +942,6 @@ function addCubeAxisLabels(opts: {
         </label>
       </section>
 
-      <!-- УДАЛЕНО: блок "Набор данных" -->
-
       <section class="section">
         <h4>Координаты</h4>
         <small>Какие числовые метрики формируют оси X/Y/Z.</small>
@@ -1062,7 +963,7 @@ function addCubeAxisLabels(opts: {
             {#each axisFields as field}<option value={field.code}>{field.name}</option>{/each}
           </select>
         </label>
-        <label class="toggle"><input type="checkbox" bind:checked={showPlanes} /> Плоскости</label>
+        <label class="toggle"><input type="checkbox" bind:checked={showPlanes} /> Каркас</label>
       </section>
 
       <section class="section">
@@ -1140,24 +1041,4 @@ function addCubeAxisLabels(opts: {
   :global(.plane-label) { background:rgba(15,23,42,.7); color:#f8fafc; border-radius:8px; padding:3px 7px; font-size:11px; white-space:nowrap; }
   .toggle { flex-direction:row; align-items:center; gap:6px; }
   small { color:#64748b; font-size:11px; line-height:1.3; }
-  .cube-edge-label {
-  pointer-events: none;
-  user-select: none;
-  font-size: 11px;
-  font-weight: 700;
-  color: rgba(15, 23, 42, 0.92);
-  background: rgba(255, 255, 255, 0.88);
-  border: 1px solid rgba(226, 232, 240, 0.9);
-  border-radius: 10px;
-  padding: 4px 8px;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
-  white-space: nowrap;
-  }
-
-.cube-edge-label.max {
-  color: rgba(30, 64, 175, 0.95);
-  border-color: rgba(191, 219, 254, 0.95);
-  }
 </style>
-
-
