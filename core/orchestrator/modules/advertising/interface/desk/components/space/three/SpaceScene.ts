@@ -3,6 +3,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 
 import type { SpacePoint } from '../types';
+import type { ShowcaseField } from '../../data/showcaseStore';
+import type { ShowcaseField } from '../../data/showcaseStore';
 import { buildBBox, normalizeBBox, calcMax, sanitizePoints, formatValueByMetric } from '../pipeline';
 
 export type SpaceSceneTheme = {
@@ -14,7 +16,7 @@ export type SpaceSceneTheme = {
 
 export type SpaceSceneDeps = {
   fieldName: (code: string) => string;
-  getFields: () => Array<{ code: string; kind: 'text' | 'number' | 'date' }>;
+  getFields: () => ShowcaseField[];
 };
 
 export type SpaceSceneCallbacks = {
@@ -380,7 +382,7 @@ export class SpaceScene {
       : this.createChipLabel('Z: выберите', { tone: 'accent' });
     zChip.position.copy(midZ);
 
-    const fields = this.deps.getFields() as any[];
+    const fields = this.deps.getFields();
 
     const mx = this.createChipLabel(formatValueByMetric(axisX, axisX ? calcMax(list, axisX) : Number.NaN, fields), { tone: 'accent' });
     mx.position.copy(Bx);
