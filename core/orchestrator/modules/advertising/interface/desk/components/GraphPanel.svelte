@@ -57,6 +57,12 @@
 
   let tooltip = { visible: false, x: 0, y: 0, lines: [] as string[] };
   let points: SpacePoint[] = [];
+  let debugCalculatedCount = 0;
+  let debugRenderedCount = 0;
+  let debugBBox = '—';
+  let debugLastError = '—';
+
+  type BBox = { minX: number; maxX: number; minY: number; maxY: number; minZ: number; maxZ: number };
 
   let renderer: THREE.WebGLRenderer;
   let scene: THREE.Scene;
@@ -64,6 +70,7 @@
   let controls: OrbitControls;
   let circleMesh: THREE.InstancedMesh | undefined;
   let diamondMesh: THREE.InstancedMesh | undefined;
+  let axesHelper: THREE.AxesHelper | undefined;
   let circlePoints: SpacePoint[] = [];
   let diamondPoints: SpacePoint[] = [];
   let anim = 0;
@@ -187,6 +194,8 @@
     });
 
     const coords = projectPoints(result);
+    const uniqueTotal = selectedEntityFields.reduce((sum, field) => sum + new Set(rows.map((r) => String((r as Record<string, unknown>)[field] ?? '')).filter(Boolean)).size, 0);
+    console.log('[Пространство] пересчет', { поля: selectedEntityFields, уникальных: uniqueTotal, первыеТочки: coords.slice(0, 3).map((p) => ({ id: p.id, x: p.x, y: p.y, z: p.z })) });
     return coords;
   }
 
@@ -220,6 +229,85 @@
     return ((value - min) / Math.max(max - min, 0.0001) - 0.5) * 180;
   }
 
+
+  function sanitizeCoord(value: number, id: string, axis: 'x' | 'y' | 'z'): number {
+    if (!Number.isFinite(value)) return hashToJitter(`${id}:${axis}`) * 0.05;
+    return value + hashToJitter(`${id}:${axis}`) * 0.05;
+  }
+
+  function fallbackPoints(count = 24): SpacePoint[] {
+    return Array.from({ length: count }).map((_, i) => {
+      const id = `fallback-${i + 1}`;
+      return {
+        id,
+        label: `Тестовая точка ${i + 1}`,
+        sourceField: i % 2 === 0 ? 'sku' : 'campaign_id',
+        metrics: { revenue: 0, spend: 0, drr: 0, roi: 0, orders: 0 },
+        x: hashToJitter(`${id}:x`) * 1.2,
+        y: hashToJitter(`${id}:y`) * 1.2,
+        z: hashToJitter(`${id}:z`) * 1.2,
+      };
+    });
+  }
+
+  function buildBBox(list: SpacePoint[]): BBox {
+    const xs = list.map((p) => p.x);
+    const ys = list.map((p) => p.y);
+    const zs = list.map((p) => p.z);
+    return {
+      minX: Math.min(...xs),
+      maxX: Math.max(...xs),
+      minY: Math.min(...ys),
+      maxY: Math.max(...ys),
+      minZ: Math.min(...zs),
+      maxZ: Math.max(...zs),
+    };
+  }
+
+  function fitCameraToPoints(list: SpacePoint[]): void {
+    if (!camera || !controls || !list.length) return;
+    const bbox = buildBBox(list);
+    debugBBox = `x ${bbox.minX.toFixed(2)}..${bbox.maxX.toFixed(2)} | y ${bbox.minY.toFixed(2)}..${bbox.maxY.toFixed(2)} | z ${bbox.minZ.toFixed(2)}..${bbox.maxZ.toFixed(2)}`;
+
+    const center = new THREE.Vector3(
+      (bbox.minX + bbox.maxX) / 2,
+      (bbox.minY + bbox.maxY) / 2,
+      (bbox.minZ + bbox.maxZ) / 2
+    );
+    const spanX = Math.max(0.001, bbox.maxX - bbox.minX);
+    const spanY = Math.max(0.001, bbox.maxY - bbox.minY);
+    const spanZ = Math.max(0.001, bbox.maxZ - bbox.minZ);
+    const maxSpan = Math.max(spanX, spanY, spanZ);
+
+    if (maxSpan < 0.5) {
+      camera.position.set(center.x + 1.5, center.y + 1.5, center.z + 5);
+      controls.target.copy(center);
+      controls.update();
+      return;
+    }
+
+    const distance = Math.max(8, maxSpan * 1.55);
+    camera.position.set(center.x + distance * 0.55, center.y + distance * 0.45, center.z + distance);
+    controls.target.copy(center);
+    controls.update();
+  }
+
+  function ensureRenderablePoints(input: SpacePoint[]): SpacePoint[] {
+    const sanitized = input.map((point) => ({
+      ...point,
+      x: sanitizeCoord(point.x, point.id, 'x'),
+      y: sanitizeCoord(point.y, point.id, 'y'),
+      z: sanitizeCoord(point.z, point.id, 'z'),
+    }));
+    const hasFinite = sanitized.some((p) => Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z));
+    if (!sanitized.length || !hasFinite) {
+      debugLastError = 'Включен гарантированный режим: точки подставлены автоматически';
+      return fallbackPoints(24);
+    }
+    debugLastError = '—';
+    return sanitized;
+  }
+
   function init3d(): void {
     const width = container3d.clientWidth;
     const height = 560;
@@ -242,6 +330,8 @@
     light.position.set(80, 120, 75);
     scene.add(light);
     scene.add(new THREE.GridHelper(260, 16, '#d6deea', '#eaf0f7'));
+    axesHelper = new THREE.AxesHelper(60);
+    scene.add(axesHelper);
 
     renderer.domElement.addEventListener('mousemove', onMove3d);
     animate();
@@ -259,8 +349,12 @@
     clearMesh(circleMesh);
     clearMesh(diamondMesh);
 
-    circlePoints = points.filter((p) => p.sourceField !== 'campaign_id');
-    diamondPoints = points.filter((p) => p.sourceField === 'campaign_id');
+    debugCalculatedCount = points.length;
+    const renderablePoints = ensureRenderablePoints(points);
+    debugRenderedCount = renderablePoints.length;
+
+    circlePoints = renderablePoints.filter((p) => p.sourceField !== 'campaign_id');
+    diamondPoints = renderablePoints.filter((p) => p.sourceField === 'campaign_id');
 
     if (circlePoints.length) {
       circleMesh = new THREE.InstancedMesh(
@@ -292,6 +386,8 @@
       });
       scene.add(diamondMesh);
     }
+
+    fitCameraToPoints(renderablePoints);
   }
 
   function formatDate(value: string): string {
@@ -506,6 +602,13 @@
     <div class="graph-wrap">
       <div class="stage">
         <div bind:this={container3d} class="scene" />
+        <div class="debug">
+          <div>Точек (расчёт): {debugCalculatedCount}</div>
+          <div>Точек (отрисовка): {debugRenderedCount}</div>
+          <div>X/Y/Z: {fieldName(axisX || '—')} / {fieldName(axisY || '—')} / {fieldName(axisZ || '—')}</div>
+          <div>bbox: {debugBBox}</div>
+          <div>последняя ошибка: {debugLastError}</div>
+        </div>
         {#if tooltip.visible}
           <div class="tooltip" style={`left:${tooltip.x}px;top:${tooltip.y}px`}>
             {#each tooltip.lines as line}<div>{line}</div>{/each}
@@ -629,8 +732,9 @@
   .status { font-size:12px; color:#64748b; text-align:right; }
   .content { display:grid; grid-template-columns:minmax(0,1fr) 360px; gap:12px; align-items:stretch; }
   .graph-wrap { min-width:0; }
-  .stage { position:relative; }
-  .scene { width:100%; height:560px; border:1px solid #e2e8f0; border-radius:16px; background:#f8fbff; }
+  .stage { position:relative; min-height:560px; }
+  .scene { width:100%; height:100%; min-height:560px; border:1px solid #e2e8f0; border-radius:16px; background:#f8fbff; }
+  .debug { position:absolute; left:10px; top:10px; z-index:3; background:rgba(15,23,42,.82); color:#f8fafc; font-size:11px; border-radius:10px; padding:8px 10px; line-height:1.4; pointer-events:none; max-width:400px; }
   .control-panel { height:560px; border:1px solid #e2e8f0; border-radius:14px; padding:10px; background:#fbfdff; display:flex; flex-direction:column; gap:10px; overflow:auto; }
   .section { border:1px solid #e7edf6; border-radius:10px; padding:8px; display:flex; flex-direction:column; gap:6px; }
   .section h4 { margin:0; font-size:13px; color:#334155; }
