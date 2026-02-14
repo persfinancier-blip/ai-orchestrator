@@ -176,18 +176,20 @@
 
       <div class="hue-wrap">
         <div class="hue-label">Тон</div>
-        <input
-          class="hue"
-          type="range"
-          min="0"
-          max="360"
-          step="1"
-          value={hsv.h}
-          on:input={onHue}
-          style={`background:linear-gradient(90deg,
-            ${hueHex(0)}, ${hueHex(60)}, ${hueHex(120)}, ${hueHex(180)}, ${hueHex(240)}, ${hueHex(300)}, ${hueHex(360)}
-          );`}
-        />
+        <div class="hue-pad">
+          <input
+            class="hue"
+            type="range"
+            min="0"
+            max="360"
+            step="1"
+            value={hsv.h}
+            on:input={onHue}
+            style={`background:linear-gradient(90deg,
+              ${hueHex(0)}, ${hueHex(60)}, ${hueHex(120)}, ${hueHex(180)}, ${hueHex(240)}, ${hueHex(300)}, ${hueHex(360)}
+            );`}
+          />
+        </div>
       </div>
     </div>
   </div>
@@ -199,12 +201,16 @@
     top: 52px;
     right: 0;
     width: 320px;
+    max-width: 100%;
     padding: 12px;
     border-radius: 18px;
     background: rgba(255, 255, 255, 0.94);
     box-shadow: 0 22px 60px rgba(15, 23, 42, 0.18);
     backdrop-filter: blur(14px);
     z-index: 30;
+
+    box-sizing: border-box;
+    overflow: hidden; /* ✅ режем всё по скруглению */
   }
 
   .head {
@@ -233,9 +239,10 @@
 
   .body {
     display: grid;
-    grid-template-columns: 1fr 110px;
+    grid-template-columns: 1fr 116px; /* ✅ фикс правой колонки */
     gap: 10px;
     align-items: start;
+    box-sizing: border-box;
   }
 
   .sv {
@@ -248,6 +255,7 @@
     box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.06);
     border: 1px solid rgba(15, 23, 42, 0.06);
     touch-action: none;
+    box-sizing: border-box;
   }
 
   .sv-white {
@@ -277,6 +285,8 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
+    min-width: 0; /* ✅ не даём расширяться */
+    box-sizing: border-box;
   }
 
   .preview {
@@ -295,6 +305,7 @@
     padding: 10px 10px;
     font-size: 12px;
     color: rgba(15, 23, 42, 0.9);
+    box-sizing: border-box;
   }
 
   .hue-wrap { margin-top: 2px; }
@@ -305,6 +316,10 @@
     margin-bottom: 6px;
   }
 
+  .hue-pad {
+    padding: 0 2px; /* ✅ чтобы круглый thumb не упирался в край */
+  }
+
   .hue {
     -webkit-appearance: none;
     appearance: none;
@@ -313,6 +328,8 @@
     border-radius: 999px;
     border: 1px solid rgba(15, 23, 42, 0.06);
     outline: none;
+    box-sizing: border-box;
+    display: block;
   }
 
   .hue::-webkit-slider-thumb {
