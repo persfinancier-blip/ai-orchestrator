@@ -1,10 +1,11 @@
+<!-- core/orchestrator/modules/advertising/interface/desk/components/GraphPanel.svelte -->
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
   import { get } from 'svelte/store';
 
   import { showcaseStore, fieldName, type DatasetId, type ShowcaseField } from '../data/showcaseStore';
 
-  import type { DatasetPreset, PeriodMode, TooltipState, VisualScheme, ShowcaseSafe } from './space/types';
+  import type { DatasetPreset, PeriodMode, TooltipState, VisualScheme, ShowcaseSafe, SpacePoint } from './space/types';
   import { applyRowsFilter, buildPoints } from './space/pipeline';
   import { loadDatasetPresets, loadVisualSchemes, saveDatasetPresets, saveVisualSchemes } from './space/presetsStorage';
   import { SpaceScene } from './space/three/SpaceScene';
@@ -15,6 +16,12 @@
   import Tooltip from './space/ui/Tooltip.svelte';
   import Crumbs from './space/ui/Crumbs.svelte';
   import InfoCard from './space/ui/InfoCard.svelte';
+
+  import GroupingMenu from './space/ui/GroupingMenu.svelte';
+
+  import type { GroupingConfig } from './space/cluster/types';
+  import { dbscan3 } from './space/cluster/dbscan3';
+  import { buildFeatureVec3, dbscanParamsFromDetail, weightsForCfg } from './space/cluster/features';
 
   const STORAGE_KEY_VISUALS = 'desk-space-visual-schemes-v2';
   const STORAGE_KEY_DATASETS = 'desk-space-datasets-v2';
@@ -65,6 +72,24 @@
 
   let scene: SpaceScene | null = null;
 
+  let showGroupingMenu = false;
+
+  let grouping: GroupingConfig = {
+    enabled: false,
+    principle: 'proximity',
+    featureFields: [],
+    detail: 0.45,
+    customWeights: false,
+    wX: 1,
+    wY: 1,
+    wZ: 1,
+    minClusterSize: 5,
+    recompute: 'auto'
+  };
+
+  let clusterSeed = 0;
+
+  // ---- fields helpers
   function fieldsAll(): ShowcaseField[] {
     return (showcase?.fields ?? []) as ShowcaseField[];
   }
@@ -78,6 +103,10 @@
   $: numberFieldsAll = fieldsFor('number');
   $: dateFieldsAll = fieldsFor('date');
   $: coordFieldsAll = [...numberFieldsAll, ...dateFieldsAll];
+
+  $: groupingNumberFields = numberFieldsAll;
+  $: groupingTextFields = textFieldsAll;
+
   $: if (coordFieldsAll.length) ensureDefaults();
 
   function ensureDefaults(): void {
@@ -87,6 +116,7 @@
     if (!axisZ && coords[2]) axisZ = coords[2].code;
   }
 
+  // ---- data -> points
   $: filteredRows = applyRowsFilter({
     rows: showcase?.rows ?? [],
     period,
@@ -106,30 +136,173 @@
     dateFields: dateFieldsAll
   });
 
+  // ---- clustering cache
+  let cachedLabels: Int32Array | null = null;
+  let cachedCounts: Map<number, number> | null = null;
+  let cachedKey = '';
+  let cachedAxisKey = '';
+
+  function colorForCluster(id: number): string {
+    if (id < 0) return '#94a3b8';
+    const hue = (id * 47) % 360;
+    return `hsl(${hue} 70% 45%)`;
+  }
+
+  function makeClusterKey(cfg: GroupingConfig): string {
+    return [
+      cfg.enabled ? '1' : '0',
+      cfg.principle,
+      cfg.featureFields.slice().sort().join('|'),
+      cfg.detail.toFixed(3),
+      cfg.customWeights ? '1' : '0',
+      cfg.wX.toFixed(2),
+      cfg.wY.toFixed(2),
+      cfg.wZ.toFixed(2),
+      String(cfg.minClusterSize),
+      cfg.recompute,
+      String(clusterSeed) // manual trigger
+    ].join('::');
+  }
+
+  function getTextValue(p: SpacePoint, field: string): string {
+    // для behavior: берём “label” и мета-ключи максимально стабильно
+    // metrics для text полей обычно пустые => используем label / id / sourceField как fallback
+    const m = (p as any)?.metrics ?? {};
+    const v = m?.[field];
+    if (typeof v === 'string') return v;
+    // если вдруг кто-то положил текст прямо в metrics как number/string
+    if (v != null) return String(v);
+
+    // fallback: если выбран field совпадает с sourceField, label содержит значение группы
+    if (p.sourceField === field) return p.label;
+
+    return '';
+  }
+
+  function computeClusters(input: SpacePoint[]): { labels: Int32Array; counts: Map<number, number> } {
+    const vecs = buildFeatureVec3({
+      points: input,
+      cfg: grouping,
+      axis: { x: axisX, y: axisY, z: axisZ },
+      getTextValue
+    });
+
+    const { eps, minPts } = dbscanParamsFromDetail(grouping.detail);
+    const w = weightsForCfg(grouping);
+
+    const labels = dbscan3(vecs, { eps, minPts }, w);
+
+    const counts = new Map<number, number>();
+    for (let i = 0; i < labels.length; i += 1) {
+      const id = labels[i];
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+
+    return { labels, counts };
+  }
+
+  function applyClustering(input: SpacePoint[]): SpacePoint[] {
+    if (!grouping.enabled) {
+      cachedLabels = null;
+      cachedCounts = null;
+      cachedKey = '';
+      cachedAxisKey = '';
+      return input.map((p) => ({ ...p, color: undefined }));
+    }
+
+    const key = makeClusterKey(grouping);
+    const axisKey = `${axisX}::${axisY}::${axisZ}`;
+
+    const needRecomputeAuto = grouping.recompute === 'auto';
+    const needRecomputeManual = grouping.recompute === 'manual';
+    const needRecomputeFixed = grouping.recompute === 'fixed';
+
+    // fixed: не пересчитывать при смене осей/поиска/периода, только если:
+    // - кэш пуст (первое включение)
+    // - или пользователь нажал "пересчитать" (clusterSeed изменился)
+    const fixedShouldRecompute = needRecomputeFixed && (!cachedLabels || key !== cachedKey);
+
+    // manual: пересчёт только по кнопке (clusterSeed меняет key)
+    const manualShouldRecompute = needRecomputeManual && (!cachedLabels || key !== cachedKey);
+
+    // auto: пересчёт при любом изменении key или если длина изменилась
+    const autoShouldRecompute =
+      needRecomputeAuto &&
+      (!cachedLabels || key !== cachedKey || axisKey !== cachedAxisKey || cachedLabels.length !== input.length);
+
+    const shouldRecompute = autoShouldRecompute || manualShouldRecompute || fixedShouldRecompute;
+
+    if (shouldRecompute) {
+      const res = computeClusters(input);
+      cachedLabels = res.labels;
+      cachedCounts = res.counts;
+      cachedKey = key;
+      cachedAxisKey = axisKey;
+    }
+
+    const labels = cachedLabels;
+    const counts = cachedCounts;
+
+    if (!labels || !counts || labels.length !== input.length) {
+      return input.map((p) => ({ ...p, color: '#94a3b8' }));
+    }
+
+    return input.map((p, i) => {
+      const id = labels[i];
+      const size = counts.get(id) ?? 0;
+      const effectiveId = id >= 0 && size < grouping.minClusterSize ? -1 : id;
+      return { ...p, color: colorForCluster(effectiveId) };
+    });
+  }
+
+  function recomputeClusters(): void {
+    clusterSeed += 1;
+  }
+
+  // ---- render reactive
   $: if (scene) {
     scene.setTheme({ bg: visualBg, edge: visualEdge });
     scene.setAxisCodes({ x: axisX, y: axisY, z: axisZ });
 
-    const info = scene.setPoints(points);
+    const clustered = applyClustering(points);
+    const info = scene.setPoints(clustered);
+
     renderedCount = info.renderedCount;
     bboxLabel = info.bboxLabel;
   }
 
+  // ---- menus
   function toggleDisplayMenu(): void {
     showDisplayMenu = !showDisplayMenu;
-    if (showDisplayMenu) showPickDataMenu = false;
+    if (showDisplayMenu) {
+      showPickDataMenu = false;
+      showGroupingMenu = false;
+    }
   }
 
   function togglePickMenu(): void {
     showPickDataMenu = !showPickDataMenu;
-    if (showPickDataMenu) showDisplayMenu = false;
+    if (showPickDataMenu) {
+      showDisplayMenu = false;
+      showGroupingMenu = false;
+    }
+  }
+
+  function toggleGroupingMenu(): void {
+    showGroupingMenu = !showGroupingMenu;
+    if (showGroupingMenu) {
+      showDisplayMenu = false;
+      showPickDataMenu = false;
+    }
   }
 
   function closeAllMenus(): void {
     showDisplayMenu = false;
     showPickDataMenu = false;
+    showGroupingMenu = false;
   }
 
+  // ---- selection helpers
   function addEntityField(code: string): void {
     if (!code || selectedEntityFields.includes(code)) return;
     selectedEntityFields = [...selectedEntityFields, code];
@@ -156,6 +329,7 @@
     search = '';
   }
 
+  // ---- storage
   function loadStorages(): void {
     visualSchemes = loadVisualSchemes(STORAGE_KEY_VISUALS);
     datasetPresets = loadDatasetPresets(STORAGE_KEY_DATASETS);
@@ -213,19 +387,21 @@
     search = p.value.search ?? '';
   }
 
+  // ---- axis remove
   function onAxisRemove(axis: 'x' | 'y' | 'z'): void {
     if (axis === 'x') axisX = '';
     if (axis === 'y') axisY = '';
     if (axis === 'z') axisZ = '';
   }
 
+  // ---- global close / esc
   function onGlobalClick(e: MouseEvent): void {
     const t = e.target as Node | null;
     if (!t) return;
 
-    const inMenu =
-      (document.querySelector('.menu-pop.display')?.contains(t) ?? false) ||
-      (document.querySelector('.menu-pop.pick')?.contains(t) ?? false);
+    // любой .menu-pop (display/pick/grouping) считаем меню
+    const menus = Array.from(document.querySelectorAll('.menu-pop')) as HTMLElement[];
+    const inMenu = menus.some((m) => m.contains(t));
 
     const inBtns = (document.querySelector('.hud')?.contains(t) ?? false);
     if (!inMenu && !inBtns) closeAllMenus();
@@ -241,6 +417,7 @@
       e.preventDefault();
       showPickDataMenu = true;
       showDisplayMenu = false;
+      showGroupingMenu = false;
     }
   }
 
@@ -248,6 +425,7 @@
     scene?.resize(560);
   }
 
+  // ---- mount/unmount
   onMount(async () => {
     loadStorages();
     await tick();
@@ -265,7 +443,9 @@
     window.addEventListener('click', onGlobalClick, true);
 
     await tick();
-    const info = scene.setPoints(points);
+
+    const clustered = applyClustering(points);
+    const info = scene.setPoints(clustered);
     renderedCount = info.renderedCount;
     bboxLabel = info.bboxLabel;
   });
@@ -281,6 +461,7 @@
     scene = null;
   });
 
+  // ---- breadcrumbs/labels
   $: selectedCrumbs = selectedEntityFields.map((c) => ({ code: c, name: fieldName(c) }));
   $: axesLabel = `Оси: ${fieldName(axisX || '—')} / ${fieldName(axisY || '—')} / ${fieldName(axisZ || '—')}`;
 </script>
@@ -293,6 +474,7 @@
       <div class="hud-actions">
         <button class="btn" on:click={toggleDisplayMenu}>Настройка отображения</button>
         <button class="btn btn-primary" on:click={togglePickMenu}>Выбрать данные</button>
+        <button class="btn" on:click={toggleGroupingMenu}>Формирование групп</button>
       </div>
 
       <Crumbs crumbs={selectedCrumbs} onRemove={removeEntityField} />
@@ -344,6 +526,10 @@
       />
     {/if}
 
+    {#if showGroupingMenu}
+      <GroupingMenu bind:cfg={grouping} numberFields={groupingNumberFields} textFields={groupingTextFields} onRecompute={recomputeClusters} />
+    {/if}
+
     <Tooltip {tooltip} />
   </div>
 
@@ -375,8 +561,6 @@
 </section>
 
 <style>
-  /* Важно: UI теперь в отдельных компонентах, поэтому стили делаем global. */
-
   :global(.graph-root) { width: 100%; }
 
   :global(.stage) {
@@ -625,7 +809,7 @@
 
   :global(.modal) {
     width: min(520px, calc(100vw - 24px));
-    background: rgba(255, 255, 255, 0.92);
+    background: rgba(255,  255, 255, 0.92);
     border-radius: 18px;
     padding: 14px;
     box-shadow: 0 30px 80px rgba(15, 23, 42, 0.24);
