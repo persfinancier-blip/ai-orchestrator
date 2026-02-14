@@ -60,7 +60,6 @@
   let debugCalculatedCount = 0;
   let debugRenderedCount = 0;
   let debugBBox = '—';
-  let debugLastError = '—';
 
   type BBox = { minX: number; maxX: number; minY: number; maxY: number; minZ: number; maxZ: number };
 
@@ -82,7 +81,6 @@
     if (!axisX && numberFields[0]) axisX = numberFields[0].code;
     if (!axisY && numberFields[1]) axisY = numberFields[1].code;
     if (!axisZ && numberFields[2]) axisZ = numberFields[2].code;
-    if (!selectedEntityFields.length) selectedEntityFields = ['sku'];
   }
 
   function availableFields(kind: ShowcaseField['kind'], role: 'entity' | 'axis' | 'filter'): ShowcaseField[] {
@@ -98,8 +96,8 @@
   $: numberFilterFields = availableFields('number', 'filter');
 
   $: filteredRows = applyRowsFilter(showcase.rows);
-  $: points = buildPoints(filteredRows);
-  $: rebuildScene();
+  $: points = buildPoints(filteredRows, selectedEntityFields, axisX, axisY, axisZ);
+  $: rebuildScene(points, selectedEntityFields);
 
   function hashToJitter(input: string): number {
     let hash = 0;
@@ -157,11 +155,12 @@
     return n >= Math.min(a, b) && n <= Math.max(a, b);
   }
 
-  function buildPoints(rows: ShowcaseRow[]): SpacePoint[] {
+  function buildPoints(rows: ShowcaseRow[], entityFields: string[], xCode: string, yCode: string, zCode: string): SpacePoint[] {
+    if (!entityFields.length) return [];
     const result: SpacePoint[] = [];
     const numberCodes = showcase.fields.filter((f) => f.kind === 'number').map((f) => f.code);
 
-    selectedEntityFields.forEach((entityField) => {
+    entityFields.forEach((entityField) => {
       const groups = new Map<string, ShowcaseRow[]>();
       rows.forEach((row) => {
         const key = String((row as Record<string, unknown>)[entityField] ?? '').trim();
@@ -193,21 +192,21 @@
       });
     });
 
-    const coords = projectPoints(result);
-    const uniqueTotal = selectedEntityFields.reduce((sum, field) => sum + new Set(rows.map((r) => String((r as Record<string, unknown>)[field] ?? '')).filter(Boolean)).size, 0);
-    console.log('[Пространство] пересчет', { поля: selectedEntityFields, уникальных: uniqueTotal, первыеТочки: coords.slice(0, 3).map((p) => ({ id: p.id, x: p.x, y: p.y, z: p.z })) });
+    const coords = projectPoints(result, xCode, yCode, zCode);
+    const uniqueTotal = entityFields.reduce((sum, field) => sum + new Set(rows.map((r) => String((r as Record<string, unknown>)[field] ?? '')).filter(Boolean)).size, 0);
+    console.log('[Пространство] пересчет', { поля: entityFields, уникальных: uniqueTotal, первыеТочки: coords.slice(0, 3).map((p) => ({ id: p.id, x: p.x, y: p.y, z: p.z })) });
     return coords;
   }
 
-  function projectPoints(list: SpacePoint[]): SpacePoint[] {
+  function projectPoints(list: SpacePoint[], xCode: string, yCode: string, zCode: string): SpacePoint[] {
     if (!list.length) return [];
-    const useX = axisX && axisFields.some((f) => f.code === axisX);
-    const useY = axisY && axisFields.some((f) => f.code === axisY);
-    const useZ = axisZ && axisFields.some((f) => f.code === axisZ);
+    const useX = xCode && axisFields.some((f) => f.code === xCode);
+    const useY = yCode && axisFields.some((f) => f.code === yCode);
+    const useZ = zCode && axisFields.some((f) => f.code === zCode);
 
-    const xValues = useX ? list.map((p) => p.metrics[axisX] ?? 0) : [0, 1];
-    const yValues = useY ? list.map((p) => p.metrics[axisY] ?? 0) : [0, 1];
-    const zValues = useZ ? list.map((p) => p.metrics[axisZ] ?? 0) : [0, 1];
+    const xValues = useX ? list.map((p) => p.metrics[xCode] ?? 0) : [0, 1];
+    const yValues = useY ? list.map((p) => p.metrics[yCode] ?? 0) : [0, 1];
+    const zValues = useZ ? list.map((p) => p.metrics[zCode] ?? 0) : [0, 1];
 
     const minX = Math.min(...xValues);
     const maxX = Math.max(...xValues);
@@ -218,9 +217,9 @@
 
     return list.map((point, index) => {
       const jitter = hashToJitter(point.id);
-      const x = useX ? normalize(point.metrics[axisX] ?? 0, minX, maxX) : jitter;
-      const y = useY ? normalize(point.metrics[axisY] ?? 0, minY, maxY) : -jitter;
-      const z = useZ ? normalize(point.metrics[axisZ] ?? 0, minZ, maxZ) : (index % 9) - 4 + jitter * 0.2;
+      const x = useX ? normalize(point.metrics[xCode] ?? 0, minX, maxX) : hashToJitter(`${point.id}:x`);
+      const y = useY ? normalize(point.metrics[yCode] ?? 0, minY, maxY) : hashToJitter(`${point.id}:y`);
+      const z = useZ ? normalize(point.metrics[zCode] ?? 0, minZ, maxZ) : hashToJitter(`${point.id}:z`);
       return { ...point, x, y, z };
     });
   }
@@ -230,24 +229,10 @@
   }
 
 
-  function sanitizeCoord(value: number, id: string, axis: 'x' | 'y' | 'z'): number {
-    if (!Number.isFinite(value)) return hashToJitter(`${id}:${axis}`) * 0.05;
-    return value + hashToJitter(`${id}:${axis}`) * 0.05;
-  }
 
-  function fallbackPoints(count = 24): SpacePoint[] {
-    return Array.from({ length: count }).map((_, i) => {
-      const id = `fallback-${i + 1}`;
-      return {
-        id,
-        label: `Тестовая точка ${i + 1}`,
-        sourceField: i % 2 === 0 ? 'sku' : 'campaign_id',
-        metrics: { revenue: 0, spend: 0, drr: 0, roi: 0, orders: 0 },
-        x: hashToJitter(`${id}:x`) * 1.2,
-        y: hashToJitter(`${id}:y`) * 1.2,
-        z: hashToJitter(`${id}:z`) * 1.2,
-      };
-    });
+  function sanitizeCoord(value: number, id: string, axis: 'x' | 'y' | 'z'): number {
+    if (!Number.isFinite(value)) return hashToJitter(`${id}:${axis}`) * 0.1;
+    return value;
   }
 
   function buildBBox(list: SpacePoint[]): BBox {
@@ -265,7 +250,15 @@
   }
 
   function fitCameraToPoints(list: SpacePoint[]): void {
-    if (!camera || !controls || !list.length) return;
+    if (!camera || !controls) return;
+    if (!list.length) {
+      debugBBox = '—';
+      camera.position.set(0, 0, 40);
+      controls.target.set(0, 0, 0);
+      controls.update();
+      return;
+    }
+
     const bbox = buildBBox(list);
     debugBBox = `x ${bbox.minX.toFixed(2)}..${bbox.maxX.toFixed(2)} | y ${bbox.minY.toFixed(2)}..${bbox.maxY.toFixed(2)} | z ${bbox.minZ.toFixed(2)}..${bbox.maxZ.toFixed(2)}`;
 
@@ -292,20 +285,13 @@
     controls.update();
   }
 
-  function ensureRenderablePoints(input: SpacePoint[]): SpacePoint[] {
-    const sanitized = input.map((point) => ({
+  function sanitizePoints(input: SpacePoint[]): SpacePoint[] {
+    return input.map((point) => ({
       ...point,
-      x: sanitizeCoord(point.x, point.id, 'x'),
-      y: sanitizeCoord(point.y, point.id, 'y'),
-      z: sanitizeCoord(point.z, point.id, 'z'),
+      x: sanitizeCoord(point.x, point.id, 'x') + hashToJitter(`${point.id}:x`) * 0.05,
+      y: sanitizeCoord(point.y, point.id, 'y') + hashToJitter(`${point.id}:y`) * 0.05,
+      z: sanitizeCoord(point.z, point.id, 'z') + hashToJitter(`${point.id}:z`) * 0.05,
     }));
-    const hasFinite = sanitized.some((p) => Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z));
-    if (!sanitized.length || !hasFinite) {
-      debugLastError = 'Включен гарантированный режим: точки подставлены автоматически';
-      return fallbackPoints(24);
-    }
-    debugLastError = '—';
-    return sanitized;
   }
 
   function init3d(): void {
@@ -344,13 +330,13 @@
     (mesh.material as THREE.Material).dispose();
   }
 
-  function rebuildScene(): void {
+  function rebuildScene(sourcePoints: SpacePoint[], entityFields: string[]): void {
     if (!scene) return;
     clearMesh(circleMesh);
     clearMesh(diamondMesh);
 
-    debugCalculatedCount = points.length;
-    const renderablePoints = ensureRenderablePoints(points);
+    debugCalculatedCount = sourcePoints.length;
+    const renderablePoints = sanitizePoints(sourcePoints);
     debugRenderedCount = renderablePoints.length;
 
     circlePoints = renderablePoints.filter((p) => p.sourceField !== 'campaign_id');
@@ -385,6 +371,12 @@
         diamondMesh?.setMatrixAt(idx, o.matrix);
       });
       scene.add(diamondMesh);
+    }
+
+    if (entityFields.length === 0) {
+      debugRenderedCount = 0;
+      fitCameraToPoints([]);
+      return;
     }
 
     fitCameraToPoints(renderablePoints);
@@ -572,7 +564,7 @@
   onMount(() => {
     init3d();
     ensureDefaults();
-    rebuildScene();
+    rebuildScene(points, selectedEntityFields);
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       panelSettingsList = raw ? JSON.parse(raw) : [];
@@ -604,12 +596,14 @@
       <div class="stage">
         <div bind:this={container3d} class="scene" />
         <div class="debug">
-          <div>Точек (расчёт): {debugCalculatedCount}</div>
-          <div>Точек (отрисовка): {debugRenderedCount}</div>
+          <div>Выбрано полей: {selectedEntityFields.length} ({selectedEntityFields.join(', ') || '—'})</div>
+          <div>Точек на графе: {debugRenderedCount}</div>
+          <div>Источник: Витрина данных (rows={filteredRows.length})</div>
+          <div>Группировка по: {selectedEntityFields[0] || '—'}</div>
           <div>X/Y/Z: {fieldName(axisX || '—')} / {fieldName(axisY || '—')} / {fieldName(axisZ || '—')}</div>
           <div>bbox: {debugBBox}</div>
-          <div>последняя ошибка: {debugLastError}</div>
         </div>
+        {#if selectedEntityFields.length === 0}<div class="empty-hint">Выберите поля в ‘Точки на графе’</div>{/if}
         {#if tooltip.visible}
           <div class="tooltip" style={`left:${tooltip.x}px;top:${tooltip.y}px`}>
             {#each tooltip.lines as line}<div>{line}</div>{/each}
@@ -751,5 +745,6 @@
   .layer-item { display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:12px; }
   .filter-item { display:flex; flex-direction:column; gap:6px; border:1px solid #e2e8f0; border-radius:10px; padding:6px; }
   .tooltip { position:absolute; pointer-events:none; background:rgba(15,23,42,.94); color:#f8fafc; font-size:12px; padding:10px; border-radius:10px; max-width:360px; }
+  .empty-hint { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); background:#fff; border:1px dashed #94a3b8; color:#334155; border-radius:10px; padding:10px 12px; font-size:13px; }
   small { color:#64748b; font-size:11px; line-height:1.3; }
 </style>

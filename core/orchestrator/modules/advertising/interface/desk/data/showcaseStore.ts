@@ -86,6 +86,8 @@ function dateAgo(daysAgo: number): string {
 
 export function generateShowcaseRows(count = 200): ShowcaseRow[] {
   const rows: ShowcaseRow[] = [];
+  const skuPool = 10 + Math.floor(Math.random() * 11);
+  const campaignPool = 10 + Math.floor(Math.random() * 11);
   for (let i = 0; i < count; i += 1) {
     const cluster = i % 3;
     const revenueBase = cluster === 0 ? 180000 : cluster === 1 ? 70000 : 120000;
@@ -99,8 +101,8 @@ export function generateShowcaseRows(count = 200): ShowcaseRow[] {
 
     rows.push({
       id: `row-${i + 1}`,
-      sku: `SKU ${String(1 + (i % 20)).padStart(4, '0')}`,
-      campaign_id: `РК ${1000 + (i % 20)}`,
+      sku: `SKU ${String(1 + (i % skuPool)).padStart(4, '0')}`,
+      campaign_id: `РК ${1000 + (i % campaignPool)}`,
       subject: subjects[i % subjects.length],
       brand: brands[i % brands.length],
       category: categories[i % categories.length],
