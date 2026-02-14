@@ -79,6 +79,8 @@
   let anim = 0;
   const raycaster = new THREE.Raycaster();
   const ndc = new THREE.Vector2();
+  let edgeLabelGroup; // THREE.Group
+  let xLabelSprite, yLabelSprite, zLabelSprite;
 
   function ensureDefaults(): void {
     const numberFields = availableFields('number', 'axis');
@@ -322,6 +324,40 @@
     return obj;
   }
 
+function makeTextSprite(text, { fontSize = 36, padding = 16 } = {}) {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+
+  ctx.font = `${fontSize}px Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+  const metrics = ctx.measureText(text);
+  const w = Math.ceil(metrics.width) + padding * 2;
+  const h = fontSize + padding * 2;
+
+  canvas.width = w;
+  canvas.height = h;
+
+  // фон прозрачный
+  ctx.clearRect(0, 0, w, h);
+
+  // текст
+  ctx.font = `${fontSize}px Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+  ctx.fillStyle = '#1f2a37'; // тёмный (как UI)
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, padding, h / 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
+  const sprite = new THREE.Sprite(material);
+
+  // размер в мировых координатах (подстрой под размер куба)
+  const scale = 0.06; 
+  sprite.scale.set(w * scale, h * scale, 1);
+
+  return sprite;
+}
+
   function rebuildPlanes(list: SpacePoint[]): void {
     planeGroup.clear();
     if (!showPlanes) return;
@@ -374,6 +410,8 @@
     labelRenderer?.setSize(width, height);
     container3d.innerHTML = '';
     container3d.appendChild(renderer.domElement);
+    edgeLabelGroup = new THREE.Group();
+    scene.add(edgeLabelGroup);
 
     controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -397,6 +435,62 @@
     renderer.domElement.addEventListener('mousemove', onMove3d);
     animate();
   }
+
+  function calcMax(points, metricKey) {
+    if (!metricKey) return NaN;
+    let max = -Infinity;
+    for (const p of points) {
+      const v = p?.metrics?.[metricKey] ?? p?.[metricKey];
+      if (Number.isFinite(v)) max = Math.max(max, v);
+    }
+    return max === -Infinity ? NaN : max;
+  }
+
+updateEdgeLabels({
+  points: visiblePoints,
+  xMetric: selectedX.code,
+  yMetric: selectedY.code,
+  zMetric: selectedZ.code,
+  xName: selectedX.name,
+  yName: selectedY.name,
+  zName: selectedZ.name,
+  cubeSize: 240
+}) {
+  if (!edgeLabelGroup) return;
+
+  // очистка старых
+  edgeLabelGroup.clear();
+
+  // вычисляем max
+  const xMax = calcMax(points, xMetric);
+  const yMax = calcMax(points, yMetric);
+  const zMax = calcMax(points, zMetric);
+
+  const xText = xMetric ? `${xName}  0 — ${formatValueByMetric(xMetric, xMax)}` : 'Ось X не выбрана';
+  const yText = yMetric ? `${yName}  0 — ${formatValueByMetric(yMetric, yMax)}` : 'Ось Y не выбрана';
+  const zText = zMetric ? `${zName}  0 — ${formatValueByMetric(zMetric, zMax)}` : 'Ось Z не выбрана';
+
+  xLabelSprite = makeTextSprite(xText);
+  yLabelSprite = makeTextSprite(yText);
+  zLabelSprite = makeTextSprite(zText);
+
+  // Позиции рёбер (куб центрируется в 0,0,0)
+  const half = cubeSize / 2;
+
+  // X — нижнее переднее ребро (по X)
+  xLabelSprite.position.set(0, -half - 14, +half + 8);
+  // ориентируем вдоль X: sprite сам “в камеру”, поэтому просто кладём вдоль ребра по позиции; это нормально читается.
+
+  // Y — нижнее левое ребро (в глубину по Z или Y — зависит от твоей системы)
+  // В твоём кубе обычно: X вправо, Y вверх, Z в глубину.
+  // Тогда “ось Y” как метрика обычно глубина/вторая координата. Если у тебя Y=вверх, то тут подпись для оси Y (вторая координата) лучше ставить на нижнем ребре, уходящем в глубину: по Z.
+  yLabelSprite.position.set(-half - 18, -half - 14, 0);
+
+  // Z — вертикальное ребро (вверх)
+  zLabelSprite.position.set(+half + 18, 0, +half + 8);
+
+  edgeLabelGroup.add(xLabelSprite, yLabelSprite, zLabelSprite);
+}
 
   function clearMesh(mesh?: THREE.InstancedMesh): void {
     if (!mesh) return;
@@ -463,6 +557,37 @@
     const [y, m, d] = value.split('-');
     return y && m && d ? `${d}.${m}.${y}` : value;
   }
+
+function formatNumberHuman(n) {
+  if (!Number.isFinite(n)) return 'нет данных';
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000_000) return (n/1_000_000_000).toFixed(1).replace('.', ',') + ' млрд';
+  if (abs >= 1_000_000) return (n/1_000_000).toFixed(1).replace('.', ',') + ' млн';
+  if (abs >= 1_000) return (n/1_000).toFixed(1).replace('.', ',') + ' тыс';
+  return Math.round(n).toString();
+}
+
+function formatValueByMetric(metricCode, maxValue) {
+  if (!Number.isFinite(maxValue)) return 'нет данных';
+
+  // ₽ — эти метрики считаем денежными
+  const money = new Set(['revenue','spend','margin','profit']);
+  if (money.has(metricCode)) return `${formatNumberHuman(maxValue)} ₽`;
+
+  // % — эти метрики считаем процентами
+  const percent = new Set(['drr','cr0','cr1','cr2','roi_pct']);
+  if (percent.has(metricCode)) {
+    // если 0..1 → переводим в %
+    const v = maxValue <= 1 ? maxValue * 100 : maxValue;
+    return `${v.toFixed(1).replace('.', ',')}%`;
+  }
+
+  // ROI часто “раз” (2.3x) — оставим как число
+  if (metricCode === 'roi') return maxValue.toFixed(2).replace('.', ',');
+
+  // позиция, дни, заказы и т.п.
+  return formatNumberHuman(maxValue);
+}
 
   function onMove3d(event: MouseEvent): void {
     if (!renderer) return;
