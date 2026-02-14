@@ -30,7 +30,7 @@
     const cur = new Set(cfg.featureFields);
     if (cur.has(code)) cur.delete(code);
     else {
-      if (cur.size >= 3) return; // ✅ ограничение до 3
+      if (cur.size >= 3) return;
       cur.add(code);
     }
     cfg = { ...cfg, featureFields: [...cur] };
@@ -121,7 +121,7 @@
     </select>
   </div>
 
-  {#if cfg.recompute === 'manual'}
+  {#if cfg.recompute !== 'auto'}
     <div class="row">
       <button class="btn btn-primary wide" on:click={onRecompute}>Пересчитать группы</button>
     </div>
