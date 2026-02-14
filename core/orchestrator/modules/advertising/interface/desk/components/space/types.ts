@@ -19,7 +19,13 @@ export type BBox = {
   minZ: number; maxZ: number;
 };
 
-export type VisualScheme = { id: string; name: string; bg: string; edge: string };
+export type VisualScheme = {
+  id: string;
+  name: string;
+  bg: string;
+  edge: string;
+  pointColor: string; // ✅ добавили
+};
 
 export type DatasetPresetValue = {
   selectedEntityFields: string[];
