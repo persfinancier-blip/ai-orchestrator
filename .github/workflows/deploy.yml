@@ -22,7 +22,6 @@ jobs:
         working-directory: core/orchestrator/modules/advertising/interface
         run: |
           npm ci
-          echo "${GITHUB_SHA::7}" > public/build.txt
           npm run build
 
       - name: Rsync dist to server
