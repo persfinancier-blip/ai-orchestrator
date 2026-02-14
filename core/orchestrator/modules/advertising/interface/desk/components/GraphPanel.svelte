@@ -383,9 +383,6 @@
     const light = new THREE.DirectionalLight('#ffffff', 0.35);
     light.position.set(80, 120, 75);
     scene.add(light);
-    scene.add(new THREE.GridHelper(260, 16, '#d6deea', '#eaf0f7'));
-    axesHelper = new THREE.AxesHelper(60);
-    scene.add(axesHelper);
     scene.add(planeGroup);
 
     labelRenderer = new CSS2DRenderer();
