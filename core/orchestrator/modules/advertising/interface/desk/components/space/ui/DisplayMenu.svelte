@@ -22,11 +22,14 @@
 
   export let onResetView: () => void;
 
-  type Rgb = { r: number; g: number; b: number };
+  let bgPickerEl: HTMLInputElement | null = null;
+  let edgePickerEl: HTMLInputElement | null = null;
+  let pointPickerEl: HTMLInputElement | null = null;
 
-  function clampByte(n: number): number {
-    if (!Number.isFinite(n)) return 0;
-    return Math.max(0, Math.min(255, Math.round(n)));
+  function openPicker(kind: 'bg' | 'edge' | 'point'): void {
+    if (kind === 'bg') bgPickerEl?.click();
+    if (kind === 'edge') edgePickerEl?.click();
+    if (kind === 'point') pointPickerEl?.click();
   }
 
   function normalizeHex(input: string): string {
@@ -38,224 +41,90 @@
       const a = m3[1];
       return `#${a[0]}${a[0]}${a[1]}${a[1]}${a[2]}${a[2]}`;
     }
-    return '#000000';
+    return input; // если человек печатает — не ломаем ввод на лету
   }
 
-  function hexToRgb(hex: string): Rgb {
-    const h = normalizeHex(hex).slice(1);
-    const r = parseInt(h.slice(0, 2), 16);
-    const g = parseInt(h.slice(2, 4), 16);
-    const b = parseInt(h.slice(4, 6), 16);
-    return { r: clampByte(r), g: clampByte(g), b: clampByte(b) };
+  function onHex(kind: 'bg' | 'edge' | 'point', e: Event): void {
+    const v = normalizeHex((e.currentTarget as HTMLInputElement).value);
+    if (kind === 'bg') visualBg = v;
+    if (kind === 'edge') visualEdge = v;
+    if (kind === 'point') pointColor = v;
   }
 
-  function rgbToHex(rgb: Rgb): string {
-    const r = clampByte(rgb.r).toString(16).padStart(2, '0');
-    const g = clampByte(rgb.g).toString(16).padStart(2, '0');
-    const b = clampByte(rgb.b).toString(16).padStart(2, '0');
-    return `#${r}${g}${b}`;
+  function onPicker(kind: 'bg' | 'edge' | 'point', e: Event): void {
+    const v = (e.currentTarget as HTMLInputElement).value;
+    if (kind === 'bg') visualBg = v;
+    if (kind === 'edge') visualEdge = v;
+    if (kind === 'point') pointColor = v;
   }
-
-  function makeGradient(channel: 'r' | 'g' | 'b', rgb: Rgb): string {
-    const a: Rgb = { ...rgb, [channel]: 0 } as Rgb;
-    const z: Rgb = { ...rgb, [channel]: 255 } as Rgb;
-    return `linear-gradient(90deg, ${rgbToHex(a)}, ${rgbToHex(z)})`;
-  }
-
-  function inputValue(e: Event): string {
-    return String((e.currentTarget as HTMLInputElement).value ?? '');
-  }
-
-  function rangeValue(e: Event): number {
-    return Number((e.currentTarget as HTMLInputElement).value);
-  }
-
-  function setColorFromHex(kind: 'bg' | 'edge' | 'point', hex: string): void {
-    const normalized = normalizeHex(hex);
-    if (kind === 'bg') visualBg = normalized;
-    if (kind === 'edge') visualEdge = normalized;
-    if (kind === 'point') pointColor = normalized;
-  }
-
-  function setColorFromRgb(kind: 'bg' | 'edge' | 'point', next: Rgb): void {
-    const hex = rgbToHex(next);
-    if (kind === 'bg') visualBg = hex;
-    if (kind === 'edge') visualEdge = hex;
-    if (kind === 'point') pointColor = hex;
-  }
-
-  // ---- local state
-  let bgRgb: Rgb = hexToRgb(visualBg);
-  let edgeRgb: Rgb = hexToRgb(visualEdge);
-  let pointRgb: Rgb = hexToRgb(pointColor);
-
-  $: bgRgb = hexToRgb(visualBg);
-  $: edgeRgb = hexToRgb(visualEdge);
-  $: pointRgb = hexToRgb(pointColor);
 </script>
 
 <div class="menu-pop display">
   <div class="menu-title">Визуал</div>
 
-  <div class="color-block">
-    <div class="row">
-      <div class="label">Фон</div>
-      <div class="color-head">
-        <div class="swatch" style={`background:${visualBg};`} />
-        <input class="hex" spellcheck="false" value={visualBg} on:input={(e) => setColorFromHex('bg', inputValue(e))} />
-      </div>
-    </div>
+  <div class="row">
+    <div class="label">Фон</div>
 
-    <div class="rgb">
-      <div class="rgb-row">
-        <div class="c">R</div>
-        <input
-          class="slider"
-          style={`background:${makeGradient('r', bgRgb)};`}
-          type="range"
-          min="0"
-          max="255"
-          value={bgRgb.r}
-          on:input={(e) => setColorFromRgb('bg', { ...bgRgb, r: rangeValue(e) })}
-        />
-        <div class="v">{bgRgb.r}</div>
-      </div>
+    <div class="color-row">
+      <button class="swatch-btn" type="button" on:click={() => openPicker('bg')} aria-label="Выбрать цвет фона">
+        <span class="swatch" style={`background:${visualBg};`} />
+      </button>
 
-      <div class="rgb-row">
-        <div class="c">G</div>
-        <input
-          class="slider"
-          style={`background:${makeGradient('g', bgRgb)};`}
-          type="range"
-          min="0"
-          max="255"
-          value={bgRgb.g}
-          on:input={(e) => setColorFromRgb('bg', { ...bgRgb, g: rangeValue(e) })}
-        />
-        <div class="v">{bgRgb.g}</div>
-      </div>
+      <input
+        bind:this={bgPickerEl}
+        class="color-hidden"
+        type="color"
+        value={visualBg}
+        on:input={(e) => onPicker('bg', e)}
+        tabindex="-1"
+        aria-hidden="true"
+      />
 
-      <div class="rgb-row">
-        <div class="c">B</div>
-        <input
-          class="slider"
-          style={`background:${makeGradient('b', bgRgb)};`}
-          type="range"
-          min="0"
-          max="255"
-          value={bgRgb.b}
-          on:input={(e) => setColorFromRgb('bg', { ...bgRgb, b: rangeValue(e) })}
-        />
-        <div class="v">{bgRgb.b}</div>
-      </div>
+      <input class="hex" spellcheck="false" value={visualBg} on:input={(e) => onHex('bg', e)} />
     </div>
   </div>
 
-  <div class="color-block">
-    <div class="row">
-      <div class="label">Рёбра</div>
-      <div class="color-head">
-        <div class="swatch" style={`background:${visualEdge};`} />
-        <input class="hex" spellcheck="false" value={visualEdge} on:input={(e) => setColorFromHex('edge', inputValue(e))} />
-      </div>
-    </div>
+  <div class="row">
+    <div class="label">Рёбра</div>
 
-    <div class="rgb">
-      <div class="rgb-row">
-        <div class="c">R</div>
-        <input
-          class="slider"
-          style={`background:${makeGradient('r', edgeRgb)};`}
-          type="range"
-          min="0"
-          max="255"
-          value={edgeRgb.r}
-          on:input={(e) => setColorFromRgb('edge', { ...edgeRgb, r: rangeValue(e) })}
-        />
-        <div class="v">{edgeRgb.r}</div>
-      </div>
+    <div class="color-row">
+      <button class="swatch-btn" type="button" on:click={() => openPicker('edge')} aria-label="Выбрать цвет рёбер">
+        <span class="swatch" style={`background:${visualEdge};`} />
+      </button>
 
-      <div class="rgb-row">
-        <div class="c">G</div>
-        <input
-          class="slider"
-          style={`background:${makeGradient('g', edgeRgb)};`}
-          type="range"
-          min="0"
-          max="255"
-          value={edgeRgb.g}
-          on:input={(e) => setColorFromRgb('edge', { ...edgeRgb, g: rangeValue(e) })}
-        />
-        <div class="v">{edgeRgb.g}</div>
-      </div>
+      <input
+        bind:this={edgePickerEl}
+        class="color-hidden"
+        type="color"
+        value={visualEdge}
+        on:input={(e) => onPicker('edge', e)}
+        tabindex="-1"
+        aria-hidden="true"
+      />
 
-      <div class="rgb-row">
-        <div class="c">B</div>
-        <input
-          class="slider"
-          style={`background:${makeGradient('b', edgeRgb)};`}
-          type="range"
-          min="0"
-          max="255"
-          value={edgeRgb.b}
-          on:input={(e) => setColorFromRgb('edge', { ...edgeRgb, b: rangeValue(e) })}
-        />
-        <div class="v">{edgeRgb.b}</div>
-      </div>
+      <input class="hex" spellcheck="false" value={visualEdge} on:input={(e) => onHex('edge', e)} />
     </div>
   </div>
 
-  <div class="color-block">
-    <div class="row">
-      <div class="label">Точки</div>
-      <div class="color-head">
-        <div class="swatch" style={`background:${pointColor};`} />
-        <input class="hex" spellcheck="false" value={pointColor} on:input={(e) => setColorFromHex('point', inputValue(e))} />
-      </div>
-    </div>
+  <div class="row">
+    <div class="label">Точки</div>
 
-    <div class="rgb">
-      <div class="rgb-row">
-        <div class="c">R</div>
-        <input
-          class="slider"
-          style={`background:${makeGradient('r', pointRgb)};`}
-          type="range"
-          min="0"
-          max="255"
-          value={pointRgb.r}
-          on:input={(e) => setColorFromRgb('point', { ...pointRgb, r: rangeValue(e) })}
-        />
-        <div class="v">{pointRgb.r}</div>
-      </div>
+    <div class="color-row">
+      <button class="swatch-btn" type="button" on:click={() => openPicker('point')} aria-label="Выбрать цвет точек">
+        <span class="swatch" style={`background:${pointColor};`} />
+      </button>
 
-      <div class="rgb-row">
-        <div class="c">G</div>
-        <input
-          class="slider"
-          style={`background:${makeGradient('g', pointRgb)};`}
-          type="range"
-          min="0"
-          max="255"
-          value={pointRgb.g}
-          on:input={(e) => setColorFromRgb('point', { ...pointRgb, g: rangeValue(e) })}
-        />
-        <div class="v">{pointRgb.g}</div>
-      </div>
+      <input
+        bind:this={pointPickerEl}
+        class="color-hidden"
+        type="color"
+        value={pointColor}
+        on:input={(e) => onPicker('point', e)}
+        tabindex="-1"
+        aria-hidden="true"
+      />
 
-      <div class="rgb-row">
-        <div class="c">B</div>
-        <input
-          class="slider"
-          style={`background:${makeGradient('b', pointRgb)};`}
-          type="range"
-          min="0"
-          max="255"
-          value={pointRgb.b}
-          on:input={(e) => setColorFromRgb('point', { ...pointRgb, b: rangeValue(e) })}
-        />
-        <div class="v">{pointRgb.b}</div>
-      </div>
+      <input class="hex" spellcheck="false" value={pointColor} on:input={(e) => onHex('point', e)} />
     </div>
   </div>
 
@@ -298,85 +167,29 @@
 </div>
 
 <style>
-  .color-block {
-    margin-top: 10px;
-    padding: 10px;
-    border-radius: 14px;
-    background: rgba(248, 251, 255, 0.65);
-  }
-
-  .color-head {
-    display: flex;
+  .swatch-btn {
+    border: 0;
+    padding: 0;
+    background: transparent;
+    cursor: pointer;
+    display: inline-flex;
     align-items: center;
-    gap: 10px;
-    width: 100%;
+    justify-content: center;
   }
 
   .swatch {
-    width: 22px;
-    height: 22px;
-    border-radius: 999px;
-    box-shadow: 0 10px 22px rgba(15, 23, 42, 0.12);
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    box-shadow: 0 10px 26px rgba(15, 23, 42, 0.10);
     border: 1px solid rgba(15, 23, 42, 0.08);
-    flex: 0 0 auto;
   }
 
-  .rgb {
-    margin-top: 8px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .rgb-row {
-    display: grid;
-    grid-template-columns: 16px 1fr 34px;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .c {
-    font-size: 11px;
-    font-weight: 800;
-    color: rgba(15, 23, 42, 0.75);
-  }
-
-  .v {
-    font-size: 11px;
-    font-weight: 700;
-    color: rgba(15, 23, 42, 0.75);
-    text-align: right;
-  }
-
-  .slider {
-    -webkit-appearance: none;
-    appearance: none;
-    height: 10px;
-    border-radius: 999px;
-    outline: none;
-    border: 1px solid rgba(15, 23, 42, 0.06);
-    box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.06);
-  }
-
-  .slider::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 16px;
-    height: 16px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.95);
-    border: 1px solid rgba(15, 23, 42, 0.15);
-    box-shadow: 0 10px 22px rgba(15, 23, 42, 0.18);
-    cursor: pointer;
-  }
-
-  .slider::-moz-range-thumb {
-    width: 16px;
-    height: 16px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.95);
-    border: 1px solid rgba(15, 23, 42, 0.15);
-    box-shadow: 0 10px 22px rgba(15, 23, 42, 0.18);
-    cursor: pointer;
+  .color-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
   }
 </style>
