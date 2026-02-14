@@ -24,7 +24,6 @@
   let showcase: ShowcaseSafe = ((get(showcaseStore) as any) ?? EMPTY_SHOWCASE) as ShowcaseSafe;
   const unsub = showcaseStore.subscribe((value) => {
     showcase = (((value as any) ?? EMPTY_SHOWCASE) as ShowcaseSafe) ?? EMPTY_SHOWCASE;
-    ensureDefaults();
   });
 
   let container3d: HTMLDivElement;
@@ -79,6 +78,7 @@
   $: numberFieldsAll = fieldsFor('number');
   $: dateFieldsAll = fieldsFor('date');
   $: coordFieldsAll = [...numberFieldsAll, ...dateFieldsAll];
+  $: if (coordFieldsAll.length) ensureDefaults();
 
   function ensureDefaults(): void {
     const coords = coordFieldsAll;
