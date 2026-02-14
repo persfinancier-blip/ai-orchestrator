@@ -557,7 +557,7 @@
               Условие
               <input
                 value={toolCfg(selectedNode).settings.condition ?? ''}
-                on:input={(e) => updateToolSetting(selectedNode.id, 'condition', (e.currentTarget as HTMLInputElement).value)}
+                on:input={(e) => updateToolSetting(selectedNode.id, 'condition', e.currentTarget.value)}
               />
             </label>
 
@@ -565,7 +565,7 @@
               Ключ
               <input
                 value={toolCfg(selectedNode).settings.key ?? ''}
-                on:input={(e) => updateToolSetting(selectedNode.id, 'key', (e.currentTarget as HTMLInputElement).value)}
+                on:input={(e) => updateToolSetting(selectedNode.id, 'key', e.currentTarget.value)}
               />
             </label>
 
@@ -573,7 +573,7 @@
               Group by
               <input
                 value={toolCfg(selectedNode).settings.groupBy ?? ''}
-                on:input={(e) => updateToolSetting(selectedNode.id, 'groupBy', (e.currentTarget as HTMLInputElement).value)}
+                on:input={(e) => updateToolSetting(selectedNode.id, 'groupBy', e.currentTarget.value)}
               />
             </label>
 
