@@ -1,8 +1,8 @@
 <script lang="ts">
-  export type FieldItem = { code: string; name: string; kind: 'text' | 'number' | 'date' };
+  import type { ShowcaseField } from '../../data/showcaseStore';
 
-  export let textFields: FieldItem[] = [];
-  export let coordFields: FieldItem[] = [];
+  export let textFields: ShowcaseField[] = [];
+  export let coordFields: ShowcaseField[] = [];
 
   export let selectedEntityFields: string[] = [];
   export let axisX = '';
