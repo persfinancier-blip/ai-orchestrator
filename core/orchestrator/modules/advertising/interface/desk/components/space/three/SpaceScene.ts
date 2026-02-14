@@ -114,12 +114,6 @@ export class SpaceScene {
 
     if (this.scene) this.scene.background = new THREE.Color(this.theme.bg);
 
-    // если mesh уже создан — обновим материал
-    if (this.pointsMesh) {
-      const mat = this.pointsMesh.material as THREE.MeshBasicMaterial;
-      mat.color = new THREE.Color(this.theme.pointColor);
-    }
-
     this.rebuildPlanesForCurrentPoints();
   }
 
@@ -157,21 +151,29 @@ export class SpaceScene {
     this.renderPoints = renderable;
 
     if (this.renderPoints.length) {
-      this.pointsMesh = new THREE.InstancedMesh(
-        new THREE.SphereGeometry(1.55, 10, 10),
-        new THREE.MeshBasicMaterial({ color: this.theme.pointColor }),
-        this.renderPoints.length
-      );
+        this.pointsMesh = new THREE.InstancedMesh(
+          new THREE.SphereGeometry(1.55, 10, 10),
+          new THREE.MeshBasicMaterial({ vertexColors: true }),
+          this.renderPoints.length
+        );
 
-      const o = new THREE.Object3D();
-      this.renderPoints.forEach((point, idx) => {
-        o.position.set(point.x, point.y, point.z);
-        o.updateMatrix();
-        this.pointsMesh!.setMatrixAt(idx, o.matrix);
-      });
-
-      this.scene.add(this.pointsMesh);
+    const o = new THREE.Object3D();
+    this.renderPoints.forEach((point, idx) => {
+      o.position.set(point.x, point.y, point.z);
+      o.updateMatrix();
+      this.pointsMesh!.setMatrixAt(idx, o.matrix);
+    });
+    
+    const c = new THREE.Color();
+    for (let i = 0; i < this.renderPoints.length; i += 1) {
+      const hex = this.renderPoints[i].color ?? this.theme.pointColor;
+      c.set(hex);
+      this.pointsMesh!.setColorAt(i, c);
     }
+    this.pointsMesh!.instanceColor!.needsUpdate = true;
+    
+    this.scene.add(this.pointsMesh);
+        }
 
     this.rebuildPlanes(renderable);
 
