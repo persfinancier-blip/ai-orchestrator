@@ -7,26 +7,11 @@
   import { get } from 'svelte/store';
   import { showcaseStore, fieldName, type DatasetId, type ShowcaseField, type ShowcaseRow } from '../data/showcaseStore';
 
-  type FilterType = 'date' | 'text' | 'number';
-  type PeriodMode = '7 дней' | '14 дней' | '30 дней' | 'Даты';
-  type DateOperator = 'с' | 'по';
-  type TextOperator = 'равно' | 'не равно' | 'содержит' | 'не содержит' | 'в списке';
-  type NumberOperator = '>' | '<' | '≥' | '≤' | 'между';
-
-  type PanelFilter = {
-    id: string;
-    filterType: FilterType;
-    fieldCode: string;
-    operator: DateOperator | TextOperator | NumberOperator;
-    valueA: string;
-    valueB: string;
-  };
-
   type SpacePoint = {
     id: string;
     label: string;
-    sourceField: string;
-    metrics: Record<string, number>;
+    sourceField: string; // по какому текстовому полю сгруппировано
+    metrics: Record<string, number>; // числовые/датовые поля в виде number
     x: number;
     y: number;
     z: number;
@@ -34,32 +19,39 @@
 
   type BBox = { minX: number; maxX: number; minY: number; maxY: number; minZ: number; maxZ: number };
 
-  const STORAGE_KEY = 'desk-space-settings-v2';
+  const STORAGE_KEY = 'desk-space-settings-v3';
 
+  // источники данных оставляем фиксированными как раньше
   let activeLayers: DatasetId[] = ['sales_fact', 'ads'];
 
-  let selectedEntityFields: string[] = ['sku', 'campaign_id'];
+  // ✅ Новая логика выбора полей
+  let selectedTextFields: string[] = ['sku', 'campaign_id']; // “точки”
+  let selectedCoordFields: string[] = ['revenue', 'orders', 'spend']; // “координаты” (числа/даты), максимум 3
+
+  // эти 3 реально используются в 3D
   let axisX = '';
   let axisY = '';
   let axisZ = '';
 
-  let period: PeriodMode = '30 дней';
-  let fromDate = '';
-  let toDate = '';
-  let search = '';
-  let filters: PanelFilter[] = [];
-
+  // настройки (сохранение/загрузка)
   let panelSettingsList: Array<{ id: string; name: string; value: unknown }> = [];
   let selectedSettingId = '';
+
+  // UI: “Добавить поле”
+  let addMenuOpen = false;
+  let addMenuAnchor: HTMLElement | null = null;
+
+  // UI: модалка для сохранения
+  let saveModalOpen = false;
+  let saveName = '';
 
   let showcase = get(showcaseStore);
   const unsub = showcaseStore.subscribe((value) => {
     showcase = value;
-    ensureDefaults();
+    ensureAxisFromCoords();
   });
 
   let container3d: HTMLDivElement;
-  let searchInput: HTMLInputElement;
 
   let tooltip = { visible: false, x: 0, y: 0, lines: [] as string[] };
   let points: SpacePoint[] = [];
@@ -74,13 +66,12 @@
   let diamondMesh: THREE.InstancedMesh | undefined;
   let labelRenderer: CSS2DRenderer | undefined;
 
-  // Геометрия "пространства" и подписи
-  const planeGroup = new THREE.Group(); // линии/каркас
-  const edgeLabelGroup = new THREE.Group(); // CSS2D подписи осей
+  // геометрия “пространства”
+  const planeGroup = new THREE.Group();
+  const edgeLabelGroup = new THREE.Group();
   let axisLabels: CSS2DObject[] = [];
-  let cornerFrame: THREE.LineSegments<THREEBufferGeom, THREE.LineBasicMaterial> | null = null;
+  let cornerFrame: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | null = null;
 
-  type THREEBufferGeom = THREE.BufferGeometry<THREE.NormalBufferAttributes>;
   let circlePoints: SpacePoint[] = [];
   let diamondPoints: SpacePoint[] = [];
   let anim = 0;
@@ -88,28 +79,41 @@
   const raycaster = new THREE.Raycaster();
   const ndc = new THREE.Vector2();
 
-  function ensureDefaults(): void {
-    const numberFields = availableFields('number', 'axis');
-    if (!axisX && numberFields[0]) axisX = numberFields[0].code;
-    if (!axisY && numberFields[1]) axisY = numberFields[1].code;
-    if (!axisZ && numberFields[2]) axisZ = numberFields[2].code;
+  // ───────────────────────────────────────────────────────────
+  // Доступные поля
+  function allFieldsByKind(kind: ShowcaseField['kind']): ShowcaseField[] {
+    return showcase.fields.filter((f) => f.kind === kind && f.datasetIds.some((id) => activeLayers.includes(id)));
   }
 
-  function availableFields(kind: ShowcaseField['kind'], role: 'entity' | 'axis' | 'filter'): ShowcaseField[] {
-    return showcase.fields.filter(
-      (field) => field.kind === kind && field.roles.includes(role) && field.datasetIds.some((id) => activeLayers.includes(id))
-    );
+  $: textFieldsAll = allFieldsByKind('text'); // ✅ текст — добавлять можно всё
+  $: numberFieldsAll = allFieldsByKind('number');
+  $: dateFieldsAll = allFieldsByKind('date');
+
+  // координаты = числа + даты, но максимум 3 суммарно
+  function coordLimitReached(): boolean {
+    return selectedCoordFields.length >= 3;
   }
 
-  $: textFields = availableFields('text', 'entity');
-  $: axisFields = availableFields('number', 'axis');
-  $: dateFields = availableFields('date', 'filter');
-  $: textFilterFields = availableFields('text', 'filter');
-  $: numberFilterFields = availableFields('number', 'filter');
+  function fieldKind(code: string): ShowcaseField['kind'] | null {
+    const f = showcase.fields.find((x) => x.code === code);
+    return f?.kind ?? null;
+  }
 
-  $: filteredRows = applyRowsFilter(showcase.rows);
-  $: points = buildPoints(filteredRows, selectedEntityFields, axisX, axisY, axisZ);
-  $: rebuildScene(points, selectedEntityFields);
+  function ensureAxisFromCoords(): void {
+    const a0 = selectedCoordFields[0] ?? '';
+    const a1 = selectedCoordFields[1] ?? '';
+    const a2 = selectedCoordFields[2] ?? '';
+    axisX = a0;
+    axisY = a1;
+    axisZ = a2;
+  }
+
+  // ───────────────────────────────────────────────────────────
+  // Данные → точки
+
+  $: rows = showcase.rows;
+  $: points = buildPoints(rows, selectedTextFields, axisX, axisY, axisZ);
+  $: rebuildScene(points, selectedTextFields);
 
   function hashToJitter(input: string): number {
     let hash = 0;
@@ -117,85 +121,54 @@
     return ((hash % 1000) / 1000 - 0.5) * 10;
   }
 
-  function applyRowsFilter(rows: ShowcaseRow[]): ShowcaseRow[] {
-    return rows.filter((row) => {
-      if (!inPeriod(row.date)) return false;
-      if (filters.some((filter) => !matchFilter(row, filter))) return false;
-      if (!search.trim()) return true;
-      const q = search.trim().toLowerCase();
-      return selectedEntityFields.some((field) => String((row as Record<string, unknown>)[field] ?? '').toLowerCase().includes(q));
-    });
+  function toNumberByField(row: ShowcaseRow, code: string): number {
+    const k = fieldKind(code);
+    const v = (row as Record<string, unknown>)[code];
+
+    if (k === 'number') {
+      const n = Number(v ?? 0);
+      return Number.isFinite(n) ? n : 0;
+    }
+
+    if (k === 'date') {
+      const s = String(v ?? '');
+      const t = Date.parse(s);
+      return Number.isFinite(t) ? t : 0;
+    }
+
+    // текст/прочее
+    const n = Number(v ?? 0);
+    return Number.isFinite(n) ? n : 0;
   }
 
-  function inPeriod(date: string): boolean {
-    if (period === 'Даты') {
-      if (fromDate && date < fromDate) return false;
-      if (toDate && date > toDate) return false;
-      return true;
-    }
-    const days = period === '7 дней' ? 7 : period === '14 дней' ? 14 : 30;
-    const border = new Date();
-    border.setDate(border.getDate() - (days - 1));
-    return new Date(date) >= border;
-  }
+  function buildPoints(rowsInput: ShowcaseRow[], textFields: string[], xCode: string, yCode: string, zCode: string): SpacePoint[] {
+    if (!textFields.length) return [];
 
-  function matchFilter(row: ShowcaseRow, filter: PanelFilter): boolean {
-    const value = (row as Record<string, unknown>)[filter.fieldCode];
-    if (filter.filterType === 'date') {
-      const v = String(value ?? '');
-      if (!filter.valueA) return true;
-      return filter.operator === 'с' ? v >= filter.valueA : v <= filter.valueA;
-    }
-    if (filter.filterType === 'text') {
-      const v = String(value ?? '').toLowerCase();
-      const q = filter.valueA.toLowerCase();
-      if (filter.operator === 'равно') return v === q;
-      if (filter.operator === 'не равно') return v !== q;
-      if (filter.operator === 'содержит') return v.includes(q);
-      if (filter.operator === 'не содержит') return !v.includes(q);
-      return q
-        .split(',')
-        .map((i) => i.trim())
-        .filter(Boolean)
-        .includes(v);
-    }
-    const n = Number(value ?? 0);
-    const a = Number(filter.valueA);
-    const b = Number(filter.valueB);
-    if (Number.isNaN(a)) return true;
-    if (filter.operator === '>') return n > a;
-    if (filter.operator === '<') return n < a;
-    if (filter.operator === '≥') return n >= a;
-    if (filter.operator === '≤') return n <= a;
-    if (Number.isNaN(b)) return true;
-    return n >= Math.min(a, b) && n <= Math.max(a, b);
-  }
-
-  function buildPoints(rows: ShowcaseRow[], entityFields: string[], xCode: string, yCode: string, zCode: string): SpacePoint[] {
-    if (!entityFields.length) return [];
+    const coordCodes = [xCode, yCode, zCode].filter(Boolean);
     const result: SpacePoint[] = [];
-    const numberCodes = showcase.fields.filter((f) => f.kind === 'number').map((f) => f.code);
 
-    entityFields.forEach((entityField) => {
+    for (const entityField of textFields) {
       const groups = new Map<string, ShowcaseRow[]>();
-      rows.forEach((row) => {
+
+      for (const row of rowsInput) {
         const key = String((row as Record<string, unknown>)[entityField] ?? '').trim();
-        if (!key) return;
+        if (!key) continue;
         if (!groups.has(key)) groups.set(key, []);
-        groups.get(key)?.push(row);
-      });
+        groups.get(key)!.push(row);
+      }
 
-      groups.forEach((groupRows, key) => {
+      for (const [key, groupRows] of groups.entries()) {
         const metrics: Record<string, number> = {};
-        numberCodes.forEach((code) => {
-          metrics[code] =
-            groupRows.reduce((sum, row) => sum + Number((row as Record<string, unknown>)[code] ?? 0), 0) / Math.max(groupRows.length, 1);
-        });
 
-        // ожидаемые поля
-        metrics.revenue = groupRows.reduce((sum, row) => sum + (row as any).revenue, 0);
-        metrics.spend = groupRows.reduce((sum, row) => sum + (row as any).spend, 0);
-        metrics.orders = groupRows.reduce((sum, row) => sum + (row as any).orders, 0);
+        for (const c of coordCodes) {
+          const sum = groupRows.reduce((acc, r) => acc + toNumberByField(r, c), 0);
+          metrics[c] = sum / Math.max(groupRows.length, 1);
+        }
+
+        // если есть привычные поля — пусть будут (для тултипа)
+        metrics.revenue = groupRows.reduce((sum, row) => sum + Number((row as any).revenue ?? 0), 0);
+        metrics.spend = groupRows.reduce((sum, row) => sum + Number((row as any).spend ?? 0), 0);
+        metrics.orders = groupRows.reduce((sum, row) => sum + Number((row as any).orders ?? 0), 0);
         metrics.drr = metrics.revenue > 0 ? (metrics.spend / metrics.revenue) * 100 : 0;
         metrics.roi = metrics.spend > 0 ? metrics.revenue / metrics.spend : 0;
 
@@ -208,17 +181,18 @@
           y: 0,
           z: 0
         });
-      });
-    });
+      }
+    }
 
     return projectPoints(result, xCode, yCode, zCode);
   }
 
   function projectPoints(list: SpacePoint[], xCode: string, yCode: string, zCode: string): SpacePoint[] {
     if (!list.length) return [];
-    const useX = xCode && axisFields.some((f) => f.code === xCode);
-    const useY = yCode && axisFields.some((f) => f.code === yCode);
-    const useZ = zCode && axisFields.some((f) => f.code === zCode);
+
+    const useX = !!xCode;
+    const useY = !!yCode;
+    const useZ = !!zCode;
 
     const xValues = useX ? list.map((p) => p.metrics[xCode] ?? 0) : [0, 1];
     const yValues = useY ? list.map((p) => p.metrics[yCode] ?? 0) : [0, 1];
@@ -248,6 +222,18 @@
     return value;
   }
 
+  function sanitizePoints(input: SpacePoint[]): SpacePoint[] {
+    return input.map((point) => ({
+      ...point,
+      x: sanitizeCoord(point.x, point.id, 'x') + hashToJitter(`${point.id}:x`) * 0.05,
+      y: sanitizeCoord(point.y, point.id, 'y') + hashToJitter(`${point.id}:y`) * 0.05,
+      z: sanitizeCoord(point.z, point.id, 'z') + hashToJitter(`${point.id}:z`) * 0.05
+    }));
+  }
+
+  // ───────────────────────────────────────────────────────────
+  // bbox/камера
+
   function buildBBox(list: SpacePoint[]): BBox {
     const xs = list.map((p) => p.x);
     const ys = list.map((p) => p.y);
@@ -265,9 +251,11 @@
   function normalizeBBox(list: SpacePoint[]): BBox {
     if (!list.length) return { minX: -1, maxX: 1, minY: -1, maxY: 1, minZ: -1, maxZ: 1 };
     const bbox = buildBBox(list);
+
     const spanX = bbox.maxX - bbox.minX;
     const spanY = bbox.maxY - bbox.minY;
     const spanZ = bbox.maxZ - bbox.minZ;
+
     if (spanX < 0.001 && spanY < 0.001 && spanZ < 0.001) {
       const cx = (bbox.minX + bbox.maxX) / 2;
       const cy = (bbox.minY + bbox.maxY) / 2;
@@ -297,27 +285,14 @@
     const spanZ = Math.max(0.001, bbox.maxZ - bbox.minZ);
     const maxSpan = Math.max(spanX, spanY, spanZ);
 
-    if (maxSpan < 0.5) {
-      camera.position.set(center.x + 1.5, center.y + 1.5, center.z + 5);
-      controls.target.copy(center);
-      controls.update();
-      return;
-    }
-
     const distance = Math.max(8, maxSpan * 1.55);
     camera.position.set(center.x + distance * 0.55, center.y + distance * 0.45, center.z + distance);
     controls.target.copy(center);
     controls.update();
   }
 
-  function sanitizePoints(input: SpacePoint[]): SpacePoint[] {
-    return input.map((point) => ({
-      ...point,
-      x: sanitizeCoord(point.x, point.id, 'x') + hashToJitter(`${point.id}:x`) * 0.05,
-      y: sanitizeCoord(point.y, point.id, 'y') + hashToJitter(`${point.id}:y`) * 0.05,
-      z: sanitizeCoord(point.z, point.id, 'z') + hashToJitter(`${point.id}:z`) * 0.05
-    }));
-  }
+  // ───────────────────────────────────────────────────────────
+  // подписи/каркас (угол из 3 плоскостей)
 
   function calcMax(pointsList: SpacePoint[], metricKey: string): number {
     if (!metricKey) return NaN;
@@ -327,11 +302,6 @@
       if (Number.isFinite(v)) max = Math.max(max, v);
     }
     return max === -Infinity ? NaN : max;
-  }
-
-  function formatDate(value: string): string {
-    const [y, m, d] = value.split('-');
-    return y && m && d ? `${d}.${m}.${y}` : value;
   }
 
   function formatNumberHuman(n: number): string {
@@ -344,7 +314,21 @@
   }
 
   function formatValueByMetric(metricCode: string, maxValue: number): string {
+    if (!metricCode) return '—';
     if (!Number.isFinite(maxValue)) return 'нет данных';
+
+    const k = fieldKind(metricCode);
+    if (k === 'date') {
+      // maxValue = timestamp
+      const d = new Date(maxValue);
+      if (Number.isFinite(d.getTime())) {
+        const dd = String(d.getDate()).padStart(2, '0');
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const yy = d.getFullYear();
+        return `${dd}.${mm}.${yy}`;
+      }
+      return 'нет данных';
+    }
 
     const money = new Set(['revenue', 'spend', 'margin', 'profit']);
     if (money.has(metricCode)) return `${formatNumberHuman(maxValue)} ₽`;
@@ -356,7 +340,6 @@
     }
 
     if (metricCode === 'roi') return maxValue.toFixed(2).replace('.', ',');
-
     return formatNumberHuman(maxValue);
   }
 
@@ -366,11 +349,6 @@
     cornerFrame.geometry.dispose();
     cornerFrame.material.dispose();
     cornerFrame = null;
-  }
-
-  // совместимость со старым названием
-  function disposeWireframe(): void {
-    disposeCornerFrame();
   }
 
   function disposeAxisLabels(): void {
@@ -404,10 +382,6 @@
     return new CSS2DObject(el);
   }
 
-  /**
-   * Рисуем "угол" из трёх плоскостей: XY(z=min), XZ(y=min), YZ(x=min),
-   * и ставим подписи в центре рёбер + max на концах рёбер.
-   */
   function rebuildPlanes(list: SpacePoint[]): void {
     planeGroup.clear();
     disposeCornerFrame();
@@ -424,7 +398,6 @@
     const Cxz = new THREE.Vector3(bbox.maxX, bbox.minY, bbox.maxZ);
     const Cyz = new THREE.Vector3(bbox.minX, bbox.maxY, bbox.maxZ);
 
-    // Только 3 плоскости-угол (без "верхних" линий и без центральных)
     const segments: Array<[THREE.Vector3, THREE.Vector3]> = [
       // XY (z=min)
       [A, Bx],
@@ -455,10 +428,9 @@
     cornerFrame = new THREE.LineSegments(geom, mat);
     planeGroup.add(cornerFrame);
 
-    // Подписи осей
-    const xName = fieldName(axisX || '—');
-    const yName = fieldName(axisY || '—');
-    const zName = fieldName(axisZ || '—');
+    const xName = axisX ? fieldName(axisX) : '—';
+    const yName = axisY ? fieldName(axisY) : '—';
+    const zName = axisZ ? fieldName(axisZ) : '—';
 
     const midX = A.clone().lerp(Bx, 0.5);
     const midY = A.clone().lerp(By, 0.5);
@@ -473,7 +445,6 @@
     const lz = createAxisLabel(zName);
     lz.position.copy(midZ);
 
-    // max в концах
     const xMax = axisX ? calcMax(list, axisX) : NaN;
     const yMax = axisY ? calcMax(list, axisY) : NaN;
     const zMax = axisZ ? calcMax(list, axisZ) : NaN;
@@ -491,9 +462,12 @@
     edgeLabelGroup.add(...axisLabels);
   }
 
+  // ───────────────────────────────────────────────────────────
+  // 3D
+
   function init3d(): void {
     const width = container3d.clientWidth;
-    const height = 560;
+    const height = container3d.clientHeight || 640;
 
     scene = new THREE.Scene();
     scene.background = new THREE.Color('#f8fbff');
@@ -540,7 +514,7 @@
     (mesh.material as THREE.Material).dispose();
   }
 
-  function rebuildScene(sourcePoints: SpacePoint[], entityFields: string[]): void {
+  function rebuildScene(sourcePoints: SpacePoint[], textFields: string[]): void {
     if (!scene) return;
 
     clearMesh(circleMesh);
@@ -562,7 +536,7 @@
       circlePoints.forEach((point, idx) => {
         o.position.set(point.x, point.y, point.z);
         o.updateMatrix();
-        circleMesh?.setMatrixAt(idx, o.matrix);
+        circleMesh!.setMatrixAt(idx, o.matrix);
       });
       scene.add(circleMesh);
     }
@@ -578,17 +552,15 @@
         o.position.set(point.x, point.y, point.z);
         o.rotation.set(0.2, 0.5, 0.1);
         o.updateMatrix();
-        diamondMesh?.setMatrixAt(idx, o.matrix);
+        diamondMesh!.setMatrixAt(idx, o.matrix);
       });
       scene.add(diamondMesh);
     }
 
-    if (entityFields.length === 0) {
+    if (textFields.length === 0) {
       debugRenderedCount = 0;
       rebuildPlanes([]);
       fitCameraToPoints([]);
-      disposeAxisLabels();
-      disposeCornerFrame();
       return;
     }
 
@@ -624,8 +596,7 @@
         `Поле: ${fieldName(point.sourceField)}`,
         `Выручка: ${Math.round(point.metrics.revenue).toLocaleString('ru-RU')} ₽`,
         `Расход: ${Math.round(point.metrics.spend).toLocaleString('ru-RU')} ₽`,
-        `ДРР: ${point.metrics.drr.toFixed(2)}% · ROI: ${point.metrics.roi.toFixed(2)}`,
-        `Период: ${formatDate(fromDate || (showcase.rows[0] as any)?.date || '')} — ${formatDate(toDate || (showcase.rows[showcase.rows.length - 1] as any)?.date || '')}`
+        `ДРР: ${point.metrics.drr.toFixed(2)}% · ROI: ${point.metrics.roi.toFixed(2)}`
       ]
     };
   }
@@ -640,7 +611,7 @@
   function onResize(): void {
     if (!renderer || !camera || !container3d) return;
     const width = container3d.clientWidth;
-    const height = 560;
+    const height = container3d.clientHeight || 640;
     renderer.setSize(width, height);
     labelRenderer?.setSize(width, height);
     camera.aspect = width / height;
@@ -653,117 +624,116 @@
     controls.update();
   }
 
-  function onAddEntityFieldChange(event: Event): void {
-    const code = (event.currentTarget as HTMLSelectElement).value;
-    addEntityField(code);
-    (event.currentTarget as HTMLSelectElement).value = '';
-  }
+  // ───────────────────────────────────────────────────────────
+  // UI: Добавить/удалить поля
 
-  function addEntityField(code: string): void {
-    if (!code || selectedEntityFields.includes(code)) return;
-    selectedEntityFields = [...selectedEntityFields, code];
-  }
-
-  function removeEntityField(code: string): void {
-    selectedEntityFields = selectedEntityFields.filter((item) => item !== code);
-  }
-
-  function addFilter(type: FilterType): void {
-    const id = `${Date.now()}-${Math.random()}`;
-    if (type === 'date') {
-      filters = [...filters, { id, filterType: type, fieldCode: dateFields[0]?.code ?? 'date', operator: 'с', valueA: '', valueB: '' }];
+  function removeField(code: string): void {
+    // если это текст
+    if (selectedTextFields.includes(code)) {
+      selectedTextFields = selectedTextFields.filter((x) => x !== code);
       return;
     }
-    if (type === 'number') {
-      filters = [
-        ...filters,
-        { id, filterType: type, fieldCode: numberFilterFields[0]?.code ?? 'revenue', operator: '>', valueA: '', valueB: '' }
-      ];
+    // если это координата
+    if (selectedCoordFields.includes(code)) {
+      selectedCoordFields = selectedCoordFields.filter((x) => x !== code);
+      ensureAxisFromCoords();
       return;
     }
-    filters = [
-      ...filters,
-      { id, filterType: type, fieldCode: textFilterFields[0]?.code ?? 'sku', operator: 'содержит', valueA: '', valueB: '' }
-    ];
   }
 
-  function updateFilter(id: string, patch: Partial<PanelFilter>): void {
-    filters = filters.map((f) => (f.id === id ? { ...f, ...patch } : f));
+  function addField(code: string): void {
+    const k = fieldKind(code);
+    if (!k) return;
+
+    if (k === 'text') {
+      if (selectedTextFields.includes(code)) return;
+      selectedTextFields = [...selectedTextFields, code];
+      return;
+    }
+
+    if (k === 'number' || k === 'date') {
+      if (selectedCoordFields.includes(code)) return;
+      if (coordLimitReached()) return; // защита
+      selectedCoordFields = [...selectedCoordFields, code];
+      ensureAxisFromCoords();
+      return;
+    }
   }
 
-  function removeFilter(id: string): void {
-    filters = filters.filter((f) => f.id !== id);
+  function openAddMenu(anchor: HTMLElement): void {
+    addMenuAnchor = anchor;
+    addMenuOpen = true;
   }
 
-  function onFilterTypeChange(id: string, event: Event): void {
-    const t = (event.currentTarget as HTMLSelectElement).value as FilterType;
-    if (t === 'date') updateFilter(id, { filterType: t, fieldCode: dateFields[0]?.code ?? 'date', operator: 'с', valueA: '', valueB: '' });
-    if (t === 'text')
-      updateFilter(id, { filterType: t, fieldCode: textFilterFields[0]?.code ?? 'sku', operator: 'содержит', valueA: '', valueB: '' });
-    if (t === 'number')
-      updateFilter(id, { filterType: t, fieldCode: numberFilterFields[0]?.code ?? 'revenue', operator: '>', valueA: '', valueB: '' });
+  function closeAddMenu(): void {
+    addMenuOpen = false;
+    addMenuAnchor = null;
   }
 
-  function saveCurrent(): void {
-    const name = window.prompt('Название настройки', `Настройка ${panelSettingsList.length + 1}`)?.trim();
+  function allowedCoordFields(): ShowcaseField[] {
+    if (coordLimitReached()) return [];
+    return [...numberFieldsAll, ...dateFieldsAll].filter((f) => !selectedCoordFields.includes(f.code));
+  }
+
+  function allowedTextFields(): ShowcaseField[] {
+    return textFieldsAll.filter((f) => !selectedTextFields.includes(f.code));
+  }
+
+  // ───────────────────────────────────────────────────────────
+  // Настройки (сохранить/сбросить)
+
+  function openSaveModal(): void {
+    saveName = '';
+    saveModalOpen = true;
+  }
+
+  function confirmSave(): void {
+    const name = saveName.trim();
     if (!name) return;
+
     const item = {
       id: `${Date.now()}-${Math.random()}`,
       name,
-      value: { activeLayers, selectedEntityFields, axisX, axisY, axisZ, period, fromDate, toDate, filters }
+      value: {
+        activeLayers,
+        selectedTextFields,
+        selectedCoordFields
+      }
     };
+
     panelSettingsList = [item, ...panelSettingsList].slice(0, 20);
     selectedSettingId = item.id;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(panelSettingsList));
+
+    saveModalOpen = false;
   }
 
   function loadSettings(): void {
     const found = panelSettingsList.find((item) => item.id === selectedSettingId);
     if (!found) return;
-    const value = found.value as Record<string, unknown>;
-    activeLayers = (value.activeLayers as DatasetId[]) ?? ['sales_fact', 'ads'];
-    selectedEntityFields = (value.selectedEntityFields as string[]) ?? ['sku'];
-    axisX = String(value.axisX ?? '');
-    axisY = String(value.axisY ?? '');
-    axisZ = String(value.axisZ ?? '');
-    period = (value.period as PeriodMode) ?? '30 дней';
-    fromDate = String(value.fromDate ?? '');
-    toDate = String(value.toDate ?? '');
-    filters = (value.filters as PanelFilter[]) ?? [];
+    const v = found.value as Record<string, unknown>;
+
+    activeLayers = (v.activeLayers as DatasetId[]) ?? ['sales_fact', 'ads'];
+    selectedTextFields = (v.selectedTextFields as string[]) ?? ['sku'];
+    selectedCoordFields = (v.selectedCoordFields as string[]) ?? [];
+    ensureAxisFromCoords();
   }
 
-  function removeSetting(): void {
-    if (!selectedSettingId) return;
-    panelSettingsList = panelSettingsList.filter((item) => item.id !== selectedSettingId);
+  function resetSettings(): void {
     selectedSettingId = '';
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(panelSettingsList));
-  }
-
-  function resetPanel(): void {
     activeLayers = ['sales_fact', 'ads'];
-    selectedEntityFields = ['sku', 'campaign_id'];
-    axisX = '';
-    axisY = '';
-    axisZ = '';
-    period = '30 дней';
-    fromDate = '';
-    toDate = '';
-    filters = [];
-    search = '';
+    selectedTextFields = ['sku', 'campaign_id'];
+    selectedCoordFields = ['revenue', 'orders', 'spend'];
+    ensureAxisFromCoords();
     resetView();
   }
 
-  function onHotKey(event: KeyboardEvent): void {
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
-      event.preventDefault();
-      searchInput?.focus();
-    }
-  }
+  // ───────────────────────────────────────────────────────────
+  // mount/unmount
 
   onMount(() => {
+    ensureAxisFromCoords();
     init3d();
-    ensureDefaults();
-    rebuildScene(points, selectedEntityFields);
 
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -773,17 +743,23 @@
     }
 
     window.addEventListener('resize', onResize);
-    window.addEventListener('keydown', onHotKey);
+    window.addEventListener('click', (e) => {
+      // закрытие меню “Добавить поле” по клику вне
+      if (!addMenuOpen) return;
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('.add-menu') || target.closest('.add-btn')) return;
+      closeAddMenu();
+    });
   });
 
   onDestroy(() => {
     unsub();
     cancelAnimationFrame(anim);
     window.removeEventListener('resize', onResize);
-    window.removeEventListener('keydown', onHotKey);
 
     disposeAxisLabels();
-    disposeWireframe();
+    disposeCornerFrame();
 
     renderer?.domElement?.removeEventListener('mousemove', onMove3d);
 
@@ -793,182 +769,366 @@
   });
 </script>
 
-<section class="graph-root panel">
-  <div class="title-row">
-    <h2>Пространство</h2>
-    <div class="status">
-      Точек: {points.length} ·
-      Слои: {activeLayers.map((id) => showcase.datasets.find((d) => d.id === id)?.name).join(', ')} ·
-      Оси: {fieldName(axisX || '—')} / {fieldName(axisY || '—')} / {fieldName(axisZ || '—')}
-    </div>
-  </div>
+<section class="graph-root">
+  <div class="stage">
+    <div bind:this={container3d} class="scene"></div>
 
-  <div class="content">
-    <div class="graph-wrap">
-      <div class="stage">
-        <div bind:this={container3d} class="scene" />
-        <div class="debug">
-          <div>Выбрано полей: {selectedEntityFields.length} ({selectedEntityFields.join(', ') || '—'})</div>
-          <div>Точек на графе: {debugRenderedCount}</div>
-          <div>Источник: Витрина данных (rows={filteredRows.length})</div>
-          <div>Группировка по: {selectedEntityFields[0] || '—'}</div>
-          <div>X/Y/Z: {fieldName(axisX || '—')} / {fieldName(axisY || '—')} / {fieldName(axisZ || '—')}</div>
-          <div>bbox: {debugBBox}</div>
-        </div>
-
-        {#if selectedEntityFields.length === 0}
-          <div class="empty-hint">Выберите поля в ‘Точки на графе’</div>
-        {/if}
-
-        {#if tooltip.visible}
-          <div class="tooltip" style={`left:${tooltip.x}px;top:${tooltip.y}px`}>
-            {#each tooltip.lines as line}<div>{line}</div>{/each}
-          </div>
-        {/if}
-      </div>
-    </div>
-
-    <aside class="control-panel">
-      <section class="section">
-        <h4>Настройки</h4>
-        <small>Сохранение и загрузка конфигурации панели.</small>
-        <select bind:value={selectedSettingId} on:change={loadSettings}>
-          <option value="">Выберите сохранённую настройку</option>
+    <!-- overlay controls (внутри пространства) -->
+    <div class="overlay">
+      <!-- Настройки -->
+      <div class="settings">
+        <select class="bubble" bind:value={selectedSettingId} on:change={loadSettings}>
+          <option value="">Выберите настройку</option>
           {#each panelSettingsList as setting}
             <option value={setting.id}>{setting.name}</option>
           {/each}
         </select>
-        <div class="row-buttons">
-          <button on:click={saveCurrent}>Сохранить текущую</button>
-          <button on:click={removeSetting} disabled={!selectedSettingId}>Удалить</button>
-          <button on:click={resetPanel}>Сбросить</button>
-        </div>
-      </section>
 
-      <section class="section">
-        <h4>Точки на графе</h4>
-        <small>Добавьте одно или несколько текстовых полей. Каждое уникальное значение станет точкой.</small>
+        <div class="settings-actions">
+          <button class="settings-btn" on:click={openSaveModal}>Сохранить настройку</button>
+          <button class="settings-btn ghost" on:click={resetSettings}>Сбросить настройку</button>
+        </div>
+      </div>
+
+      <!-- Поля -->
+      <div class="fields">
+        <button class="add-btn" bind:this={addMenuAnchor} on:click={(e) => openAddMenu(e.currentTarget as HTMLElement)}>
+          + Добавить поле
+        </button>
+
+        {#if addMenuOpen}
+          <div class="add-menu" style="right:0; top:46px;">
+            <div class="add-menu-title">Точки (текст)</div>
+            <div class="add-list">
+              {#each allowedTextFields() as f}
+                <button class="add-item" on:click={() => (addField(f.code), closeAddMenu())}>{f.name}</button>
+              {/each}
+              {#if allowedTextFields().length === 0}
+                <div class="add-empty">Нет доступных</div>
+              {/if}
+            </div>
+
+            <div class="add-menu-title">
+              Координаты (числа/даты)
+              {#if coordLimitReached()}<span class="limit"> · максимум 3</span>{/if}
+            </div>
+            <div class="add-list">
+              {#each allowedCoordFields() as f}
+                <button class="add-item" on:click={() => (addField(f.code), closeAddMenu())}>{f.name}</button>
+              {/each}
+              {#if allowedCoordFields().length === 0}
+                <div class="add-empty">{coordLimitReached() ? 'Лимит координат достигнут' : 'Нет доступных'}</div>
+              {/if}
+            </div>
+          </div>
+        {/if}
+
         <div class="chips">
-          {#each selectedEntityFields as code}
-            <span class="chip">{fieldName(code)} <button on:click={() => removeEntityField(code)}>×</button></span>
+          {#each selectedTextFields as code}
+            <span class="chip text">
+              {fieldName(code)}
+              <button class="x" on:click={() => removeField(code)}>×</button>
+            </span>
+          {/each}
+
+          {#each selectedCoordFields as code}
+            <span class="chip coord">
+              {fieldName(code)}
+              <button class="x" on:click={() => removeField(code)}>×</button>
+            </span>
           {/each}
         </div>
-        <label>+ Добавить поле
-          <select on:change={onAddEntityFieldChange}>
-            <option value="">Выберите поле</option>
-            {#each textFields as field}
-              <option value={field.code}>{field.name}</option>
-            {/each}
-          </select>
-        </label>
-      </section>
 
-      <section class="section">
-        <h4>Координаты</h4>
-        <small>Какие числовые метрики формируют оси X/Y/Z.</small>
-        <label>Ось X
-          <select bind:value={axisX}>
-            <option value="">Не выбрано</option>
-            {#each axisFields as field}<option value={field.code}>{field.name}</option>{/each}
-          </select>
-        </label>
-        <label>Ось Y
-          <select bind:value={axisY}>
-            <option value="">Не выбрано</option>
-            {#each axisFields as field}<option value={field.code}>{field.name}</option>{/each}
-          </select>
-        </label>
-        <label>Ось Z
-          <select bind:value={axisZ}>
-            <option value="">Не выбрано</option>
-            {#each axisFields as field}<option value={field.code}>{field.name}</option>{/each}
-          </select>
-        </label>
-      </section>
-
-      <section class="section">
-        <h4>Период и фильтры</h4>
-        <small>Ограничивает данные для расчёта.</small>
-        <label>Период
-          <select bind:value={period}>
-            <option>7 дней</option><option>14 дней</option><option>30 дней</option><option>Даты</option>
-          </select>
-        </label>
-        {#if period === 'Даты'}
-          <div class="dates"><input type="date" bind:value={fromDate} /><input type="date" bind:value={toDate} /></div>
-        {/if}
-        <input bind:this={searchInput} bind:value={search} placeholder="Поиск по выбранным полям" />
-        <div class="row-buttons">
-          <button on:click={() => addFilter('date')}>+ Дата</button>
-          <button on:click={() => addFilter('text')}>+ Текст</button>
-          <button on:click={() => addFilter('number')}>+ Число</button>
+        <div class="mini">
+          Точек: {points.length} ·
+          Точек на графе: {debugRenderedCount} ·
+          Оси: {axisX ? fieldName(axisX) : '—'} / {axisY ? fieldName(axisY) : '—'} / {axisZ ? fieldName(axisZ) : '—'}
         </div>
+      </div>
+    </div>
 
-        {#each filters as filter}
-          <div class="filter-item">
-            <select bind:value={filter.filterType} on:change={(event) => onFilterTypeChange(filter.id, event)}>
-              <option value="date">Дата</option>
-              <option value="text">Текст</option>
-              <option value="number">Число</option>
-            </select>
+    {#if tooltip.visible}
+      <div class="tooltip" style={`left:${tooltip.x}px;top:${tooltip.y}px`}>
+        {#each tooltip.lines as line}<div>{line}</div>{/each}
+      </div>
+    {/if}
 
-            {#if filter.filterType === 'date'}
-              <select bind:value={filter.fieldCode}>
-                {#each dateFields as field}<option value={field.code}>{field.name}</option>{/each}
-              </select>
-              <select bind:value={filter.operator}><option>с</option><option>по</option></select>
-              <input type="date" bind:value={filter.valueA} />
-            {:else if filter.filterType === 'text'}
-              <select bind:value={filter.fieldCode}>
-                {#each textFilterFields as field}<option value={field.code}>{field.name}</option>{/each}
-              </select>
-              <select bind:value={filter.operator}>
-                <option>равно</option><option>не равно</option><option>содержит</option><option>не содержит</option><option>в списке</option>
-              </select>
-              <input type="text" bind:value={filter.valueA} placeholder="Значение" />
-            {:else}
-              <select bind:value={filter.fieldCode}>
-                {#each numberFilterFields as field}<option value={field.code}>{field.name}</option>{/each}
-              </select>
-              <select bind:value={filter.operator}><option>&gt;</option><option>&lt;</option><option>≥</option><option>≤</option><option>между</option></select>
-              <input type="number" bind:value={filter.valueA} placeholder="От" />
-              {#if filter.operator === 'между'}<input type="number" bind:value={filter.valueB} placeholder="До" />{/if}
-            {/if}
-
-            <button on:click={() => removeFilter(filter.id)}>Удалить</button>
+    <!-- Сохранить модалка -->
+    {#if saveModalOpen}
+      <div class="modal-backdrop" on:click={() => (saveModalOpen = false)}>
+        <div class="modal" on:click|stopPropagation>
+          <div class="modal-title">Название настройки</div>
+          <input class="modal-input" bind:value={saveName} placeholder="Например: Моя настройка" />
+          <div class="modal-actions">
+            <button class="settings-btn ghost" on:click={() => (saveModalOpen = false)}>Отмена</button>
+            <button class="settings-btn" on:click={confirmSave} disabled={!saveName.trim()}>Сохранить</button>
           </div>
-        {/each}
-
-        <button on:click={resetView}>Сбросить вид</button>
-      </section>
-    </aside>
+        </div>
+      </div>
+    {/if}
   </div>
 </section>
 
 <style>
-  .graph-root { display:flex; flex-direction:column; gap:8px; }
-  .title-row { display:flex; justify-content:space-between; align-items:center; gap:12px; }
-  .title-row h2 { margin:0; font-size:24px; }
-  .status { font-size:12px; color:#64748b; text-align:right; }
-  .content { display:grid; grid-template-columns:minmax(0,1fr) 360px; gap:12px; align-items:stretch; }
-  .graph-wrap { min-width:0; }
-  .stage { position:relative; min-height:560px; }
-  .scene { position:relative; width:100%; height:100%; min-height:560px; border:1px solid #e2e8f0; border-radius:16px; background:#f8fbff; overflow:hidden; }
-  .debug { position:absolute; left:10px; top:10px; z-index:3; background:rgba(15,23,42,.82); color:#f8fafc; font-size:11px; border-radius:10px; padding:8px 10px; line-height:1.4; pointer-events:none; max-width:400px; }
-  .control-panel { height:560px; border:1px solid #e2e8f0; border-radius:14px; padding:10px; background:#fbfdff; display:flex; flex-direction:column; gap:10px; overflow:auto; }
-  .section { border:1px solid #e7edf6; border-radius:10px; padding:8px; display:flex; flex-direction:column; gap:6px; }
-  .section h4 { margin:0; font-size:13px; color:#334155; }
-  .section label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:#334155; }
-  .section select, .section input, .section button { border:1px solid #dbe4f0; border-radius:10px; padding:6px 8px; background:#fff; font-size:12px; }
-  .section button { cursor:pointer; }
-  .section button:disabled { opacity:.5; cursor:not-allowed; }
-  .row-buttons { display:flex; flex-wrap:wrap; gap:6px; }
-  .dates { display:flex; gap:6px; }
-  .chips { display:flex; flex-wrap:wrap; gap:6px; }
-  .chip { display:inline-flex; align-items:center; gap:6px; border:1px solid #dbe4f0; border-radius:999px; padding:4px 8px; background:#f8fbff; font-size:12px; }
-  .chip button { border:none; background:transparent; cursor:pointer; padding:0; line-height:1; }
-  .filter-item { display:flex; flex-direction:column; gap:6px; border:1px solid #e2e8f0; border-radius:10px; padding:6px; }
-  .tooltip { position:absolute; pointer-events:none; background:rgba(15,23,42,.94); color:#f8fafc; font-size:12px; padding:10px; border-radius:10px; max-width:360px; }
-  .empty-hint { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); background:#fff; border:1px dashed #94a3b8; color:#334155; border-radius:10px; padding:10px 12px; font-size:13px; }
-  small { color:#64748b; font-size:11px; line-height:1.3; }
+  .graph-root {
+    width: 100%;
+  }
+
+  /* ✅ граф на всё пространство */
+  .stage {
+    position: relative;
+    width: 100%;
+    height: 720px; /* можно подправить */
+    border-radius: 18px;
+    background: #f8fbff;
+    overflow: hidden;
+  }
+
+  .scene {
+    position: absolute;
+    inset: 0;
+  }
+
+  /* overlay */
+  .overlay {
+    position: absolute;
+    inset: 14px;
+    pointer-events: none;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .settings,
+  .fields {
+    pointer-events: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-width: 420px;
+  }
+
+  .settings {
+    min-width: 280px;
+  }
+
+  /* “облачко” select */
+  .bubble {
+    width: 100%;
+    border: 1px solid rgba(226, 232, 240, 0.95);
+    background: rgba(255, 255, 255, 0.92);
+    border-radius: 14px;
+    padding: 10px 12px;
+    font-size: 13px;
+    font-weight: 600;
+    color: rgba(15, 23, 42, 0.9);
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+    outline: none;
+  }
+
+  .settings-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  /* 2 одинаковые кнопки по ширине “облачка” */
+  .settings-btn {
+    flex: 1;
+    border: 1px solid rgba(226, 232, 240, 0.95);
+    background: rgba(255, 255, 255, 0.92);
+    border-radius: 14px;
+    padding: 10px 12px;
+    font-size: 13px;
+    font-weight: 700;
+    color: rgba(15, 23, 42, 0.92);
+    cursor: pointer;
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+  }
+
+  .settings-btn.ghost {
+    background: rgba(248, 250, 252, 0.92);
+    color: rgba(51, 65, 85, 0.92);
+  }
+
+  .settings-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  /* поля */
+  .add-btn {
+    align-self: flex-end;
+    border: 1px solid rgba(226, 232, 240, 0.95);
+    background: rgba(255, 255, 255, 0.92);
+    border-radius: 14px;
+    padding: 10px 12px;
+    font-size: 13px;
+    font-weight: 800;
+    color: rgba(15, 23, 42, 0.92);
+    cursor: pointer;
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border-radius: 999px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 700;
+    border: 1px solid rgba(226, 232, 240, 0.95);
+    background: rgba(255, 255, 255, 0.92);
+    color: rgba(15, 23, 42, 0.9);
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+  }
+
+  .chip.text {
+    background: rgba(240, 253, 244, 0.92);
+    border-color: rgba(187, 247, 208, 0.95);
+  }
+
+  .chip.coord {
+    background: rgba(239, 246, 255, 0.92);
+    border-color: rgba(191, 219, 254, 0.95);
+  }
+
+  .x {
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+    color: rgba(51, 65, 85, 0.9);
+  }
+
+  .mini {
+    align-self: flex-end;
+    font-size: 12px;
+    color: rgba(71, 85, 105, 0.92);
+    background: rgba(255, 255, 255, 0.7);
+    border: 1px solid rgba(226, 232, 240, 0.85);
+    border-radius: 12px;
+    padding: 8px 10px;
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+  }
+
+  /* меню добавления */
+  .add-menu {
+    position: absolute;
+    width: 340px;
+    max-height: 420px;
+    overflow: auto;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.96);
+    border: 1px solid rgba(226, 232, 240, 0.95);
+    box-shadow: 0 18px 45px rgba(15, 23, 42, 0.14);
+    padding: 10px;
+    z-index: 20;
+  }
+
+  .add-menu-title {
+    font-size: 12px;
+    font-weight: 900;
+    color: rgba(51, 65, 85, 0.95);
+    margin: 8px 0 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .limit {
+    font-weight: 800;
+    color: rgba(30, 64, 175, 0.95);
+  }
+
+  .add-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .add-item {
+    text-align: left;
+    border: 1px solid rgba(226, 232, 240, 0.95);
+    background: rgba(248, 250, 252, 0.95);
+    border-radius: 12px;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-weight: 700;
+    color: rgba(15, 23, 42, 0.92);
+    cursor: pointer;
+  }
+
+  .add-empty {
+    font-size: 12px;
+    color: rgba(100, 116, 139, 0.95);
+    padding: 8px 10px;
+  }
+
+  /* tooltip */
+  .tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: rgba(15, 23, 42, 0.94);
+    color: #f8fafc;
+    font-size: 12px;
+    padding: 10px;
+    border-radius: 12px;
+    max-width: 360px;
+    z-index: 30;
+  }
+
+  /* modal */
+  .modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.24);
+    display: grid;
+    place-items: center;
+    z-index: 50;
+  }
+
+  .modal {
+    width: min(460px, calc(100% - 24px));
+    background: rgba(255, 255, 255, 0.98);
+    border: 1px solid rgba(226, 232, 240, 0.95);
+    border-radius: 18px;
+    box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
+    padding: 14px;
+  }
+
+  .modal-title {
+    font-size: 14px;
+    font-weight: 900;
+    color: rgba(15, 23, 42, 0.92);
+    margin-bottom: 10px;
+  }
+
+  .modal-input {
+    width: 100%;
+    border: 1px solid rgba(226, 232, 240, 0.95);
+    border-radius: 14px;
+    padding: 10px 12px;
+    font-size: 13px;
+    font-weight: 700;
+    outline: none;
+    background: rgba(248, 250, 252, 0.92);
+  }
+
+  .modal-actions {
+    margin-top: 12px;
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+  }
 </style>
