@@ -62,21 +62,12 @@
     return `linear-gradient(90deg, ${rgbToHex(a)}, ${rgbToHex(z)})`;
   }
 
-  // ---- local state (so sliders feel smooth)
-  let bgRgb: Rgb = hexToRgb(visualBg);
-  let edgeRgb: Rgb = hexToRgb(visualEdge);
-  let pointRgb: Rgb = hexToRgb(pointColor);
+  function inputValue(e: Event): string {
+    return String((e.currentTarget as HTMLInputElement).value ?? '');
+  }
 
-  // keep in sync if parent changes (apply scheme/reset)
-  $: bgRgb = hexToRgb(visualBg);
-  $: edgeRgb = hexToRgb(visualEdge);
-  $: pointRgb = hexToRgb(pointColor);
-
-  function setColorFromRgb(kind: 'bg' | 'edge' | 'point', next: Rgb): void {
-    const hex = rgbToHex(next);
-    if (kind === 'bg') visualBg = hex;
-    if (kind === 'edge') visualEdge = hex;
-    if (kind === 'point') pointColor = hex;
+  function rangeValue(e: Event): number {
+    return Number((e.currentTarget as HTMLInputElement).value);
   }
 
   function setColorFromHex(kind: 'bg' | 'edge' | 'point', hex: string): void {
@@ -85,18 +76,33 @@
     if (kind === 'edge') visualEdge = normalized;
     if (kind === 'point') pointColor = normalized;
   }
+
+  function setColorFromRgb(kind: 'bg' | 'edge' | 'point', next: Rgb): void {
+    const hex = rgbToHex(next);
+    if (kind === 'bg') visualBg = hex;
+    if (kind === 'edge') visualEdge = hex;
+    if (kind === 'point') pointColor = hex;
+  }
+
+  // ---- local state
+  let bgRgb: Rgb = hexToRgb(visualBg);
+  let edgeRgb: Rgb = hexToRgb(visualEdge);
+  let pointRgb: Rgb = hexToRgb(pointColor);
+
+  $: bgRgb = hexToRgb(visualBg);
+  $: edgeRgb = hexToRgb(visualEdge);
+  $: pointRgb = hexToRgb(pointColor);
 </script>
 
 <div class="menu-pop display">
   <div class="menu-title">Визуал</div>
 
-  <!-- Фон -->
   <div class="color-block">
     <div class="row">
       <div class="label">Фон</div>
       <div class="color-head">
         <div class="swatch" style={`background:${visualBg};`} />
-        <input class="hex" spellcheck="false" value={visualBg} on:input={(e) => setColorFromHex('bg', (e.target as HTMLInputElement).value)} />
+        <input class="hex" spellcheck="false" value={visualBg} on:input={(e) => setColorFromHex('bg', inputValue(e))} />
       </div>
     </div>
 
@@ -110,10 +116,11 @@
           min="0"
           max="255"
           value={bgRgb.r}
-          on:input={(e) => setColorFromRgb('bg', { ...bgRgb, r: Number((e.target as HTMLInputElement).value) })}
+          on:input={(e) => setColorFromRgb('bg', { ...bgRgb, r: rangeValue(e) })}
         />
         <div class="v">{bgRgb.r}</div>
       </div>
+
       <div class="rgb-row">
         <div class="c">G</div>
         <input
@@ -123,10 +130,11 @@
           min="0"
           max="255"
           value={bgRgb.g}
-          on:input={(e) => setColorFromRgb('bg', { ...bgRgb, g: Number((e.target as HTMLInputElement).value) })}
+          on:input={(e) => setColorFromRgb('bg', { ...bgRgb, g: rangeValue(e) })}
         />
         <div class="v">{bgRgb.g}</div>
       </div>
+
       <div class="rgb-row">
         <div class="c">B</div>
         <input
@@ -136,20 +144,19 @@
           min="0"
           max="255"
           value={bgRgb.b}
-          on:input={(e) => setColorFromRgb('bg', { ...bgRgb, b: Number((e.target as HTMLInputElement).value) })}
+          on:input={(e) => setColorFromRgb('bg', { ...bgRgb, b: rangeValue(e) })}
         />
         <div class="v">{bgRgb.b}</div>
       </div>
     </div>
   </div>
 
-  <!-- Рёбра -->
   <div class="color-block">
     <div class="row">
       <div class="label">Рёбра</div>
       <div class="color-head">
         <div class="swatch" style={`background:${visualEdge};`} />
-        <input class="hex" spellcheck="false" value={visualEdge} on:input={(e) => setColorFromHex('edge', (e.target as HTMLInputElement).value)} />
+        <input class="hex" spellcheck="false" value={visualEdge} on:input={(e) => setColorFromHex('edge', inputValue(e))} />
       </div>
     </div>
 
@@ -163,10 +170,11 @@
           min="0"
           max="255"
           value={edgeRgb.r}
-          on:input={(e) => setColorFromRgb('edge', { ...edgeRgb, r: Number((e.target as HTMLInputElement).value) })}
+          on:input={(e) => setColorFromRgb('edge', { ...edgeRgb, r: rangeValue(e) })}
         />
         <div class="v">{edgeRgb.r}</div>
       </div>
+
       <div class="rgb-row">
         <div class="c">G</div>
         <input
@@ -176,10 +184,11 @@
           min="0"
           max="255"
           value={edgeRgb.g}
-          on:input={(e) => setColorFromRgb('edge', { ...edgeRgb, g: Number((e.target as HTMLInputElement).value) })}
+          on:input={(e) => setColorFromRgb('edge', { ...edgeRgb, g: rangeValue(e) })}
         />
         <div class="v">{edgeRgb.g}</div>
       </div>
+
       <div class="rgb-row">
         <div class="c">B</div>
         <input
@@ -189,20 +198,19 @@
           min="0"
           max="255"
           value={edgeRgb.b}
-          on:input={(e) => setColorFromRgb('edge', { ...edgeRgb, b: Number((e.target as HTMLInputElement).value) })}
+          on:input={(e) => setColorFromRgb('edge', { ...edgeRgb, b: rangeValue(e) })}
         />
         <div class="v">{edgeRgb.b}</div>
       </div>
     </div>
   </div>
 
-  <!-- Точки -->
   <div class="color-block">
     <div class="row">
       <div class="label">Точки</div>
       <div class="color-head">
         <div class="swatch" style={`background:${pointColor};`} />
-        <input class="hex" spellcheck="false" value={pointColor} on:input={(e) => setColorFromHex('point', (e.target as HTMLInputElement).value)} />
+        <input class="hex" spellcheck="false" value={pointColor} on:input={(e) => setColorFromHex('point', inputValue(e))} />
       </div>
     </div>
 
@@ -216,10 +224,11 @@
           min="0"
           max="255"
           value={pointRgb.r}
-          on:input={(e) => setColorFromRgb('point', { ...pointRgb, r: Number((e.target as HTMLInputElement).value) })}
+          on:input={(e) => setColorFromRgb('point', { ...pointRgb, r: rangeValue(e) })}
         />
         <div class="v">{pointRgb.r}</div>
       </div>
+
       <div class="rgb-row">
         <div class="c">G</div>
         <input
@@ -229,10 +238,11 @@
           min="0"
           max="255"
           value={pointRgb.g}
-          on:input={(e) => setColorFromRgb('point', { ...pointRgb, g: Number((e.target as HTMLInputElement).value) })}
+          on:input={(e) => setColorFromRgb('point', { ...pointRgb, g: rangeValue(e) })}
         />
         <div class="v">{pointRgb.g}</div>
       </div>
+
       <div class="rgb-row">
         <div class="c">B</div>
         <input
@@ -242,7 +252,7 @@
           min="0"
           max="255"
           value={pointRgb.b}
-          on:input={(e) => setColorFromRgb('point', { ...pointRgb, b: Number((e.target as HTMLInputElement).value) })}
+          on:input={(e) => setColorFromRgb('point', { ...pointRgb, b: rangeValue(e) })}
         />
         <div class="v">{pointRgb.b}</div>
       </div>
