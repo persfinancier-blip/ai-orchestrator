@@ -1,4 +1,3 @@
-```svelte
 <!-- core/orchestrator/modules/advertising/interface/desk/components/PivotPreview.svelte -->
 <script lang="ts">
   export type PivotColumn = {
@@ -12,7 +11,6 @@
 
   function formatDate(value: unknown): string {
     const v = String(value ?? '');
-    // ожидаем YYYY-MM-DD
     const parts = v.split('-');
     if (parts.length === 3 && parts[0] && parts[1] && parts[2]) {
       const [y, m, d] = parts;
@@ -54,6 +52,7 @@
         {#each rows as r}
           <tr>
             {#each columns as c}
+              <!-- ВАЖНО: НИКАКИХ "as any" В ШАБЛОНЕ SVELTE -->
               <td>{formatCell(c, r[c.key])}</td>
             {/each}
           </tr>
@@ -106,4 +105,3 @@
     padding: 14px 10px;
   }
 </style>
-```
