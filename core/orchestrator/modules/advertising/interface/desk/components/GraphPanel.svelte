@@ -63,7 +63,6 @@
 
   let tooltip = { visible: false, x: 0, y: 0, lines: [] as string[] };
   let points: SpacePoint[] = [];
-  let debugCalculatedCount = 0;
   let debugRenderedCount = 0;
   let debugBBox = '—';
 
@@ -75,36 +74,19 @@
   let diamondMesh: THREE.InstancedMesh | undefined;
   let labelRenderer: CSS2DRenderer | undefined;
 
-  // группа "геометрии пространства" (теперь в ней каркас)
-  const planeGroup = new THREE.Group();
-  const edgeLabelGroup = new THREE.Group();
+  // Геометрия "пространства" и подписи
+  const planeGroup = new THREE.Group(); // линии/каркас
+  const edgeLabelGroup = new THREE.Group(); // CSS2D подписи осей
   let axisLabels: CSS2DObject[] = [];
-  let cornerFrame: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | null = null;
-  let cornerFrame: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | null = null;
-  
-  let axisLabels: CSS2DObject[] = [];
+  let cornerFrame: THREE.LineSegments<THREEBufferGeom, THREE.LineBasicMaterial> | null = null;
 
+  type THREEBufferGeom = THREE.BufferGeometry<THREE.NormalBufferAttributes>;
   let circlePoints: SpacePoint[] = [];
   let diamondPoints: SpacePoint[] = [];
   let anim = 0;
 
   const raycaster = new THREE.Raycaster();
   const ndc = new THREE.Vector2();
-
-  type EdgeLabelItem = { mesh: THREE.Mesh; pos: THREE.Vector3; dir: THREE.Vector3; offset: number };
-  let edgeLabels: EdgeLabelItem[] = [];
-  let lastEdgeParams:
-    | {
-        bbox: BBox;
-        pointsList: SpacePoint[];
-        xMetric: string;
-        yMetric: string;
-        zMetric: string;
-        xName: string;
-        yName: string;
-        zName: string;
-      }
-    | null = null;
 
   function ensureDefaults(): void {
     const numberFields = availableFields('number', 'axis');
@@ -171,7 +153,11 @@
       if (filter.operator === 'не равно') return v !== q;
       if (filter.operator === 'содержит') return v.includes(q);
       if (filter.operator === 'не содержит') return !v.includes(q);
-      return q.split(',').map((i) => i.trim()).filter(Boolean).includes(v);
+      return q
+        .split(',')
+        .map((i) => i.trim())
+        .filter(Boolean)
+        .includes(v);
     }
     const n = Number(value ?? 0);
     const a = Number(filter.valueA);
@@ -205,9 +191,11 @@
           metrics[code] =
             groupRows.reduce((sum, row) => sum + Number((row as Record<string, unknown>)[code] ?? 0), 0) / Math.max(groupRows.length, 1);
         });
-        metrics.revenue = groupRows.reduce((sum, row) => sum + row.revenue, 0);
-        metrics.spend = groupRows.reduce((sum, row) => sum + row.spend, 0);
-        metrics.orders = groupRows.reduce((sum, row) => sum + row.orders, 0);
+
+        // ожидаемые поля
+        metrics.revenue = groupRows.reduce((sum, row) => sum + (row as any).revenue, 0);
+        metrics.spend = groupRows.reduce((sum, row) => sum + (row as any).spend, 0);
+        metrics.orders = groupRows.reduce((sum, row) => sum + (row as any).orders, 0);
         metrics.drr = metrics.revenue > 0 ? (metrics.spend / metrics.revenue) * 100 : 0;
         metrics.roi = metrics.spend > 0 ? metrics.revenue / metrics.spend : 0;
 
@@ -291,6 +279,7 @@
 
   function fitCameraToPoints(list: SpacePoint[]): void {
     if (!camera || !controls) return;
+
     if (!list.length) {
       debugBBox = '—';
       camera.position.set(0, 0, 40);
@@ -328,181 +317,6 @@
       y: sanitizeCoord(point.y, point.id, 'y') + hashToJitter(`${point.id}:y`) * 0.05,
       z: sanitizeCoord(point.z, point.id, 'z') + hashToJitter(`${point.id}:z`) * 0.05
     }));
-  }
-
-  function makePlaneLabel(text: string, x: number, y: number, z: number): CSS2DObject {
-    const el = document.createElement('div');
-    el.className = 'plane-label';
-    el.textContent = text;
-    const obj = new CSS2DObject(el);
-    obj.position.set(x, y, z);
-    return obj;
-  }
-
-function disposeWireframe(): void {
-  if (cornerFrame) {
-    planeGroup.remove(cornerFrame);
-    cornerFrame.geometry.dispose();
-    cornerFrame.material.dispose();
-    cornerFrame = null;
-  }
-}
-
-function disposeAxisLabels(): void {
-  for (const l of axisLabels) edgeLabelGroup.remove(l);
-  axisLabels = [];
-}
-
-function createAxisLabel(text: string, isMax = false): CSS2DObject {
-  const el = document.createElement('div');
-
-  // инлайн-стили = не зависит от svelte-scoped CSS
-  el.style.pointerEvents = 'none';
-  el.style.userSelect = 'none';
-  el.style.whiteSpace = 'nowrap';
-  el.style.fontFamily = 'Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial';
-  el.style.fontSize = '12px';
-  el.style.fontWeight = '700';
-  el.style.padding = '4px 8px';
-  el.style.borderRadius = '10px';
-  el.style.boxShadow = '0 8px 24px rgba(15, 23, 42, 0.12)';
-  el.style.background = 'rgba(255, 255, 255, 0.92)';
-  el.style.border = '1px solid rgba(226, 232, 240, 0.95)';
-  el.style.color = 'rgba(15, 23, 42, 0.92)';
-
-  if (isMax) {
-    el.style.color = 'rgba(30, 64, 175, 0.98)';
-    el.style.borderColor = 'rgba(191, 219, 254, 0.98)';
-    el.style.background = 'rgba(239, 246, 255, 0.95)';
-  }
-
-  el.textContent = text;
-  return new CSS2DObject(el);
-}
-
-function rebuildPlanes(list: SpacePoint[]): void {
-  planeGroup.clear();
-  disposeCornerFrame();
-  disposeAxisLabels();
-
-  const bbox = normalizeBBox(list);
-
-  const A = new THREE.Vector3(bbox.minX, bbox.minY, bbox.minZ);
-  const Bx = new THREE.Vector3(bbox.maxX, bbox.minY, bbox.minZ);
-  const By = new THREE.Vector3(bbox.minX, bbox.maxY, bbox.minZ);
-  const Bz = new THREE.Vector3(bbox.minX, bbox.minY, bbox.maxZ);
-
-  const Cxy = new THREE.Vector3(bbox.maxX, bbox.maxY, bbox.minZ);
-  const Cxz = new THREE.Vector3(bbox.maxX, bbox.minY, bbox.maxZ);
-  const Cyz = new THREE.Vector3(bbox.minX, bbox.maxY, bbox.maxZ);
-
-  const segments: Array<[THREE.Vector3, THREE.Vector3]> = [
-    // XY (z=min)
-    [A, Bx],
-    [Bx, Cxy],
-    [Cxy, By],
-    [By, A],
-
-    // XZ (y=min)
-    [A, Bx],
-    [Bx, Cxz],
-    [Cxz, Bz],
-    [Bz, A],
-
-    // YZ (x=min)
-    [A, By],
-    [By, Cyz],
-    [Cyz, Bz],
-    [Bz, A]
-  ];
-
-  const vertices: number[] = [];
-  for (const [p1, p2] of segments) vertices.push(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
-
-  const geom = new THREE.BufferGeometry();
-  geom.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-
-  const mat = new THREE.LineBasicMaterial({ color: 0x334155 });
-  cornerFrame = new THREE.LineSegments(geom, mat);
-  planeGroup.add(cornerFrame);
-
-  // подписи (середина осей)
-  const xName = fieldName(axisX || '—');
-  const yName = fieldName(axisY || '—');
-  const zName = fieldName(axisZ || '—');
-
-  const midX = A.clone().lerp(Bx, 0.5);
-  const midY = A.clone().lerp(By, 0.5);
-  const midZ = A.clone().lerp(Bz, 0.5);
-
-  const lx = createAxisLabel(xName);
-  lx.position.copy(midX);
-
-  const ly = createAxisLabel(yName);
-  ly.position.copy(midY);
-
-  const lz = createAxisLabel(zName);
-  lz.position.copy(midZ);
-
-  // max на концах осей
-  const xMax = axisX ? calcMax(list, axisX) : NaN;
-  const yMax = axisY ? calcMax(list, axisY) : NaN;
-  const zMax = axisZ ? calcMax(list, axisZ) : NaN;
-
-  const mx = createAxisLabel(formatValueByMetric(axisX, xMax), true);
-  mx.position.copy(Bx);
-
-  const my = createAxisLabel(formatValueByMetric(axisY, yMax), true);
-  my.position.copy(By);
-
-  const mz = createAxisLabel(formatValueByMetric(axisZ, zMax), true);
-  mz.position.copy(Bz);
-
-  axisLabels = [lx, ly, lz, mx, my, mz];
-  edgeLabelGroup.add(...axisLabels);
-}
-
-
-  function init3d(): void {
-    const width = container3d.clientWidth;
-    const height = 560;
-
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color('#f8fbff');
-
-    camera = new THREE.PerspectiveCamera(52, width / height, 0.1, 1500);
-    camera.position.set(0, 80, 220);
-
-    renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(width, height);
-
-    container3d.innerHTML = '';
-    container3d.appendChild(renderer.domElement);
-
-    controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.08;
-
-    scene.add(new THREE.AmbientLight('#ffffff', 0.95));
-    const light = new THREE.DirectionalLight('#ffffff', 0.35);
-    light.position.set(80, 120, 75);
-    scene.add(light);
-
-    scene.add(planeGroup);
-    scene.add(edgeLabelGroup);
-
-    labelRenderer = new CSS2DRenderer();
-    labelRenderer.setSize(width, height);
-    labelRenderer.domElement.style.position = 'absolute';
-    labelRenderer.domElement.style.left = '0';
-    labelRenderer.domElement.style.top = '0';
-    labelRenderer.domElement.style.pointerEvents = 'none';
-    labelRenderer.domElement.className = 'label-layer';
-    container3d.appendChild(labelRenderer.domElement);
-
-    renderer.domElement.addEventListener('mousemove', onMove3d);
-    animate();
   }
 
   function calcMax(pointsList: SpacePoint[], metricKey: string): number {
@@ -546,38 +360,6 @@ function rebuildPlanes(list: SpacePoint[]): void {
     return formatNumberHuman(maxValue);
   }
 
-function disposeAxisLabels(): void {
-  for (const l of axisLabels) edgeLabelGroup.remove(l);
-  axisLabels = [];
-}
-
-function createAxisLabel(text: string, isMax = false): CSS2DObject {
-  const el = document.createElement('div');
-
-  // инлайн-стили => не зависят от svelte-scoped CSS
-  el.style.pointerEvents = 'none';
-  el.style.userSelect = 'none';
-  el.style.whiteSpace = 'nowrap';
-  el.style.fontFamily = 'Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial';
-  el.style.fontSize = '12px';
-  el.style.fontWeight = '700';
-  el.style.padding = '4px 8px';
-  el.style.borderRadius = '10px';
-  el.style.boxShadow = '0 8px 24px rgba(15, 23, 42, 0.12)';
-  el.style.background = 'rgba(255, 255, 255, 0.92)';
-  el.style.border = '1px solid rgba(226, 232, 240, 0.95)';
-  el.style.color = 'rgba(15, 23, 42, 0.92)';
-
-  if (isMax) {
-    el.style.color = 'rgba(30, 64, 175, 0.98)';
-    el.style.borderColor = 'rgba(191, 219, 254, 0.98)';
-    el.style.background = 'rgba(239, 246, 255, 0.95)';
-  }
-
-  el.textContent = text;
-  return new CSS2DObject(el);
-}
-
   function disposeCornerFrame(): void {
     if (!cornerFrame) return;
     planeGroup.remove(cornerFrame);
@@ -586,153 +368,169 @@ function createAxisLabel(text: string, isMax = false): CSS2DObject {
     cornerFrame = null;
   }
 
-  function disposeEdgeLabels(): void {
-    for (const item of edgeLabels) {
-      const mesh = item.mesh;
-      const mat = mesh.material as THREE.MeshBasicMaterial;
-      const map = mat.map as THREE.Texture | null;
-      map?.dispose();
-      mat.dispose();
-      mesh.geometry.dispose();
-      edgeLabelGroup.remove(mesh);
+  // совместимость со старым названием
+  function disposeWireframe(): void {
+    disposeCornerFrame();
+  }
+
+  function disposeAxisLabels(): void {
+    for (const l of axisLabels) edgeLabelGroup.remove(l);
+    axisLabels = [];
+  }
+
+  function createAxisLabel(text: string, isMax = false): CSS2DObject {
+    const el = document.createElement('div');
+
+    el.style.pointerEvents = 'none';
+    el.style.userSelect = 'none';
+    el.style.whiteSpace = 'nowrap';
+    el.style.fontFamily = 'Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial';
+    el.style.fontSize = '12px';
+    el.style.fontWeight = '700';
+    el.style.padding = '4px 8px';
+    el.style.borderRadius = '10px';
+    el.style.boxShadow = '0 8px 24px rgba(15, 23, 42, 0.12)';
+    el.style.background = 'rgba(255, 255, 255, 0.92)';
+    el.style.border = '1px solid rgba(226, 232, 240, 0.95)';
+    el.style.color = 'rgba(15, 23, 42, 0.92)';
+
+    if (isMax) {
+      el.style.color = 'rgba(30, 64, 175, 0.98)';
+      el.style.borderColor = 'rgba(191, 219, 254, 0.98)';
+      el.style.background = 'rgba(239, 246, 255, 0.95)';
     }
-    edgeLabels = [];
-    edgeLabelGroup.clear();
+
+    el.textContent = text;
+    return new CSS2DObject(el);
   }
 
-  function makeTextPlane(text: string, opts: { fontSize?: number; padding?: number; worldScale?: number } = {}): THREE.Mesh {
-    const fontSize = opts.fontSize ?? 70;
-    const padding = opts.padding ?? 22;
-    const worldScale = opts.worldScale ?? 0.22;
+  /**
+   * Рисуем "угол" из трёх плоскостей: XY(z=min), XZ(y=min), YZ(x=min),
+   * и ставим подписи в центре рёбер + max на концах рёбер.
+   */
+  function rebuildPlanes(list: SpacePoint[]): void {
+    planeGroup.clear();
+    disposeCornerFrame();
+    disposeAxisLabels();
 
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      const geo = new THREE.PlaneGeometry(10, 3);
-      const mat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthTest: false, side: THREE.DoubleSide });
-      return new THREE.Mesh(geo, mat);
-    }
-
-    ctx.font = `${fontSize}px Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial`;
-    const metrics = ctx.measureText(text);
-    const w = Math.ceil(metrics.width) + padding * 2;
-    const h = fontSize + padding * 2;
-
-    canvas.width = w;
-    canvas.height = h;
-
-    ctx.clearRect(0, 0, w, h);
-    ctx.font = `${fontSize}px Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial`;
-    ctx.fillStyle = '#0f172a';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(text, padding, h / 2);
-
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.needsUpdate = true;
-    texture.minFilter = THREE.LinearFilter;
-    texture.magFilter = THREE.LinearFilter;
-    texture.anisotropy = renderer ? Math.min(8, renderer.capabilities.getMaxAnisotropy()) : 1;
-
-    const material = new THREE.MeshBasicMaterial({
-      map: texture,
-      transparent: true,
-      depthTest: false,
-      depthWrite: false,
-      side: THREE.DoubleSide
-    });
-
-    const planeW = w * worldScale;
-    const planeH = h * worldScale;
-
-    const geometry = new THREE.PlaneGeometry(planeW, planeH);
-    return new THREE.Mesh(geometry, material);
-  }
-
-  function orientParallelToEdge(mesh: THREE.Mesh, pos: THREE.Vector3, edgeDir: THREE.Vector3, offset: number): void {
-    if (!camera) return;
-
-    const dir = edgeDir.clone().normalize();
-    const toCam = camera.position.clone().sub(pos).normalize();
-
-    const yAxis = toCam.clone().sub(dir.clone().multiplyScalar(toCam.dot(dir))).normalize();
-    if (!Number.isFinite(yAxis.x) || yAxis.length() < 1e-6) yAxis.set(0, 1, 0);
-
-    const zAxis = new THREE.Vector3().crossVectors(dir, yAxis).normalize();
-    const xAxis = dir;
-
-    const m = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
-    mesh.quaternion.setFromRotationMatrix(m);
-
-    mesh.position.copy(pos);
-    mesh.position.add(yAxis.clone().multiplyScalar(offset));
-  }
-
-  function updateEdgeLabels(params: {
-    bbox: BBox;
-    pointsList: SpacePoint[];
-    xMetric: string;
-    yMetric: string;
-    zMetric: string;
-    xName: string;
-    yName: string;
-    zName: string;
-  }): void {
-    if (!scene || !camera) return;
-
-    lastEdgeParams = params;
-    disposeEdgeLabels();
-
-    const { bbox, pointsList, xMetric, yMetric, zMetric, xName, yName, zName } = params;
+    const bbox = normalizeBBox(list);
 
     const A = new THREE.Vector3(bbox.minX, bbox.minY, bbox.minZ);
     const Bx = new THREE.Vector3(bbox.maxX, bbox.minY, bbox.minZ);
     const By = new THREE.Vector3(bbox.minX, bbox.maxY, bbox.minZ);
     const Bz = new THREE.Vector3(bbox.minX, bbox.minY, bbox.maxZ);
 
+    const Cxy = new THREE.Vector3(bbox.maxX, bbox.maxY, bbox.minZ);
+    const Cxz = new THREE.Vector3(bbox.maxX, bbox.minY, bbox.maxZ);
+    const Cyz = new THREE.Vector3(bbox.minX, bbox.maxY, bbox.maxZ);
+
+    // Только 3 плоскости-угол (без "верхних" линий и без центральных)
+    const segments: Array<[THREE.Vector3, THREE.Vector3]> = [
+      // XY (z=min)
+      [A, Bx],
+      [Bx, Cxy],
+      [Cxy, By],
+      [By, A],
+
+      // XZ (y=min)
+      [A, Bx],
+      [Bx, Cxz],
+      [Cxz, Bz],
+      [Bz, A],
+
+      // YZ (x=min)
+      [A, By],
+      [By, Cyz],
+      [Cyz, Bz],
+      [Bz, A]
+    ];
+
+    const vertices: number[] = [];
+    for (const [p1, p2] of segments) vertices.push(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
+
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+
+    const mat = new THREE.LineBasicMaterial({ color: 0x334155 });
+    cornerFrame = new THREE.LineSegments(geom, mat);
+    planeGroup.add(cornerFrame);
+
+    // Подписи осей
+    const xName = fieldName(axisX || '—');
+    const yName = fieldName(axisY || '—');
+    const zName = fieldName(axisZ || '—');
+
     const midX = A.clone().lerp(Bx, 0.5);
     const midY = A.clone().lerp(By, 0.5);
     const midZ = A.clone().lerp(Bz, 0.5);
 
-    const dirX = Bx.clone().sub(A).normalize();
-    const dirY = By.clone().sub(A).normalize();
-    const dirZ = Bz.clone().sub(A).normalize();
+    const lx = createAxisLabel(xName);
+    lx.position.copy(midX);
 
-    const spanX = Math.max(0.001, bbox.maxX - bbox.minX);
-    const spanY = Math.max(0.001, bbox.maxY - bbox.minY);
-    const spanZ = Math.max(0.001, bbox.maxZ - bbox.minZ);
-    const maxSpan = Math.max(spanX, spanY, spanZ);
-    const offset = Math.max(4, Math.min(14, maxSpan * 0.06));
+    const ly = createAxisLabel(yName);
+    ly.position.copy(midY);
 
-    const commonStyle = { fontSize: 84, worldScale: 0.20 };
+    const lz = createAxisLabel(zName);
+    lz.position.copy(midZ);
 
-    if (xMetric) {
-      const xMax = calcMax(pointsList, xMetric);
-      const mesh = makeTextPlane(`${xName} · 0 — ${formatValueByMetric(xMetric, xMax)}`, commonStyle);
-      orientParallelToEdge(mesh, midX, dirX, offset);
-      edgeLabelGroup.add(mesh);
-      edgeLabels.push({ mesh, pos: midX, dir: dirX, offset });
-    }
+    // max в концах
+    const xMax = axisX ? calcMax(list, axisX) : NaN;
+    const yMax = axisY ? calcMax(list, axisY) : NaN;
+    const zMax = axisZ ? calcMax(list, axisZ) : NaN;
 
-    if (yMetric) {
-      const yMax = calcMax(pointsList, yMetric);
-      const mesh = makeTextPlane(`${yName} · 0 — ${formatValueByMetric(yMetric, yMax)}`, commonStyle);
-      orientParallelToEdge(mesh, midY, dirY, offset);
-      edgeLabelGroup.add(mesh);
-      edgeLabels.push({ mesh, pos: midY, dir: dirY, offset });
-    }
+    const mx = createAxisLabel(formatValueByMetric(axisX, xMax), true);
+    mx.position.copy(Bx);
 
-    if (zMetric) {
-      const zMax = calcMax(pointsList, zMetric);
-      const mesh = makeTextPlane(`${zName} · 0 — ${formatValueByMetric(zMetric, zMax)}`, commonStyle);
-      orientParallelToEdge(mesh, midZ, dirZ, offset);
-      edgeLabelGroup.add(mesh);
-      edgeLabels.push({ mesh, pos: midZ, dir: dirZ, offset });
-    }
+    const my = createAxisLabel(formatValueByMetric(axisY, yMax), true);
+    my.position.copy(By);
+
+    const mz = createAxisLabel(formatValueByMetric(axisZ, zMax), true);
+    mz.position.copy(Bz);
+
+    axisLabels = [lx, ly, lz, mx, my, mz];
+    edgeLabelGroup.add(...axisLabels);
   }
 
-  function updateEdgeLabelOrientations(): void {
-    if (!camera) return;
-    for (const item of edgeLabels) orientParallelToEdge(item.mesh, item.pos, item.dir, item.offset);
+  function init3d(): void {
+    const width = container3d.clientWidth;
+    const height = 560;
+
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color('#f8fbff');
+
+    camera = new THREE.PerspectiveCamera(52, width / height, 0.1, 1500);
+    camera.position.set(0, 80, 220);
+
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(width, height);
+
+    container3d.innerHTML = '';
+    container3d.appendChild(renderer.domElement);
+
+    controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+
+    scene.add(new THREE.AmbientLight('#ffffff', 0.95));
+    const light = new THREE.DirectionalLight('#ffffff', 0.35);
+    light.position.set(80, 120, 75);
+    scene.add(light);
+
+    scene.add(planeGroup);
+    scene.add(edgeLabelGroup);
+
+    labelRenderer = new CSS2DRenderer();
+    labelRenderer.setSize(width, height);
+    labelRenderer.domElement.style.position = 'absolute';
+    labelRenderer.domElement.style.left = '0';
+    labelRenderer.domElement.style.top = '0';
+    labelRenderer.domElement.style.pointerEvents = 'none';
+    labelRenderer.domElement.className = 'label-layer';
+    container3d.appendChild(labelRenderer.domElement);
+
+    renderer.domElement.addEventListener('mousemove', onMove3d);
+    animate();
   }
 
   function clearMesh(mesh?: THREE.InstancedMesh): void {
@@ -748,7 +546,6 @@ function createAxisLabel(text: string, isMax = false): CSS2DObject {
     clearMesh(circleMesh);
     clearMesh(diamondMesh);
 
-    debugCalculatedCount = sourcePoints.length;
     const renderablePoints = sanitizePoints(sourcePoints);
     debugRenderedCount = renderablePoints.length;
 
@@ -790,25 +587,13 @@ function createAxisLabel(text: string, isMax = false): CSS2DObject {
       debugRenderedCount = 0;
       rebuildPlanes([]);
       fitCameraToPoints([]);
-      disposeEdgeLabels();
-      lastEdgeParams = null;
+      disposeAxisLabels();
+      disposeCornerFrame();
       return;
     }
 
     rebuildPlanes(renderablePoints);
     fitCameraToPoints(renderablePoints);
-
-    const bbox = normalizeBBox(renderablePoints);
-    updateEdgeLabels({
-      bbox,
-      pointsList: renderablePoints,
-      xMetric: axisX || '',
-      yMetric: axisY || '',
-      zMetric: axisZ || '',
-      xName: fieldName(axisX || '—'),
-      yName: fieldName(axisY || '—'),
-      zName: fieldName(axisZ || '—')
-    });
   }
 
   function onMove3d(event: MouseEvent): void {
@@ -840,14 +625,13 @@ function createAxisLabel(text: string, isMax = false): CSS2DObject {
         `Выручка: ${Math.round(point.metrics.revenue).toLocaleString('ru-RU')} ₽`,
         `Расход: ${Math.round(point.metrics.spend).toLocaleString('ru-RU')} ₽`,
         `ДРР: ${point.metrics.drr.toFixed(2)}% · ROI: ${point.metrics.roi.toFixed(2)}`,
-        `Период: ${formatDate(fromDate || showcase.rows[0]?.date || '')} — ${formatDate(toDate || showcase.rows[showcase.rows.length - 1]?.date || '')}`
+        `Период: ${formatDate(fromDate || (showcase.rows[0] as any)?.date || '')} — ${formatDate(toDate || (showcase.rows[showcase.rows.length - 1] as any)?.date || '')}`
       ]
     };
   }
 
   function animate(): void {
     controls?.update();
-    updateEdgeLabelOrientations();
     renderer?.render(scene, camera);
     labelRenderer?.render(scene, camera);
     anim = requestAnimationFrame(animate);
@@ -980,35 +764,33 @@ function createAxisLabel(text: string, isMax = false): CSS2DObject {
     init3d();
     ensureDefaults();
     rebuildScene(points, selectedEntityFields);
+
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       panelSettingsList = raw ? JSON.parse(raw) : [];
     } catch {
       panelSettingsList = [];
     }
+
     window.addEventListener('resize', onResize);
     window.addEventListener('keydown', onHotKey);
   });
 
-onDestroy(() => {
-  unsub();
-  cancelAnimationFrame(anim);
-  window.removeEventListener('resize', onResize);
-  window.removeEventListener('keydown', onHotKey);
+  onDestroy(() => {
+    unsub();
+    cancelAnimationFrame(anim);
+    window.removeEventListener('resize', onResize);
+    window.removeEventListener('keydown', onHotKey);
 
-  disposeEdgeLabels();
-  disposeWireframe();
+    disposeAxisLabels();
+    disposeWireframe();
 
-  // ✅ ВОТ ЭТИ 2 СТРОКИ ДОБАВЬ
-  disposeAxisLabels();
-  disposeCornerFrame();
+    renderer?.domElement?.removeEventListener('mousemove', onMove3d);
 
-  renderer?.domElement?.removeEventListener('mousemove', onMove3d);
-
-  renderer?.dispose();
-  controls?.dispose();
-  labelRenderer?.domElement?.remove();
-});
+    renderer?.dispose();
+    controls?.dispose();
+    labelRenderer?.domElement?.remove();
+  });
 </script>
 
 <section class="graph-root panel">
@@ -1033,7 +815,11 @@ onDestroy(() => {
           <div>X/Y/Z: {fieldName(axisX || '—')} / {fieldName(axisY || '—')} / {fieldName(axisZ || '—')}</div>
           <div>bbox: {debugBBox}</div>
         </div>
-        {#if selectedEntityFields.length === 0}<div class="empty-hint">Выберите поля в ‘Точки на графе’</div>{/if}
+
+        {#if selectedEntityFields.length === 0}
+          <div class="empty-hint">Выберите поля в ‘Точки на графе’</div>
+        {/if}
+
         {#if tooltip.visible}
           <div class="tooltip" style={`left:${tooltip.x}px;top:${tooltip.y}px`}>
             {#each tooltip.lines as line}<div>{line}</div>{/each}
@@ -1117,6 +903,7 @@ onDestroy(() => {
           <button on:click={() => addFilter('text')}>+ Текст</button>
           <button on:click={() => addFilter('number')}>+ Число</button>
         </div>
+
         {#each filters as filter}
           <div class="filter-item">
             <select bind:value={filter.filterType} on:change={(event) => onFilterTypeChange(filter.id, event)}>
@@ -1124,23 +911,34 @@ onDestroy(() => {
               <option value="text">Текст</option>
               <option value="number">Число</option>
             </select>
+
             {#if filter.filterType === 'date'}
-              <select bind:value={filter.fieldCode}>{#each dateFields as field}<option value={field.code}>{field.name}</option>{/each}</select>
+              <select bind:value={filter.fieldCode}>
+                {#each dateFields as field}<option value={field.code}>{field.name}</option>{/each}
+              </select>
               <select bind:value={filter.operator}><option>с</option><option>по</option></select>
               <input type="date" bind:value={filter.valueA} />
             {:else if filter.filterType === 'text'}
-              <select bind:value={filter.fieldCode}>{#each textFilterFields as field}<option value={field.code}>{field.name}</option>{/each}</select>
-              <select bind:value={filter.operator}><option>равно</option><option>не равно</option><option>содержит</option><option>не содержит</option><option>в списке</option></select>
+              <select bind:value={filter.fieldCode}>
+                {#each textFilterFields as field}<option value={field.code}>{field.name}</option>{/each}
+              </select>
+              <select bind:value={filter.operator}>
+                <option>равно</option><option>не равно</option><option>содержит</option><option>не содержит</option><option>в списке</option>
+              </select>
               <input type="text" bind:value={filter.valueA} placeholder="Значение" />
             {:else}
-              <select bind:value={filter.fieldCode}>{#each numberFilterFields as field}<option value={field.code}>{field.name}</option>{/each}</select>
+              <select bind:value={filter.fieldCode}>
+                {#each numberFilterFields as field}<option value={field.code}>{field.name}</option>{/each}
+              </select>
               <select bind:value={filter.operator}><option>&gt;</option><option>&lt;</option><option>≥</option><option>≤</option><option>между</option></select>
               <input type="number" bind:value={filter.valueA} placeholder="От" />
               {#if filter.operator === 'между'}<input type="number" bind:value={filter.valueB} placeholder="До" />{/if}
             {/if}
+
             <button on:click={() => removeFilter(filter.id)}>Удалить</button>
           </div>
         {/each}
+
         <button on:click={resetView}>Сбросить вид</button>
       </section>
     </aside>
@@ -1172,7 +970,5 @@ onDestroy(() => {
   .filter-item { display:flex; flex-direction:column; gap:6px; border:1px solid #e2e8f0; border-radius:10px; padding:6px; }
   .tooltip { position:absolute; pointer-events:none; background:rgba(15,23,42,.94); color:#f8fafc; font-size:12px; padding:10px; border-radius:10px; max-width:360px; }
   .empty-hint { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); background:#fff; border:1px dashed #94a3b8; color:#334155; border-radius:10px; padding:10px 12px; font-size:13px; }
-  :global(.plane-label) { background:rgba(15,23,42,.7); color:#f8fafc; border-radius:8px; padding:3px 7px; font-size:11px; white-space:nowrap; }
-  .toggle { flex-direction:row; align-items:center; gap:6px; }
   small { color:#64748b; font-size:11px; line-height:1.3; }
 </style>
