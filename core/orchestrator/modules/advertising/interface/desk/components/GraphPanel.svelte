@@ -21,16 +21,16 @@
 
   type BBox = { minX: number; maxX: number; minY: number; maxY: number; minZ: number; maxZ: number };
 
-  // ---- storage
   const STORAGE_KEY_VISUALS = 'desk-space-visual-schemes-v2';
   const STORAGE_KEY_DATASETS = 'desk-space-datasets-v2';
 
-  // ---- data
   let activeLayers: DatasetId[] = ['sales_fact', 'ads'];
 
-  // “Выбрать данные”
-  let selectedEntityFields: string[] = ['sku', 'campaign_id']; // text => точки
-  let axisX = ''; // number|date => координата
+  // точки (текстовые поля)
+  let selectedEntityFields: string[] = ['sku', 'campaign_id'];
+
+  // координаты (числа/даты)
+  let axisX = '';
   let axisY = '';
   let axisZ = '';
 
@@ -40,14 +40,14 @@
   let toDate = '';
   let search = '';
 
-  // ---- visual settings
+  // визуал
   type VisualScheme = { id: string; name: string; bg: string; edge: string };
-  let visualBg = '#ffffff'; // ✅ дефолт: белый
+  let visualBg = '#ffffff';
   let visualEdge = '#334155';
   let visualSchemes: VisualScheme[] = [];
   let selectedVisualId = '';
 
-  // ---- dataset presets
+  // наборы данных
   type DatasetPreset = {
     id: string;
     name: string;
@@ -65,7 +65,7 @@
   let datasetPresets: DatasetPreset[] = [];
   let selectedDatasetPresetId = '';
 
-  // ---- UI
+  // UI
   let showDisplayMenu = false;
   let showPickDataMenu = false;
 
@@ -75,16 +75,10 @@
   let showSaveDatasetModal = false;
   let saveDatasetName = '';
 
-  // ---- store (safe)
+  // store safe
   type ShowcaseSafe = { fields: ShowcaseField[]; rows: ShowcaseRow[]; datasets: any[] };
   const EMPTY_SHOWCASE: ShowcaseSafe = { fields: [], rows: [], datasets: [] };
-
   let showcase: ShowcaseSafe = ((get(showcaseStore) as any) ?? EMPTY_SHOWCASE) as ShowcaseSafe;
-
-  const unsub = showcaseStore.subscribe((value) => {
-    showcase = (((value as any) ?? EMPTY_SHOWCASE) as ShowcaseSafe) ?? EMPTY_SHOWCASE;
-    ensureDefaults();
-  });
 
   // ---- 3D
   let container3d: HTMLDivElement;
@@ -102,8 +96,8 @@
   let diamondMesh: THREE.InstancedMesh | undefined;
   let labelRenderer: CSS2DRenderer | null = null;
 
-  const planeGroup = new THREE.Group(); // линии “угла”
-  const edgeLabelGroup = new THREE.Group(); // CSS2D подписи осей
+  const planeGroup = new THREE.Group();
+  const edgeLabelGroup = new THREE.Group();
   let cornerFrame: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | null = null;
   let axisLabelObjects: CSS2DObject[] = [];
 
@@ -114,39 +108,42 @@
   const raycaster = new THREE.Raycaster();
   const ndc = new THREE.Vector2();
 
-  // ---- fields helpers (без падений)
+  // ---------- safe field getters (NO undefined)
   function fieldsAll(): ShowcaseField[] {
-    return (showcase?.fields ?? []) as ShowcaseField[];
+    return ((showcase?.fields ?? []) as ShowcaseField[]) || [];
   }
 
-  function fieldsFor(kind: ShowcaseField['kind']): ShowcaseField[] {
+  function fieldsForKind(kind: ShowcaseField['kind']): ShowcaseField[] {
     const all = fieldsAll();
     return all.filter((f) => f.kind === kind && (f.datasetIds ?? []).some((id) => activeLayers.includes(id)));
   }
 
-  $: textFieldsAll = fieldsFor('text');
-  $: numberFieldsAll = fieldsFor('number');
-  $: dateFieldsAll = fieldsFor('date');
+  // reactive lists for UI (can be empty, but never undefined)
+  $: textFieldsAll = fieldsForKind('text');
+  $: numberFieldsAll = fieldsForKind('number');
+  $: dateFieldsAll = fieldsForKind('date');
   $: coordFieldsAll = [...numberFieldsAll, ...dateFieldsAll];
 
   $: selectedCoordCount = [axisX, axisY, axisZ].filter(Boolean).length;
   $: canAddCoord = selectedCoordCount < 3;
 
-  // ---- points pipeline
-  $: filteredRows = applyRowsFilter(showcase?.rows ?? []);
-  $: points = buildPoints(filteredRows, selectedEntityFields, axisX, axisY, axisZ);
-
-  // ✅ не запускаем rebuildScene до init3d
-  $: if (scene) rebuildScene(points);
-
+  // ✅ FIX: ensureDefaults does NOT depend on reactive coordFieldsAll
   function ensureDefaults(): void {
-    // подставляем первые координаты, если пусто
-    const coords = coordFieldsAll;
-    if (!axisX && coords[0]) axisX = coords[0].code;
-    if (!axisY && coords[1]) axisY = coords[1].code;
-    if (!axisZ && coords[2]) axisZ = coords[2].code;
+    const number = fieldsForKind('number');
+    const date = fieldsForKind('date');
+    const coords = [...number, ...date]; // always array
+
+    if (!axisX && coords.length > 0) axisX = coords[0].code;
+    if (!axisY && coords.length > 1) axisY = coords[1].code;
+    if (!axisZ && coords.length > 2) axisZ = coords[2].code;
   }
 
+  const unsub = showcaseStore.subscribe((value) => {
+    showcase = (((value as any) ?? EMPTY_SHOWCASE) as ShowcaseSafe) ?? EMPTY_SHOWCASE;
+    ensureDefaults(); // safe now
+  });
+
+  // ---------- filtering / points
   function hashToJitter(input: string): number {
     let hash = 0;
     for (let i = 0; i < input.length; i += 1) hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
@@ -186,6 +183,10 @@
     return Number.isFinite(t) ? t : NaN;
   }
 
+  function normalize(value: number, min: number, max: number): number {
+    return ((value - min) / Math.max(max - min, 0.0001) - 0.5) * 180;
+  }
+
   function buildPoints(rows: ShowcaseRow[], entityFields: string[], xCode: string, yCode: string, zCode: string): SpacePoint[] {
     if (!entityFields.length) return [];
 
@@ -205,14 +206,12 @@
       groups.forEach((groupRows, key) => {
         const metrics: Record<string, number> = {};
 
-        // numbers: avg
         for (const code of numberCodes) {
           let sum = 0;
           for (const r of groupRows) sum += Number((r as any)[code] ?? 0);
           metrics[code] = sum / Math.max(groupRows.length, 1);
         }
 
-        // dates: avg timestamp
         for (const code of dateCodes) {
           let sum = 0;
           let cnt = 0;
@@ -226,30 +225,17 @@
           metrics[code] = cnt ? sum / cnt : NaN;
         }
 
-        // ожидаемые поля
         metrics.revenue = groupRows.reduce((sum, r) => sum + Number((r as any).revenue ?? 0), 0);
         metrics.spend = groupRows.reduce((sum, r) => sum + Number((r as any).spend ?? 0), 0);
         metrics.orders = groupRows.reduce((sum, r) => sum + Number((r as any).orders ?? 0), 0);
         metrics.drr = metrics.revenue > 0 ? (metrics.spend / metrics.revenue) * 100 : 0;
         metrics.roi = metrics.spend > 0 ? metrics.revenue / metrics.spend : 0;
 
-        result.push({
-          id: `${entityField}:${key}`,
-          label: key,
-          sourceField: entityField,
-          metrics,
-          x: 0,
-          y: 0,
-          z: 0
-        });
+        result.push({ id: `${entityField}:${key}`, label: key, sourceField: entityField, metrics, x: 0, y: 0, z: 0 });
       });
     });
 
     return projectPoints(result, xCode, yCode, zCode);
-  }
-
-  function normalize(value: number, min: number, max: number): number {
-    return ((value - min) / Math.max(max - min, 0.0001) - 0.5) * 180;
   }
 
   function projectPoints(list: SpacePoint[], xCode: string, yCode: string, zCode: string): SpacePoint[] {
@@ -296,14 +282,7 @@
     const xs = list.map((p) => p.x);
     const ys = list.map((p) => p.y);
     const zs = list.map((p) => p.z);
-    return {
-      minX: Math.min(...xs),
-      maxX: Math.max(...xs),
-      minY: Math.min(...ys),
-      maxY: Math.max(...ys),
-      minZ: Math.min(...zs),
-      maxZ: Math.max(...zs)
-    };
+    return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys), minZ: Math.min(...zs), maxZ: Math.max(...zs) };
   }
 
   function normalizeBBox(list: SpacePoint[]): BBox {
@@ -394,7 +373,7 @@
     return formatNumberHuman(maxValue);
   }
 
-  // ---- labels / wireframe
+  // ---------- labels / wireframe
   function disposeCornerFrame(): void {
     if (!cornerFrame) return;
     planeGroup.remove(cornerFrame);
@@ -411,7 +390,7 @@
   function makeChipEl(text: string, opts: { tone?: 'neutral' | 'accent'; removable?: boolean; onRemove?: () => void } = {}): HTMLDivElement {
     const el = document.createElement('div');
     el.className = 'chip3d';
-    el.style.pointerEvents = opts.removable ? 'auto' : 'none'; // ✅ кликаем только там где крестик
+    el.style.pointerEvents = opts.removable ? 'auto' : 'none';
     el.style.userSelect = 'none';
     if (opts.tone === 'accent') el.classList.add('accent');
 
@@ -457,21 +436,9 @@
     const Cyz = new THREE.Vector3(bbox.minX, bbox.maxY, bbox.maxZ);
 
     const segments: Array<[THREE.Vector3, THREE.Vector3]> = [
-      // XY (z=min)
-      [A, Bx],
-      [Bx, Cxy],
-      [Cxy, By],
-      [By, A],
-      // XZ (y=min)
-      [A, Bx],
-      [Bx, Cxz],
-      [Cxz, Bz],
-      [Bz, A],
-      // YZ (x=min)
-      [A, By],
-      [By, Cyz],
-      [Cyz, Bz],
-      [Bz, A]
+      [A, Bx], [Bx, Cxy], [Cxy, By], [By, A],
+      [A, Bx], [Bx, Cxz], [Cxz, Bz], [Bz, A],
+      [A, By], [By, Cyz], [Cyz, Bz], [Bz, A]
     ];
 
     const vertices: number[] = [];
@@ -484,45 +451,33 @@
     cornerFrame = new THREE.LineSegments(geom, mat);
     planeGroup.add(cornerFrame);
 
-    // подписи осей (с крестиком)
+    // axis labels
     const midX = A.clone().lerp(Bx, 0.5);
     const midY = A.clone().lerp(By, 0.5);
     const midZ = A.clone().lerp(Bz, 0.5);
 
-    const xChip = axisX
-      ? createChipLabel(fieldName(axisX), { removable: true, onRemove: () => (axisX = '') })
-      : createChipLabel('X: выберите', { tone: 'accent' });
+    const xChip = axisX ? createChipLabel(fieldName(axisX), { removable: true, onRemove: () => (axisX = '') }) : createChipLabel('X: выберите', { tone: 'accent' });
     xChip.position.copy(midX);
 
-    const yChip = axisY
-      ? createChipLabel(fieldName(axisY), { removable: true, onRemove: () => (axisY = '') })
-      : createChipLabel('Y: выберите', { tone: 'accent' });
+    const yChip = axisY ? createChipLabel(fieldName(axisY), { removable: true, onRemove: () => (axisY = '') }) : createChipLabel('Y: выберите', { tone: 'accent' });
     yChip.position.copy(midY);
 
-    const zChip = axisZ
-      ? createChipLabel(fieldName(axisZ), { removable: true, onRemove: () => (axisZ = '') })
-      : createChipLabel('Z: выберите', { tone: 'accent' });
+    const zChip = axisZ ? createChipLabel(fieldName(axisZ), { removable: true, onRemove: () => (axisZ = '') }) : createChipLabel('Z: выберите', { tone: 'accent' });
     zChip.position.copy(midZ);
 
-    // max на концах
     const xMax = axisX ? calcMax(list, axisX) : NaN;
     const yMax = axisY ? calcMax(list, axisY) : NaN;
     const zMax = axisZ ? calcMax(list, axisZ) : NaN;
 
-    const mx = createChipLabel(formatValueByMetric(axisX, xMax), { tone: 'accent' });
-    mx.position.copy(Bx);
-
-    const my = createChipLabel(formatValueByMetric(axisY, yMax), { tone: 'accent' });
-    my.position.copy(By);
-
-    const mz = createChipLabel(formatValueByMetric(axisZ, zMax), { tone: 'accent' });
-    mz.position.copy(Bz);
+    const mx = createChipLabel(formatValueByMetric(axisX, xMax), { tone: 'accent' }); mx.position.copy(Bx);
+    const my = createChipLabel(formatValueByMetric(axisY, yMax), { tone: 'accent' }); my.position.copy(By);
+    const mz = createChipLabel(formatValueByMetric(axisZ, zMax), { tone: 'accent' }); mz.position.copy(Bz);
 
     axisLabelObjects = [xChip, yChip, zChip, mx, my, mz];
     edgeLabelGroup.add(...axisLabelObjects);
   }
 
-  // ---- init / render
+  // ---------- init / render
   function init3d(): void {
     const width = container3d.clientWidth;
     const height = 560;
@@ -558,7 +513,6 @@
     labelRenderer.domElement.style.left = '0';
     labelRenderer.domElement.style.top = '0';
     labelRenderer.domElement.style.pointerEvents = 'none';
-    labelRenderer.domElement.className = 'label-layer';
     container3d.appendChild(labelRenderer.domElement);
 
     renderer.domElement.addEventListener('mousemove', onMove3d);
@@ -575,10 +529,8 @@
   function rebuildScene(sourcePoints: SpacePoint[]): void {
     if (!scene || !camera || !controls || !renderer) return;
 
-    // фон
     scene.background = new THREE.Color(visualBg);
 
-    // точки
     clearMesh(circleMesh);
     clearMesh(diamondMesh);
 
@@ -589,11 +541,7 @@
     diamondPoints = renderablePoints.filter((p) => p.sourceField === 'campaign_id');
 
     if (circlePoints.length) {
-      circleMesh = new THREE.InstancedMesh(
-        new THREE.SphereGeometry(1.45, 10, 10),
-        new THREE.MeshBasicMaterial({ color: '#22c55e' }),
-        circlePoints.length
-      );
+      circleMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(1.45, 10, 10), new THREE.MeshBasicMaterial({ color: '#22c55e' }), circlePoints.length);
       const o = new THREE.Object3D();
       circlePoints.forEach((point, idx) => {
         o.position.set(point.x, point.y, point.z);
@@ -604,11 +552,7 @@
     }
 
     if (diamondPoints.length) {
-      diamondMesh = new THREE.InstancedMesh(
-        new THREE.OctahedronGeometry(1.9, 0),
-        new THREE.MeshBasicMaterial({ color: '#1d4ed8' }),
-        diamondPoints.length
-      );
+      diamondMesh = new THREE.InstancedMesh(new THREE.OctahedronGeometry(1.9, 0), new THREE.MeshBasicMaterial({ color: '#1d4ed8' }), diamondPoints.length);
       const o = new THREE.Object3D();
       diamondPoints.forEach((point, idx) => {
         o.position.set(point.x, point.y, point.z);
@@ -619,10 +563,7 @@
       scene.add(diamondMesh);
     }
 
-    // рёбра/подписи (включая цвет рёбер)
     rebuildPlanes(renderablePoints);
-
-    // камера
     fitCameraToPoints(renderablePoints);
   }
 
@@ -684,7 +625,7 @@
     controls.update();
   }
 
-  // ---- selection helpers
+  // selection helpers
   function addEntityField(code: string): void {
     if (!code || selectedEntityFields.includes(code)) return;
     selectedEntityFields = [...selectedEntityFields, code];
@@ -710,7 +651,7 @@
     search = '';
   }
 
-  // ---- menus
+  // menus
   function toggleDisplayMenu(): void {
     showDisplayMenu = !showDisplayMenu;
     if (showDisplayMenu) showPickDataMenu = false;
@@ -724,7 +665,7 @@
     showPickDataMenu = false;
   }
 
-  // ---- visuals storage
+  // storage
   function loadVisualSchemes(): void {
     try {
       const raw = localStorage.getItem(STORAGE_KEY_VISUALS);
@@ -756,7 +697,6 @@
     selectedVisualId = '';
   }
 
-  // ---- dataset presets storage
   function loadDatasetPresets(): void {
     try {
       const raw = localStorage.getItem(STORAGE_KEY_DATASETS);
@@ -792,15 +732,14 @@
     search = p.value.search ?? '';
   }
 
-  // ---- global close / esc
   function onGlobalClick(e: MouseEvent): void {
     const t = e.target as Node | null;
     if (!t) return;
-
-    const inMenu = (document.querySelector('.menu-pop.display')?.contains(t) ?? false) || (document.querySelector('.menu-pop.pick')?.contains(t) ?? false);
-    const inBtns = (document.querySelector('.hud')?.contains(t) ?? false);
-
-    if (!inMenu && !inBtns) closeAllMenus();
+    const inMenu =
+      (document.querySelector('.menu-pop.display')?.contains(t) ?? false) ||
+      (document.querySelector('.menu-pop.pick')?.contains(t) ?? false);
+    const inHud = document.querySelector('.hud')?.contains(t) ?? false;
+    if (!inMenu && !inHud) closeAllMenus();
   }
 
   function onKey(e: KeyboardEvent): void {
@@ -816,7 +755,14 @@
     }
   }
 
-  // ---- mount/unmount
+  // reactive rows/points
+  $: filteredRows = applyRowsFilter(showcase?.rows ?? []);
+  $: points = buildPoints(filteredRows, selectedEntityFields, axisX, axisY, axisZ);
+  $: if (scene) rebuildScene(points);
+
+  // breadcrumbs: выбранные текстовые
+  $: selectedCrumbs = selectedEntityFields.map((c) => ({ code: c, name: fieldName(c) }));
+
   onMount(async () => {
     loadVisualSchemes();
     loadDatasetPresets();
@@ -845,7 +791,6 @@
     disposeCornerFrame();
 
     renderer?.domElement?.removeEventListener('mousemove', onMove3d);
-
     renderer?.dispose();
     controls?.dispose();
     labelRenderer?.domElement?.remove();
@@ -856,9 +801,6 @@
     scene = null;
     camera = null;
   });
-
-  // ---- “breadcrumbs” under buttons
-  $: selectedCrumbs = selectedEntityFields.map((c) => ({ code: c, name: fieldName(c) }));
 </script>
 
 <section class="graph-root">
@@ -872,7 +814,6 @@
         <button class="btn btn-primary" on:click={togglePickMenu}>Выбрать данные</button>
       </div>
 
-      <!-- breadcrumbs: ТЕКСТОВЫЕ поля (точки) -->
       <div class="crumbs">
         {#each selectedCrumbs as c (c.code)}
           <button class="crumb" type="button" on:click={() => removeEntityField(c.code)}>
@@ -892,7 +833,7 @@
       </div>
     </div>
 
-    <!-- Меню “Настройка отображения” -->
+    <!-- Display menu -->
     {#if showDisplayMenu}
       <div class="menu-pop display">
         <div class="menu-title">Визуал</div>
@@ -970,7 +911,7 @@
       </div>
     {/if}
 
-    <!-- Меню “Выбрать данные” -->
+    <!-- Pick data menu -->
     {#if showPickDataMenu}
       <div class="menu-pop pick">
         <div class="menu-title">Выбор данных</div>
@@ -1000,9 +941,7 @@
             {/each}
           </div>
         {:else}
-          <div class="limit">
-            Уже выбрано 3 координаты (X/Y/Z). Удалите одну прямо на ребре куба (×), чтобы добавить другую.
-          </div>
+          <div class="limit">Уже выбрано 3 координаты (X/Y/Z). Удалите одну на ребре куба (×), чтобы добавить другую.</div>
         {/if}
 
         <div class="sep" />
@@ -1042,7 +981,7 @@
     {/if}
   </div>
 
-  <!-- Modal: save visual -->
+  <!-- Save visual modal -->
   {#if showSaveVisualModal}
     <div class="modal-backdrop" on:click={() => (showSaveVisualModal = false)}>
       <div class="modal" on:click|stopPropagation>
@@ -1050,21 +989,13 @@
         <input class="input" placeholder="Например: Светлый фон" bind:value={saveVisualName} />
         <div class="row two">
           <button class="btn" on:click={() => (showSaveVisualModal = false)}>Отмена</button>
-          <button
-            class="btn btn-primary"
-            on:click={() => {
-              saveVisualScheme(saveVisualName);
-              showSaveVisualModal = false;
-            }}
-          >
-            Сохранить
-          </button>
+          <button class="btn btn-primary" on:click={() => { saveVisualScheme(saveVisualName); showSaveVisualModal = false; }}>Сохранить</button>
         </div>
       </div>
     </div>
   {/if}
 
-  <!-- Modal: save dataset -->
+  <!-- Save dataset modal -->
   {#if showSaveDatasetModal}
     <div class="modal-backdrop" on:click={() => (showSaveDatasetModal = false)}>
       <div class="modal" on:click|stopPropagation>
@@ -1072,15 +1003,7 @@
         <input class="input" placeholder="Например: Артикул + Выручка/Заказы/Расход" bind:value={saveDatasetName} />
         <div class="row two">
           <button class="btn" on:click={() => (showSaveDatasetModal = false)}>Отмена</button>
-          <button
-            class="btn btn-primary"
-            on:click={() => {
-              saveDatasetPreset(saveDatasetName);
-              showSaveDatasetModal = false;
-            }}
-          >
-            Сохранить
-          </button>
+          <button class="btn btn-primary" on:click={() => { saveDatasetPreset(saveDatasetName); showSaveDatasetModal = false; }}>Сохранить</button>
         </div>
       </div>
     </div>
@@ -1089,46 +1012,17 @@
 
 <style>
   .graph-root { width: 100%; }
-
-  .stage {
-    position: relative;
-    height: 560px;
-    border-radius: 18px;
-    overflow: hidden;
-    background: #ffffff;
-  }
-
+  .stage { position: relative; height: 560px; border-radius: 18px; overflow: hidden; background: #ffffff; }
   .scene { position: absolute; inset: 0; }
 
-  /* HUD layout */
-  .hud {
-    position: absolute;
-    pointer-events: none; /* orbit-controls живёт */
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    z-index: 5;
-  }
+  /* HUD */
+  .hud { position: absolute; pointer-events: none; display: flex; flex-direction: column; gap: 10px; z-index: 5; }
+  .hud.top-right { right: 14px; top: 12px; align-items: flex-end; }
+  .hud.bottom-left { left: 14px; bottom: 12px; align-items: flex-start; }
 
-  .hud.top-right {
-    right: 14px;
-    top: 12px;
-    align-items: flex-end;
-  }
+  .hud-actions { display: flex; gap: 10px; pointer-events: auto; }
 
-  .hud.bottom-left {
-    left: 14px;
-    bottom: 12px;
-    align-items: flex-start;
-  }
-
-  .hud-actions {
-    display: flex;
-    gap: 10px;
-    pointer-events: auto;
-  }
-
-  /* Buttons: как “в заголовке таблицы” → очень светлый голубой */
+  /* Buttons: светлый как “шапка таблицы” */
   .btn {
     border: 0;
     border-radius: 999px;
@@ -1143,36 +1037,20 @@
     pointer-events: auto;
   }
   .btn:hover { transform: translateY(-0.5px); }
+  .btn.wide { width: 100%; }
 
-  .btn.btn-primary {
-    background: #f8fbff;
-    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
-    position: relative;
-  }
+  .btn.btn-primary { position: relative; background: #f8fbff; }
   .btn.btn-primary::after {
     content: '';
     position: absolute;
-    left: 12px;
-    right: 12px;
-    bottom: 8px;
-    height: 2px;
-    border-radius: 2px;
-    background: rgba(34, 197, 94, 0.9); /* небольшой зелёный акцент */
+    left: 12px; right: 12px; bottom: 8px;
+    height: 2px; border-radius: 2px;
+    background: rgba(34, 197, 94, 0.9);
     opacity: .55;
   }
 
-  .btn.wide { width: 100%; }
-
   /* breadcrumbs */
-  .crumbs {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    justify-content: flex-end;
-    max-width: 520px;
-    pointer-events: auto;
-  }
-
+  .crumbs { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; max-width: 520px; pointer-events: auto; }
   .crumb {
     display: inline-flex;
     align-items: center;
@@ -1187,10 +1065,8 @@
   }
   .crumb .t { font-size: 12px; font-weight: 650; }
   .crumb .x {
-    width: 18px;
-    height: 18px;
-    display: grid;
-    place-items: center;
+    width: 18px; height: 18px;
+    display: grid; place-items: center;
     border-radius: 999px;
     background: rgba(15,23,42,.06);
     font-weight: 900;
@@ -1198,7 +1074,7 @@
   }
   .crumb:hover .x { background: rgba(34,197,94,.18); }
 
-  /* info card bottom-left */
+  /* info */
   .info-card {
     pointer-events: none;
     background: rgba(248, 251, 255, 0.88);
@@ -1224,56 +1100,22 @@
     pointer-events: auto;
     z-index: 10;
   }
-  .menu-pop.pick { right: 14px; top: 56px; }
-  .menu-pop.display { right: 14px; top: 56px; }
 
-  .menu-title {
-    font-weight: 800;
-    font-size: 13px;
-    color: rgba(15, 23, 42, 0.9);
-    margin-bottom: 10px;
-  }
-
-  .sub {
-    margin-top: 10px;
-    font-size: 12px;
-    font-weight: 650;
-    color: rgba(15, 23, 42, 0.78);
-    display: flex;
-    align-items: baseline;
-    gap: 6px;
-  }
+  .menu-title { font-weight: 800; font-size: 13px; color: rgba(15, 23, 42, 0.9); margin-bottom: 10px; }
+  .sub { margin-top: 10px; font-size: 12px; font-weight: 650; color: rgba(15, 23, 42, 0.78); display: flex; align-items: baseline; gap: 6px; }
   .hint { font-weight: 600; color: rgba(100, 116, 139, 0.9); }
 
-  .row {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    margin-top: 10px;
-  }
+  .row { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
   .row.two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-
   .label { font-size: 12px; color: rgba(15,23,42,.78); width: 52px; }
 
-  .sep {
-    height: 1px;
-    background: rgba(226, 232, 240, 0.7);
-    margin: 12px 0;
-  }
+  .sep { height: 1px; background: rgba(226, 232, 240, 0.7); margin: 12px 0; }
 
-  /* modern color row (без “красных границ”) */
-  .color-row {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    width: 100%;
-  }
-
+  /* color row: без рамок */
+  .color-row { display: flex; gap: 10px; align-items: center; width: 100%; }
   .color-input {
-    width: 34px;
-    height: 34px;
-    border: 0;
-    padding: 0;
+    width: 34px; height: 34px;
+    border: 0; padding: 0;
     background: transparent;
     cursor: pointer;
     border-radius: 10px;
@@ -1303,21 +1145,9 @@
     outline: none;
     color: rgba(15,23,42,.9);
   }
+  .select:focus, .input:focus { box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.14); }
 
-  .select:focus, .input:focus {
-    box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.14);
-  }
-
-  .list {
-    margin-top: 8px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    max-height: 190px;
-    overflow: auto;
-    padding-right: 2px;
-  }
-
+  .list { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; max-height: 190px; overflow: auto; padding-right: 2px; }
   .item {
     width: 100%;
     text-align: left;
@@ -1331,57 +1161,12 @@
     cursor: pointer;
   }
   .item:disabled { opacity: .45; cursor: not-allowed; }
-
   .name { font-size: 12px; font-weight: 650; color: rgba(15,23,42,.88); }
   .tag { font-size: 11px; color: rgba(100,116,139,.9); }
 
-  .limit {
-    margin-top: 8px;
-    font-size: 12px;
-    color: rgba(100, 116, 139, 0.95);
-    background: rgba(248, 251, 255, 0.92);
-    border-radius: 14px;
-    padding: 10px 12px;
-  }
+  .limit { margin-top: 8px; font-size: 12px; color: rgba(100, 116, 139, 0.95); background: rgba(248, 251, 255, 0.92); border-radius: 14px; padding: 10px 12px; }
 
-  /* tooltip */
-  .tooltip {
-    position: absolute;
-    pointer-events: none;
-    background: rgba(15, 23, 42, 0.92);
-    color: #f8fafc;
-    font-size: 12px;
-    padding: 10px;
-    border-radius: 12px;
-    max-width: 360px;
-    z-index: 6;
-  }
-
-  /* modal */
-  .modal-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(15, 23, 42, 0.35);
-    display: grid;
-    place-items: center;
-    z-index: 50;
-  }
-
-  .modal {
-    width: min(520px, calc(100vw - 24px));
-    background: rgba(255, 255, 255, 0.92);
-    border-radius: 18px;
-    padding: 14px;
-    box-shadow: 0 30px 80px rgba(15, 23, 42, 0.24);
-    backdrop-filter: blur(14px);
-  }
-
-  .modal-title {
-    font-weight: 800;
-    font-size: 14px;
-    color: rgba(15, 23, 42, 0.92);
-    margin-bottom: 10px;
-  }
+  .tooltip { position: absolute; pointer-events: none; background: rgba(15, 23, 42, 0.92); color: #f8fafc; font-size: 12px; padding: 10px; border-radius: 12px; max-width: 360px; z-index: 6; }
 
   /* 3D axis chips */
   :global(.chip3d) {
@@ -1399,12 +1184,7 @@
     white-space: nowrap;
     transform: translate(-50%, -50%);
   }
-
-  :global(.chip3d.accent) {
-    background: rgba(248, 251, 255, 0.95);
-    color: rgba(30, 64, 175, 0.98);
-  }
-
+  :global(.chip3d.accent) { background: rgba(248, 251, 255, 0.95); color: rgba(30, 64, 175, 0.98); }
   :global(.chip3d .x) {
     border: 0;
     width: 20px;
@@ -1419,4 +1199,9 @@
     place-items: center;
   }
   :global(.chip3d .x:hover) { background: rgba(34,197,94,.18); color: rgba(5,46,22,.9); }
+
+  /* modal */
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.35); display: grid; place-items: center; z-index: 50; }
+  .modal { width: min(520px, calc(100vw - 24px)); background: rgba(255, 255, 255, 0.92); border-radius: 18px; padding: 14px; box-shadow: 0 30px 80px rgba(15, 23, 42, 0.24); backdrop-filter: blur(14px); }
+  .modal-title { font-weight: 800; font-size: 14px; color: rgba(15, 23, 42, 0.92); margin-bottom: 10px; }
 </style>
