@@ -1,6 +1,6 @@
 <!-- core/orchestrator/modules/advertising/interface/desk/components/GraphPanel.svelte -->
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import * as THREE from 'three';
   import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
   import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
@@ -34,20 +34,20 @@
   let axisY = '';
   let axisZ = '';
 
-  // период
+  // период/поиск
   let period: PeriodMode = '30 дней';
   let fromDate = '';
   let toDate = '';
   let search = '';
 
-  // visuals
+  // ---- visual settings
   type VisualScheme = { id: string; name: string; bg: string; edge: string };
-  let visualBg = '#ffffff'; // ✅ по умолчанию белый
+  let visualBg = '#ffffff'; // ✅ дефолт: белый
   let visualEdge = '#334155';
   let visualSchemes: VisualScheme[] = [];
   let selectedVisualId = '';
 
-  // dataset presets
+  // ---- dataset presets
   type DatasetPreset = {
     id: string;
     name: string;
@@ -65,7 +65,7 @@
   let datasetPresets: DatasetPreset[] = [];
   let selectedDatasetPresetId = '';
 
-  // UI popovers / modals
+  // ---- UI
   let showDisplayMenu = false;
   let showPickDataMenu = false;
 
@@ -75,15 +75,15 @@
   let showSaveDatasetModal = false;
   let saveDatasetName = '';
 
-  // ---- store safe
+  // ---- store (safe)
   type ShowcaseSafe = { fields: ShowcaseField[]; rows: ShowcaseRow[]; datasets: any[] };
   const EMPTY_SHOWCASE: ShowcaseSafe = { fields: [], rows: [], datasets: [] };
 
   let showcase: ShowcaseSafe = ((get(showcaseStore) as any) ?? EMPTY_SHOWCASE) as ShowcaseSafe;
 
   const unsub = showcaseStore.subscribe((value) => {
-    showcase = ((value as any) ?? EMPTY_SHOWCASE) as ShowcaseSafe;
-    ensureDefaults(); // ✅ только когда поля реально есть
+    showcase = (((value as any) ?? EMPTY_SHOWCASE) as ShowcaseSafe) ?? EMPTY_SHOWCASE;
+    ensureDefaults();
   });
 
   // ---- 3D
@@ -94,18 +94,18 @@
   let debugRenderedCount = 0;
   let debugBBox = '—';
 
-  let renderer: THREE.WebGLRenderer;
-  let scene: THREE.Scene;
-  let camera: THREE.PerspectiveCamera;
-  let controls: OrbitControls;
+  let renderer: THREE.WebGLRenderer | null = null;
+  let scene: THREE.Scene | null = null;
+  let camera: THREE.PerspectiveCamera | null = null;
+  let controls: OrbitControls | null = null;
   let circleMesh: THREE.InstancedMesh | undefined;
   let diamondMesh: THREE.InstancedMesh | undefined;
-  let labelRenderer: CSS2DRenderer | undefined;
+  let labelRenderer: CSS2DRenderer | null = null;
 
-  const planeGroup = new THREE.Group();
-  const labelGroup = new THREE.Group();
+  const planeGroup = new THREE.Group(); // линии “угла”
+  const edgeLabelGroup = new THREE.Group(); // CSS2D подписи осей
   let cornerFrame: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | null = null;
-  let maxLabels: CSS2DObject[] = [];
+  let axisLabelObjects: CSS2DObject[] = [];
 
   let circlePoints: SpacePoint[] = [];
   let diamondPoints: SpacePoint[] = [];
@@ -114,35 +114,34 @@
   const raycaster = new THREE.Raycaster();
   const ndc = new THREE.Vector2();
 
-  // ---- fields (без ролей — чтобы не падало на undefined)
-  function availableFieldsByKind(kind: ShowcaseField['kind']): ShowcaseField[] {
-    const fields = showcase?.fields ?? [];
-    return fields.filter((f) => {
-      if (f.kind !== kind) return false;
-      const ids = (f as any).datasetIds ?? [];
-      if (!Array.isArray(ids) || !ids.length) return true;
-      return ids.some((id: DatasetId) => activeLayers.includes(id));
-    });
+  // ---- fields helpers (без падений)
+  function fieldsAll(): ShowcaseField[] {
+    return (showcase?.fields ?? []) as ShowcaseField[];
   }
 
-  $: textFieldsAll = availableFieldsByKind('text');
-  $: numberFieldsAll = availableFieldsByKind('number');
-  $: dateFieldsAll = availableFieldsByKind('date');
+  function fieldsFor(kind: ShowcaseField['kind']): ShowcaseField[] {
+    const all = fieldsAll();
+    return all.filter((f) => f.kind === kind && (f.datasetIds ?? []).some((id) => activeLayers.includes(id)));
+  }
+
+  $: textFieldsAll = fieldsFor('text');
+  $: numberFieldsAll = fieldsFor('number');
+  $: dateFieldsAll = fieldsFor('date');
   $: coordFieldsAll = [...numberFieldsAll, ...dateFieldsAll];
 
   $: selectedCoordCount = [axisX, axisY, axisZ].filter(Boolean).length;
   $: canAddCoord = selectedCoordCount < 3;
 
-  // ---- rows/points
+  // ---- points pipeline
   $: filteredRows = applyRowsFilter(showcase?.rows ?? []);
   $: points = buildPoints(filteredRows, selectedEntityFields, axisX, axisY, axisZ);
-  $: rebuildScene(points);
+
+  // ✅ не запускаем rebuildScene до init3d
+  $: if (scene) rebuildScene(points);
 
   function ensureDefaults(): void {
-    const coords = coordFieldsAll ?? [];
-    // ✅ если данных ещё нет — ничего не трогаем
-    if (!coords.length) return;
-
+    // подставляем первые координаты, если пусто
+    const coords = coordFieldsAll;
     if (!axisX && coords[0]) axisX = coords[0].code;
     if (!axisY && coords[1]) axisY = coords[1].code;
     if (!axisZ && coords[2]) axisZ = coords[2].code;
@@ -170,11 +169,13 @@
   function applyRowsFilter(rows: ShowcaseRow[]): ShowcaseRow[] {
     return rows.filter((row) => {
       const anyRow = row as any;
-      if (!inPeriod(String(anyRow.date ?? ''))) return false;
+      if (!inPeriod(String(anyRow?.date ?? ''))) return false;
 
       if (!search.trim()) return true;
       const q = search.trim().toLowerCase();
-      return selectedEntityFields.some((field) => String((row as any)?.[field] ?? '').toLowerCase().includes(q));
+      return selectedEntityFields.some((field) =>
+        String((row as Record<string, unknown>)[field] ?? '').toLowerCase().includes(q)
+      );
     });
   }
 
@@ -189,35 +190,34 @@
     if (!entityFields.length) return [];
 
     const result: SpacePoint[] = [];
-    const numberCodes = (numberFieldsAll ?? []).map((f) => f.code);
-    const dateCodes = (dateFieldsAll ?? []).map((f) => f.code);
+    const numberCodes = numberFieldsAll.map((f) => f.code);
+    const dateCodes = dateFieldsAll.map((f) => f.code);
 
-    for (const entityField of entityFields) {
+    entityFields.forEach((entityField) => {
       const groups = new Map<string, ShowcaseRow[]>();
-
-      for (const row of rows) {
-        const key = String((row as any)?.[entityField] ?? '').trim();
-        if (!key) continue;
+      rows.forEach((row) => {
+        const key = String((row as Record<string, unknown>)[entityField] ?? '').trim();
+        if (!key) return;
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key)!.push(row);
-      }
+      });
 
       groups.forEach((groupRows, key) => {
         const metrics: Record<string, number> = {};
 
-        // numbers avg
+        // numbers: avg
         for (const code of numberCodes) {
           let sum = 0;
-          for (const r of groupRows) sum += Number((r as any)?.[code] ?? 0);
+          for (const r of groupRows) sum += Number((r as any)[code] ?? 0);
           metrics[code] = sum / Math.max(groupRows.length, 1);
         }
 
-        // dates avg timestamp
+        // dates: avg timestamp
         for (const code of dateCodes) {
           let sum = 0;
           let cnt = 0;
           for (const r of groupRows) {
-            const n = parseDateToNumber((r as any)?.[code]);
+            const n = parseDateToNumber((r as any)[code]);
             if (Number.isFinite(n)) {
               sum += n;
               cnt += 1;
@@ -226,10 +226,10 @@
           metrics[code] = cnt ? sum / cnt : NaN;
         }
 
-        // expected fields
-        metrics.revenue = groupRows.reduce((s, r) => s + Number((r as any)?.revenue ?? 0), 0);
-        metrics.spend = groupRows.reduce((s, r) => s + Number((r as any)?.spend ?? 0), 0);
-        metrics.orders = groupRows.reduce((s, r) => s + Number((r as any)?.orders ?? 0), 0);
+        // ожидаемые поля
+        metrics.revenue = groupRows.reduce((sum, r) => sum + Number((r as any).revenue ?? 0), 0);
+        metrics.spend = groupRows.reduce((sum, r) => sum + Number((r as any).spend ?? 0), 0);
+        metrics.orders = groupRows.reduce((sum, r) => sum + Number((r as any).orders ?? 0), 0);
         metrics.drr = metrics.revenue > 0 ? (metrics.spend / metrics.revenue) * 100 : 0;
         metrics.roi = metrics.spend > 0 ? metrics.revenue / metrics.spend : 0;
 
@@ -243,7 +243,7 @@
           z: 0
         });
       });
-    }
+    });
 
     return projectPoints(result, xCode, yCode, zCode);
   }
@@ -370,7 +370,7 @@
     if (!metricCode) return '—';
     if (!Number.isFinite(maxValue)) return 'нет данных';
 
-    const f = (showcase?.fields ?? []).find((x) => x.code === metricCode);
+    const f = fieldsAll().find((x) => x.code === metricCode);
     if (f?.kind === 'date') {
       const d = new Date(maxValue);
       if (Number.isNaN(d.getTime())) return 'нет данных';
@@ -394,7 +394,7 @@
     return formatNumberHuman(maxValue);
   }
 
-  // ---- wireframe & max labels
+  // ---- labels / wireframe
   function disposeCornerFrame(): void {
     if (!cornerFrame) return;
     planeGroup.remove(cornerFrame);
@@ -403,22 +403,47 @@
     cornerFrame = null;
   }
 
-  function disposeMaxLabels(): void {
-    for (const l of maxLabels) labelGroup.remove(l);
-    maxLabels = [];
+  function disposeAxisLabels(): void {
+    for (const l of axisLabelObjects) edgeLabelGroup.remove(l);
+    axisLabelObjects = [];
   }
 
-  function createCloud(text: string): CSS2DObject {
+  function makeChipEl(text: string, opts: { tone?: 'neutral' | 'accent'; removable?: boolean; onRemove?: () => void } = {}): HTMLDivElement {
     const el = document.createElement('div');
-    el.className = 'cloud';
-    el.textContent = text;
-    return new CSS2DObject(el);
+    el.className = 'chip3d';
+    el.style.pointerEvents = opts.removable ? 'auto' : 'none'; // ✅ кликаем только там где крестик
+    el.style.userSelect = 'none';
+    if (opts.tone === 'accent') el.classList.add('accent');
+
+    const span = document.createElement('span');
+    span.className = 'txt';
+    span.textContent = text;
+    el.appendChild(span);
+
+    if (opts.removable) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'x';
+      btn.textContent = '×';
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        opts.onRemove?.();
+      });
+      el.appendChild(btn);
+    }
+
+    return el;
+  }
+
+  function createChipLabel(text: string, opts: { tone?: 'neutral' | 'accent'; removable?: boolean; onRemove?: () => void } = {}): CSS2DObject {
+    return new CSS2DObject(makeChipEl(text, opts));
   }
 
   function rebuildPlanes(list: SpacePoint[]): void {
     planeGroup.clear();
     disposeCornerFrame();
-    disposeMaxLabels();
+    disposeAxisLabels();
 
     const bbox = normalizeBBox(list);
 
@@ -431,20 +456,17 @@
     const Cxz = new THREE.Vector3(bbox.maxX, bbox.minY, bbox.maxZ);
     const Cyz = new THREE.Vector3(bbox.minX, bbox.maxY, bbox.maxZ);
 
-    // 3 плоскости-угол (без верхних граней)
     const segments: Array<[THREE.Vector3, THREE.Vector3]> = [
       // XY (z=min)
       [A, Bx],
       [Bx, Cxy],
       [Cxy, By],
       [By, A],
-
       // XZ (y=min)
       [A, Bx],
       [Bx, Cxz],
       [Cxz, Bz],
       [Bz, A],
-
       // YZ (x=min)
       [A, By],
       [By, Cyz],
@@ -457,27 +479,47 @@
 
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-    const mat = new THREE.LineBasicMaterial({ color: new THREE.Color(visualEdge) });
 
+    const mat = new THREE.LineBasicMaterial({ color: new THREE.Color(visualEdge) });
     cornerFrame = new THREE.LineSegments(geom, mat);
     planeGroup.add(cornerFrame);
 
-    // max values at ends
+    // подписи осей (с крестиком)
+    const midX = A.clone().lerp(Bx, 0.5);
+    const midY = A.clone().lerp(By, 0.5);
+    const midZ = A.clone().lerp(Bz, 0.5);
+
+    const xChip = axisX
+      ? createChipLabel(fieldName(axisX), { removable: true, onRemove: () => (axisX = '') })
+      : createChipLabel('X: выберите', { tone: 'accent' });
+    xChip.position.copy(midX);
+
+    const yChip = axisY
+      ? createChipLabel(fieldName(axisY), { removable: true, onRemove: () => (axisY = '') })
+      : createChipLabel('Y: выберите', { tone: 'accent' });
+    yChip.position.copy(midY);
+
+    const zChip = axisZ
+      ? createChipLabel(fieldName(axisZ), { removable: true, onRemove: () => (axisZ = '') })
+      : createChipLabel('Z: выберите', { tone: 'accent' });
+    zChip.position.copy(midZ);
+
+    // max на концах
     const xMax = axisX ? calcMax(list, axisX) : NaN;
     const yMax = axisY ? calcMax(list, axisY) : NaN;
     const zMax = axisZ ? calcMax(list, axisZ) : NaN;
 
-    const mx = createCloud(formatValueByMetric(axisX, xMax));
+    const mx = createChipLabel(formatValueByMetric(axisX, xMax), { tone: 'accent' });
     mx.position.copy(Bx);
 
-    const my = createCloud(formatValueByMetric(axisY, yMax));
+    const my = createChipLabel(formatValueByMetric(axisY, yMax), { tone: 'accent' });
     my.position.copy(By);
 
-    const mz = createCloud(formatValueByMetric(axisZ, zMax));
+    const mz = createChipLabel(formatValueByMetric(axisZ, zMax), { tone: 'accent' });
     mz.position.copy(Bz);
 
-    maxLabels = [mx, my, mz];
-    labelGroup.add(...maxLabels);
+    axisLabelObjects = [xChip, yChip, zChip, mx, my, mz];
+    edgeLabelGroup.add(...axisLabelObjects);
   }
 
   // ---- init / render
@@ -491,7 +533,7 @@
     camera = new THREE.PerspectiveCamera(52, width / height, 0.1, 1500);
     camera.position.set(0, 80, 220);
 
-    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(width, height);
 
@@ -501,9 +543,6 @@
     controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
-    controls.rotateSpeed = 0.6;
-    controls.panSpeed = 0.7;
-    controls.zoomSpeed = 0.9;
 
     scene.add(new THREE.AmbientLight('#ffffff', 0.95));
     const light = new THREE.DirectionalLight('#ffffff', 0.35);
@@ -511,7 +550,7 @@
     scene.add(light);
 
     scene.add(planeGroup);
-    scene.add(labelGroup);
+    scene.add(edgeLabelGroup);
 
     labelRenderer = new CSS2DRenderer();
     labelRenderer.setSize(width, height);
@@ -534,16 +573,12 @@
   }
 
   function rebuildScene(sourcePoints: SpacePoint[]): void {
-    if (!scene) return;
+    if (!scene || !camera || !controls || !renderer) return;
 
+    // фон
     scene.background = new THREE.Color(visualBg);
 
-    if (cornerFrame) {
-      const m = cornerFrame.material as THREE.LineBasicMaterial;
-      m.color = new THREE.Color(visualEdge);
-      m.needsUpdate = true;
-    }
-
+    // точки
     clearMesh(circleMesh);
     clearMesh(diamondMesh);
 
@@ -553,10 +588,9 @@
     circlePoints = renderablePoints.filter((p) => p.sourceField !== 'campaign_id');
     diamondPoints = renderablePoints.filter((p) => p.sourceField === 'campaign_id');
 
-    // ✅ фикс “зелёной хрени”: не раздуваем точки, размер стабильный
     if (circlePoints.length) {
       circleMesh = new THREE.InstancedMesh(
-        new THREE.SphereGeometry(1.35, 10, 10),
+        new THREE.SphereGeometry(1.45, 10, 10),
         new THREE.MeshBasicMaterial({ color: '#22c55e' }),
         circlePoints.length
       );
@@ -571,7 +605,7 @@
 
     if (diamondPoints.length) {
       diamondMesh = new THREE.InstancedMesh(
-        new THREE.OctahedronGeometry(1.75, 0),
+        new THREE.OctahedronGeometry(1.9, 0),
         new THREE.MeshBasicMaterial({ color: '#1d4ed8' }),
         diamondPoints.length
       );
@@ -585,12 +619,16 @@
       scene.add(diamondMesh);
     }
 
+    // рёбра/подписи (включая цвет рёбер)
     rebuildPlanes(renderablePoints);
+
+    // камера
     fitCameraToPoints(renderablePoints);
   }
 
   function onMove3d(event: MouseEvent): void {
-    if (!renderer) return;
+    if (!renderer || !camera) return;
+
     const rect = renderer.domElement.getBoundingClientRect();
     ndc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     ndc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -624,8 +662,8 @@
 
   function animate(): void {
     controls?.update();
-    renderer?.render(scene, camera);
-    labelRenderer?.render(scene, camera);
+    renderer?.render(scene!, camera!);
+    labelRenderer?.render(scene!, camera!);
     anim = requestAnimationFrame(animate);
   }
 
@@ -640,6 +678,7 @@
   }
 
   function resetView(): void {
+    if (!camera || !controls) return;
     camera.position.set(0, 80, 220);
     controls.target.set(0, 0, 0);
     controls.update();
@@ -657,15 +696,18 @@
   function addCoordField(code: string): void {
     if (!code) return;
     if (axisX === code || axisY === code || axisZ === code) return;
+
     if (!axisX) axisX = code;
     else if (!axisY) axisY = code;
     else if (!axisZ) axisZ = code;
   }
 
-  function clearAxis(slot: 'x' | 'y' | 'z'): void {
-    if (slot === 'x') axisX = '';
-    if (slot === 'y') axisY = '';
-    if (slot === 'z') axisZ = '';
+  function clearAllDataSelection(): void {
+    selectedEntityFields = [];
+    axisX = '';
+    axisY = '';
+    axisZ = '';
+    search = '';
   }
 
   // ---- menus
@@ -673,7 +715,7 @@
     showDisplayMenu = !showDisplayMenu;
     if (showDisplayMenu) showPickDataMenu = false;
   }
-  function togglePickDataMenu(): void {
+  function togglePickMenu(): void {
     showPickDataMenu = !showPickDataMenu;
     if (showPickDataMenu) showDisplayMenu = false;
   }
@@ -682,28 +724,7 @@
     showPickDataMenu = false;
   }
 
-  function onGlobalClick(e: MouseEvent): void {
-    const t = e.target as Node | null;
-    if (!t) return;
-    const inMenu = document.querySelector('.menu-pop')?.contains(t) ?? false;
-    const inBtn = document.querySelector('.hud')?.contains(t) ?? false;
-    if (!inMenu && !inBtn) closeAllMenus();
-  }
-
-  function onKey(e: KeyboardEvent): void {
-    if (e.key === 'Escape') {
-      closeAllMenus();
-      showSaveVisualModal = false;
-      showSaveDatasetModal = false;
-    }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-      e.preventDefault();
-      showPickDataMenu = true;
-      showDisplayMenu = false;
-    }
-  }
-
-  // ---- visuals persistence
+  // ---- visuals storage
   function loadVisualSchemes(): void {
     try {
       const raw = localStorage.getItem(STORAGE_KEY_VISUALS);
@@ -735,7 +756,7 @@
     selectedVisualId = '';
   }
 
-  // ---- dataset presets persistence
+  // ---- dataset presets storage
   function loadDatasetPresets(): void {
     try {
       const raw = localStorage.getItem(STORAGE_KEY_DATASETS);
@@ -771,42 +792,45 @@
     search = p.value.search ?? '';
   }
 
-  // ---- breadcrumbs (под кнопками)
-  type Crumb = { kind: 'text' | 'axis'; label: string; code: string; slot?: 'x' | 'y' | 'z' };
-  $: crumbs = buildCrumbs();
+  // ---- global close / esc
+  function onGlobalClick(e: MouseEvent): void {
+    const t = e.target as Node | null;
+    if (!t) return;
 
-  function buildCrumbs(): Crumb[] {
-    const out: Crumb[] = [];
+    const inMenu = (document.querySelector('.menu-pop.display')?.contains(t) ?? false) || (document.querySelector('.menu-pop.pick')?.contains(t) ?? false);
+    const inBtns = (document.querySelector('.hud')?.contains(t) ?? false);
 
-    // axes first (X/Y/Z)
-    if (axisX) out.push({ kind: 'axis', label: `X: ${fieldName(axisX)}`, code: axisX, slot: 'x' });
-    if (axisY) out.push({ kind: 'axis', label: `Y: ${fieldName(axisY)}`, code: axisY, slot: 'y' });
-    if (axisZ) out.push({ kind: 'axis', label: `Z: ${fieldName(axisZ)}`, code: axisZ, slot: 'z' });
-
-    // then text fields
-    for (const code of selectedEntityFields) {
-      out.push({ kind: 'text', label: fieldName(code), code });
-    }
-    return out;
+    if (!inMenu && !inBtns) closeAllMenus();
   }
 
-  function removeCrumb(c: Crumb): void {
-    if (c.kind === 'text') removeEntityField(c.code);
-    else if (c.slot) clearAxis(c.slot);
+  function onKey(e: KeyboardEvent): void {
+    if (e.key === 'Escape') {
+      closeAllMenus();
+      showSaveVisualModal = false;
+      showSaveDatasetModal = false;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      showPickDataMenu = true;
+      showDisplayMenu = false;
+    }
   }
 
   // ---- mount/unmount
-  onMount(() => {
+  onMount(async () => {
     loadVisualSchemes();
     loadDatasetPresets();
 
+    await tick();
     init3d();
     ensureDefaults();
-    rebuildScene(points);
 
     window.addEventListener('resize', onResize);
     window.addEventListener('keydown', onKey);
     window.addEventListener('click', onGlobalClick, true);
+
+    await tick();
+    rebuildScene(points);
   });
 
   onDestroy(() => {
@@ -817,64 +841,84 @@
     window.removeEventListener('keydown', onKey);
     window.removeEventListener('click', onGlobalClick, true);
 
-    disposeMaxLabels();
+    disposeAxisLabels();
     disposeCornerFrame();
 
     renderer?.domElement?.removeEventListener('mousemove', onMove3d);
+
     renderer?.dispose();
     controls?.dispose();
     labelRenderer?.domElement?.remove();
+
+    renderer = null;
+    controls = null;
+    labelRenderer = null;
+    scene = null;
+    camera = null;
   });
+
+  // ---- “breadcrumbs” under buttons
+  $: selectedCrumbs = selectedEntityFields.map((c) => ({ code: c, name: fieldName(c) }));
 </script>
 
 <section class="graph-root">
   <div class="stage">
     <div bind:this={container3d} class="scene" />
 
-    <!-- HUD: кнопки справа сверху + хлебные крошки под ними -->
-    <div class="hud">
-      <div class="hud-right">
-        <button class="btn ghost" on:click={toggleDisplayMenu}>Настройка отображения</button>
-        <button class="btn primary" on:click={togglePickDataMenu}>Выбрать данные</button>
+    <!-- TOP RIGHT: buttons + breadcrumbs -->
+    <div class="hud top-right">
+      <div class="hud-actions">
+        <button class="btn" on:click={toggleDisplayMenu}>Настройка отображения</button>
+        <button class="btn btn-primary" on:click={togglePickMenu}>Выбрать данные</button>
+      </div>
 
-        <div class="crumbs">
-          {#each crumbs as c (c.kind + ':' + c.code + ':' + (c.slot ?? ''))}
-            <button class="crumb" type="button" on:click={() => removeCrumb(c)} title="Убрать">
-              <span>{c.label}</span>
-              <span class="x">×</span>
-            </button>
-          {/each}
-        </div>
+      <!-- breadcrumbs: ТЕКСТОВЫЕ поля (точки) -->
+      <div class="crumbs">
+        {#each selectedCrumbs as c (c.code)}
+          <button class="crumb" type="button" on:click={() => removeEntityField(c.code)}>
+            <span class="t">{c.name}</span>
+            <span class="x">×</span>
+          </button>
+        {/each}
+      </div>
+    </div>
+
+    <!-- BOTTOM LEFT: info -->
+    <div class="hud bottom-left">
+      <div class="info-card">
+        <div class="info-title">Точек: {debugRenderedCount}</div>
+        <div class="info-sub">Оси: {fieldName(axisX || '—')} / {fieldName(axisY || '—')} / {fieldName(axisZ || '—')}</div>
+        <div class="info-sub">{debugBBox}</div>
       </div>
     </div>
 
     <!-- Меню “Настройка отображения” -->
     {#if showDisplayMenu}
-      <div class="menu-pop">
+      <div class="menu-pop display">
         <div class="menu-title">Визуал</div>
 
         <div class="row">
           <div class="label">Фон</div>
-          <div class="color-wrap">
-            <input class="color" type="color" bind:value={visualBg} aria-label="Цвет фона" />
-            <div class="swatch" style={`background:${visualBg}`} />
+          <div class="color-row">
+            <input class="color-input" type="color" bind:value={visualBg} />
+            <input class="hex" spellcheck="false" bind:value={visualBg} />
           </div>
         </div>
 
         <div class="row">
           <div class="label">Рёбра</div>
-          <div class="color-wrap">
-            <input class="color" type="color" bind:value={visualEdge} aria-label="Цвет рёбер" />
-            <div class="swatch" style={`background:${visualEdge}`} />
+          <div class="color-row">
+            <input class="color-input" type="color" bind:value={visualEdge} />
+            <input class="hex" spellcheck="false" bind:value={visualEdge} />
           </div>
         </div>
 
-        <div class="hr" />
+        <div class="sep" />
 
         <div class="row two">
-          <button class="btn ghost" on:click={resetVisual}>Сбросить</button>
+          <button class="btn" on:click={resetVisual}>Сбросить</button>
           <button
-            class="btn primary"
+            class="btn btn-primary"
             on:click={() => {
               saveVisualName = '';
               showSaveVisualModal = true;
@@ -894,26 +938,13 @@
           </select>
         </div>
 
-        <div class="hr" />
+        <div class="sep" />
 
-        <div class="menu-title">Наборы данных</div>
-
+        <div class="menu-title">Набор данных</div>
         <div class="row two">
+          <button class="btn" on:click={clearAllDataSelection}>Заводские</button>
           <button
-            class="btn ghost"
-            on:click={() => {
-              selectedEntityFields = [];
-              axisX = '';
-              axisY = '';
-              axisZ = '';
-              search = '';
-            }}
-          >
-            Заводские
-          </button>
-
-          <button
-            class="btn primary"
+            class="btn btn-primary"
             on:click={() => {
               saveDatasetName = '';
               showSaveDatasetModal = true;
@@ -934,19 +965,19 @@
         </div>
 
         <div class="row">
-          <button class="btn ghost wide" on:click={resetView}>Сбросить камеру</button>
+          <button class="btn wide" on:click={resetView}>Сбросить камеру</button>
         </div>
       </div>
     {/if}
 
     <!-- Меню “Выбрать данные” -->
     {#if showPickDataMenu}
-      <div class="menu-pop">
+      <div class="menu-pop pick">
         <div class="menu-title">Выбор данных</div>
 
         <div class="sub">Текстовые → точки</div>
         <div class="list">
-          {#each textFieldsAll as f}
+          {#each textFieldsAll as f (f.code)}
             <button class="item" disabled={selectedEntityFields.includes(f.code)} on:click={() => addEntityField(f.code)}>
               <span class="name">{f.name}</span>
               <span class="tag">текст</span>
@@ -961,7 +992,7 @@
 
         {#if canAddCoord}
           <div class="list">
-            {#each coordFieldsAll as f}
+            {#each coordFieldsAll as f (f.code)}
               <button class="item" disabled={axisX === f.code || axisY === f.code || axisZ === f.code} on:click={() => addCoordField(f.code)}>
                 <span class="name">{f.name}</span>
                 <span class="tag">{f.kind === 'date' ? 'дата' : 'число'}</span>
@@ -969,10 +1000,12 @@
             {/each}
           </div>
         {:else}
-          <div class="limit">Уже выбрано 3 координаты (X/Y/Z). Удалите одну в хлебных крошках (×), чтобы добавить другую.</div>
+          <div class="limit">
+            Уже выбрано 3 координаты (X/Y/Z). Удалите одну прямо на ребре куба (×), чтобы добавить другую.
+          </div>
         {/if}
 
-        <div class="hr" />
+        <div class="sep" />
 
         <div class="row">
           <input class="input" placeholder="Поиск по точкам (Ctrl+K)" bind:value={search} />
@@ -995,8 +1028,8 @@
         {/if}
 
         <div class="row two">
-          <button class="btn ghost" on:click={closeAllMenus}>Закрыть</button>
-          <button class="btn primary" on:click={closeAllMenus}>Готово</button>
+          <button class="btn" on:click={closeAllMenus}>Закрыть</button>
+          <button class="btn btn-primary" on:click={closeAllMenus}>Готово</button>
         </div>
       </div>
     {/if}
@@ -1007,13 +1040,6 @@
         {#each tooltip.lines as line}<div>{line}</div>{/each}
       </div>
     {/if}
-
-    <!-- Info: слева снизу -->
-    <div class="info">
-      <div class="info-title">Точек: {debugRenderedCount}</div>
-      <div class="info-sub">Оси: {fieldName(axisX || '—')} / {fieldName(axisY || '—')} / {fieldName(axisZ || '—')}</div>
-      <div class="info-sub">{debugBBox}</div>
-    </div>
   </div>
 
   <!-- Modal: save visual -->
@@ -1023,9 +1049,9 @@
         <div class="modal-title">Сохранить визуальную схему</div>
         <input class="input" placeholder="Например: Светлый фон" bind:value={saveVisualName} />
         <div class="row two">
-          <button class="btn ghost" on:click={() => (showSaveVisualModal = false)}>Отмена</button>
+          <button class="btn" on:click={() => (showSaveVisualModal = false)}>Отмена</button>
           <button
-            class="btn primary"
+            class="btn btn-primary"
             on:click={() => {
               saveVisualScheme(saveVisualName);
               showSaveVisualModal = false;
@@ -1045,9 +1071,9 @@
         <div class="modal-title">Сохранить набор данных</div>
         <input class="input" placeholder="Например: Артикул + Выручка/Заказы/Расход" bind:value={saveDatasetName} />
         <div class="row two">
-          <button class="btn ghost" on:click={() => (showSaveDatasetModal = false)}>Отмена</button>
+          <button class="btn" on:click={() => (showSaveDatasetModal = false)}>Отмена</button>
           <button
-            class="btn primary"
+            class="btn btn-primary"
             on:click={() => {
               saveDatasetPreset(saveDatasetName);
               showSaveDatasetModal = false;
@@ -1069,67 +1095,40 @@
     height: 560px;
     border-radius: 18px;
     overflow: hidden;
-    background: #ffffff; /* ✅ белый дефолт */
+    background: #ffffff;
   }
 
   .scene { position: absolute; inset: 0; }
 
-  /* HUD: справа сверху */
+  /* HUD layout */
   .hud {
     position: absolute;
-    top: 12px;
-    right: 14px;
+    pointer-events: none; /* orbit-controls живёт */
     display: flex;
-    justify-content: flex-end;
-    pointer-events: none;
+    flex-direction: column;
+    gap: 10px;
     z-index: 5;
   }
 
-  .hud-right {
-    display: flex;
-    flex-direction: column;
+  .hud.top-right {
+    right: 14px;
+    top: 12px;
     align-items: flex-end;
+  }
+
+  .hud.bottom-left {
+    left: 14px;
+    bottom: 12px;
+    align-items: flex-start;
+  }
+
+  .hud-actions {
+    display: flex;
     gap: 10px;
     pointer-events: auto;
   }
 
-  .crumbs {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: 8px;
-    max-width: min(680px, calc(100vw - 40px));
-  }
-
-  .crumb {
-    border: 0;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 10px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.78);
-    color: rgba(15, 23, 42, 0.9);
-    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.10);
-    backdrop-filter: blur(10px);
-    font-size: 12px;
-    font-weight: 650;
-    white-space: nowrap;
-  }
-  .crumb .x {
-    width: 18px;
-    height: 18px;
-    border-radius: 999px;
-    display: grid;
-    place-items: center;
-    background: rgba(15, 23, 42, 0.06);
-    font-weight: 900;
-    line-height: 1;
-  }
-  .crumb:hover .x { background: rgba(37, 99, 235, 0.16); }
-
-  /* buttons: “как в заголовке таблицы” — синий акцент */
+  /* Buttons: как “в заголовке таблицы” → очень светлый голубой */
   .btn {
     border: 0;
     border-radius: 999px;
@@ -1138,38 +1137,98 @@
     font-weight: 650;
     cursor: pointer;
     line-height: 1;
-    background: rgba(255, 255, 255, 0.78);
+    background: #f8fbff;
     color: rgba(15, 23, 42, 0.9);
-    backdrop-filter: blur(10px);
-    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.10);
+    box-shadow: 0 10px 26px rgba(15, 23, 42, 0.10);
+    pointer-events: auto;
   }
   .btn:hover { transform: translateY(-0.5px); }
 
-  .btn.primary {
-    background: rgba(37, 99, 235, 0.92);
-    color: #ffffff;
-    box-shadow: 0 12px 34px rgba(37, 99, 235, 0.22);
+  .btn.btn-primary {
+    background: #f8fbff;
+    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+    position: relative;
   }
-  .btn.ghost { background: rgba(255, 255, 255, 0.78); }
+  .btn.btn-primary::after {
+    content: '';
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    bottom: 8px;
+    height: 2px;
+    border-radius: 2px;
+    background: rgba(34, 197, 94, 0.9); /* небольшой зелёный акцент */
+    opacity: .55;
+  }
+
   .btn.wide { width: 100%; }
 
-  /* меню */
+  /* breadcrumbs */
+  .crumbs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+    max-width: 520px;
+    pointer-events: auto;
+  }
+
+  .crumb {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 999px;
+    border: 0;
+    background: rgba(248, 251, 255, 0.95);
+    color: rgba(15, 23, 42, 0.9);
+    box-shadow: 0 10px 22px rgba(15, 23, 42, 0.10);
+    cursor: pointer;
+  }
+  .crumb .t { font-size: 12px; font-weight: 650; }
+  .crumb .x {
+    width: 18px;
+    height: 18px;
+    display: grid;
+    place-items: center;
+    border-radius: 999px;
+    background: rgba(15,23,42,.06);
+    font-weight: 900;
+    line-height: 1;
+  }
+  .crumb:hover .x { background: rgba(34,197,94,.18); }
+
+  /* info card bottom-left */
+  .info-card {
+    pointer-events: none;
+    background: rgba(248, 251, 255, 0.88);
+    border-radius: 14px;
+    padding: 10px 12px;
+    box-shadow: 0 16px 38px rgba(15, 23, 42, 0.14);
+    max-width: 420px;
+  }
+  .info-title { font-size: 12px; font-weight: 750; color: rgba(15,23,42,.9); margin-bottom: 4px; }
+  .info-sub { font-size: 11px; color: rgba(100,116,139,.92); line-height: 1.35; }
+
+  /* menus */
   .menu-pop {
     position: absolute;
-    top: 58px;
+    top: 56px;
     right: 14px;
     width: 340px;
     background: rgba(255, 255, 255, 0.92);
     border-radius: 18px;
     padding: 12px;
-    box-shadow: 0 18px 50px rgba(15, 23, 42, 0.16);
+    box-shadow: 0 22px 60px rgba(15, 23, 42, 0.18);
     backdrop-filter: blur(14px);
     pointer-events: auto;
     z-index: 10;
   }
+  .menu-pop.pick { right: 14px; top: 56px; }
+  .menu-pop.display { right: 14px; top: 56px; }
 
   .menu-title {
-    font-weight: 750;
+    font-weight: 800;
     font-size: 13px;
     color: rgba(15, 23, 42, 0.9);
     margin-bottom: 10px;
@@ -1184,7 +1243,6 @@
     align-items: baseline;
     gap: 6px;
   }
-
   .hint { font-weight: 600; color: rgba(100, 116, 139, 0.9); }
 
   .row {
@@ -1194,51 +1252,60 @@
     margin-top: 10px;
   }
   .row.two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
   .label { font-size: 12px; color: rgba(15,23,42,.78); width: 52px; }
 
-  .hr {
+  .sep {
     height: 1px;
     background: rgba(226, 232, 240, 0.7);
     margin: 12px 0;
   }
 
-  /* ✅ современный “без рамок” выбор цвета */
-  .color-wrap {
+  /* modern color row (без “красных границ”) */
+  .color-row {
     display: flex;
-    align-items: center;
     gap: 10px;
+    align-items: center;
+    width: 100%;
   }
-  .color {
-    width: 30px;
-    height: 30px;
+
+  .color-input {
+    width: 34px;
+    height: 34px;
+    border: 0;
     padding: 0;
-    border: 0;             /* ✅ убрать границы */
     background: transparent;
-    appearance: none;
     cursor: pointer;
+    border-radius: 10px;
+    overflow: hidden;
   }
-  .color::-webkit-color-swatch-wrapper { padding: 0; border: 0; }
-  .color::-webkit-color-swatch { border: 0; border-radius: 10px; } /* ✅ без рамок (красное на скрине) */
-  .swatch {
-    width: 44px;
-    height: 30px;
+  .color-input::-webkit-color-swatch-wrapper { padding: 0; }
+  .color-input::-webkit-color-swatch { border: 0; border-radius: 10px; }
+
+  .hex {
+    flex: 1;
+    border: 0;
+    outline: none;
+    background: rgba(248, 251, 255, 0.9);
     border-radius: 12px;
-    box-shadow: inset 0 0 0 1px rgba(226,232,240,.55);
+    padding: 10px 12px;
+    font-size: 12px;
+    color: rgba(15, 23, 42, 0.9);
   }
 
   .select, .input {
     width: 100%;
     border: 0;
-    background: rgba(248, 250, 252, 0.9);
+    background: rgba(248, 251, 255, 0.9);
     border-radius: 12px;
     padding: 10px 12px;
     font-size: 12px;
     outline: none;
-    box-shadow: inset 0 0 0 1px rgba(226, 232, 240, 0.85);
+    color: rgba(15,23,42,.9);
   }
 
   .select:focus, .input:focus {
-    box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.55), 0 0 0 4px rgba(37, 99, 235, 0.12);
+    box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.14);
   }
 
   .list {
@@ -1255,16 +1322,16 @@
     width: 100%;
     text-align: left;
     border: 0;
-    background: rgba(248, 250, 252, 0.9);
+    background: rgba(248, 251, 255, 0.92);
     border-radius: 14px;
     padding: 10px 10px;
     display: flex;
     justify-content: space-between;
     gap: 10px;
     cursor: pointer;
-    box-shadow: inset 0 0 0 1px rgba(226, 232, 240, 0.85);
   }
   .item:disabled { opacity: .45; cursor: not-allowed; }
+
   .name { font-size: 12px; font-weight: 650; color: rgba(15,23,42,.88); }
   .tag { font-size: 11px; color: rgba(100,116,139,.9); }
 
@@ -1272,10 +1339,9 @@
     margin-top: 8px;
     font-size: 12px;
     color: rgba(100, 116, 139, 0.95);
-    background: rgba(241, 245, 249, 0.9);
+    background: rgba(248, 251, 255, 0.92);
     border-radius: 14px;
     padding: 10px 12px;
-    box-shadow: inset 0 0 0 1px rgba(226, 232, 240, 0.85);
   }
 
   /* tooltip */
@@ -1288,25 +1354,8 @@
     padding: 10px;
     border-radius: 12px;
     max-width: 360px;
-    z-index: 20;
-  }
-
-  /* info: слева снизу */
-  .info {
-    position: absolute;
-    left: 14px;
-    bottom: 12px;
-    background: rgba(255,255,255,.74);
-    border-radius: 14px;
-    padding: 10px 12px;
-    box-shadow: 0 18px 50px rgba(15, 23, 42, 0.12);
-    backdrop-filter: blur(12px);
-    pointer-events: none;
     z-index: 6;
-    max-width: 380px;
   }
-  .info-title { font-size: 12px; font-weight: 750; color: rgba(15,23,42,.9); }
-  .info-sub { font-size: 11px; color: rgba(100,116,139,.92); margin-top: 2px; }
 
   /* modal */
   .modal-backdrop {
@@ -1334,19 +1383,40 @@
     margin-bottom: 10px;
   }
 
-  /* clouds (max labels) */
-  :global(.cloud) {
-    transform: translate(-50%, -50%);
-    pointer-events: none;
-    user-select: none;
-    white-space: nowrap;
-    font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial;
-    font-size: 12px;
-    font-weight: 750;
+  /* 3D axis chips */
+  :global(.chip3d) {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
     padding: 6px 10px;
     border-radius: 999px;
-    background: rgba(239, 246, 255, 0.92);
-    color: rgba(30, 64, 175, 0.98);
-    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.14);
+    background: rgba(255, 255, 255, 0.92);
+    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.14);
+    font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    font-size: 12px;
+    font-weight: 720;
+    color: rgba(15, 23, 42, 0.92);
+    white-space: nowrap;
+    transform: translate(-50%, -50%);
   }
+
+  :global(.chip3d.accent) {
+    background: rgba(248, 251, 255, 0.95);
+    color: rgba(30, 64, 175, 0.98);
+  }
+
+  :global(.chip3d .x) {
+    border: 0;
+    width: 20px;
+    height: 20px;
+    border-radius: 999px;
+    background: rgba(15,23,42,.06);
+    color: rgba(15,23,42,.75);
+    cursor: pointer;
+    font-weight: 900;
+    line-height: 1;
+    display: grid;
+    place-items: center;
+  }
+  :global(.chip3d .x:hover) { background: rgba(34,197,94,.18); color: rgba(5,46,22,.9); }
 </style>
