@@ -81,7 +81,9 @@
   const planeGroup = new THREE.Group();
   const edgeLabelGroup = new THREE.Group();
 
-  let wireframeLines: THREE.LineSegments<THREE.EdgesGeometry, THREE.LineBasicMaterial> | null = null;
+  let cornerFrame: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | null = null;
+  
+  let axisLabels: CSS2DObject[] = [];
 
   let circlePoints: SpacePoint[] = [];
   let diamondPoints: SpacePoint[] = [];
@@ -338,39 +340,121 @@
     return obj;
   }
 
-  function disposeWireframe(): void {
-    if (!wireframeLines) return;
-    planeGroup.remove(wireframeLines);
-    wireframeLines.geometry.dispose();
-    wireframeLines.material.dispose();
-    wireframeLines = null;
+function disposeWireframe(): void {
+  if (cornerFrame) {
+    planeGroup.remove(cornerFrame);
+    cornerFrame.geometry.dispose();
+    cornerFrame.material.dispose();
+    cornerFrame = null;
+  }
+}
+
+function disposeAxisLabels(): void {
+  for (const l of axisLabels) edgeLabelGroup.remove(l);
+  axisLabels = [];
+}
+
+function createAxisLabel(text: string, isMax = false): CSS2DObject {
+  const el = document.createElement('div');
+  el.className = `cube-edge-label${isMax ? ' max' : ''}`;
+  el.textContent = text;
+  return new CSS2DObject(el);
+}
+
+function rebuildPlanes(list: SpacePoint[]): void {
+  // Теперь здесь НЕ куб, а "угол" из 3 плоскостей: XY (пол), XZ, YZ
+  planeGroup.clear();
+  disposeWireframe();
+  disposeAxisLabels();
+
+  if (!showPlanes) return;
+
+  const bbox = normalizeBBox(list);
+
+  // точки "нуля" и концов осей (как ты рисовал желтым/зелёным)
+  const A = new THREE.Vector3(bbox.minX, bbox.minY, bbox.minZ);
+  const Bx = new THREE.Vector3(bbox.maxX, bbox.minY, bbox.minZ);
+  const By = new THREE.Vector3(bbox.minX, bbox.maxY, bbox.minZ);
+  const Bz = new THREE.Vector3(bbox.minX, bbox.minY, bbox.maxZ);
+
+  // Рёбра 3 прямоугольников:
+  // XY на z=min
+  const Cxy = new THREE.Vector3(bbox.maxX, bbox.maxY, bbox.minZ);
+  // XZ на y=min
+  const Cxz = new THREE.Vector3(bbox.maxX, bbox.minY, bbox.maxZ);
+  // YZ на x=min
+  const Cyz = new THREE.Vector3(bbox.minX, bbox.maxY, bbox.maxZ);
+
+  const segments: Array<[THREE.Vector3, THREE.Vector3]> = [
+    // XY (z=min)
+    [A, Bx],
+    [Bx, Cxy],
+    [Cxy, By],
+    [By, A],
+
+    // XZ (y=min)
+    [A, Bx],     // общая
+    [Bx, Cxz],
+    [Cxz, Bz],
+    [Bz, A],
+
+    // YZ (x=min)
+    [A, By],     // общая
+    [By, Cyz],
+    [Cyz, Bz],
+    [Bz, A]
+  ];
+
+  // Собираем геометрию линий
+  const vertices: number[] = [];
+  for (const [p1, p2] of segments) {
+    vertices.push(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
   }
 
-  function rebuildPlanes(list: SpacePoint[]): void {
-    // Теперь здесь НЕ плоскости, а каркас пространства
-    planeGroup.clear();
-    disposeWireframe();
-    if (!showPlanes) return;
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
 
-    const bbox = normalizeBBox(list);
+  const mat = new THREE.LineBasicMaterial({ color: 0x334155 });
+  cornerFrame = new THREE.LineSegments(geom, mat);
+  planeGroup.add(cornerFrame);
 
-    const sizeX = Math.max(2, bbox.maxX - bbox.minX);
-    const sizeY = Math.max(2, bbox.maxY - bbox.minY);
-    const sizeZ = Math.max(2, bbox.maxZ - bbox.minZ);
+  // ---- Подписи (жёлтые) и максимумы (зелёные) ----
+  const xName = fieldName(axisX || '—');
+  const yName = fieldName(axisY || '—');
+  const zName = fieldName(axisZ || '—');
 
-    const centerX = (bbox.minX + bbox.maxX) / 2;
-    const centerY = (bbox.minY + bbox.maxY) / 2;
-    const centerZ = (bbox.minZ + bbox.maxZ) / 2;
+  const xMax = axisX ? calcMax(list, axisX) : NaN;
+  const yMax = axisY ? calcMax(list, axisY) : NaN;
+  const zMax = axisZ ? calcMax(list, axisZ) : NaN;
 
-    const geom = new THREE.EdgesGeometry(new THREE.BoxGeometry(sizeX, sizeY, sizeZ));
-    const mat = new THREE.LineBasicMaterial({ color: 0x334155 });
-    wireframeLines = new THREE.LineSegments(geom, mat);
-    wireframeLines.position.set(centerX, centerY, centerZ);
-    planeGroup.add(wireframeLines);
+  const midX = A.clone().lerp(Bx, 0.5);
+  const midY = A.clone().lerp(By, 0.5);
+  const midZ = A.clone().lerp(Bz, 0.5);
 
-    // Лейблы плоскостей можно убрать, чтобы не мешали (оставляем только edge labels)
-    // planeGroup.add(makePlaneLabel(...)) — не добавляем
-  }
+  // подписи по центру осей
+  const lx = createAxisLabel(xName);
+  lx.position.copy(midX);
+
+  const ly = createAxisLabel(yName);
+  ly.position.copy(midY);
+
+  const lz = createAxisLabel(zName);
+  lz.position.copy(midZ);
+
+  // max на концах осей
+  const mx = createAxisLabel(`${formatValueByMetric(axisX, xMax)}`, true);
+  mx.position.copy(Bx);
+
+  const my = createAxisLabel(`${formatValueByMetric(axisY, yMax)}`, true);
+  my.position.copy(By);
+
+  const mz = createAxisLabel(`${formatValueByMetric(axisZ, zMax)}`, true);
+  mz.position.copy(Bz);
+
+  axisLabels = [lx, ly, lz, mx, my, mz];
+  edgeLabelGroup.add(...axisLabels);
+}
+
 
   function init3d(): void {
     const width = container3d.clientWidth;
