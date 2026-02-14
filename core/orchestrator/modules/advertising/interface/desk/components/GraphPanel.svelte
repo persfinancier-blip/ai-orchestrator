@@ -333,8 +333,31 @@
     return obj;
   }
 
+  // ✅ чтобы не копились материалы/геометрия при пересборке "куба"
+  function disposeGroupChildren(group: THREE.Group): void {
+    const children = [...group.children];
+    for (const obj of children) {
+      group.remove(obj);
+
+      const anyObj = obj as any;
+
+      if (anyObj.geometry && typeof anyObj.geometry.dispose === 'function') anyObj.geometry.dispose();
+
+      if (anyObj.material) {
+        const mats = Array.isArray(anyObj.material) ? anyObj.material : [anyObj.material];
+        for (const m of mats) {
+          if (!m) continue;
+          if (m.map && typeof m.map.dispose === 'function') m.map.dispose();
+          if (typeof m.dispose === 'function') m.dispose();
+        }
+      }
+    }
+  }
+
+  // ✅ РАНЬШЕ: три полупрозрачные плоскости (заливка)
+  // ✅ ТЕПЕРЬ: только линии "куба" + подписи плоскостей (без заливки)
   function rebuildPlanes(list: SpacePoint[]): void {
-    planeGroup.clear();
+    disposeGroupChildren(planeGroup);
     if (!showPlanes) return;
 
     const bbox = normalizeBBox(list);
@@ -345,42 +368,22 @@
     const centerY = (bbox.minY + bbox.maxY) / 2;
     const centerZ = (bbox.minZ + bbox.maxZ) / 2;
 
-    const matXY = new THREE.MeshBasicMaterial({
+    // --- ЛИНИИ КУБА (без заливки) ---
+    const boxGeo = new THREE.BoxGeometry(widthX, widthY, widthZ);
+    const edgesGeo = new THREE.EdgesGeometry(boxGeo);
+    boxGeo.dispose(); // сам BoxGeometry дальше не нужен
+
+    const edgesMat = new THREE.LineBasicMaterial({
       color: '#94a3b8',
       transparent: true,
-      opacity: 0.1,
-      side: THREE.DoubleSide,
-      depthWrite: false
-    });
-    const matXZ = new THREE.MeshBasicMaterial({
-      color: '#9ca3af',
-      transparent: true,
-      opacity: 0.1,
-      side: THREE.DoubleSide,
-      depthWrite: false
-    });
-    const matYZ = new THREE.MeshBasicMaterial({
-      color: '#a5b4fc',
-      transparent: true,
-      opacity: 0.1,
-      side: THREE.DoubleSide,
-      depthWrite: false
+      opacity: 0.85
     });
 
-    const planeXY = new THREE.Mesh(new THREE.PlaneGeometry(widthX, widthY), matXY);
-    planeXY.position.set(centerX, centerY, bbox.minZ);
-    planeGroup.add(planeXY);
+    const edges = new THREE.LineSegments(edgesGeo, edgesMat);
+    edges.position.set(centerX, centerY, centerZ);
+    planeGroup.add(edges);
 
-    const planeXZ = new THREE.Mesh(new THREE.PlaneGeometry(widthX, widthZ), matXZ);
-    planeXZ.rotation.x = -Math.PI / 2;
-    planeXZ.position.set(centerX, bbox.minY, centerZ);
-    planeGroup.add(planeXZ);
-
-    const planeYZ = new THREE.Mesh(new THREE.PlaneGeometry(widthY, widthZ), matYZ);
-    planeYZ.rotation.y = Math.PI / 2;
-    planeYZ.position.set(bbox.minX, centerY, centerZ);
-    planeGroup.add(planeYZ);
-
+    // --- ПОДПИСИ ПЛОСКОСТЕЙ (оставляем как раньше) ---
     const xName = fieldName(axisX || '—');
     const yName = fieldName(axisY || '—');
     const zName = fieldName(axisZ || '—');
@@ -884,6 +887,7 @@
     window.removeEventListener('keydown', onHotKey);
 
     disposeEdgeLabels();
+    disposeGroupChildren(planeGroup);
 
     renderer?.dispose();
     controls?.dispose();
@@ -956,8 +960,6 @@
           </select>
         </label>
       </section>
-
-      <!-- УДАЛЕНО: блок "Набор данных" -->
 
       <section class="section">
         <h4>Координаты</h4>
