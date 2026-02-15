@@ -58,6 +58,9 @@
   let activeColorCode: string | null = null;
   let activeColorValue = defaultEntityColor;
 
+  // ✅ защита от самотриггера реактивного блока (чтобы работало как bg/edge)
+  let lastCommitted = '';
+
   function getFieldColor(code: string): string {
     return entityFieldColors?.[code] ?? defaultEntityColor;
   }
@@ -78,12 +81,14 @@
   function openColorFor(code: string): void {
     activeColorCode = code;
     activeColorValue = getFieldColor(code);
+    lastCommitted = activeColorValue; // ✅ считаем текущее уже применённым
     isColorOpen = true;
   }
 
   function closeColor(): void {
     isColorOpen = false;
     activeColorCode = null;
+    lastCommitted = '';
   }
 
   function onActiveHexInput(e: Event): void {
@@ -92,11 +97,14 @@
     activeColorValue = String(el.value ?? '').trim();
   }
 
-  // ✅ live update: пока поповер открыт — пишем в entityFieldColors, чтобы:
-  // - свотч менялся сразу
-  // - график перекрашивался сразу (через bind в родителе)
+  // ✅ live update (как в DisplayMenu), но без лупа:
+  // пишем в entityFieldColors только если реально изменилось значение
   $: if (isColorOpen && activeColorCode) {
-    entityFieldColors = { ...(entityFieldColors ?? {}), [activeColorCode]: activeColorValue };
+    const v = String(activeColorValue ?? '').trim();
+    if (v && v !== lastCommitted) {
+      lastCommitted = v;
+      entityFieldColors = { ...(entityFieldColors ?? {}), [activeColorCode]: v };
+    }
   }
 
   // --- selection logic ---
@@ -185,7 +193,7 @@
                   type="button"
                   class="swatch"
                   aria-label="Цвет поля"
-                  style={`background:${getFieldColor(c)};`}
+                  style={`background:${(isColorOpen && activeColorCode === c) ? activeColorValue : getFieldColor(c)};`}
                   on:click|stopPropagation={() => openColorFor(c)}
                 ></button>
 
