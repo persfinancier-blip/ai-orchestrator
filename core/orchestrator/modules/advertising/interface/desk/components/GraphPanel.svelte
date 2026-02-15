@@ -50,8 +50,12 @@
   let visualBg = '#ffffff';
   let visualEdge = '#334155';
 
-  // ✅ цвет точек (управляется из PickDataMenu)
+  // ✅ старый цвет (fallback)
   let pointsColor = '#3b82f6';
+
+  // ✅ НОВОЕ: per-field цвета, но ничего не ломаем: если нет — берём pointsColor
+  let entityFieldColors: Record<string, string> = {};
+  const DEFAULT_ENTITY_COLOR = '#3b82f6';
 
   let visualSchemes: VisualScheme[] = [];
   let selectedVisualId = '';
@@ -136,7 +140,6 @@
     dateFields: dateFieldsAll
   });
 
-  // ---- FIXED caching: Map(point.id -> clusterId)
   let fixedAssign: Map<string, number> = new Map();
   let fixedCounts: Map<number, number> = new Map();
   let fixedConfigKey = '';
@@ -145,6 +148,11 @@
     if (id < 0) return '#94a3b8';
     const hue = (id * 47) % 360;
     return `hsl(${hue} 70% 45%)`;
+  }
+
+  function colorForEntityField(code: string): string {
+    // ✅ важное: не ломаем старое поведение, если мапа пустая
+    return entityFieldColors?.[code] ?? pointsColor ?? DEFAULT_ENTITY_COLOR;
   }
 
   function getTextValue(p: SpacePoint, field: string): string {
@@ -200,8 +208,10 @@
   }
 
   function applyClustering(input: SpacePoint[]): SpacePoint[] {
-    // ✅ когда группировка выключена — красим все точки выбранным цветом
-    if (!grouping.enabled) return input.map((p) => ({ ...p, color: pointsColor }));
+    // ✅ когда группировка выключена — красим по полю (если задано), иначе pointsColor
+    if (!grouping.enabled) {
+      return input.map((p) => ({ ...p, color: colorForEntityField(p.sourceField) }));
+    }
 
     if (grouping.recompute === 'fixed') {
       const cfgKey = makeFixedConfigKey(grouping);
@@ -533,6 +543,9 @@
 
         bind:pointsColor
 
+        bind:entityFieldColors
+        defaultEntityColor={DEFAULT_ENTITY_COLOR}
+
         onAddEntity={addEntityField}
         onAddCoord={addCoordField}
         onClose={closeAllMenus}
@@ -572,6 +585,7 @@
     />
   {/if}
 </section>
+
 
 <style>
   :global(:root) {
