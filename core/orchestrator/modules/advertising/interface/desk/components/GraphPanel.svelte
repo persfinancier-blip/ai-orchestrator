@@ -53,6 +53,9 @@
   let lodDetail = 0.5; // средняя
   let lodMinCount = 5;
 
+  // ✅ max по осям до LOD (для стабильных подписей)
+  let axisMax = { xMax: Number.NaN, yMax: Number.NaN, zMax: Number.NaN };
+
   // ✅ НОРМАЛИЗАЦИЯ КЛЮЧЕЙ (должна совпадать с PickDataMenu)
   const norm = (s: string): string => String(s ?? '').trim().toLowerCase();
   const tail = (s: string): string => {
@@ -139,9 +142,19 @@
     axisZ,
     numberFields: numberFieldsAll,
     dateFields: dateFieldsAll,
+
     lodEnabled,
     lodDetail,
-    lodMinCount
+    lodMinCount,
+
+    onAxisMax: (v) => {
+      // ✅ чтобы не создавать лишние реактивные циклы
+      if (
+        v.xMax !== axisMax.xMax ||
+        v.yMax !== axisMax.yMax ||
+        v.zMax !== axisMax.zMax
+      ) axisMax = v;
+    }
   });
 
   // ✅ красим только по полю (цвет задаётся при выборе точек)
@@ -159,7 +172,7 @@
     scene.setTheme({ bg: visualBg, edge: visualEdge });
     scene.setAxisCodes({ x: axisX, y: axisY, z: axisZ });
 
-    const info = scene.setPoints(colored);
+    const info = scene.setPoints(clustered, { axisMaxOverride: axisMax });
 
     renderedCount = info.renderedCount;
     bboxLabel = info.bboxLabel;
@@ -341,7 +354,7 @@
     await tick();
 
     // ✅ на старте тоже используем colored
-    const info = scene.setPoints(colored);
+    const info = scene.setPoints(clustered, { axisMaxOverride: axisMax });;
     renderedCount = info.renderedCount;
     bboxLabel = info.bboxLabel;
   });
