@@ -41,7 +41,7 @@ export class SpaceScene {
   private axisLabelObjects: CSS2DObject[] = [];
 
   private pointsMesh?: THREE.InstancedMesh;
-  private clusterCloudMesh?: THREE.InstancedMesh; // ✅ “облако” кластера (границы)
+  private clusterCloudMesh?: THREE.InstancedMesh; // ✅ “облако” кластера
 
   private renderPoints: SpacePoint[] = [];
 
@@ -163,7 +163,7 @@ export class SpaceScene {
     return { x: Math.max(0.001, sx), y: Math.max(0.001, sy), z: Math.max(0.001, sz) };
   }
 
-  // sqrt(n)/log(n+1) с клампом чтобы не улетало
+  // sqrt(n)/log(n+1) с клампом
   private pointScale(p: SpacePoint): number {
     if (!this.isClusterPoint(p)) return 1;
 
@@ -182,11 +182,9 @@ export class SpaceScene {
 
     this.scene.background = new THREE.Color(this.theme.bg);
 
-    // ✅ сохраняем цвета до sanitizePoints
     const colorById = new Map<string, string | undefined>();
     for (const p of points ?? []) colorById.set(p.id, p.color);
 
-    // ✅ чистим старое
     this.clearMesh(this.pointsMesh);
     this.pointsMesh = undefined;
 
@@ -195,7 +193,6 @@ export class SpaceScene {
 
     const sanitized = sanitizePoints(points);
 
-    // ✅ возвращаем цвет обратно
     const renderable = sanitized.map((p) => ({
       ...p,
       color: colorById.get(p.id) ?? p.color
@@ -222,9 +219,6 @@ export class SpaceScene {
         this.pointsMesh!.setMatrixAt(idx, o.matrix);
       });
 
-      // ✅ важно для инстансов
-      this.pointsMesh.instanceMatrix.needsUpdate = true;
-
       const c = new THREE.Color();
       for (let i = 0; i < this.renderPoints.length; i += 1) {
         const hex = this.renderPoints[i].color ?? this.theme.pointColor;
@@ -237,7 +231,7 @@ export class SpaceScene {
     }
 
     // ---------------------------------------
-    // 2) CLUSTER CLOUDS (bbox wireframe box)
+    // 2) CLUSTER CLOUDS (ellipsoid by bbox span)
     // ---------------------------------------
     const clusterIdx: number[] = [];
     for (let i = 0; i < this.renderPoints.length; i += 1) {
@@ -245,13 +239,14 @@ export class SpaceScene {
     }
 
     if (clusterIdx.length) {
-      const geom = new THREE.BoxGeometry(1, 1, 1);
+      // ✅ сфера -> масштабируем в эллипсоид (по span)
+      const geom = new THREE.SphereGeometry(1, 14, 14);
       const mat = new THREE.MeshBasicMaterial({
         transparent: true,
-        opacity: 0.22,
+        opacity: 0.10,
         depthWrite: false,
         vertexColors: true,
-        wireframe: true // ✅ границы “облака”
+        side: THREE.DoubleSide
       });
 
       this.clusterCloudMesh = new THREE.InstancedMesh(geom, mat, clusterIdx.length);
@@ -266,9 +261,9 @@ export class SpaceScene {
 
         o.position.set(p.x, p.y, p.z);
 
-        // небольшой буфер, чтобы не было “впритык”
-        const pad = 1.08;
-        o.scale.set(span.x * pad, span.y * pad, span.z * pad);
+        // geom radius=1 => diameter=2, поэтому scale = span/2
+        const pad = 1.12;
+        o.scale.set((span.x / 2) * pad, (span.y / 2) * pad, (span.z / 2) * pad);
 
         o.updateMatrix();
         this.clusterCloudMesh.setMatrixAt(ii, o.matrix);
@@ -474,22 +469,13 @@ export class SpaceScene {
 
     const fields = this.deps.getFields();
 
-    const mx = this.createChipLabel(
-      formatValueByMetric(axisX, axisX ? calcMax(list, axisX) : Number.NaN, fields),
-      { tone: 'accent' }
-    );
+    const mx = this.createChipLabel(formatValueByMetric(axisX, axisX ? calcMax(list, axisX) : Number.NaN, fields), { tone: 'accent' });
     mx.position.copy(Bx);
 
-    const my = this.createChipLabel(
-      formatValueByMetric(axisY, axisY ? calcMax(list, axisY) : Number.NaN, fields),
-      { tone: 'accent' }
-    );
+    const my = this.createChipLabel(formatValueByMetric(axisY, axisY ? calcMax(list, axisY) : Number.NaN, fields), { tone: 'accent' });
     my.position.copy(By);
 
-    const mz = this.createChipLabel(
-      formatValueByMetric(axisZ, axisZ ? calcMax(list, axisZ) : Number.NaN, fields),
-      { tone: 'accent' }
-    );
+    const mz = this.createChipLabel(formatValueByMetric(axisZ, axisZ ? calcMax(list, axisZ) : Number.NaN, fields), { tone: 'accent' });
     mz.position.copy(Bz);
 
     this.axisLabelObjects = [xChip, yChip, zChip, mx, my, mz];
@@ -514,7 +500,6 @@ export class SpaceScene {
     const point = this.renderPoints[hit.instanceId];
     if (!point) return;
 
-    // ✅ TOOLTIP: кластер/обычная точка
     if (this.isClusterPoint(point)) {
       const n = this.clusterCount(point);
 
