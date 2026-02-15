@@ -122,91 +122,96 @@
   }
 </script>
 
+<!-- ВАЖНО: .menu-pop.pick НЕ трогаем (позиционирование задаётся общими стилями) -->
 <div class="menu-pop pick">
-  <div class="menu-title">Выбор данных</div>
+  <!-- ✅ внутренний якорь только для overlay/layer -->
+  <div class="pick-inner">
+    <div class="menu-title">Выбор данных</div>
 
-  <div class="selected-bar">
-    <div class="selected-block">
-      <div class="selected-title">Выбраны поля</div>
-      <div class="chips">
-        {#if (selectedEntityFields?.length ?? 0) === 0}
-          <span class="empty">ничего</span>
-        {:else}
-          {#each selectedEntityFields as c (c)}
-            <span class="chip">{chipLabel(c)}</span>
-          {/each}
-        {/if}
-      </div>
-    </div>
-
-    <div class="selected-block">
-      <div class="selected-title">Оси</div>
-      <div class="chips">
-        <span class="chip axis">X: {axisX ? chipLabel(axisX) : '—'}</span>
-        <span class="chip axis">Y: {axisY ? chipLabel(axisY) : '—'}</span>
-        <span class="chip axis">Z: {axisZ ? chipLabel(axisZ) : '—'}</span>
-      </div>
-    </div>
-  </div>
-
-  <!-- ✅ выбор цвета точек -->
-  <div class="row two">
-    <div class="color-wrap">
-      <label class="label">Цвет</label>
-
-      <button
-        type="button"
-        class="color"
-        aria-label="Цвет точек"
-        style={`background:${pointsColor};`}
-        on:click|stopPropagation={togglePointsColor}
-      ></button>
-    </div>
-
-    <input class="hex" placeholder="#3b82f6" value={pointsColor} on:input={onHexInput} />
-  </div>
-
-  <div class="row">
-    <input class="input" placeholder="Поиск по полям (Ctrl+K)" bind:value={search} />
-  </div>
-
-  <div class="sep" />
-
-  <div class="sub">Поля</div>
-
-  <div class="list">
-    {#each filteredFields as f (f.code)}
-      <button class="item" disabled={isDisabledField(f)} on:click={() => onPick(f)}>
-        <span class="name">{f.name}</span>
-
-        <span class="right">
-          {#if f.kind !== 'text' && selectedAxis(f.code)}
-            <span class="pill">{selectedAxis(f.code)?.toUpperCase()}</span>
+    <div class="selected-bar">
+      <div class="selected-block">
+        <div class="selected-title">Выбраны поля</div>
+        <div class="chips">
+          {#if (selectedEntityFields?.length ?? 0) === 0}
+            <span class="empty">ничего</span>
+          {:else}
+            {#each selectedEntityFields as c (c)}
+              <span class="chip">{chipLabel(c)}</span>
+            {/each}
           {/if}
-          <span class="tag">{kindLabel[f.kind]}</span>
-        </span>
-      </button>
-    {/each}
+        </div>
+      </div>
+
+      <div class="selected-block">
+        <div class="selected-title">Оси</div>
+        <div class="chips">
+          <span class="chip axis">X: {axisX ? chipLabel(axisX) : '—'}</span>
+          <span class="chip axis">Y: {axisY ? chipLabel(axisY) : '—'}</span>
+          <span class="chip axis">Z: {axisZ ? chipLabel(axisZ) : '—'}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ✅ выбор цвета точек -->
+    <div class="row two">
+      <div class="color-wrap">
+        <label class="label">Цвет</label>
+
+        <button
+          type="button"
+          class="color"
+          aria-label="Цвет точек"
+          style={`background:${pointsColor};`}
+          on:click|stopPropagation={togglePointsColor}
+        ></button>
+      </div>
+
+      <input class="hex" placeholder="#3b82f6" value={pointsColor} on:input={onHexInput} />
+    </div>
+
+    <div class="row">
+      <input class="input" placeholder="Поиск по полям (Ctrl+K)" bind:value={search} />
+    </div>
+
+    <div class="sep" />
+
+    <div class="sub">Поля</div>
+
+    <div class="list">
+      {#each filteredFields as f (f.code)}
+        <button class="item" disabled={isDisabledField(f)} on:click={() => onPick(f)}>
+          <span class="name">{f.name}</span>
+
+          <span class="right">
+            {#if f.kind !== 'text' && selectedAxis(f.code)}
+              <span class="pill">{selectedAxis(f.code)?.toUpperCase()}</span>
+            {/if}
+            <span class="tag">{kindLabel[f.kind]}</span>
+          </span>
+        </button>
+      {/each}
+    </div>
+
+    {#if !canAddCoord}
+      <div class="limit">
+        Уже выбрано 3 координаты (X/Y/Z). Удалите одну прямо на ребре куба (×), чтобы добавить другую.
+      </div>
+    {/if}
+
+    <!-- ✅ модалка выбора цвета (живет внутри pick-inner, НЕ влияет на позицию меню) -->
+    {#if isPointsColorOpen}
+      <div class="picker-overlay" on:click={closePointsColor}></div>
+
+      <div class="picker-layer" aria-label="Цвет точек">
+        <ColorPickerPopover bind:value={pointsColor} title="Цвет точек" onClose={closePointsColor} />
+      </div>
+    {/if}
   </div>
-
-  {#if !canAddCoord}
-    <div class="limit">
-      Уже выбрано 3 координаты (X/Y/Z). Удалите одну прямо на ребре куба (×), чтобы добавить другую.
-    </div>
-  {/if}
-
-  <!-- ✅ модалка выбора цвета (в конце меню) -->
-  {#if isPointsColorOpen}
-    <div class="picker-overlay" on:click={closePointsColor}></div>
-
-    <div class="picker-layer" aria-label="Цвет точек">
-      <ColorPickerPopover bind:value={pointsColor} title="Цвет точек" onClose={closePointsColor} />
-    </div>
-  {/if}
 </div>
 
 <style>
-  .menu-pop.pick {
+  /* ✅ вот тут мы якорим только внутренние абсолюты */
+  .pick-inner {
     position: relative;
   }
 
@@ -408,7 +413,7 @@
     box-sizing: border-box;
   }
 
-  /* overlay только внутри меню, не блокирует табы/страницу */
+  /* overlay только внутри меню */
   .picker-overlay {
     position: absolute;
     inset: 0;
@@ -424,7 +429,6 @@
     pointer-events: none;
   }
 
-  /* жестко центрируем поповер внутри меню */
   .picker-layer :global(.picker) {
     position: absolute !important;
     top: 50% !important;
