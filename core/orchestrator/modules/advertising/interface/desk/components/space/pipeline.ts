@@ -190,110 +190,34 @@ export function formatValueByMetric(metricCode: string, maxValue: number, fields
 // ✅ VOXEL / GRID LOD AGGREGATION
 // ==============================
 
-type Vec3 = { x: number; y: number; z: number };
-
 function clamp01(v: number): number {
   return Math.min(1, Math.max(0, v));
 }
 
-function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * t;
-}
-
-function bboxSpan(bbox: BBox): Vec3 {
-  return {
-    x: Math.max(0.001, bbox.maxX - bbox.minX),
-    y: Math.max(0.001, bbox.maxY - bbox.minY),
-    z: Math.max(0.001, bbox.maxZ - bbox.minZ)
-  };
-}
-
-/**
- * Гарантии:
- * - detail=0 => агрегации НЕ будет (minCountEff > N)
- * - detail=1 => размер вокселя таков, что все точки попадут в одну ячейку (per sourceField)
- */
-function voxelParams(detail01: number, bbox: BBox, total: number, minCountBase: number): { size: number; minCountEff: number } {
+// ✅ Адаптивный размер вокселя: зависит от bbox и detail
+// detail: 0..1, чем больше — тем грубее (крупнее воксель)
+function voxelSizeFromDetailAndBBox(detail01: number, bbox: BBox): number {
   const d = clamp01(detail01);
 
-  if (total <= 1) return { size: 1, minCountEff: total + 1 };
+  const spanX = Math.max(0.001, bbox.maxX - bbox.minX);
+  const spanY = Math.max(0.001, bbox.maxY - bbox.minY);
+  const spanZ = Math.max(0.001, bbox.maxZ - bbox.minZ);
+  const maxSpan = Math.max(spanX, spanY, spanZ);
 
-  const span = bboxSpan(bbox);
-  const maxSpan = Math.max(span.x, span.y, span.z);
+  // хотим в среднем 30 ячеек на максимальном span при detail=0 (мелко),
+  // и ~8 ячеек при detail=1 (крупно)
+  const bins = 30 - 22 * d; // 30..8
+  const size = maxSpan / Math.max(4, bins);
 
-  // detail=1 -> ОДНА ячейка: делаем size больше maxSpan (точно 1 бакет)
-  // detail=0 -> size маленький (но агрегация всё равно выключится minCountEff)
-  const sizeMin = Math.max(0.25, maxSpan / 120); // достаточно мелко
-  const sizeMax = maxSpan * 2.1;                 // гарантированно одна ячейка
-  const size = lerp(sizeMin, sizeMax, d);
-
-  // detail=0 => никогда не агрегируем
-  // detail=1 => агрегируем даже 1 точку (чтобы все слиплось в один кластер на ячейку)
-  const minCountEff = d <= 0.0001 ? total + 1 : Math.max(1, Math.round(lerp(minCountBase, 1, d)));
-
-  return { size, minCountEff };
+  // clamp чтобы не было слишком мелко/слишком крупно
+  return Math.max(2.5, Math.min(45, size));
 }
 
-/**
- * Индексация от bbox.min, чтобы отрицательные координаты не ломали "одна ячейка".
- */
-function voxelKey(p: SpacePoint, bbox: BBox, size: number): string {
-  const ix = Math.floor((p.x - bbox.minX) / size);
-  const iy = Math.floor((p.y - bbox.minY) / size);
-  const iz = Math.floor((p.z - bbox.minZ) / size);
+function voxelKey(x: number, y: number, z: number, size: number): string {
+  const ix = Math.floor(x / size);
+  const iy = Math.floor(y / size);
+  const iz = Math.floor(z / size);
   return `${ix}|${iy}|${iz}`;
-}
-
-/**
- * "Крайние точки" из реальных точек (не bbox).
- * Берем экстремумы по направлениям ±X ±Y ±Z и по диагоналям.
- * Этого хватает для стабильного convex hull в сцене.
- */
-function pickExtremeHull(points: SpacePoint[], limit = 24): [number, number, number][] {
-  if (points.length <= 1) return points.map((p) => [p.x, p.y, p.z]);
-
-  const dirs: Vec3[] = [
-    { x: 1, y: 0, z: 0 }, { x: -1, y: 0, z: 0 },
-    { x: 0, y: 1, z: 0 }, { x: 0, y: -1, z: 0 },
-    { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: -1 },
-
-    { x: 1, y: 1, z: 1 },   { x: -1, y: 1, z: 1 },
-    { x: 1, y: -1, z: 1 },  { x: 1, y: 1, z: -1 },
-    { x: -1, y: -1, z: 1 }, { x: -1, y: 1, z: -1 },
-    { x: 1, y: -1, z: -1 }, { x: -1, y: -1, z: -1 },
-
-    { x: 1, y: 1, z: 0 },   { x: 1, y: -1, z: 0 },
-    { x: -1, y: 1, z: 0 },  { x: -1, y: -1, z: 0 },
-
-    { x: 1, y: 0, z: 1 },   { x: 1, y: 0, z: -1 },
-    { x: -1, y: 0, z: 1 },  { x: -1, y: 0, z: -1 },
-
-    { x: 0, y: 1, z: 1 },   { x: 0, y: 1, z: -1 },
-    { x: 0, y: -1, z: 1 },  { x: 0, y: -1, z: -1 }
-  ];
-
-  const uniq = new Map<string, [number, number, number]>();
-
-  for (const d of dirs) {
-    let best: SpacePoint | null = null;
-    let bestDot = -Infinity;
-
-    for (const p of points) {
-      const dot = p.x * d.x + p.y * d.y + p.z * d.z;
-      if (dot > bestDot) {
-        bestDot = dot;
-        best = p;
-      }
-    }
-
-    if (best) {
-      const key = `${best.x.toFixed(5)}|${best.y.toFixed(5)}|${best.z.toFixed(5)}`;
-      if (!uniq.has(key)) uniq.set(key, [best.x, best.y, best.z]);
-      if (uniq.size >= limit) break;
-    }
-  }
-
-  return [...uniq.values()];
 }
 
 function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: number; detail: number }): SpacePoint[] {
@@ -312,35 +236,32 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
   const out: SpacePoint[] = [];
 
   for (const [field, list] of byField.entries()) {
-    if (list.length <= 1) {
-      out.push(...list);
-      continue;
-    }
-
     const bbox = buildBBox(list);
-    const { size, minCountEff } = voxelParams(detail, bbox, list.length, minCount);
+    const size = voxelSizeFromDetailAndBBox(detail, bbox);
 
     const grid = new Map<string, SpacePoint[]>();
 
     for (const p of list) {
-      const k = voxelKey(p, bbox, size);
+      const k = voxelKey(p.x, p.y, p.z, size);
       const arr = grid.get(k);
       if (arr) arr.push(p);
       else grid.set(k, [p]);
     }
 
     for (const [cell, cellPoints] of grid.entries()) {
-      // ✅ detail=0 => minCountEff > N => сюда никогда не зайдём как кластер
-      if (cellPoints.length < minCountEff) {
+      if (cellPoints.length < minCount) {
         out.push(...cellPoints);
         continue;
       }
 
+      // bbox границы облака
       let minX = Infinity, minY = Infinity, minZ = Infinity;
       let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
 
+      // центроид
       let sx = 0, sy = 0, sz = 0;
 
+      // metrics: revenue/spend/orders SUM, остальные AVG
       const sums: Record<string, number> = {};
       const counts: Record<string, number> = {};
 
@@ -371,19 +292,20 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
 
       const metrics: Record<string, number> = {};
 
+      // средние для всего
       for (const k of Object.keys(sums)) {
         const c = counts[k] ?? 0;
         metrics[k] = c ? sums[k] / c : Number.NaN;
       }
 
+      // суммы для ключевых
       metrics.revenue = sumRevenue;
       metrics.spend = sumSpend;
       metrics.orders = sumOrders;
 
+      // эффективность от агрегатов
       metrics.drr = metrics.revenue > 0 ? (metrics.spend / metrics.revenue) * 100 : 0;
       metrics.roi = metrics.spend > 0 ? metrics.revenue / metrics.spend : 0;
-
-      const hull = pickExtremeHull(cellPoints, 24);
 
       out.push({
         id: `${field}:voxel:${cell}`,
@@ -395,9 +317,8 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
         z: sz / n,
         isCluster: true,
         clusterCount: n,
-        span: { x: maxX - minX, y: maxY - minY, z: maxZ - minZ },
-        hull
-      } as any);
+        span: { x: maxX - minX, y: maxY - minY, z: maxZ - minZ }
+      });
     }
   }
 
