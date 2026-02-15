@@ -582,6 +582,9 @@
     --shadow-modal: 0 30px 80px rgba(var(--ink-900) / 0.24);
 
     --focus-ring: 0 0 0 4px rgba(var(--ink-900) / 0.10);
+
+    --field-bg: #ffffff;
+    --field-bg-soft: rgba(248, 251, 255, 0.9); /* если вдруг захочешь обратно */
   }
 
   :global(.graph-root) { width: 100%; }
@@ -708,7 +711,7 @@
   :global(.select), :global(.input), :global(.hex) {
     width: 100%;
     border: 1px solid var(--stroke-soft);
-    background: rgba(248, 251, 255, 0.9);
+    background: var(--field-bg, #ffffff);
     border-radius: 12px;
     padding: 10px 12px;
     font-size: 12px;
