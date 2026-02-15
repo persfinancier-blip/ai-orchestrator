@@ -28,7 +28,7 @@
   export let entityFieldColors: Record<string, string> = {};
 
   /**
-   * ✅ Цвет по умолчанию для новых полей (можешь поменять)
+   * ✅ Цвет по умолчанию для новых полей
    */
   export let defaultEntityColor = '#3b82f6';
 
@@ -51,17 +51,12 @@
         );
 
   $: nameByCode = new Map(allFields.map((f) => [f.code, f.name] as const));
-  $: if (isColorOpen && activeColorCode) {
-    // чтобы свотч менялся сразу при движении ползунков
-    entityFieldColors = { ...(entityFieldColors ?? {}), [activeColorCode]: activeColorValue };
-  }
   const chipLabel = (code: string): string => nameByCode.get(code) ?? code;
 
   // --- per-field color popover state ---
   let isColorOpen = false;
   let activeColorCode: string | null = null;
   let activeColorValue = defaultEntityColor;
-  let entityFieldColors: Record<string, string> = {};
 
   function getFieldColor(code: string): string {
     return entityFieldColors?.[code] ?? defaultEntityColor;
@@ -97,6 +92,11 @@
     activeColorValue = String(el.value ?? '').trim();
   }
 
+  // ✅ live update while picker is open (for swatch update)
+  $: if (isColorOpen && activeColorCode) {
+    entityFieldColors = { ...(entityFieldColors ?? {}), [activeColorCode]: activeColorValue };
+  }
+
   // --- selection logic ---
   function toggleText(code: string): void {
     const cleaned = String(code ?? '').trim();
@@ -110,7 +110,6 @@
 
     selectedEntityFields = [...selectedEntityFields, cleaned];
 
-    // автозаполняем цвет при добавлении (чтобы свотч сразу был)
     if (!entityFieldColors?.[cleaned]) setFieldColor(cleaned, defaultEntityColor);
   }
 
@@ -164,7 +163,6 @@
     else toggleCoord(f.code);
   }
 </script>
-
 
 <div class="menu-pop pick">
   <div class="pick-inner">
@@ -234,14 +232,12 @@
       </div>
     {/if}
 
-    <!-- ✅ модалка выбора цвета для активного поля -->
     {#if isColorOpen}
       <div class="picker-overlay" on:click={closeColor}></div>
 
       <div class="picker-layer" aria-label="Цвет поля">
         <ColorPickerPopover bind:value={activeColorValue} title="Цвет поля" onClose={closeColor} />
 
-        <!-- мини-поле hex под поповером (опционально) -->
         <div class="active-hex">
           <input class="hex" value={activeColorValue} on:input={onActiveHexInput} />
         </div>
@@ -438,7 +434,6 @@
     box-sizing: border-box;
   }
 
-  /* overlay только внутри меню */
   .picker-overlay {
     position: absolute;
     inset: 0;
