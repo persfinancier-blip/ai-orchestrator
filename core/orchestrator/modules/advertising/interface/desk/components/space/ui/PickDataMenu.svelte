@@ -32,6 +32,14 @@
    */
   export let defaultEntityColor = '#3b82f6';
 
+  /**
+   * ✅ LOD / voxel grouping settings (управляют схлопыванием ДО сцены)
+   * bind из GraphPanel, прокидываем в buildPoints()
+   */
+  export let lodEnabled = true;
+  export let lodDetail = 0.5;   // 0..1
+  export let lodMinCount = 5;   // >= 2 обычно
+
   type AnyField =
     | { code: string; name: string; kind: 'text' }
     | { code: string; name: string; kind: 'number' | 'date' };
@@ -189,6 +197,23 @@
     if (f.kind === 'text') toggleText(f.code);
     else toggleCoord(f.code);
   }
+
+  function clamp01(v: number): number {
+    return Math.min(1, Math.max(0, v));
+  }
+
+  function onLodDetailInput(e: Event): void {
+    const el = e.currentTarget as HTMLInputElement | null;
+    if (!el) return;
+    lodDetail = clamp01(Number(el.value));
+  }
+
+  function onLodMinCountInput(e: Event): void {
+    const el = e.currentTarget as HTMLInputElement | null;
+    if (!el) return;
+    const n = Math.round(Number(el.value));
+    lodMinCount = Number.isFinite(n) ? Math.max(2, n) : 5;
+  }
 </script>
 
 <div class="menu-pop pick">
@@ -232,6 +257,56 @@
 
     <div class="row">
       <input class="input" placeholder="Поиск по полям (Ctrl+K)" bind:value={search} />
+    </div>
+
+    <div class="sep" />
+
+    <!-- ✅ LOD секция -->
+    <div class="sub">Группировка (LOD)</div>
+
+    <div class="row">
+      <label class="check">
+        <input type="checkbox" bind:checked={lodEnabled} />
+        <span>Схлопывать плотные области</span>
+      </label>
+    </div>
+
+    <div class="row two">
+      <div class="col">
+        <div class="mini">Детализация</div>
+        <input
+          class="input"
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          value={lodDetail}
+          disabled={!lodEnabled}
+          on:input={onLodDetailInput}
+        />
+      </div>
+
+      <div class="col">
+        <div class="mini">Мин. размер</div>
+        <input
+          class="input"
+          type="number"
+          min="2"
+          step="1"
+          value={lodMinCount}
+          disabled={!lodEnabled}
+          on:input={onLodMinCountInput}
+        />
+      </div>
+    </div>
+
+    <div class="hintbox">
+      {#if !lodEnabled}
+        Группировка выключена — рисуем все точки.
+      {:else}
+        Если в вокселе &lt; <b>{lodMinCount}</b> точек — не схлопываем. Если ≥ <b>{lodMinCount}</b> — показываем одну кластер-точку.
+        Кластерим только однородные данные (поле с полем).
+      {/if}
     </div>
 
     <div class="sep" />
@@ -283,6 +358,47 @@
     gap: 10px;
     align-items: center;
     margin-top: 10px;
+  }
+
+  .row.two {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    align-items: start;
+    margin-top: 10px;
+  }
+
+  .col {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .mini {
+    font-size: 11px;
+    font-weight: 750;
+    color: rgba(15, 23, 42, 0.72);
+  }
+
+  .check {
+    display: inline-flex;
+    gap: 10px;
+    align-items: center;
+    font-size: 12px;
+    font-weight: 650;
+    color: rgba(15, 23, 42, 0.86);
+  }
+
+  .hintbox {
+    margin-top: 8px;
+    font-size: 12px;
+    color: rgba(100, 116, 139, 0.95);
+    background: rgba(248, 251, 255, 0.92);
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    border-radius: 14px;
+    padding: 10px 12px;
+    box-sizing: border-box;
+    line-height: 1.35;
   }
 
   .sep {
