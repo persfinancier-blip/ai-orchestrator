@@ -153,18 +153,23 @@ function toggleText(code: string): void {
 
   <div class="list">
 {#each filteredFields as f (f.code)}
+  {@const active = isActiveField(f)}
+  {@const ax = f.kind !== 'text' ? selectedAxis(f.code) : null}
+
   <button
     class="item"
-    class:active={isActiveField(f)}
-    class:disabledish={isDisabledField(f)}
+    class:active={active}
     disabled={isDisabledField(f)}
     on:click={() => onPick(f)}
   >
-    <span class="name">{f.name}</span>
+    <span class="left">
+      <span class="check" aria-hidden="true">{active ? '✓' : ''}</span>
+      <span class="name">{f.name}</span>
+    </span>
 
     <span class="right">
-      {#if f.kind !== 'text' && selectedAxis(f.code)}
-        <span class="pill">{selectedAxis(f.code)?.toUpperCase()}</span>
+      {#if ax}
+        <span class="pill">{ax.toUpperCase()}</span>
       {/if}
       <span class="tag">{kindLabel[f.kind]}</span>
     </span>
@@ -273,4 +278,23 @@ function toggleText(code: string): void {
     padding: 10px 12px;
     box-sizing: border-box;
   }
+.left {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.check {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 900;
+  color: rgba(15, 23, 42, 0.75);
+  flex: 0 0 16px;
+}
+
 </style>
