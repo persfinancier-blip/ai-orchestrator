@@ -506,7 +506,9 @@
       <Crumbs crumbs={selectedCrumbs} onRemove={removeEntityField} />
     </div>
 
-    <InfoCard pointsCount={renderedCount} axesLabel={axesLabel} bboxLabel={bboxLabel} />
+    <div class="hud bottom-left">
+      <InfoCard pointsCount={renderedCount} axesLabel={axesLabel} bboxLabel={bboxLabel} />
+    </div>
 
     {#if showDisplayMenu}
       <DisplayMenu
@@ -647,6 +649,7 @@
     display: flex;
     gap: 10px;
     pointer-events: auto;
+    align-items: center;
   }
 
   :global(.btn) {
@@ -759,16 +762,16 @@
     box-sizing: border-box;
   }
 
-  :global(.info-card) {
-    pointer-events: none;
-    background: rgba(248, 251, 255, 0.88);
-    border-radius: 14px;
-    padding: 10px 12px;
-    box-shadow: var(--shadow-card);
-    max-width: 420px;
-    border: 1px solid var(--stroke-soft);
-    box-sizing: border-box;
-  }
+    :global(.info-card) {
+      pointer-events: none;
+      background: rgba(255, 255, 255, 0.92); 
+      border-radius: 14px;
+      padding: 10px 12px;
+      box-shadow: var(--shadow-card);
+      max-width: 420px;
+      border: 1px solid var(--stroke-soft);
+      box-sizing: border-box;
+    }
 
   :global(.tooltip) {
     position: absolute;
