@@ -1,3 +1,4 @@
+// core/orchestrator/modules/advertising/interface/desk/components/space/pipeline.ts
 import type { ShowcaseField, ShowcaseRow } from '../data/showcaseStore';
 import type { BBox, PeriodMode, SpacePoint } from './types';
 
@@ -76,13 +77,19 @@ export function projectPoints(list: SpacePoint[], xCode: string, yCode: string, 
 
   return list.map((point) => {
     const x =
-      useX && Number.isFinite(point.metrics[xCode]) ? normalize(point.metrics[xCode], minX, maxX) : hashToJitter(`${point.id}:x`);
+      useX && Number.isFinite(point.metrics[xCode])
+        ? normalize(point.metrics[xCode], minX, maxX)
+        : hashToJitter(`${point.id}:x`);
 
     const y =
-      useY && Number.isFinite(point.metrics[yCode]) ? normalize(point.metrics[yCode], minY, maxY) : hashToJitter(`${point.id}:y`);
+      useY && Number.isFinite(point.metrics[yCode])
+        ? normalize(point.metrics[yCode], minY, maxY)
+        : hashToJitter(`${point.id}:y`);
 
     const z =
-      useZ && Number.isFinite(point.metrics[zCode]) ? normalize(point.metrics[zCode], minZ, maxZ) : hashToJitter(`${point.id}:z`);
+      useZ && Number.isFinite(point.metrics[zCode])
+        ? normalize(point.metrics[zCode], minZ, maxZ)
+        : hashToJitter(`${point.id}:z`);
 
     return { ...point, x, y, z };
   });
@@ -194,8 +201,12 @@ function clamp01(v: number): number {
   return Math.min(1, Math.max(0, v));
 }
 
-// ✅ Адаптивный размер вокселя: зависит от bbox и detail
-// detail: 0..1, чем больше — тем грубее (крупнее воксель)
+/**
+ * ✅ НОВАЯ логика под ТЗ:
+ * - detail≈0  -> вообще не агрегируем (кластеров = точек)
+ * - detail≈1  -> один воксель на bbox (=> 1 кластер на группу)
+ * - между     -> плавно уменьшаем количество ячеек
+ */
 function voxelSizeFromDetailAndBBox(detail01: number, bbox: BBox): number {
   const d = clamp01(detail01);
 
@@ -204,27 +215,34 @@ function voxelSizeFromDetailAndBBox(detail01: number, bbox: BBox): number {
   const spanZ = Math.max(0.001, bbox.maxZ - bbox.minZ);
   const maxSpan = Math.max(spanX, spanY, spanZ);
 
-  // хотим в среднем 30 ячеек на максимальном span при detail=0 (мелко),
-  // и ~8 ячеек при detail=1 (крупно)
-  const bins = 30 - 22 * d; // 30..8
-  const size = maxSpan / Math.max(4, bins);
+  // При detail=0 хотим "очень мелко" (много ячеек), при detail=1 -> 1 ячейка.
+  const MAX_BINS = 60; // больше bins -> меньше агрегации
+  const bins = Math.max(1, Math.round((1 - d) * MAX_BINS + d * 1));
 
-  // clamp чтобы не было слишком мелко/слишком крупно
-  return Math.max(2.5, Math.min(45, size));
+  // Если bins=1 — делаем воксель больше bbox, чтобы гарантировать одну ячейку.
+  if (bins === 1) return maxSpan * 2;
+
+  // Обычный режим
+  return maxSpan / bins;
 }
 
-function voxelKey(x: number, y: number, z: number, size: number): string {
-  const ix = Math.floor(x / size);
-  const iy = Math.floor(y / size);
-  const iz = Math.floor(z / size);
+function voxelKeyFromBBox(x: number, y: number, z: number, size: number, bbox: BBox): string {
+  const ix = Math.floor((x - bbox.minX) / size);
+  const iy = Math.floor((y - bbox.minY) / size);
+  const iz = Math.floor((z - bbox.minZ) / size);
   return `${ix}|${iy}|${iz}`;
 }
 
 function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: number; detail: number }): SpacePoint[] {
-  const { minCount, detail } = opts;
+  const { minCount } = opts;
+  const detail = clamp01(opts.detail);
+
   if (!points.length) return [];
 
-  // ✅ строго однородно: по sourceField
+  // ✅ detail=0 => "минимум": кластеров = точек
+  if (detail <= 0.00001) return points;
+
+  // ✅ строго однородно: по sourceField (как было)
   const byField = new Map<string, SpacePoint[]>();
   for (const p of points) {
     const k = String(p.sourceField ?? '');
@@ -236,13 +254,81 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
   const out: SpacePoint[] = [];
 
   for (const [field, list] of byField.entries()) {
+    if (!list.length) continue;
+
     const bbox = buildBBox(list);
+
+    // ✅ detail≈1 => "максимум": один кластер на группу (field)
+    if (detail >= 0.99999) {
+      let minX = Infinity, minY = Infinity, minZ = Infinity;
+      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+
+      let sx = 0, sy = 0, sz = 0;
+
+      const sums: Record<string, number> = {};
+      const counts: Record<string, number> = {};
+
+      let sumRevenue = 0;
+      let sumSpend = 0;
+      let sumOrders = 0;
+
+      for (const p of list) {
+        sx += p.x;
+        sy += p.y;
+        sz += p.z;
+
+        minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); minZ = Math.min(minZ, p.z);
+        maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); maxZ = Math.max(maxZ, p.z);
+
+        const m = p.metrics ?? {};
+        for (const k of Object.keys(m)) {
+          const v = Number(m[k]);
+          if (!Number.isFinite(v)) continue;
+          sums[k] = (sums[k] ?? 0) + v;
+          counts[k] = (counts[k] ?? 0) + 1;
+        }
+
+        sumRevenue += Number(m.revenue ?? 0);
+        sumSpend += Number(m.spend ?? 0);
+        sumOrders += Number(m.orders ?? 0);
+      }
+
+      const n = list.length;
+
+      const metrics: Record<string, number> = {};
+      for (const k of Object.keys(sums)) {
+        const c = counts[k] ?? 0;
+        metrics[k] = c ? sums[k] / c : Number.NaN;
+      }
+
+      metrics.revenue = sumRevenue;
+      metrics.spend = sumSpend;
+      metrics.orders = sumOrders;
+
+      metrics.drr = metrics.revenue > 0 ? (metrics.spend / metrics.revenue) * 100 : 0;
+      metrics.roi = metrics.spend > 0 ? metrics.revenue / metrics.spend : 0;
+
+      out.push({
+        id: `${field}:voxel:ALL`,
+        label: `Кластер (${n})`,
+        sourceField: field,
+        metrics,
+        x: sx / n,
+        y: sy / n,
+        z: sz / n,
+        isCluster: true,
+        clusterCount: n,
+        span: { x: maxX - minX, y: maxY - minY, z: maxZ - minZ }
+      });
+
+      continue;
+    }
+
     const size = voxelSizeFromDetailAndBBox(detail, bbox);
 
     const grid = new Map<string, SpacePoint[]>();
-
     for (const p of list) {
-      const k = voxelKey(p.x, p.y, p.z, size);
+      const k = voxelKeyFromBBox(p.x, p.y, p.z, size, bbox);
       const arr = grid.get(k);
       if (arr) arr.push(p);
       else grid.set(k, [p]);
@@ -254,14 +340,11 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
         continue;
       }
 
-      // bbox границы облака
       let minX = Infinity, minY = Infinity, minZ = Infinity;
       let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
 
-      // центроид
       let sx = 0, sy = 0, sz = 0;
 
-      // metrics: revenue/spend/orders SUM, остальные AVG
       const sums: Record<string, number> = {};
       const counts: Record<string, number> = {};
 
@@ -270,7 +353,9 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
       let sumOrders = 0;
 
       for (const p of cellPoints) {
-        sx += p.x; sy += p.y; sz += p.z;
+        sx += p.x;
+        sy += p.y;
+        sz += p.z;
 
         minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); minZ = Math.min(minZ, p.z);
         maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); maxZ = Math.max(maxZ, p.z);
@@ -291,19 +376,15 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
       const n = cellPoints.length;
 
       const metrics: Record<string, number> = {};
-
-      // средние для всего
       for (const k of Object.keys(sums)) {
         const c = counts[k] ?? 0;
         metrics[k] = c ? sums[k] / c : Number.NaN;
       }
 
-      // суммы для ключевых
       metrics.revenue = sumRevenue;
       metrics.spend = sumSpend;
       metrics.orders = sumOrders;
 
-      // эффективность от агрегатов
       metrics.drr = metrics.revenue > 0 ? (metrics.spend / metrics.revenue) * 100 : 0;
       metrics.roi = metrics.spend > 0 ? metrics.revenue / metrics.spend : 0;
 
@@ -335,8 +416,8 @@ export function buildPoints(args: {
   dateFields: ShowcaseField[];
 
   lodEnabled?: boolean;
-  lodDetail?: number;       // 0..1
-  lodMinCount?: number;     // например 5
+  lodDetail?: number; // 0..1
+  lodMinCount?: number; // например 5
 }): SpacePoint[] {
   const {
     rows,
@@ -408,10 +489,8 @@ export function buildPoints(args: {
     });
   });
 
-  // 1) проекция
   const projected = projectPoints(result, axisX, axisY, axisZ);
 
-  // 2) LOD voxel clustering ДО сцены
   if (lodEnabled) {
     return voxelAggregateHomogeneous(projected, { minCount: lodMinCount, detail: lodDetail });
   }
