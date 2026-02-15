@@ -23,7 +23,7 @@
 
   /**
    * ✅ Цвет для каждого выбранного поля: code -> hex
-   * Родитель должен передавать bind:entityFieldColors
+   * Родитель передаёт bind:entityFieldColors
    */
   export let entityFieldColors: Record<string, string> = {};
 
@@ -47,7 +47,7 @@
     !q
       ? allFields
       : allFields.filter(
-          (f) => (f.name ?? '').toLowerCase().includes(q) || (f.code ?? '').toLowerCase().includes(q),
+          (f) => (f.name ?? '').toLowerCase().includes(q) || (f.code ?? '').toLowerCase().includes(q)
         );
 
   $: nameByCode = new Map(allFields.map((f) => [f.code, f.name] as const));
@@ -92,7 +92,9 @@
     activeColorValue = String(el.value ?? '').trim();
   }
 
-  // ✅ live update while picker is open (for swatch update)
+  // ✅ live update: пока поповер открыт — пишем в entityFieldColors, чтобы:
+  // - свотч менялся сразу
+  // - график перекрашивался сразу (через bind в родителе)
   $: if (isColorOpen && activeColorCode) {
     entityFieldColors = { ...(entityFieldColors ?? {}), [activeColorCode]: activeColorValue };
   }
@@ -110,6 +112,7 @@
 
     selectedEntityFields = [...selectedEntityFields, cleaned];
 
+    // чтобы свотч был сразу после добавления
     if (!entityFieldColors?.[cleaned]) setFieldColor(cleaned, defaultEntityColor);
   }
 
@@ -434,6 +437,7 @@
     box-sizing: border-box;
   }
 
+  /* overlay только внутри меню */
   .picker-overlay {
     position: absolute;
     inset: 0;
