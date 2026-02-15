@@ -122,15 +122,29 @@
   }
 </script>
 
-<!-- ВАЖНО: .menu-pop.pick НЕ трогаем (позиционирование задаётся общими стилями) -->
 <div class="menu-pop pick">
-  <!-- ✅ внутренний якорь только для overlay/layer -->
   <div class="pick-inner">
     <div class="menu-title">Выбор данных</div>
 
     <div class="selected-bar">
       <div class="selected-block">
-        <div class="selected-title">Выбраны поля</div>
+        <div class="selected-head">
+          <div class="selected-title">Выбраны поля</div>
+
+          <!-- ✅ перенесённый контрол цвета точек -->
+          <div class="points-color-inline">
+            <button
+              type="button"
+              class="color"
+              aria-label="Цвет точек"
+              style={`background:${pointsColor};`}
+              on:click|stopPropagation={togglePointsColor}
+            ></button>
+
+            <input class="hex mini" placeholder="#3b82f6" value={pointsColor} on:input={onHexInput} />
+          </div>
+        </div>
+
         <div class="chips">
           {#if (selectedEntityFields?.length ?? 0) === 0}
             <span class="empty">ничего</span>
@@ -150,23 +164,6 @@
           <span class="chip axis">Z: {axisZ ? chipLabel(axisZ) : '—'}</span>
         </div>
       </div>
-    </div>
-
-    <!-- ✅ выбор цвета точек -->
-    <div class="row two">
-      <div class="color-wrap">
-        <label class="label">Цвет</label>
-
-        <button
-          type="button"
-          class="color"
-          aria-label="Цвет точек"
-          style={`background:${pointsColor};`}
-          on:click|stopPropagation={togglePointsColor}
-        ></button>
-      </div>
-
-      <input class="hex" placeholder="#3b82f6" value={pointsColor} on:input={onHexInput} />
     </div>
 
     <div class="row">
@@ -198,7 +195,7 @@
       </div>
     {/if}
 
-    <!-- ✅ модалка выбора цвета (живет внутри pick-inner, НЕ влияет на позицию меню) -->
+    <!-- ✅ модалка выбора цвета -->
     {#if isPointsColorOpen}
       <div class="picker-overlay" on:click={closePointsColor}></div>
 
@@ -210,7 +207,6 @@
 </div>
 
 <style>
-  /* ✅ вот тут мы якорим только внутренние абсолюты */
   .pick-inner {
     position: relative;
   }
@@ -220,12 +216,6 @@
     gap: 10px;
     align-items: center;
     margin-top: 10px;
-  }
-
-  .row.two {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
   }
 
   .sep {
@@ -258,10 +248,25 @@
     gap: 6px;
   }
 
+  .selected-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
   .selected-title {
     font-size: 11px;
     font-weight: 800;
     color: rgba(15, 23, 42, 0.7);
+    white-space: nowrap;
+  }
+
+  .points-color-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
   }
 
   .chips {
@@ -292,19 +297,6 @@
     background: rgba(248, 251, 255, 0.92);
   }
 
-  .label {
-    font-size: 12px;
-    color: rgba(15, 23, 42, 0.78);
-    width: 52px;
-  }
-
-  .color-wrap {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-  }
-
   .color {
     width: 44px;
     height: 34px;
@@ -313,6 +305,7 @@
     border-radius: 10px;
     background: #ffffff;
     cursor: pointer;
+    flex: 0 0 auto;
   }
 
   .hex {
@@ -325,6 +318,12 @@
     outline: none;
     color: rgba(15, 23, 42, 0.9);
     box-sizing: border-box;
+  }
+
+  .hex.mini {
+    width: 110px;
+    padding: 8px 10px;
+    font-size: 12px;
   }
 
   .hex:focus {
@@ -413,7 +412,6 @@
     box-sizing: border-box;
   }
 
-  /* overlay только внутри меню */
   .picker-overlay {
     position: absolute;
     inset: 0;
