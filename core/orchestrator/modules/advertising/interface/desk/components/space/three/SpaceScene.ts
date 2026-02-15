@@ -4,7 +4,7 @@ import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRe
 
 import type { ShowcaseField } from '../../data/showcaseStore';
 import type { SpacePoint } from '../types';
-import { buildBBox, normalizeBBox, calcMax, sanitizePoints, formatValueByMetric } from '../pipeline';
+import { buildBBox, normalizeBBox, sanitizePoints, formatValueByMetric } from '../pipeline';
 
 export type SpaceSceneTheme = {
   bg: string;
@@ -41,7 +41,7 @@ export class SpaceScene {
   private axisLabelObjects: CSS2DObject[] = [];
 
   private pointsMesh?: THREE.InstancedMesh;
-  private clusterCloudMesh?: THREE.InstancedMesh; // ✅ “облако” кластера
+  private clusterCloudMesh?: THREE.InstancedMesh;
 
   private renderPoints: SpacePoint[] = [];
 
@@ -57,6 +57,9 @@ export class SpaceScene {
   private ndc = new THREE.Vector2();
 
   private axisCodes = { x: '', y: '', z: '' };
+
+  // ✅ max по осям ДО LOD (чтобы подписи осей не прыгали)
+  private axisMaxOverride: { xMax: number; yMax: number; zMax: number } | null = null;
 
   public constructor(deps: SpaceSceneDeps, cb: SpaceSceneCallbacks) {
     this.deps = deps;
@@ -163,7 +166,6 @@ export class SpaceScene {
     return { x: Math.max(0.001, sx), y: Math.max(0.001, sy), z: Math.max(0.001, sz) };
   }
 
-  // sqrt(n)/log(n+1) с клампом
   private pointScale(p: SpacePoint): number {
     if (!this.isClusterPoint(p)) return 1;
 
@@ -175,10 +177,15 @@ export class SpaceScene {
     return Math.min(6, Math.max(1.35, s));
   }
 
-  public setPoints(points: SpacePoint[]): { renderedCount: number; bboxLabel: string } {
+  public setPoints(
+    points: SpacePoint[],
+    opts?: { axisMaxOverride?: { xMax: number; yMax: number; zMax: number } }
+  ): { renderedCount: number; bboxLabel: string } {
     if (!this.scene || !this.camera || !this.controls || !this.renderer) {
       return { renderedCount: 0, bboxLabel: '—' };
     }
+
+    this.axisMaxOverride = opts?.axisMaxOverride ?? this.axisMaxOverride ?? null;
 
     this.scene.background = new THREE.Color(this.theme.bg);
 
@@ -200,9 +207,7 @@ export class SpaceScene {
 
     this.renderPoints = renderable;
 
-    // -----------------------
-    // 1) MAIN POINTS (spheres)
-    // -----------------------
+    // 1) MAIN POINTS
     if (this.renderPoints.length) {
       this.pointsMesh = new THREE.InstancedMesh(
         new THREE.SphereGeometry(1.55, 10, 10),
@@ -230,23 +235,20 @@ export class SpaceScene {
       this.scene.add(this.pointsMesh);
     }
 
-    // ---------------------------------------
-    // 2) CLUSTER CLOUDS (ellipsoid by bbox span)
-    // ---------------------------------------
+    // 2) CLUSTER CLOUDS (✅ wireframe bbox по крайним точкам)
     const clusterIdx: number[] = [];
     for (let i = 0; i < this.renderPoints.length; i += 1) {
       if (this.isClusterPoint(this.renderPoints[i]) && this.clusterSpan(this.renderPoints[i])) clusterIdx.push(i);
     }
 
     if (clusterIdx.length) {
-      // ✅ сфера -> масштабируем в эллипсоид (по span)
-      const geom = new THREE.SphereGeometry(1, 14, 14);
+      const geom = new THREE.BoxGeometry(1, 1, 1);
       const mat = new THREE.MeshBasicMaterial({
         transparent: true,
-        opacity: 0.10,
+        opacity: 0.22,
         depthWrite: false,
         vertexColors: true,
-        side: THREE.DoubleSide
+        wireframe: true // ✅ не “кубик-кирпич”, а границы
       });
 
       this.clusterCloudMesh = new THREE.InstancedMesh(geom, mat, clusterIdx.length);
@@ -261,9 +263,8 @@ export class SpaceScene {
 
         o.position.set(p.x, p.y, p.z);
 
-        // geom radius=1 => diameter=2, поэтому scale = span/2
-        const pad = 1.12;
-        o.scale.set((span.x / 2) * pad, (span.y / 2) * pad, (span.z / 2) * pad);
+        const pad = 1.10;
+        o.scale.set(span.x * pad, span.y * pad, span.z * pad);
 
         o.updateMatrix();
         this.clusterCloudMesh.setMatrixAt(ii, o.matrix);
@@ -469,13 +470,18 @@ export class SpaceScene {
 
     const fields = this.deps.getFields();
 
-    const mx = this.createChipLabel(formatValueByMetric(axisX, axisX ? calcMax(list, axisX) : Number.NaN, fields), { tone: 'accent' });
+    // ✅ max берём из override (до LOD), иначе fallback на текущее list
+    const xMax = this.axisMaxOverride?.xMax;
+    const yMax = this.axisMaxOverride?.yMax;
+    const zMax = this.axisMaxOverride?.zMax;
+
+    const mx = this.createChipLabel(formatValueByMetric(axisX, axisX ? (Number.isFinite(xMax!) ? xMax! : Number.NaN) : Number.NaN, fields), { tone: 'accent' });
     mx.position.copy(Bx);
 
-    const my = this.createChipLabel(formatValueByMetric(axisY, axisY ? calcMax(list, axisY) : Number.NaN, fields), { tone: 'accent' });
+    const my = this.createChipLabel(formatValueByMetric(axisY, axisY ? (Number.isFinite(yMax!) ? yMax! : Number.NaN) : Number.NaN, fields), { tone: 'accent' });
     my.position.copy(By);
 
-    const mz = this.createChipLabel(formatValueByMetric(axisZ, axisZ ? calcMax(list, axisZ) : Number.NaN, fields), { tone: 'accent' });
+    const mz = this.createChipLabel(formatValueByMetric(axisZ, axisZ ? (Number.isFinite(zMax!) ? zMax! : Number.NaN) : Number.NaN, fields), { tone: 'accent' });
     mz.position.copy(Bz);
 
     this.axisLabelObjects = [xChip, yChip, zChip, mx, my, mz];
