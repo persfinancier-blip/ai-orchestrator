@@ -133,7 +133,12 @@
     axisY,
     axisZ,
     numberFields: numberFieldsAll,
-    dateFields: dateFieldsAll
+    dateFields: dateFieldsAll,
+
+    // ✅ FIX: включаем voxel-LOD, чтобы ползунок "Детализация групп" реально влиял на агрегацию
+    lodEnabled: grouping.enabled,
+    lodDetail: Number(grouping.detail),
+    lodMinCount: 2
   });
 
   // ---- FIXED caching: Map(point.id -> clusterId)
@@ -145,6 +150,13 @@
     if (id < 0) return '#94a3b8';
     const hue = (id * 47) % 360;
     return `hsl(${hue} 70% 45%)`;
+  }
+
+  function clusterIdForEntity(field: string | undefined | null): number {
+    const s = String(field ?? '');
+    let h = 0;
+    for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) | 0;
+    return Math.abs(h);
   }
 
   function getTextValue(p: SpacePoint, field: string): string {
@@ -175,7 +187,7 @@
       getTextValue
     });
 
-    const { eps, minPts } = dbscanParamsFromDetail(grouping.detail);
+    const { eps, minPts } = dbscanParamsFromDetail(Number(grouping.detail));
     const w = weightsForCfg(grouping);
 
     const labels = dbscan3(vecs, { eps, minPts }, w);
@@ -203,6 +215,14 @@
     // ✅ когда группировка выключена — красим все точки выбранным цветом
     if (!grouping.enabled) return input.map((p) => ({ ...p, color: pointsColor }));
 
+    // ✅ FIX: при включенной группировке красим "по сущности" (sourceField),
+    // чтобы detail=max визуально давал "1 кластер на сущность" (артикул/РК/и т.д.)
+    // А геометрическое "укрупнение" даёт voxel-LOD выше (через buildPoints).
+    return input.map((p) => ({ ...p, color: colorForCluster(clusterIdForEntity(p.sourceField)) }));
+
+    // ---- Ниже оставлен старый DBSCAN-путь, если захочешь вернуть кластеризацию "proximity"
+    // (сейчас он недостижим из-за return выше; UI не меняем, но могу сделать выбор по cfg.principle)
+    /*
     if (grouping.recompute === 'fixed') {
       const cfgKey = makeFixedConfigKey(grouping);
 
@@ -250,6 +270,7 @@
       const effectiveId = clusterId >= 0 && size < grouping.minClusterSize ? -1 : clusterId;
       return { ...p, color: colorForCluster(effectiveId) };
     });
+    */
   }
 
   function recomputeClusters(): void {
@@ -593,7 +614,7 @@
     --focus-ring: 0 0 0 4px rgba(var(--ink-900) / 0.10);
 
     --field-bg: #ffffff;
-    --field-bg-soft: rgba(248, 251, 255, 0.9); /* если вдруг захочешь обратно */
+    --field-bg-soft: rgba(248, 251, 255, 0.9);
   }
 
   :global(.graph-root) { width: 100%; }
@@ -608,7 +629,6 @@
 
   :global(.scene) { position: absolute; inset: 0; }
 
-  /* HUD layout */
   :global(.hud) {
     position: absolute;
     pointer-events: none;
@@ -636,7 +656,6 @@
     pointer-events: auto;
   }
 
-  /* Buttons */
   :global(.btn) {
     border: 0;
     border-radius: 999px;
@@ -660,13 +679,12 @@
 
   :global(.btn.wide) { width: 100%; }
 
-  /* Menus данных */
   :global(.menu-pop) {
     position: absolute;
     top: 56px;
     right: 14px;
     width: 340px;
-  
+
     background: rgba(255, 255, 255, 0.92);
     border-radius: 18px;
     padding: 12px;
@@ -774,7 +792,6 @@
     box-sizing: border-box;
   }
 
-  /* crumbs (если Crumbs использует классы из глобала) */
   :global(.crumbs) {
     display: flex;
     flex-wrap: wrap;
@@ -797,7 +814,6 @@
     cursor: pointer;
   }
 
-  /* info card (если InfoCard выводит .info-card) */
   :global(.info-card) {
     pointer-events: none;
     background: rgba(248, 251, 255, 0.88);
