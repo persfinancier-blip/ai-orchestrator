@@ -99,8 +99,7 @@
     if (!cleaned) return;
 
     if (isSelectedText(cleaned)) {
-      const c = norm(cleaned);
-selectedEntityFields = selectedEntityFields.filter((x) => !sameCode(x, code));
+      selectedEntityFields = selectedEntityFields.filter((x) => !sameCode(x, code));
       return;
     }
 
@@ -155,24 +154,24 @@ selectedEntityFields = selectedEntityFields.filter((x) => !sameCode(x, code));
   <div class="sub">Поля</div>
 
   <div class="list">
-{#each filteredFields as f (f.code)}
-  <button
-    class="item"
-    class:active={isActiveField(f)}
-    class:disabledish={isDisabledField(f)}
-    disabled={isDisabledField(f)}
-    on:click={() => onPick(f)}
-  >
-    <span class="name">{f.name}</span>
+    {#each filteredFields as f (f.code)}
+      <button
+        class="item"
+        class:active={isActiveField(f)}
+        class:disabledish={isDisabledField(f)}
+        disabled={isDisabledField(f)}
+        on:click={() => onPick(f)}
+      >
+        <span class="name">{f.name}</span>
 
-    <span class="right">
-      {#if f.kind !== 'text' && selectedAxis(f.code)}
-        <span class="pill">{selectedAxis(f.code)?.toUpperCase()}</span>
-      {/if}
-      <span class="tag">{kindLabel[f.kind]}</span>
-    </span>
-  </button>
-{/each}
+        <span class="right">
+          {#if f.kind !== 'text' && selectedAxis(f.code)}
+            <span class="pill">{selectedAxis(f.code)?.toUpperCase()}</span>
+          {/if}
+          <span class="tag">{kindLabel[f.kind]}</span>
+        </span>
+      </button>
+    {/each}
   </div>
 
   {#if !canAddCoord}
@@ -208,7 +207,8 @@ selectedEntityFields = selectedEntityFields.filter((x) => !sameCode(x, code));
     padding-right: 2px;
   }
 
-  .item {
+  /* ✅ ВАЖНО: усиливаем специфичность, чтобы не перебивалось :global(.item) из GraphPanel */
+  .menu-pop.pick .item {
     width: 100%;
     text-align: left;
     border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
@@ -223,20 +223,20 @@ selectedEntityFields = selectedEntityFields.filter((x) => !sameCode(x, code));
     transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease, background 120ms ease;
   }
 
-  .item:hover {
+  .menu-pop.pick .item:hover {
     transform: translateY(-0.5px);
     box-shadow: var(--shadow-btn, 0 10px 26px rgba(15, 23, 42, 0.10));
     border-color: var(--stroke-mid, rgba(15, 23, 42, 0.12));
   }
 
-  /* ✅ выбранное поле (усилили селектор, чтобы не перебивалось глобалом) */
-  .list .item.active {
+  /* ✅ выбранное поле */
+  .menu-pop.pick .item.active {
     background: rgba(248, 251, 255, 0.92);
     border-color: var(--stroke-hard, rgba(15, 23, 42, 0.18));
     box-shadow: var(--shadow-btn-strong, 0 12px 30px rgba(15, 23, 42, 0.12));
   }
 
-  .item:disabled {
+  .menu-pop.pick .item:disabled {
     opacity: 0.55;
     cursor: not-allowed;
     box-shadow: none;
