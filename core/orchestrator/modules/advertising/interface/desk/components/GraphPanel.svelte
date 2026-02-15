@@ -651,21 +651,22 @@
 
   :global(.btn.wide) { width: 100%; }
 
-  /* Menus (ЭТО ТО, ЧЕГО НЕ ХВАТАЕТ) */
+  /* Menus данных */
   :global(.menu-pop) {
     position: absolute;
     top: 56px;
     right: 14px;
     width: 340px;
+  
     background: rgba(255, 255, 255, 0.92);
     border-radius: 18px;
     padding: 12px;
-    box-shadow: var(--shadow-pop);
+    box-shadow: 0 22px 60px rgba(15, 23, 42, 0.18);
     backdrop-filter: blur(14px);
     pointer-events: auto;
-    z-index: 10;
-    box-sizing: border-box;
-    border: 1px solid var(--stroke-soft);
+    z-index: 2000;
+    max-height: calc(100vh - 110px);
+    overflow: auto;
   }
 
   :global(.menu-title) {
