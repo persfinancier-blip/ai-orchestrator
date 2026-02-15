@@ -618,17 +618,6 @@
     box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
     position: relative;
   }
-  :global(.btn.btn-primary::after) {
-    content: '';
-    position: absolute;
-    left: 12px;
-    right: 12px;
-    bottom: 8px;
-    height: 2px;
-    border-radius: 2px;
-    background: rgba(34, 197, 94, 0.9);
-    opacity: .55;
-  }
 
   :global(.btn.wide) { width: 100%; }
 
