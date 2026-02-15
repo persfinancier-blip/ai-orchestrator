@@ -189,18 +189,13 @@ export function formatValueByMetric(metricCode: string, maxValue: number, fields
 }
 
 // ==============================
-// VOXEL / GRID LOD AGGREGATION
+// ✅ VOXEL / GRID LOD AGGREGATION
 // ==============================
 
 function clamp01(v: number): number {
   return Math.min(1, Math.max(0, v));
 }
 
-/**
- * detail: 0..1
- * 0 => максимально детально (много ячеек)
- * 1 => максимально грубо (мало ячеек)
- */
 function voxelSizeFromDetailAndBBox(detail01: number, bbox: BBox): number {
   const d = clamp01(detail01);
 
@@ -245,7 +240,6 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
     const size = voxelSizeFromDetailAndBBox(detail, bbox);
 
     const grid = new Map<string, SpacePoint[]>();
-
     for (const p of list) {
       const k = voxelKey(p.x, p.y, p.z, size);
       const arr = grid.get(k);
@@ -293,6 +287,7 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
       const n = cellPoints.length;
 
       const metrics: Record<string, number> = {};
+
       for (const k of Object.keys(sums)) {
         const c = counts[k] ?? 0;
         metrics[k] = c ? sums[k] / c : Number.NaN;
@@ -344,7 +339,7 @@ export function buildPoints(args: {
     axisZ,
     numberFields,
     dateFields,
-    lodEnabled = false,
+    lodEnabled = true,
     lodDetail = 0.5,
     lodMinCount = 5
   } = args;
@@ -408,8 +403,12 @@ export function buildPoints(args: {
 
   const projected = projectPoints(result, axisX, axisY, axisZ);
 
-  if (lodEnabled) {
-    return voxelAggregateHomogeneous(projected, { minCount: lodMinCount, detail: lodDetail });
+  // ✅ всегда включено, но при lodDetail=0 агрегации НЕТ
+  if (lodEnabled && lodDetail > 0) {
+    return voxelAggregateHomogeneous(projected, {
+      minCount: Math.max(2, Math.floor(lodMinCount)),
+      detail: clamp01(lodDetail)
+    });
   }
 
   return projected;
