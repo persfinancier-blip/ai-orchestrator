@@ -46,8 +46,29 @@
       ? allFields
       : allFields.filter((f) => (f.name ?? '').toLowerCase().includes(q) || (f.code ?? '').toLowerCase().includes(q));
 
+const norm = (s: string): string => String(s ?? '').trim().toLowerCase();
+
+// быстрый set для проверки выбранности - 11111
+$: selectedTextSet = new Set((selectedEntityFields ?? []).map(norm));
+
 function isSelectedText(code: string): boolean {
-  return selectedEntityFields.includes(code);
+  return selectedTextSet.has(norm(code));
+}
+
+function toggleText(code: string): void {
+  const cleaned = String(code ?? '').trim();
+  if (!cleaned) return;
+
+  const n = norm(cleaned);
+
+  if (selectedTextSet.has(n)) {
+    // удаляем по нормализованному совпадению
+    selectedEntityFields = selectedEntityFields.filter((x) => norm(x) !== n);
+    return;
+  }
+
+  // добавляем именно cleaned (без пробелов), чтобы дальше стабильно матчиться
+  selectedEntityFields = [...selectedEntityFields, cleaned];
 }
 
 function selectedAxis(code: string): 'x' | 'y' | 'z' | null {
@@ -75,15 +96,6 @@ function addCoord(code: string): void {
   else if (!axisY) axisY = cleaned;
   else if (!axisZ) axisZ = cleaned;
 }
-
-function toggleText(code: string): void {
-  const cleaned = String(code ?? '').trim();
-  if (!cleaned) return;
-
-  if (selectedEntityFields.includes(cleaned)) {
-    selectedEntityFields = selectedEntityFields.filter((x) => x !== cleaned);
-    return;
-  }
 
   selectedEntityFields = [...selectedEntityFields, cleaned];
 }
