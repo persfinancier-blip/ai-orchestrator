@@ -131,8 +131,9 @@
     width: 34px;
     height: 34px;
     border-radius: 12px;
-    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
-    border: 1px solid rgba(15, 23, 42, 0.08);
+    box-shadow: var(--shadow-btn-strong, 0 12px 30px rgba(15, 23, 42, 0.12));
+    border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
+    box-sizing: border-box;
   }
 
   .picker-slot {
@@ -141,5 +142,6 @@
     top: 46px;
     width: 0;
     height: 0;
+    z-index: 40;
   }
 </style>
