@@ -209,14 +209,22 @@
     fixedConfigKey = makeFixedConfigKey(grouping);
   }
 
+  function stableHash32(input: string): number {
+    let h = 0;
+    for (let i = 0; i < input.length; i += 1) h = (h * 31 + input.charCodeAt(i)) | 0;
+    return Math.abs(h);
+  }
+  
   function applyClustering(input: SpacePoint[]): SpacePoint[] {
-    // ✅ когда группировка выключена — красим все точки выбранным цветом
     if (!grouping.enabled) return input.map((p) => ({ ...p, color: pointsColor }));
-
-    // ✅ FIX: цвет по voxel-ячейке/кластеру.
-    // - detail=min => почти все точки имеют уникальный id => визуально "одиночки"
-    // - detail=max => все сливаются в одну точку => один цвет/кластер
-    return input.map((p) => ({ ...p, color: colorForCluster(stableHash32(p.id)) }));
+  
+    // voxel-LOD сам меняет число точек:
+    // detail=min => почти все одиночки (isCluster=false)
+    // detail=max => одна точка-кластер (isCluster=true)
+    return input.map((p) => {
+      if (p.isCluster) return { ...p, color: colorForCluster(stableHash32(p.id)) };
+      return { ...p, color: pointsColor };
+    });
   }
 
   function recomputeClusters(): void {
