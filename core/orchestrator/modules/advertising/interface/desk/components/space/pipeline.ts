@@ -198,8 +198,8 @@ function clamp01(v: number): number {
 // “средняя” = 0.5
 function voxelSizeFromDetail(detail01: number): number {
   const d = clamp01(detail01);
-  const min = 4; // тонко (много точек)
-  const max = 18; // грубо (мало точек)
+  const min = 4;
+  const max = 18;
   return min + (max - min) * d;
 }
 
@@ -244,17 +244,8 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
       }
 
       // bbox границы облака
-      let minX = Infinity,
-        minY = Infinity,
-        minZ = Infinity;
-      let maxX = -Infinity,
-        maxY = -Infinity,
-        maxZ = -Infinity;
-
-      // центроид
-      let sx = 0,
-        sy = 0,
-        sz = 0;
+      let minX = Infinity, minY = Infinity, minZ = Infinity;
+      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
 
       // metrics: revenue/spend/orders SUM, остальные AVG
       const sums: Record<string, number> = {};
@@ -265,16 +256,8 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
       let sumOrders = 0;
 
       for (const p of cellPoints) {
-        sx += p.x;
-        sy += p.y;
-        sz += p.z;
-
-        minX = Math.min(minX, p.x);
-        minY = Math.min(minY, p.y);
-        minZ = Math.min(minZ, p.z);
-        maxX = Math.max(maxX, p.x);
-        maxY = Math.max(maxY, p.y);
-        maxZ = Math.max(maxZ, p.z);
+        minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); minZ = Math.min(minZ, p.z);
+        maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); maxZ = Math.max(maxZ, p.z);
 
         const m = p.metrics ?? {};
         for (const k of Object.keys(m)) {
@@ -292,30 +275,31 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
       const n = cellPoints.length;
 
       const metrics: Record<string, number> = {};
-
-      // сначала средние для всего (потом перетрём sums для revenue/spend/orders)
       for (const k of Object.keys(sums)) {
         const c = counts[k] ?? 0;
         metrics[k] = c ? sums[k] / c : Number.NaN;
       }
 
-      // суммы для ключевых
       metrics.revenue = sumRevenue;
       metrics.spend = sumSpend;
       metrics.orders = sumOrders;
 
-      // пересчёт эффективности от агрегатов
       metrics.drr = metrics.revenue > 0 ? (metrics.spend / metrics.revenue) * 100 : 0;
       metrics.roi = metrics.spend > 0 ? metrics.revenue / metrics.spend : 0;
+
+      // ✅ центр bbox (по крайним точкам) — чтобы “облако” было корректно
+      const cx = (minX + maxX) / 2;
+      const cy = (minY + maxY) / 2;
+      const cz = (minZ + maxZ) / 2;
 
       out.push({
         id: `${field}:voxel:${cell}`,
         label: `Кластер (${n})`,
         sourceField: field,
         metrics,
-        x: sx / n,
-        y: sy / n,
-        z: sz / n,
+        x: cx,
+        y: cy,
+        z: cz,
         isCluster: true,
         clusterCount: n,
         span: { x: maxX - minX, y: maxY - minY, z: maxZ - minZ }
@@ -334,14 +318,9 @@ export function buildPoints(args: {
   axisZ: string;
   numberFields: ShowcaseField[];
   dateFields: ShowcaseField[];
-
-  /**
-   * ✅ LOD settings (можно потом подключить к UI секции "Группировка" в PickDataMenu)
-   * По умолчанию: включено, средняя детализация, minCount=5
-   */
   lodEnabled?: boolean;
-  lodDetail?: number; // 0..1
-  lodMinCount?: number; // например 5
+  lodDetail?: number;
+  lodMinCount?: number;
 }): SpacePoint[] {
   const {
     rows,
@@ -413,10 +392,8 @@ export function buildPoints(args: {
     });
   });
 
-  // 1) проекция (как было)
   const projected = projectPoints(result, axisX, axisY, axisZ);
 
-  // 2) ✅ LOD voxel clustering ДО сцены (профит по производительности)
   if (lodEnabled) {
     return voxelAggregateHomogeneous(projected, { minCount: lodMinCount, detail: lodDetail });
   }
