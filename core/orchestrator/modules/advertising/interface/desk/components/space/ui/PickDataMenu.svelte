@@ -46,35 +46,49 @@
   $: filteredFields =
     !q
       ? allFields
-      : allFields.filter(
-          (f) => (f.name ?? '').toLowerCase().includes(q) || (f.code ?? '').toLowerCase().includes(q)
-        );
+      : allFields.filter((f) => (f.name ?? '').toLowerCase().includes(q) || (f.code ?? '').toLowerCase().includes(q));
 
   $: nameByCode = new Map(allFields.map((f) => [f.code, f.name] as const));
   const chipLabel = (code: string): string => nameByCode.get(code) ?? code;
 
+  // =========================
+  // ✅ FIX: key normalization
+  // =========================
+  const norm = (s: string): string => String(s ?? '').trim().toLowerCase();
+  const tail = (s: string): string => {
+    const n = norm(s);
+    // поддерживаем sales_fact:sku / ads.sku / sales_fact/sku
+    return n.split(/[:./]/g).filter(Boolean).pop() ?? n;
+  };
+  const keyForColor = (code: string): string => tail(code);
+
   // --- per-field color popover state ---
   let isColorOpen = false;
-  let activeColorCode: string | null = null;
+  let activeColorCode: string | null = null; // это "код поля" из selectedEntityFields (sku, campaign_id, ...)
   let activeColorValue = defaultEntityColor;
 
   // ✅ защита от самотриггера реактивного блока (чтобы работало как bg/edge)
   let lastCommitted = '';
 
   function getFieldColor(code: string): string {
-    return entityFieldColors?.[code] ?? defaultEntityColor;
+    const k = keyForColor(code);
+    return entityFieldColors?.[k] ?? defaultEntityColor;
   }
 
   function setFieldColor(code: string, color: string): void {
     const cleaned = String(color ?? '').trim();
     if (!cleaned) return;
-    entityFieldColors = { ...(entityFieldColors ?? {}), [code]: cleaned };
+
+    const k = keyForColor(code);
+    entityFieldColors = { ...(entityFieldColors ?? {}), [k]: cleaned };
   }
 
   function deleteFieldColor(code: string): void {
-    if (!entityFieldColors?.[code]) return;
+    const k = keyForColor(code);
+    if (!entityFieldColors?.[k]) return;
+
     const next = { ...(entityFieldColors ?? {}) };
-    delete next[code];
+    delete next[k];
     entityFieldColors = next;
   }
 
@@ -103,7 +117,8 @@
     const v = String(activeColorValue ?? '').trim();
     if (v && v !== lastCommitted) {
       lastCommitted = v;
-      entityFieldColors = { ...(entityFieldColors ?? {}), [activeColorCode]: v };
+      const k = keyForColor(activeColorCode);
+      entityFieldColors = { ...(entityFieldColors ?? {}), [k]: v };
     }
   }
 
@@ -121,7 +136,8 @@
     selectedEntityFields = [...selectedEntityFields, cleaned];
 
     // чтобы свотч был сразу после добавления
-    if (!entityFieldColors?.[cleaned]) setFieldColor(cleaned, defaultEntityColor);
+    const k = keyForColor(cleaned);
+    if (!entityFieldColors?.[k]) setFieldColor(cleaned, defaultEntityColor);
   }
 
   function selectedAxis(code: string): 'x' | 'y' | 'z' | null {
