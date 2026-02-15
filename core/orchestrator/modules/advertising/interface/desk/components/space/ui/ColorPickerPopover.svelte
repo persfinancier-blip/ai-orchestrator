@@ -292,7 +292,7 @@
     width: 100%;
     border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
     outline: none;
-    background: rgba(248, 251, 255, 0.92);
+    background: var(--field-bg, #ffffff);
     border-radius: 12px;
     padding: 10px 10px;
     font-size: 12px;
