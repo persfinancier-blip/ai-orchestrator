@@ -50,10 +50,7 @@
   let visualBg = '#ffffff';
   let visualEdge = '#334155';
 
-  // ✅ старый цвет (fallback)
-  let pointsColor = '#3b82f6';
-
-  // ✅ НОВОЕ: per-field цвета, но ничего не ломаем: если нет — берём pointsColor
+  // ✅ per-field colors: code -> hex (используем для точек)
   let entityFieldColors: Record<string, string> = {};
   const DEFAULT_ENTITY_COLOR = '#3b82f6';
 
@@ -140,6 +137,7 @@
     dateFields: dateFieldsAll
   });
 
+  // ---- FIXED caching: Map(point.id -> clusterId)
   let fixedAssign: Map<string, number> = new Map();
   let fixedCounts: Map<number, number> = new Map();
   let fixedConfigKey = '';
@@ -151,8 +149,7 @@
   }
 
   function colorForEntityField(code: string): string {
-    // ✅ важное: не ломаем старое поведение, если мапа пустая
-    return entityFieldColors?.[code] ?? pointsColor ?? DEFAULT_ENTITY_COLOR;
+    return entityFieldColors?.[code] ?? DEFAULT_ENTITY_COLOR;
   }
 
   function getTextValue(p: SpacePoint, field: string): string {
@@ -208,9 +205,12 @@
   }
 
   function applyClustering(input: SpacePoint[]): SpacePoint[] {
-    // ✅ когда группировка выключена — красим по полю (если задано), иначе pointsColor
+    // ✅ когда группировка выключена — красим точки по полю (sku / campaign_id и т.д.)
     if (!grouping.enabled) {
-      return input.map((p) => ({ ...p, color: colorForEntityField(p.sourceField) }));
+      return input.map((p) => ({
+        ...p,
+        color: colorForEntityField(p.sourceField)
+      }));
     }
 
     if (grouping.recompute === 'fixed') {
@@ -321,6 +321,10 @@
 
   function removeEntityField(code: string): void {
     selectedEntityFields = selectedEntityFields.filter((x) => x !== code);
+    // опционально: можно и цвет удалить, но не обязательно
+    // const next = { ...(entityFieldColors ?? {}) };
+    // delete next[code];
+    // entityFieldColors = next;
   }
 
   function addCoordField(code: string): void {
@@ -338,6 +342,7 @@
     axisY = '';
     axisZ = '';
     search = '';
+    entityFieldColors = {};
   }
 
   function loadStorages(): void {
@@ -530,22 +535,16 @@
       <PickDataMenu
         textFields={textFieldsAll}
         coordFields={coordFieldsAll}
-
         bind:selectedEntityFields
         bind:axisX
         bind:axisY
         bind:axisZ
         bind:search
-
         bind:period
         bind:fromDate
         bind:toDate
-
-        bind:pointsColor
-
         bind:entityFieldColors
         defaultEntityColor={DEFAULT_ENTITY_COLOR}
-
         onAddEntity={addEntityField}
         onAddCoord={addCoordField}
         onClose={closeAllMenus}
@@ -585,6 +584,10 @@
     />
   {/if}
 </section>
+
+<style>
+  /* ТВОЙ CSS — как есть, без изменений (оставь весь блок как у тебя) */
+</style>
 
 
 <style>
