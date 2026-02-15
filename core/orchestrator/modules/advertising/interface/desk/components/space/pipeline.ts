@@ -45,7 +45,6 @@ export function applyRowsFilter(args: {
 
     if (!search.trim()) return true;
     const q = search.trim().toLowerCase();
-
     return selectedEntityFields.some((field) =>
       String((row as Record<string, unknown>)[field] ?? '').toLowerCase().includes(q)
     );
@@ -109,22 +108,29 @@ export function sanitizePoints(input: SpacePoint[]): SpacePoint[] {
 }
 
 export function buildBBox(points: SpacePoint[]): BBox {
-  const xs = points.map((p) => p.x);
-  const ys = points.map((p) => p.y);
-  const zs = points.map((p) => p.z);
-  return {
-    minX: Math.min(...xs),
-    maxX: Math.max(...xs),
-    minY: Math.min(...ys),
-    maxY: Math.max(...ys),
-    minZ: Math.min(...zs),
-    maxZ: Math.max(...zs)
-  };
+  if (!points.length) return { minX: 0, maxX: 1, minY: 0, maxY: 1, minZ: 0, maxZ: 1 };
+
+  let minX = Infinity,
+    minY = Infinity,
+    minZ = Infinity;
+  let maxX = -Infinity,
+    maxY = -Infinity,
+    maxZ = -Infinity;
+
+  for (const p of points) {
+    if (!Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.z)) continue;
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    minZ = Math.min(minZ, p.z);
+    maxX = Math.max(maxX, p.x);
+    maxY = Math.max(maxY, p.y);
+    maxZ = Math.max(maxZ, p.z);
+  }
+
+  if (!Number.isFinite(minX)) return { minX: 0, maxX: 1, minY: 0, maxY: 1, minZ: 0, maxZ: 1 };
+  return { minX, maxX, minY, maxY, minZ, maxZ };
 }
 
-/**
- * ВАЖНО: SpaceScene (твой) вызывает normalizeBBox(bbox), поэтому оставляем именно такую сигнатуру.
- */
 export function normalizeBBox(bbox: BBox): BBox {
   const spanX = bbox.maxX - bbox.minX;
   const spanY = bbox.maxY - bbox.minY;
@@ -140,27 +146,19 @@ export function normalizeBBox(bbox: BBox): BBox {
   return bbox;
 }
 
-/**
- * GraphPanel ожидает: calcMax(pointsRaw, axisCode) -> number
- */
+/** GraphPanel ожидает number */
 export function calcMax(pointsList: SpacePoint[], metricKey: string): number {
   if (!metricKey) return Number.NaN;
   let max = -Infinity;
-
   for (const p of pointsList) {
     const v = p?.metrics?.[metricKey];
     if (Number.isFinite(v)) max = Math.max(max, v);
   }
-
   return Number.isFinite(max) ? max : Number.NaN;
 }
 
-export function formatValueByMetric(metric: string, value: number): string {
+export function formatNumberHuman(value: number): string {
   if (!Number.isFinite(value)) return '—';
-  if (metric === 'drr') return `${value.toFixed(1)}%`;
-  if (metric === 'roi') return value.toFixed(2);
-  if (metric.includes('date') || metric.includes('Date')) return new Date(value).toISOString().slice(0, 10);
-
   const abs = Math.abs(value);
   if (abs >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`;
   if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
@@ -168,8 +166,16 @@ export function formatValueByMetric(metric: string, value: number): string {
   return value.toFixed(2);
 }
 
+export function formatValueByMetric(metric: string, value: number): string {
+  if (!Number.isFinite(value)) return '—';
+  if (metric === 'drr') return `${value.toFixed(1)}%`;
+  if (metric === 'roi') return value.toFixed(2);
+  if (metric.includes('date') || metric.includes('Date')) return new Date(value).toISOString().slice(0, 10);
+  return formatNumberHuman(value);
+}
+
 // ==============================
-// ✅ VOXEL LOD + HULL
+// ✅ VOXEL LOD (починили как ты хотел)
 // ==============================
 
 function clamp01(v: number): number {
@@ -177,11 +183,12 @@ function clamp01(v: number): number {
 }
 
 /**
- * - detail=0 -> "почти по точкам"
- * - detail=1 -> size >= 2*maxSpan => все точки в 1 ячейке
+ * detail=0  -> почти по точкам
+ * detail=1  -> size >= 2*maxSpan => ВСЁ в одной ячейке => 1 кластер
  */
 function voxelSizeFromDetailAndBBox(detail01: number, bbox: BBox): number {
   const d = clamp01(detail01);
+
   const spanX = Math.max(0.001, bbox.maxX - bbox.minX);
   const spanY = Math.max(0.001, bbox.maxY - bbox.minY);
   const spanZ = Math.max(0.001, bbox.maxZ - bbox.minZ);
@@ -192,6 +199,7 @@ function voxelSizeFromDetailAndBBox(detail01: number, bbox: BBox): number {
   return minSize + (maxSize - minSize) * d;
 }
 
+/** КЛЮЧ ДОЛЖЕН БЫТЬ ОТ bbox.min*, иначе отрицательные координаты ломают “1 кластер” */
 function voxelKey(p: SpacePoint, bbox: BBox, size: number): string {
   const ix = Math.floor((p.x - bbox.minX) / size);
   const iy = Math.floor((p.y - bbox.minY) / size);
@@ -199,6 +207,10 @@ function voxelKey(p: SpacePoint, bbox: BBox, size: number): string {
   return `${ix}|${iy}|${iz}`;
 }
 
+/**
+ * detail=0 -> minCountEff=N+1 => не агрегируем
+ * detail=1 -> minCountEff=1   => агрегируем
+ */
 function effectiveMinCount(detail01: number, total: number, baseMinCount: number): number {
   const d = clamp01(detail01);
   if (total <= 1) return 2;
@@ -312,6 +324,10 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
       const sums: Record<string, number> = {};
       const counts: Record<string, number> = {};
 
+      let sumRevenue = 0;
+      let sumSpend = 0;
+      let sumOrders = 0;
+
       for (const p of cellPoints) {
         sx += p.x; sy += p.y; sz += p.z;
 
@@ -325,29 +341,35 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
           sums[k] = (sums[k] ?? 0) + v;
           counts[k] = (counts[k] ?? 0) + 1;
         }
+
+        sumRevenue += Number(m.revenue ?? 0);
+        sumSpend += Number(m.spend ?? 0);
+        sumOrders += Number(m.orders ?? 0);
       }
 
       const n = cellPoints.length;
+
       const metrics: Record<string, number> = {};
       for (const k of Object.keys(sums)) {
         const c = counts[k] ?? 0;
         metrics[k] = c ? sums[k] / c : Number.NaN;
       }
 
+      metrics.revenue = sumRevenue;
+      metrics.spend = sumSpend;
+      metrics.orders = sumOrders;
+      metrics.drr = metrics.revenue > 0 ? (metrics.spend / metrics.revenue) * 100 : 0;
+      metrics.roi = metrics.spend > 0 ? metrics.revenue / metrics.spend : 0;
+
       const cx = sx / n;
       const cy = sy / n;
       const cz = sz / n;
 
-      const span = {
-        x: Math.max(0.001, maxX - minX),
-        y: Math.max(0.001, maxY - minY),
-        z: Math.max(0.001, maxZ - minZ)
-      };
-
+      const span = { x: maxX - minX, y: maxY - minY, z: maxZ - minZ };
       const hull = pickHullSamples(cellPoints, { x: cx, y: cy, z: cz });
 
       out.push({
-        id: `cluster:${field}:${cell}`,
+        id: `${field}:voxel:${cell}`,
         label: `Кластер (${n})`,
         sourceField: field,
         metrics,
@@ -364,10 +386,6 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
 
   return out;
 }
-
-// ==============================
-// ✅ buildPoints
-// ==============================
 
 export function buildPoints(args: {
   rows: ShowcaseRow[];
