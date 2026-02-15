@@ -1,528 +1,623 @@
-<!-- core/orchestrator/modules/advertising/interface/desk/components/GraphPanel.svelte -->
+<!-- core/orchestrator/modules/advertising/interface/desk/components/space/ui/PickDataMenu.svelte -->
 <script lang="ts">
-  import { onDestroy, onMount, tick } from 'svelte';
-  import { get } from 'svelte/store';
+  import type { PeriodMode } from '../types';
+  import ColorPickerPopover from './ColorPickerPopover.svelte';
 
-  import { showcaseStore, fieldName, type DatasetId, type ShowcaseField } from '../data/showcaseStore';
+  export let textFields: Array<{ code: string; name: string; kind: 'text' }>;
+  export let coordFields: Array<{ code: string; name: string; kind: 'number' | 'date' }>;
 
-  import type { DatasetPreset, PeriodMode, TooltipState, VisualScheme, ShowcaseSafe, SpacePoint } from './space/types';
-  import { applyRowsFilter, buildPoints } from './space/pipeline';
-  import { loadDatasetPresets, loadVisualSchemes, saveDatasetPresets, saveVisualSchemes } from './space/presetsStorage';
-  import { SpaceScene } from './space/three/SpaceScene';
+  export let selectedEntityFields: string[] = [];
+  export let axisX = '';
+  export let axisY = '';
+  export let axisZ = '';
 
-  import DisplayMenu from './space/ui/DisplayMenu.svelte';
-  import PickDataMenu from './space/ui/PickDataMenu.svelte';
-  import SaveModal from './space/ui/SaveModal.svelte';
-  import Tooltip from './space/ui/Tooltip.svelte';
-  import Crumbs from './space/ui/Crumbs.svelte';
-  import InfoCard from './space/ui/InfoCard.svelte';
+  export let search = '';
 
-  const STORAGE_KEY_VISUALS = 'desk-space-visual-schemes-v2';
-  const STORAGE_KEY_DATASETS = 'desk-space-datasets-v2';
+  export let period: PeriodMode = '30 дней';
+  export let fromDate = '';
+  export let toDate = '';
 
-  const EMPTY_SHOWCASE: ShowcaseSafe = { fields: [], rows: [], datasets: [] };
+  export let onAddEntity: (code: string) => void;
+  export let onAddCoord: (code: string) => void;
+  export let onClose: () => void;
 
-  let showcase: ShowcaseSafe = ((get(showcaseStore) as any) ?? EMPTY_SHOWCASE) as ShowcaseSafe;
-  const unsub = showcaseStore.subscribe((value) => {
-    showcase = (((value as any) ?? EMPTY_SHOWCASE) as ShowcaseSafe) ?? EMPTY_SHOWCASE;
-  });
+  /**
+   * ✅ Цвет для каждого выбранного поля: code -> hex
+   * Родитель передаёт bind:entityFieldColors
+   */
+  export let entityFieldColors: Record<string, string> = {};
 
-  let container3d: HTMLDivElement;
+  /**
+   * ✅ Цвет по умолчанию для новых полей
+   */
+  export let defaultEntityColor = '#3b82f6';
 
-  let activeLayers: DatasetId[] = ['sales_fact', 'ads'];
+  /**
+   * ✅ LOD / voxel grouping settings (управляют схлопыванием ДО сцены)
+   * bind из GraphPanel, прокидываем в buildPoints()
+   */
+  export let lodEnabled = true;
+  export let lodDetail = 0.5; // 0..1
+  export let lodMinCount = 5; // >= 2 обычно
 
-  let selectedEntityFields: string[] = ['sku', 'campaign_id'];
-  let axisX = '';
-  let axisY = '';
-  let axisZ = '';
+  type AnyField =
+    | { code: string; name: string; kind: 'text' }
+    | { code: string; name: string; kind: 'number' | 'date' };
 
-  let period: PeriodMode = '30 дней';
-  let fromDate = '';
-  let toDate = '';
-  let search = '';
+  const kindLabel: Record<string, string> = { text: 'текст', number: 'число', date: 'дата' };
 
-  let visualBg = '#ffffff';
-  let visualEdge = '#334155';
+  $: selectedCoordCount = [axisX, axisY, axisZ].filter(Boolean).length;
+  $: canAddCoord = selectedCoordCount < 3;
 
-  // ✅ per-field colors: code -> hex (используем для точек)
-  let entityFieldColors: Record<string, string> = {};
-  const DEFAULT_ENTITY_COLOR = '#3b82f6';
+  $: allFields = ([...(textFields ?? []), ...(coordFields ?? [])] as AnyField[]);
+  $: q = search.trim().toLowerCase();
+  $: filteredFields =
+    !q
+      ? allFields
+      : allFields.filter((f) => (f.name ?? '').toLowerCase().includes(q) || (f.code ?? '').toLowerCase().includes(q));
 
-  // ✅ LOD settings (группировка ДО сцены)
-  let lodEnabled = true;
-  let lodDetail = 0.5;   // 0..1 (средняя)
-  let lodMinCount = 5;   // min size
+  $: nameByCode = new Map(allFields.map((f) => [f.code, f.name] as const));
+  const chipLabel = (code: string): string => nameByCode.get(code) ?? code;
 
-  // ✅ НОРМАЛИЗАЦИЯ КЛЮЧЕЙ (должна совпадать с PickDataMenu)
+  // =========================
+  // ✅ FIX: key normalization
+  // =========================
   const norm = (s: string): string => String(s ?? '').trim().toLowerCase();
   const tail = (s: string): string => {
     const n = norm(s);
+    // поддерживаем sales_fact:sku / ads.sku / sales_fact/sku
     return n.split(/[:./]/g).filter(Boolean).pop() ?? n;
   };
   const keyForColor = (code: string): string => tail(code);
 
-  function setEntityColor(code: string, color: string): void {
+  // --- per-field color popover state ---
+  let isColorOpen = false;
+  let activeColorCode: string | null = null; // это "код поля" из selectedEntityFields (sku, campaign_id, ...)
+  let activeColorValue = defaultEntityColor;
+
+  // ✅ защита от самотриггера реактивного блока (чтобы работало как bg/edge)
+  let lastCommitted = '';
+
+  function getFieldColor(code: string): string {
     const k = keyForColor(code);
-    const c = String(color ?? '').trim();
-    if (!k || !c) return;
-    entityFieldColors = { ...(entityFieldColors ?? {}), [k]: c };
+    return entityFieldColors?.[k] ?? defaultEntityColor;
   }
 
-  function deleteEntityColor(code: string): void {
+  function setFieldColor(code: string, color: string): void {
+    const cleaned = String(color ?? '').trim();
+    if (!cleaned) return;
+
+    const k = keyForColor(code);
+    entityFieldColors = { ...(entityFieldColors ?? {}), [k]: cleaned };
+  }
+
+  function deleteFieldColor(code: string): void {
     const k = keyForColor(code);
     if (!entityFieldColors?.[k]) return;
+
     const next = { ...(entityFieldColors ?? {}) };
     delete next[k];
     entityFieldColors = next;
   }
 
-  let visualSchemes: VisualScheme[] = [];
-  let selectedVisualId = '';
-
-  let datasetPresets: DatasetPreset[] = [];
-  let selectedDatasetPresetId = '';
-
-  let showDisplayMenu = false;
-  let showPickDataMenu = false;
-
-  let showSaveVisualModal = false;
-  let saveVisualName = '';
-
-  let showSaveDatasetModal = false;
-  let saveDatasetName = '';
-
-  let tooltip: TooltipState = { visible: false, x: 0, y: 0, lines: [] };
-
-  let renderedCount = 0;
-  let bboxLabel = '—';
-
-  let scene: SpaceScene | null = null;
-
-  function fieldsAll(): ShowcaseField[] {
-    return (showcase?.fields ?? []) as ShowcaseField[];
+  function openColorFor(code: string): void {
+    activeColorCode = code;
+    activeColorValue = getFieldColor(code);
+    lastCommitted = activeColorValue; // ✅ считаем текущее уже применённым
+    isColorOpen = true;
   }
 
-  function fieldsFor(kind: ShowcaseField['kind']): ShowcaseField[] {
-    const all = fieldsAll();
-    return all.filter((f) => f.kind === kind && (f.datasetIds ?? []).some((id) => activeLayers.includes(id)));
+  function closeColor(): void {
+    isColorOpen = false;
+    activeColorCode = null;
+    lastCommitted = '';
   }
 
-  $: textFieldsAll = fieldsFor('text');
-  $: numberFieldsAll = fieldsFor('number');
-  $: dateFieldsAll = fieldsFor('date');
-  $: coordFieldsAll = [...numberFieldsAll, ...dateFieldsAll];
-
-  $: if (coordFieldsAll.length) ensureDefaults();
-
-  function ensureDefaults(): void {
-    const coords = coordFieldsAll;
-    if (!axisX && coords[0]) axisX = coords[0].code;
-    if (!axisY && coords[1]) axisY = coords[1].code;
-    if (!axisZ && coords[2]) axisZ = coords[2].code;
+  function onActiveHexInput(e: Event): void {
+    const el = e.currentTarget as HTMLInputElement | null;
+    if (!el) return;
+    activeColorValue = String(el.value ?? '').trim();
   }
 
-  $: filteredRows = applyRowsFilter({
-    rows: showcase?.rows ?? [],
-    period,
-    fromDate,
-    toDate,
-    search,
-    selectedEntityFields
-  });
-
-  // ✅ buildPoints получает LOD параметры
-  $: points = buildPoints({
-    rows: filteredRows,
-    entityFields: selectedEntityFields,
-    axisX,
-    axisY,
-    axisZ,
-    numberFields: numberFieldsAll,
-    dateFields: dateFieldsAll,
-    lodEnabled,
-    lodDetail,
-    lodMinCount
-  });
-
-  // ✅ цвет только по выбранному полю (и для кластеров тоже, т.к. sourceField сохраняется)
-  function colorForEntityField(code: string, colors: Record<string, string>): string {
-    return colors?.[keyForColor(code)] ?? DEFAULT_ENTITY_COLOR;
-  }
-
-  $: colored = (points ?? []).map((p) => ({
-    ...p,
-    color: colorForEntityField(p.sourceField, entityFieldColors)
-  }));
-
-  // ✅ и тут используем colored
-  $: if (scene) {
-    scene.setTheme({ bg: visualBg, edge: visualEdge });
-    scene.setAxisCodes({ x: axisX, y: axisY, z: axisZ });
-
-    const info = scene.setPoints(colored);
-
-    renderedCount = info.renderedCount;
-    bboxLabel = info.bboxLabel;
-  }
-
-  function toggleDisplayMenu(): void {
-    showDisplayMenu = !showDisplayMenu;
-    if (showDisplayMenu) showPickDataMenu = false;
-  }
-
-  function togglePickMenu(): void {
-    showPickDataMenu = !showPickDataMenu;
-    if (showPickDataMenu) showDisplayMenu = false;
-  }
-
-  function closeAllMenus(): void {
-    showDisplayMenu = false;
-    showPickDataMenu = false;
-  }
-
-  function addEntityField(code: string): void {
-    if (!code || selectedEntityFields.includes(code)) return;
-    selectedEntityFields = [...selectedEntityFields, code];
-
-    const k = keyForColor(code);
-    if (!entityFieldColors?.[k]) setEntityColor(code, DEFAULT_ENTITY_COLOR);
-  }
-
-  function removeEntityField(code: string): void {
-    selectedEntityFields = selectedEntityFields.filter((x) => x !== code);
-    deleteEntityColor(code);
-  }
-
-  function addCoordField(code: string): void {
-    if (!code) return;
-    if (axisX === code || axisY === code || axisZ === code) return;
-
-    if (!axisX) axisX = code;
-    else if (!axisY) axisY = code;
-    else if (!axisZ) axisZ = code;
-  }
-
-  function clearAllDataSelection(): void {
-    selectedEntityFields = [];
-    axisX = '';
-    axisY = '';
-    axisZ = '';
-    search = '';
-    entityFieldColors = {};
-
-    // ✅ LOD по умолчанию
-    lodEnabled = true;
-    lodDetail = 0.5;
-    lodMinCount = 5;
-  }
-
-  function loadStorages(): void {
-    const loaded = loadVisualSchemes(STORAGE_KEY_VISUALS) as any[];
-    visualSchemes = (loaded ?? []).map((v) => ({
-      id: String(v.id),
-      name: String(v.name ?? ''),
-      bg: String(v.bg ?? '#ffffff'),
-      edge: String(v.edge ?? '#334155')
-    }));
-
-    datasetPresets = loadDatasetPresets(STORAGE_KEY_DATASETS);
-  }
-
-  function saveVisualScheme(name: string): void {
-    const trimmed = name.trim();
-    if (!trimmed) return;
-
-    const item: VisualScheme = {
-      id: `${Date.now()}-${Math.random()}`,
-      name: trimmed,
-      bg: visualBg,
-      edge: visualEdge
-    };
-
-    visualSchemes = [item, ...visualSchemes].slice(0, 30);
-    selectedVisualId = item.id;
-    saveVisualSchemes(STORAGE_KEY_VISUALS, visualSchemes);
-  }
-
-  function applyVisualScheme(id: string): void {
-    const v = visualSchemes.find((x) => x.id === id);
-    if (!v) return;
-    visualBg = v.bg;
-    visualEdge = v.edge;
-  }
-
-  function resetVisual(): void {
-    visualBg = '#ffffff';
-    visualEdge = '#334155';
-    selectedVisualId = '';
-  }
-
-  function saveDatasetPreset(name: string): void {
-    const trimmed = name.trim();
-    if (!trimmed) return;
-
-    const item: DatasetPreset = {
-      id: `${Date.now()}-${Math.random()}`,
-      name: trimmed,
-      value: {
-        selectedEntityFields,
-        axisX,
-        axisY,
-        axisZ,
-        period,
-        fromDate,
-        toDate,
-        search
-        // ✅ lod настройки пока не сохраняем в пресет (если надо — добавим отдельно)
-      }
-    };
-
-    datasetPresets = [item, ...datasetPresets].slice(0, 30);
-    selectedDatasetPresetId = item.id;
-    saveDatasetPresets(STORAGE_KEY_DATASETS, datasetPresets);
-  }
-
-  function applyDatasetPreset(id: string): void {
-    const p = datasetPresets.find((x) => x.id === id);
-    if (!p) return;
-
-    selectedEntityFields = p.value.selectedEntityFields ?? [];
-    axisX = p.value.axisX ?? '';
-    axisY = p.value.axisY ?? '';
-    axisZ = p.value.axisZ ?? '';
-    period = p.value.period ?? '30 дней';
-    fromDate = p.value.fromDate ?? '';
-    toDate = p.value.toDate ?? '';
-    search = p.value.search ?? '';
-  }
-
-  function onAxisRemove(axis: 'x' | 'y' | 'z'): void {
-    if (axis === 'x') axisX = '';
-    if (axis === 'y') axisY = '';
-    if (axis === 'z') axisZ = '';
-  }
-
-  function onGlobalClick(e: MouseEvent): void {
-    const t = e.target as Node | null;
-    if (!t) return;
-
-    const menus = Array.from(document.querySelectorAll('.menu-pop')) as HTMLElement[];
-    const inMenu = menus.some((m) => m.contains(t));
-    const inBtns = (document.querySelector('.hud')?.contains(t) ?? false);
-
-    if (!inMenu && !inBtns) closeAllMenus();
-  }
-
-  function onKey(e: KeyboardEvent): void {
-    if (e.key === 'Escape') {
-      closeAllMenus();
-      showSaveVisualModal = false;
-      showSaveDatasetModal = false;
-    }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-      e.preventDefault();
-      showPickDataMenu = true;
-      showDisplayMenu = false;
+  // ✅ live update (как в DisplayMenu), но без лупа:
+  $: if (isColorOpen && activeColorCode) {
+    const v = String(activeColorValue ?? '').trim();
+    if (v && v !== lastCommitted) {
+      lastCommitted = v;
+      const k = keyForColor(activeColorCode);
+      entityFieldColors = { ...(entityFieldColors ?? {}), [k]: v };
     }
   }
 
-  function onResize(): void {
-    scene?.resize(560);
+  // --- selection logic ---
+  function toggleText(code: string): void {
+    const cleaned = String(code ?? '').trim();
+    if (!cleaned) return;
+
+    if (selectedEntityFields.includes(cleaned)) {
+      selectedEntityFields = selectedEntityFields.filter((x) => x !== cleaned);
+      deleteFieldColor(cleaned);
+      return;
+    }
+
+    selectedEntityFields = [...selectedEntityFields, cleaned];
+
+    const k = keyForColor(cleaned);
+    if (!entityFieldColors?.[k]) setFieldColor(cleaned, defaultEntityColor);
   }
 
-  onMount(async () => {
-    loadStorages();
-    await tick();
+  function selectedAxis(code: string): 'x' | 'y' | 'z' | null {
+    if (axisX === code) return 'x';
+    if (axisY === code) return 'y';
+    if (axisZ === code) return 'z';
+    return null;
+  }
 
-    scene = new SpaceScene(
-      { fieldName, getFields: () => fieldsAll() },
-      { onTooltip: (t) => (tooltip = t), onAxisRemove }
-    );
+  function removeCoord(code: string): void {
+    const ax = selectedAxis(code);
+    if (ax === 'x') axisX = '';
+    if (ax === 'y') axisY = '';
+    if (ax === 'z') axisZ = '';
+  }
 
-    scene.init(container3d, { height: 560 });
-    ensureDefaults();
+  function addCoord(code: string): void {
+    const cleaned = String(code ?? '').trim();
+    if (!cleaned) return;
 
-    window.addEventListener('resize', onResize);
-    window.addEventListener('keydown', onKey);
-    window.addEventListener('click', onGlobalClick, true);
+    if (axisX === cleaned || axisY === cleaned || axisZ === cleaned) return;
+    if (!canAddCoord) return;
 
-    await tick();
+    if (!axisX) axisX = cleaned;
+    else if (!axisY) axisY = cleaned;
+    else if (!axisZ) axisZ = cleaned;
+  }
 
-    const info = scene.setPoints(colored);
-    renderedCount = info.renderedCount;
-    bboxLabel = info.bboxLabel;
-  });
+  function toggleCoord(code: string): void {
+    const cleaned = String(code ?? '').trim();
+    if (!cleaned) return;
 
-  onDestroy(() => {
-    unsub();
+    if (selectedAxis(cleaned)) {
+      removeCoord(cleaned);
+      return;
+    }
 
-    window.removeEventListener('resize', onResize);
-    window.removeEventListener('keydown', onKey);
-    window.removeEventListener('click', onGlobalClick, true);
+    addCoord(cleaned);
+  }
 
-    scene?.dispose();
-    scene = null;
-  });
+  function isDisabledField(f: AnyField): boolean {
+    if (f.kind === 'text') return false;
+    if (selectedAxis(f.code)) return false;
+    return !canAddCoord;
+  }
 
-  $: selectedCrumbs = selectedEntityFields.map((c) => ({ code: c, name: fieldName(c) }));
-  $: axesLabel = `Оси: ${fieldName(axisX || '—')} / ${fieldName(axisY || '—')} / ${fieldName(axisZ || '—')}`;
+  function onPick(f: AnyField): void {
+    if (isDisabledField(f)) return;
+    if (f.kind === 'text') toggleText(f.code);
+    else toggleCoord(f.code);
+  }
+
+  function clamp01(v: number): number {
+    return Math.min(1, Math.max(0, v));
+  }
+
+  function onLodDetailInput(e: Event): void {
+    const el = e.currentTarget as HTMLInputElement | null;
+    if (!el) return;
+    lodDetail = clamp01(Number(el.value));
+  }
+
+  function onLodMinCountInput(e: Event): void {
+    const el = e.currentTarget as HTMLInputElement | null;
+    if (!el) return;
+    const n = Math.round(Number(el.value));
+    lodMinCount = Number.isFinite(n) ? Math.max(2, n) : 5;
+  }
 </script>
 
-<section class="graph-root">
-  <div class="stage">
-    <div bind:this={container3d} class="scene" />
+<div class="menu-pop pick">
+  <div class="pick-inner">
+    <div class="menu-title">Выбор данных</div>
 
-    <div class="hud top-right">
-      <div class="hud-actions">
-        <button class="btn" on:click={toggleDisplayMenu}>Настройка отображения</button>
-        <button class="btn btn-primary" on:click={togglePickMenu}>Выбрать данные</button>
+    <div class="selected-bar">
+      <div class="selected-block">
+        <div class="selected-title">Выбраны поля</div>
+
+        <div class="chips">
+          {#if (selectedEntityFields?.length ?? 0) === 0}
+            <span class="empty">ничего</span>
+          {:else}
+            {#each selectedEntityFields as c (c)}
+              <span class="chip">
+                <button
+                  type="button"
+                  class="swatch"
+                  aria-label="Цвет поля"
+                  style={`background:${(isColorOpen && activeColorCode === c) ? activeColorValue : getFieldColor(c)};`}
+                  on:click|stopPropagation={() => openColorFor(c)}
+                ></button>
+
+                <span class="chip-text">{chipLabel(c)}</span>
+              </span>
+            {/each}
+          {/if}
+        </div>
       </div>
 
-      <Crumbs crumbs={selectedCrumbs} onRemove={removeEntityField} />
+      <div class="selected-block">
+        <div class="selected-title">Оси</div>
+        <div class="chips">
+          <span class="chip axis">X: {axisX ? chipLabel(axisX) : '—'}</span>
+          <span class="chip axis">Y: {axisY ? chipLabel(axisY) : '—'}</span>
+          <span class="chip axis">Z: {axisZ ? chipLabel(axisZ) : '—'}</span>
+        </div>
+      </div>
     </div>
 
-    <InfoCard pointsCount={renderedCount} axesLabel={axesLabel} bboxLabel={bboxLabel} />
+    <div class="row">
+      <input class="input" placeholder="Поиск по полям (Ctrl+K)" bind:value={search} />
+    </div>
 
-    {#if showDisplayMenu}
-      <DisplayMenu
-        bind:visualBg
-        bind:visualEdge
-        bind:selectedVisualId
-        bind:selectedDatasetPresetId
-        {visualSchemes}
-        {datasetPresets}
-        onResetVisual={resetVisual}
-        onOpenSaveVisual={() => {
-          saveVisualName = '';
-          showSaveVisualModal = true;
-          closeAllMenus();
-        }}
-        onClearAllDataSelection={clearAllDataSelection}
-        onOpenSaveDataset={() => {
-          saveDatasetName = '';
-          showSaveDatasetModal = true;
-          closeAllMenus();
-        }}
-        onApplyVisual={applyVisualScheme}
-        onApplyDataset={applyDatasetPreset}
-        onResetView={() => scene?.resetView()}
-      />
+    <div class="sep" />
+
+    <!-- ✅ LOD секция -->
+    <div class="sub">Группировка (LOD)</div>
+
+    <div class="row">
+      <label class="check">
+        <input type="checkbox" bind:checked={lodEnabled} />
+        <span>Схлопывать плотные области</span>
+      </label>
+    </div>
+
+    <div class="row two">
+      <div class="col">
+        <div class="mini">Детализация</div>
+        <input
+          class="input"
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          value={lodDetail}
+          disabled={!lodEnabled}
+          on:input={onLodDetailInput}
+        />
+      </div>
+
+      <div class="col">
+        <div class="mini">Мин. размер</div>
+        <input
+          class="input"
+          type="number"
+          min="2"
+          step="1"
+          value={lodMinCount}
+          disabled={!lodEnabled}
+          on:input={onLodMinCountInput}
+        />
+      </div>
+    </div>
+
+    <div class="hintbox">
+      {#if !lodEnabled}
+        Группировка выключена — рисуем все точки.
+      {:else}
+        Если в вокселе &lt; <b>{lodMinCount}</b> точек — не схлопываем. Если ≥ <b>{lodMinCount}</b> — показываем одну кластер-точку.
+        Кластерим только однородные данные (поле с полем).
+      {/if}
+    </div>
+
+    <div class="sep" />
+
+    <div class="sub">Поля</div>
+
+    <div class="list">
+      {#each filteredFields as f (f.code)}
+        <button class="item" disabled={isDisabledField(f)} on:click={() => onPick(f)}>
+          <span class="name">{f.name}</span>
+
+          <span class="right">
+            {#if f.kind !== 'text' && selectedAxis(f.code)}
+              <span class="pill">{selectedAxis(f.code)?.toUpperCase()}</span>
+            {/if}
+            <span class="tag">{kindLabel[f.kind]}</span>
+          </span>
+        </button>
+      {/each}
+    </div>
+
+    {#if !canAddCoord}
+      <div class="limit">
+        Уже выбрано 3 координаты (X/Y/Z). Удалите одну прямо на ребре куба (×), чтобы добавить другую.
+      </div>
     {/if}
 
-    {#if showPickDataMenu}
-      <PickDataMenu
-        textFields={textFieldsAll}
-        coordFields={coordFieldsAll}
-        bind:selectedEntityFields
-        bind:axisX
-        bind:axisY
-        bind:axisZ
-        bind:search
-        bind:period
-        bind:fromDate
-        bind:toDate
-        bind:entityFieldColors
-        defaultEntityColor={DEFAULT_ENTITY_COLOR}
-        bind:lodEnabled
-        bind:lodDetail
-        bind:lodMinCount
-        onAddEntity={addEntityField}
-        onAddCoord={addCoordField}
-        onClose={closeAllMenus}
-      />
-    {/if}
+    {#if isColorOpen}
+      <div class="picker-overlay" on:click={closeColor}></div>
 
-    <Tooltip {tooltip} />
+      <div class="picker-layer" aria-label="Цвет поля">
+        <ColorPickerPopover bind:value={activeColorValue} title="Цвет поля" onClose={closeColor} />
+
+        <div class="active-hex">
+          <input class="hex" value={activeColorValue} on:input={onActiveHexInput} />
+        </div>
+      </div>
+    {/if}
   </div>
-
-  {#if showSaveVisualModal}
-    <SaveModal
-      title="Сохранить визуальную схему"
-      placeholder="Например: Светлый фон"
-      bind:value={saveVisualName}
-      onCancel={() => (showSaveVisualModal = false)}
-      onSave={(v) => {
-        saveVisualScheme(v);
-        showSaveVisualModal = false;
-      }}
-    />
-  {/if}
-
-  {#if showSaveDatasetModal}
-    <SaveModal
-      title="Сохранить набор данных"
-      placeholder="Например: Артикул + Выручка/Заказы/Расход"
-      bind:value={saveDatasetName}
-      onCancel={() => (showSaveDatasetModal = false)}
-      onSave={(v) => {
-        saveDatasetPreset(v);
-        showSaveDatasetModal = false;
-      }}
-    />
-  {/if}
-</section>
+</div>
 
 <style>
-  /* стили без изменений */
-  :global(:root) {
-    --ink-900: 15 23 42;
-    --ink-600: 100 116 139;
-    --ink-200: 226 232 240;
-
-    --stroke-soft: rgba(var(--ink-900) / 0.08);
-    --stroke-mid: rgba(var(--ink-900) / 0.12);
-    --stroke-hard: rgba(var(--ink-900) / 0.18);
-    --divider: rgba(var(--ink-200) / 0.70);
-
-    --shadow-btn: 0 10px 26px rgba(var(--ink-900) / 0.10);
-    --shadow-btn-strong: 0 12px 30px rgba(var(--ink-900) / 0.12);
-    --shadow-card: 0 16px 38px rgba(var(--ink-900) / 0.14);
-    --shadow-pop: 0 22px 60px rgba(var(--ink-900) / 0.18);
-    --shadow-modal: 0 30px 80px rgba(var(--ink-900) / 0.24);
-
-    --focus-ring: 0 0 0 4px rgba(var(--ink-900) / 0.10);
-
-    --field-bg: #ffffff;
-    --field-bg-soft: rgba(248, 251, 255, 0.9);
+  .pick-inner {
+    position: relative;
   }
 
-  :global(.graph-root) { width: 100%; }
-  :global(.stage) { position: relative; height: 560px; border-radius: 18px; overflow: hidden; background: #ffffff; }
-  :global(.scene) { position: absolute; inset: 0; }
-
-  :global(.hud) { position: absolute; pointer-events: none; display: flex; flex-direction: column; gap: 10px; z-index: 5; }
-  :global(.hud.top-right) { right: 14px; top: 12px; align-items: flex-end; }
-  :global(.hud-actions) { display: flex; gap: 10px; pointer-events: auto; }
-
-  :global(.btn) {
-    border: 0; border-radius: 999px; padding: 10px 14px; font-size: 13px; font-weight: 650;
-    cursor: pointer; line-height: 1; background: #f8fbff; color: rgba(var(--ink-900) / 0.90);
-    box-shadow: var(--shadow-btn); pointer-events: auto;
-  }
-  :global(.btn:hover) { transform: translateY(-0.5px); }
-
-  :global(.btn.btn-primary) { background: #f8fbff; box-shadow: var(--shadow-btn-strong); position: relative; }
-  :global(.btn.wide) { width: 100%; }
-
-  :global(.menu-pop) {
-    position: absolute; top: 56px; right: 14px; width: 340px;
-    background: rgba(255, 255, 255, 0.92);
-    border-radius: 18px; padding: 12px;
-    box-shadow: 0 22px 60px rgba(15, 23, 42, 0.18);
-    backdrop-filter: blur(14px);
-    pointer-events: auto; z-index: 2000;
-    max-height: calc(100vh - 110px); overflow: auto;
+  .row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-top: 10px;
   }
 
-  :global(.tooltip) {
-    position: absolute;
-    pointer-events: none;
-    background: rgba(15, 23, 42, 0.92);
-    color: #f8fafc;
+  .row.two {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    align-items: start;
+    margin-top: 10px;
+  }
+
+  .col {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .mini {
+    font-size: 11px;
+    font-weight: 750;
+    color: rgba(15, 23, 42, 0.72);
+  }
+
+  .check {
+    display: inline-flex;
+    gap: 10px;
+    align-items: center;
     font-size: 12px;
+    font-weight: 650;
+    color: rgba(15, 23, 42, 0.86);
+  }
+
+  .hintbox {
+    margin-top: 8px;
+    font-size: 12px;
+    color: rgba(100, 116, 139, 0.95);
+    background: rgba(248, 251, 255, 0.92);
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    border-radius: 14px;
+    padding: 10px 12px;
+    box-sizing: border-box;
+    line-height: 1.35;
+  }
+
+  .sep {
+    height: 1px;
+    background: var(--divider, rgba(226, 232, 240, 0.7));
+    margin: 12px 0 8px;
+  }
+
+  .sub {
+    margin-top: 2px;
+    font-size: 12px;
+    font-weight: 650;
+    color: rgba(15, 23, 42, 0.78);
+  }
+
+  .selected-bar {
+    margin: 8px 0 10px;
     padding: 10px;
+    border-radius: 14px;
+    background: rgba(15, 23, 42, 0.04);
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .selected-block {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .selected-title {
+    font-size: 11px;
+    font-weight: 800;
+    color: rgba(15, 23, 42, 0.7);
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .empty {
+    font-size: 12px;
+    color: rgba(100, 116, 139, 0.9);
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    color: rgba(15, 23, 42, 0.86);
+    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid rgba(15, 23, 42, 0.1);
+    padding: 6px 10px;
+    border-radius: 999px;
+    line-height: 1;
+    max-width: 100%;
+  }
+
+  .chip.axis {
+    background: rgba(248, 251, 255, 0.92);
+  }
+
+  .chip-text {
+    min-width: 0;
+    white-space: nowrap;
+  }
+
+  .swatch {
+    width: 16px;
+    height: 16px;
+    border-radius: 999px;
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    cursor: pointer;
+    padding: 0;
+    flex: 0 0 auto;
+  }
+
+  .hex {
+    width: 100%;
+    border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
+    background: #ffffff;
     border-radius: 12px;
-    max-width: 360px;
-    z-index: 6;
+    padding: 10px 12px;
+    font-size: 12px;
+    outline: none;
+    color: rgba(15, 23, 42, 0.9);
+    box-sizing: border-box;
+  }
+
+  .hex:focus {
+    box-shadow: var(--focus-ring, 0 0 0 4px rgba(15, 23, 42, 0.1));
+  }
+
+  .list {
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 320px;
+    overflow: auto;
+    padding-right: 2px;
+  }
+
+  .item {
+    width: 100%;
+    text-align: left;
+    border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
+    background: #ffffff;
+    border-radius: 14px;
+    padding: 10px 10px;
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    cursor: pointer;
+    box-sizing: border-box;
+    transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease, background 120ms ease;
+  }
+
+  .item:hover {
+    transform: translateY(-0.5px);
+    box-shadow: var(--shadow-btn, 0 10px 26px rgba(15, 23, 42, 0.1));
+    border-color: var(--stroke-mid, rgba(15, 23, 42, 0.12));
+  }
+
+  .item:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    box-shadow: none;
+    transform: none;
+  }
+
+  .name {
+    font-size: 12px;
+    font-weight: 650;
+    color: rgba(15, 23, 42, 0.88);
+  }
+
+  .right {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .tag {
+    font-size: 11px;
+    color: rgba(100, 116, 139, 0.9);
+  }
+
+  .pill {
+    font-size: 11px;
+    font-weight: 800;
+    color: rgba(15, 23, 42, 0.82);
+    background: rgba(15, 23, 42, 0.06);
+    border: 1px solid rgba(15, 23, 42, 0.1);
+    padding: 4px 8px;
+    border-radius: 999px;
+    line-height: 1;
+  }
+
+  .limit {
+    margin-top: 8px;
+    font-size: 12px;
+    color: rgba(100, 116, 139, 0.95);
+    background: #ffffff;
+    border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
+    border-radius: 14px;
+    padding: 10px 12px;
+    box-sizing: border-box;
+  }
+
+  /* overlay только внутри меню */
+  .picker-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.25);
+    backdrop-filter: blur(2px);
+    z-index: 200;
+  }
+
+  .picker-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 201;
+    pointer-events: none;
+  }
+
+  .picker-layer :global(.picker) {
+    position: absolute !important;
+    top: 50% !important;
+    left: 50% !important;
+    right: auto !important;
+    transform: translate(-50%, -50%) !important;
+    pointer-events: auto;
+    max-width: min(92vw, 360px);
+  }
+
+  .active-hex {
+    position: absolute;
+    left: 50%;
+    top: calc(50% + 170px);
+    transform: translateX(-50%);
+    width: min(280px, 92%);
+    pointer-events: auto;
+    z-index: 202;
+  }
+
+  @media (max-height: 560px) {
+    .picker-layer :global(.picker) {
+      top: 12px !important;
+      transform: translate(-50%, 0) !important;
+    }
+    .active-hex {
+      top: 340px;
+    }
   }
 </style>
