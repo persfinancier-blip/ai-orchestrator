@@ -1,3 +1,5 @@
+// core/orchestrator/modules/advertising/interface/desk/components/space/types.ts
+
 import type { ShowcaseField, ShowcaseRow, DatasetId } from '../data/showcaseStore';
 
 export type PeriodMode = '7 дней' | '14 дней' | '30 дней' | 'Даты';
@@ -11,6 +13,12 @@ export type SpacePoint = {
   y: number;
   z: number;
   color?: string;
+
+  // ✅ для воксель-кластеров (опционально, чтобы не ломать старые точки)
+  isCluster?: boolean;
+  clusterCount?: number;
+  span?: { x: number; y: number; z: number };
+  hull?: Array<[number, number, number]>;
 };
 
 export type BBox = {
