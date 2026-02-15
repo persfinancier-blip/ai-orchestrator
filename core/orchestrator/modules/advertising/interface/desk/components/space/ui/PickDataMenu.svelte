@@ -165,10 +165,9 @@
 
 <!-- ✅ выбор цвета точек -->
 <div class="row two">
-  <div class="color-wrap" style="position:relative;">
+  <div class="color-wrap">
     <label class="label">Цвет</label>
 
-    <!-- свотч-кнопка, открывает плашку -->
     <button
       type="button"
       class="color color-btn"
@@ -178,20 +177,18 @@
     />
 
     {#if isPointsColorOpen}
-      <ColorPickerPopover
-        bind:value={pointsColor}
-        title="Цвет точек"
-        onClose={closePointsColor}
-      />
+      <!-- 👇 якорь + скоуп для css -->
+      <div class="points-picker-scope">
+        <ColorPickerPopover
+          bind:value={pointsColor}
+          title="Цвет точек"
+          onClose={closePointsColor}
+        />
+      </div>
     {/if}
   </div>
 
-  <input
-    class="hex"
-    placeholder="#3b82f6"
-    value={pointsColor}
-    on:input={onHexInput}
-  />
+  <input class="hex" placeholder="#3b82f6" value={pointsColor} on:input={onHexInput} />
 </div>
 
   <div class="row">
@@ -360,6 +357,18 @@
   height: 34px;
   padding: 0;
   cursor: pointer;
+}
+
+/* ✅ главный фикс: делаем контейнер позиционирования для .picker */
+.points-picker-scope {
+  position: relative;
+}
+
+/* ✅ локально переякориваем поповер, не трогая его файл */
+.points-picker-scope :global(.picker) {
+  top: 42px;     /* ближе к кнопке */
+  right: auto;   /* убираем увод влево */
+  left: 0;       /* открываемся от левого края якоря */
 }
 
 </style>
