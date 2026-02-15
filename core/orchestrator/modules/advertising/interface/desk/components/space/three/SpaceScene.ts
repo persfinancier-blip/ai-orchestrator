@@ -4,7 +4,7 @@ import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRe
 
 import type { ShowcaseField } from '../../data/showcaseStore';
 import type { SpacePoint } from '../types';
-import { buildBBox, normalizeBBox, calcMax, sanitizePoints, formatValueByMetric } from '../pipeline';
+import { buildBBox, normalizeBBox, sanitizePoints, formatValueByMetric } from '../pipeline';
 
 export type SpaceSceneTheme = {
   bg: string;
@@ -41,6 +41,8 @@ export class SpaceScene {
   private axisLabelObjects: CSS2DObject[] = [];
 
   private pointsMesh?: THREE.InstancedMesh;
+  private clusterCloudMesh?: THREE.InstancedMesh;
+
   private renderPoints: SpacePoint[] = [];
 
   private anim = 0;
@@ -55,6 +57,9 @@ export class SpaceScene {
   private ndc = new THREE.Vector2();
 
   private axisCodes = { x: '', y: '', z: '' };
+
+  // ✅ max по осям ДО LOD (чтобы подписи осей не прыгали)
+  private axisMaxOverride: { xMax: number; yMax: number; zMax: number } | null = null;
 
   public constructor(deps: SpaceSceneDeps, cb: SpaceSceneCallbacks) {
     this.deps = deps;
@@ -139,41 +144,141 @@ export class SpaceScene {
     this.controls.update();
   }
 
-  public setPoints(points: SpacePoint[]): { renderedCount: number; bboxLabel: string } {
-    if (!this.scene || !this.camera || !this.controls || !this.renderer) return { renderedCount: 0, bboxLabel: '—' };
+  // -----------------------
+  // ✅ helpers for clusters
+  // -----------------------
+  private isClusterPoint(p: SpacePoint): boolean {
+    return Boolean((p as any)?.isCluster);
+  }
+
+  private clusterCount(p: SpacePoint): number {
+    const n = Number((p as any)?.clusterCount);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  }
+
+  private clusterSpan(p: SpacePoint): { x: number; y: number; z: number } | null {
+    const s = (p as any)?.span;
+    const sx = Number(s?.x);
+    const sy = Number(s?.y);
+    const sz = Number(s?.z);
+    if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(sz)) return null;
+    if (sx <= 0 && sy <= 0 && sz <= 0) return null;
+    return { x: Math.max(0.001, sx), y: Math.max(0.001, sy), z: Math.max(0.001, sz) };
+  }
+
+  private pointScale(p: SpacePoint): number {
+    if (!this.isClusterPoint(p)) return 1;
+
+    const n = this.clusterCount(p);
+    const denom = Math.log(n + 1);
+    const raw = denom > 0 ? Math.sqrt(n) / denom : 1;
+
+    const s = 0.55 * raw;
+    return Math.min(6, Math.max(1.35, s));
+  }
+
+  public setPoints(
+    points: SpacePoint[],
+    opts?: { axisMaxOverride?: { xMax: number; yMax: number; zMax: number } }
+  ): { renderedCount: number; bboxLabel: string } {
+    if (!this.scene || !this.camera || !this.controls || !this.renderer) {
+      return { renderedCount: 0, bboxLabel: '—' };
+    }
+
+    this.axisMaxOverride = opts?.axisMaxOverride ?? this.axisMaxOverride ?? null;
 
     this.scene.background = new THREE.Color(this.theme.bg);
+
+    const colorById = new Map<string, string | undefined>();
+    for (const p of points ?? []) colorById.set(p.id, p.color);
 
     this.clearMesh(this.pointsMesh);
     this.pointsMesh = undefined;
 
-    const renderable = sanitizePoints(points);
+    this.clearMesh(this.clusterCloudMesh);
+    this.clusterCloudMesh = undefined;
+
+    const sanitized = sanitizePoints(points);
+
+    const renderable = sanitized.map((p) => ({
+      ...p,
+      color: colorById.get(p.id) ?? p.color
+    }));
+
     this.renderPoints = renderable;
 
+    // 1) MAIN POINTS
     if (this.renderPoints.length) {
-        this.pointsMesh = new THREE.InstancedMesh(
-          new THREE.SphereGeometry(1.55, 10, 10),
-          new THREE.MeshBasicMaterial({ vertexColors: true }),
-          this.renderPoints.length
-        );
+      this.pointsMesh = new THREE.InstancedMesh(
+        new THREE.SphereGeometry(1.55, 10, 10),
+        new THREE.MeshBasicMaterial({ vertexColors: true }),
+        this.renderPoints.length
+      );
 
-    const o = new THREE.Object3D();
-    this.renderPoints.forEach((point, idx) => {
-      o.position.set(point.x, point.y, point.z);
-      o.updateMatrix();
-      this.pointsMesh!.setMatrixAt(idx, o.matrix);
-    });
-    
-    const c = new THREE.Color();
-    for (let i = 0; i < this.renderPoints.length; i += 1) {
-      const hex = this.renderPoints[i].color ?? this.theme.pointColor;
-      c.set(hex);
-      this.pointsMesh!.setColorAt(i, c);
+      const o = new THREE.Object3D();
+      this.renderPoints.forEach((point, idx) => {
+        const s = this.pointScale(point);
+        o.position.set(point.x, point.y, point.z);
+        o.scale.set(s, s, s);
+        o.updateMatrix();
+        this.pointsMesh!.setMatrixAt(idx, o.matrix);
+      });
+
+      const c = new THREE.Color();
+      for (let i = 0; i < this.renderPoints.length; i += 1) {
+        const hex = this.renderPoints[i].color ?? this.theme.pointColor;
+        c.set(hex);
+        this.pointsMesh!.setColorAt(i, c);
+      }
+      this.pointsMesh!.instanceColor!.needsUpdate = true;
+
+      this.scene.add(this.pointsMesh);
     }
-    this.pointsMesh!.instanceColor!.needsUpdate = true;
-    
-    this.scene.add(this.pointsMesh);
-        }
+
+    // 2) CLUSTER CLOUDS (✅ wireframe bbox по крайним точкам)
+    const clusterIdx: number[] = [];
+    for (let i = 0; i < this.renderPoints.length; i += 1) {
+      if (this.isClusterPoint(this.renderPoints[i]) && this.clusterSpan(this.renderPoints[i])) clusterIdx.push(i);
+    }
+
+    if (clusterIdx.length) {
+      const geom = new THREE.BoxGeometry(1, 1, 1);
+      const mat = new THREE.MeshBasicMaterial({
+        transparent: true,
+        opacity: 0.22,
+        depthWrite: false,
+        vertexColors: true,
+        wireframe: true // ✅ не “кубик-кирпич”, а границы
+      });
+
+      this.clusterCloudMesh = new THREE.InstancedMesh(geom, mat, clusterIdx.length);
+
+      const o = new THREE.Object3D();
+      const col = new THREE.Color();
+
+      for (let ii = 0; ii < clusterIdx.length; ii += 1) {
+        const p = this.renderPoints[clusterIdx[ii]];
+        const span = this.clusterSpan(p);
+        if (!span) continue;
+
+        o.position.set(p.x, p.y, p.z);
+
+        const pad = 1.10;
+        o.scale.set(span.x * pad, span.y * pad, span.z * pad);
+
+        o.updateMatrix();
+        this.clusterCloudMesh.setMatrixAt(ii, o.matrix);
+
+        const hex = p.color ?? this.theme.pointColor;
+        col.set(hex);
+        this.clusterCloudMesh.setColorAt(ii, col);
+      }
+
+      this.clusterCloudMesh.instanceMatrix.needsUpdate = true;
+      this.clusterCloudMesh.instanceColor!.needsUpdate = true;
+
+      this.scene.add(this.clusterCloudMesh);
+    }
 
     this.rebuildPlanes(renderable);
 
@@ -195,6 +300,7 @@ export class SpaceScene {
     this.renderer?.domElement?.removeEventListener('mousemove', this.onMove3d);
 
     this.clearMesh(this.pointsMesh);
+    this.clearMesh(this.clusterCloudMesh);
 
     this.renderer?.dispose();
     this.controls?.dispose();
@@ -364,13 +470,18 @@ export class SpaceScene {
 
     const fields = this.deps.getFields();
 
-    const mx = this.createChipLabel(formatValueByMetric(axisX, axisX ? calcMax(list, axisX) : Number.NaN, fields), { tone: 'accent' });
+    // ✅ max берём из override (до LOD), иначе fallback на текущее list
+    const xMax = this.axisMaxOverride?.xMax;
+    const yMax = this.axisMaxOverride?.yMax;
+    const zMax = this.axisMaxOverride?.zMax;
+
+    const mx = this.createChipLabel(formatValueByMetric(axisX, axisX ? (Number.isFinite(xMax!) ? xMax! : Number.NaN) : Number.NaN, fields), { tone: 'accent' });
     mx.position.copy(Bx);
 
-    const my = this.createChipLabel(formatValueByMetric(axisY, axisY ? calcMax(list, axisY) : Number.NaN, fields), { tone: 'accent' });
+    const my = this.createChipLabel(formatValueByMetric(axisY, axisY ? (Number.isFinite(yMax!) ? yMax! : Number.NaN) : Number.NaN, fields), { tone: 'accent' });
     my.position.copy(By);
 
-    const mz = this.createChipLabel(formatValueByMetric(axisZ, axisZ ? calcMax(list, axisZ) : Number.NaN, fields), { tone: 'accent' });
+    const mz = this.createChipLabel(formatValueByMetric(axisZ, axisZ ? (Number.isFinite(zMax!) ? zMax! : Number.NaN) : Number.NaN, fields), { tone: 'accent' });
     mz.position.copy(Bz);
 
     this.axisLabelObjects = [xChip, yChip, zChip, mx, my, mz];
@@ -394,6 +505,31 @@ export class SpaceScene {
 
     const point = this.renderPoints[hit.instanceId];
     if (!point) return;
+
+    if (this.isClusterPoint(point)) {
+      const n = this.clusterCount(point);
+
+      const revenue = Math.round(point.metrics.revenue ?? 0);
+      const spend = Math.round(point.metrics.spend ?? 0);
+      const orders = Math.round(point.metrics.orders ?? 0);
+      const drr = Number(point.metrics.drr ?? 0);
+      const roi = Number(point.metrics.roi ?? 0);
+
+      this.cb.onTooltip({
+        visible: true,
+        x: event.clientX - rect.left + 12,
+        y: event.clientY - rect.top + 12,
+        lines: [
+          `Кластер (${n})`,
+          `Поле: ${this.deps.fieldName(point.sourceField)}`,
+          `Выручка: ${revenue.toLocaleString('ru-RU')} ₽`,
+          `Расход: ${spend.toLocaleString('ru-RU')} ₽`,
+          `Заказы: ${orders.toLocaleString('ru-RU')}`,
+          `ДРР: ${drr.toFixed(2)}% · ROI: ${roi.toFixed(2)}`
+        ]
+      });
+      return;
+    }
 
     this.cb.onTooltip({
       visible: true,

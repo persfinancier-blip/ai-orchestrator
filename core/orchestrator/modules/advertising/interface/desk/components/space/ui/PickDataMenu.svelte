@@ -32,6 +32,14 @@
    */
   export let defaultEntityColor = '#3b82f6';
 
+  /**
+   * ✅ LOD / voxel grouping settings (управляют схлопыванием ДО сцены)
+   * bind из GraphPanel, прокидываем в buildPoints()
+   */
+  export let lodEnabled = true;
+  export let lodDetail = 0.5; // 0..1
+  export let lodMinCount = 5; // >= 2 обычно
+
   type AnyField =
     | { code: string; name: string; kind: 'text' }
     | { code: string; name: string; kind: 'number' | 'date' };
@@ -46,44 +54,63 @@
   $: filteredFields =
     !q
       ? allFields
-      : allFields.filter(
-          (f) => (f.name ?? '').toLowerCase().includes(q) || (f.code ?? '').toLowerCase().includes(q)
-        );
+      : allFields.filter((f) => (f.name ?? '').toLowerCase().includes(q) || (f.code ?? '').toLowerCase().includes(q));
 
   $: nameByCode = new Map(allFields.map((f) => [f.code, f.name] as const));
   const chipLabel = (code: string): string => nameByCode.get(code) ?? code;
 
+  // =========================
+  // ✅ FIX: key normalization
+  // =========================
+  const norm = (s: string): string => String(s ?? '').trim().toLowerCase();
+  const tail = (s: string): string => {
+    const n = norm(s);
+    // поддерживаем sales_fact:sku / ads.sku / sales_fact/sku
+    return n.split(/[:./]/g).filter(Boolean).pop() ?? n;
+  };
+  const keyForColor = (code: string): string => tail(code);
+
   // --- per-field color popover state ---
   let isColorOpen = false;
-  let activeColorCode: string | null = null;
+  let activeColorCode: string | null = null; // это "код поля" из selectedEntityFields (sku, campaign_id, ...)
   let activeColorValue = defaultEntityColor;
 
+  // ✅ защита от самотриггера реактивного блока (чтобы работало как bg/edge)
+  let lastCommitted = '';
+
   function getFieldColor(code: string): string {
-    return entityFieldColors?.[code] ?? defaultEntityColor;
+    const k = keyForColor(code);
+    return entityFieldColors?.[k] ?? defaultEntityColor;
   }
 
   function setFieldColor(code: string, color: string): void {
     const cleaned = String(color ?? '').trim();
     if (!cleaned) return;
-    entityFieldColors = { ...(entityFieldColors ?? {}), [code]: cleaned };
+
+    const k = keyForColor(code);
+    entityFieldColors = { ...(entityFieldColors ?? {}), [k]: cleaned };
   }
 
   function deleteFieldColor(code: string): void {
-    if (!entityFieldColors?.[code]) return;
+    const k = keyForColor(code);
+    if (!entityFieldColors?.[k]) return;
+
     const next = { ...(entityFieldColors ?? {}) };
-    delete next[code];
+    delete next[k];
     entityFieldColors = next;
   }
 
   function openColorFor(code: string): void {
     activeColorCode = code;
     activeColorValue = getFieldColor(code);
+    lastCommitted = activeColorValue; // ✅ считаем текущее уже применённым
     isColorOpen = true;
   }
 
   function closeColor(): void {
     isColorOpen = false;
     activeColorCode = null;
+    lastCommitted = '';
   }
 
   function onActiveHexInput(e: Event): void {
@@ -92,11 +119,14 @@
     activeColorValue = String(el.value ?? '').trim();
   }
 
-  // ✅ live update: пока поповер открыт — пишем в entityFieldColors, чтобы:
-  // - свотч менялся сразу
-  // - график перекрашивался сразу (через bind в родителе)
+  // ✅ live update (как в DisplayMenu), но без лупа:
   $: if (isColorOpen && activeColorCode) {
-    entityFieldColors = { ...(entityFieldColors ?? {}), [activeColorCode]: activeColorValue };
+    const v = String(activeColorValue ?? '').trim();
+    if (v && v !== lastCommitted) {
+      lastCommitted = v;
+      const k = keyForColor(activeColorCode);
+      entityFieldColors = { ...(entityFieldColors ?? {}), [k]: v };
+    }
   }
 
   // --- selection logic ---
@@ -112,8 +142,8 @@
 
     selectedEntityFields = [...selectedEntityFields, cleaned];
 
-    // чтобы свотч был сразу после добавления
-    if (!entityFieldColors?.[cleaned]) setFieldColor(cleaned, defaultEntityColor);
+    const k = keyForColor(cleaned);
+    if (!entityFieldColors?.[k]) setFieldColor(cleaned, defaultEntityColor);
   }
 
   function selectedAxis(code: string): 'x' | 'y' | 'z' | null {
@@ -165,6 +195,23 @@
     if (f.kind === 'text') toggleText(f.code);
     else toggleCoord(f.code);
   }
+
+  function clamp01(v: number): number {
+    return Math.min(1, Math.max(0, v));
+  }
+
+  function onLodDetailInput(e: Event): void {
+    const el = e.currentTarget as HTMLInputElement | null;
+    if (!el) return;
+    lodDetail = clamp01(Number(el.value));
+  }
+
+  function onLodMinCountInput(e: Event): void {
+    const el = e.currentTarget as HTMLInputElement | null;
+    if (!el) return;
+    const n = Math.round(Number(el.value));
+    lodMinCount = Number.isFinite(n) ? Math.max(2, n) : 5;
+  }
 </script>
 
 <div class="menu-pop pick">
@@ -185,7 +232,7 @@
                   type="button"
                   class="swatch"
                   aria-label="Цвет поля"
-                  style={`background:${getFieldColor(c)};`}
+                  style={`background:${(isColorOpen && activeColorCode === c) ? activeColorValue : getFieldColor(c)};`}
                   on:click|stopPropagation={() => openColorFor(c)}
                 ></button>
 
@@ -208,6 +255,56 @@
 
     <div class="row">
       <input class="input" placeholder="Поиск по полям (Ctrl+K)" bind:value={search} />
+    </div>
+
+    <div class="sep" />
+
+    <!-- ✅ LOD секция -->
+    <div class="sub">Группировка (LOD)</div>
+
+    <div class="row">
+      <label class="check">
+        <input type="checkbox" bind:checked={lodEnabled} />
+        <span>Схлопывать плотные области</span>
+      </label>
+    </div>
+
+    <div class="row two">
+      <div class="col">
+        <div class="mini">Детализация</div>
+        <input
+          class="input"
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          value={lodDetail}
+          disabled={!lodEnabled}
+          on:input={onLodDetailInput}
+        />
+      </div>
+
+      <div class="col">
+        <div class="mini">Мин. размер</div>
+        <input
+          class="input"
+          type="number"
+          min="2"
+          step="1"
+          value={lodMinCount}
+          disabled={!lodEnabled}
+          on:input={onLodMinCountInput}
+        />
+      </div>
+    </div>
+
+    <div class="hintbox">
+      {#if !lodEnabled}
+        Группировка выключена — рисуем все точки.
+      {:else}
+        Если в вокселе &lt; <b>{lodMinCount}</b> точек — не схлопываем. Если ≥ <b>{lodMinCount}</b> — показываем одну кластер-точку.
+        Кластерим только однородные данные (поле с полем).
+      {/if}
     </div>
 
     <div class="sep" />
@@ -259,6 +356,47 @@
     gap: 10px;
     align-items: center;
     margin-top: 10px;
+  }
+
+  .row.two {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    align-items: start;
+    margin-top: 10px;
+  }
+
+  .col {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .mini {
+    font-size: 11px;
+    font-weight: 750;
+    color: rgba(15, 23, 42, 0.72);
+  }
+
+  .check {
+    display: inline-flex;
+    gap: 10px;
+    align-items: center;
+    font-size: 12px;
+    font-weight: 650;
+    color: rgba(15, 23, 42, 0.86);
+  }
+
+  .hintbox {
+    margin-top: 8px;
+    font-size: 12px;
+    color: rgba(100, 116, 139, 0.95);
+    background: rgba(248, 251, 255, 0.92);
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    border-radius: 14px;
+    padding: 10px 12px;
+    box-sizing: border-box;
+    line-height: 1.35;
   }
 
   .sep {

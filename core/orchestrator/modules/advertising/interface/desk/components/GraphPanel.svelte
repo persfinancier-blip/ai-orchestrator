@@ -6,7 +6,7 @@
   import { showcaseStore, fieldName, type DatasetId, type ShowcaseField } from '../data/showcaseStore';
 
   import type { DatasetPreset, PeriodMode, TooltipState, VisualScheme, ShowcaseSafe, SpacePoint } from './space/types';
-  import { applyRowsFilter, buildPoints } from './space/pipeline';
+  import { applyRowsFilter, buildPoints, calcMax } from './space/pipeline';
   import { loadDatasetPresets, loadVisualSchemes, saveDatasetPresets, saveVisualSchemes } from './space/presetsStorage';
   import { SpaceScene } from './space/three/SpaceScene';
 
@@ -16,12 +16,6 @@
   import Tooltip from './space/ui/Tooltip.svelte';
   import Crumbs from './space/ui/Crumbs.svelte';
   import InfoCard from './space/ui/InfoCard.svelte';
-
-  import GroupingMenu from './space/ui/GroupingMenu.svelte';
-
-  import type { GroupingConfig } from './space/cluster/types';
-  import { dbscan3 } from './space/cluster/dbscan3';
-  import { buildFeatureVec3, dbscanParamsFromDetail, weightsForCfg } from './space/cluster/features';
 
   const STORAGE_KEY_VISUALS = 'desk-space-visual-schemes-v2';
   const STORAGE_KEY_DATASETS = 'desk-space-datasets-v2';
@@ -50,12 +44,37 @@
   let visualBg = '#ffffff';
   let visualEdge = '#334155';
 
-  // ✅ старый цвет (fallback)
-  let pointsColor = '#3b82f6';
-
-  // ✅ НОВОЕ: per-field цвета, но ничего не ломаем: если нет — берём pointsColor
+  // ✅ per-field colors: code -> hex (используем для точек)
   let entityFieldColors: Record<string, string> = {};
   const DEFAULT_ENTITY_COLOR = '#3b82f6';
+
+  // ✅ LOD state (по умолчанию включено, средняя детализация, min=5)
+  let lodEnabled = true;
+  let lodDetail = 0.5; // 0..1
+  let lodMinCount = 5;
+
+  // ✅ НОРМАЛИЗАЦИЯ КЛЮЧЕЙ (должна совпадать с PickDataMenu)
+  const norm = (s: string): string => String(s ?? '').trim().toLowerCase();
+  const tail = (s: string): string => {
+    const n = norm(s);
+    return n.split(/[:./]/g).filter(Boolean).pop() ?? n;
+  };
+  const keyForColor = (code: string): string => tail(code);
+
+  function setEntityColor(code: string, color: string): void {
+    const k = keyForColor(code);
+    const c = String(color ?? '').trim();
+    if (!k || !c) return;
+    entityFieldColors = { ...(entityFieldColors ?? {}), [k]: c };
+  }
+
+  function deleteEntityColor(code: string): void {
+    const k = keyForColor(code);
+    if (!entityFieldColors?.[k]) return;
+    const next = { ...(entityFieldColors ?? {}) };
+    delete next[k];
+    entityFieldColors = next;
+  }
 
   let visualSchemes: VisualScheme[] = [];
   let selectedVisualId = '';
@@ -65,7 +84,6 @@
 
   let showDisplayMenu = false;
   let showPickDataMenu = false;
-  let showGroupingMenu = false;
 
   let showSaveVisualModal = false;
   let saveVisualName = '';
@@ -80,21 +98,6 @@
 
   let scene: SpaceScene | null = null;
 
-  let grouping: GroupingConfig = {
-    enabled: false,
-    principle: 'proximity',
-    featureFields: [],
-    detail: 0.45,
-    customWeights: false,
-    wX: 1,
-    wY: 1,
-    wZ: 1,
-    minClusterSize: 5,
-    recompute: 'auto'
-  };
-
-  let clusterSeed = 0;
-
   function fieldsAll(): ShowcaseField[] {
     return (showcase?.fields ?? []) as ShowcaseField[];
   }
@@ -108,9 +111,6 @@
   $: numberFieldsAll = fieldsFor('number');
   $: dateFieldsAll = fieldsFor('date');
   $: coordFieldsAll = [...numberFieldsAll, ...dateFieldsAll];
-
-  $: groupingNumberFields = numberFieldsAll;
-  $: groupingTextFields = textFieldsAll;
 
   $: if (coordFieldsAll.length) ensureDefaults();
 
@@ -130,155 +130,64 @@
     selectedEntityFields
   });
 
-  $: points = buildPoints({
-    rows: filteredRows,
-    entityFields: selectedEntityFields,
-    axisX,
-    axisY,
-    axisZ,
-    numberFields: numberFieldsAll,
-    dateFields: dateFieldsAll
+  function safeBuildPoints(opts: { lodEnabled: boolean; lodDetail: number; lodMinCount: number }): SpacePoint[] {
+    try {
+      return buildPoints({
+        rows: filteredRows,
+        entityFields: selectedEntityFields,
+        axisX,
+        axisY,
+        axisZ,
+        numberFields: numberFieldsAll,
+        dateFields: dateFieldsAll,
+        lodEnabled: opts.lodEnabled,
+        lodDetail: opts.lodDetail,
+        lodMinCount: opts.lodMinCount
+      });
+    } catch (e) {
+      // чтобы UI не умирал и кнопки не “умирали” вместе с компонентом
+      console.error('[GraphPanel] buildPoints failed', e);
+      return [];
+    }
+  }
+
+  // ✅ raw points (без LOD) — только для max значений осей
+  $: pointsRaw = safeBuildPoints({ lodEnabled: false, lodDetail, lodMinCount });
+
+  // ✅ render points (с LOD) — то, что реально рисуем
+  $: points = safeBuildPoints({ lodEnabled, lodDetail, lodMinCount });
+
+  // ✅ max по осям считаем по raw (не зависят от LOD)
+  $: axisMaxOverride = ({
+    xMax: axisX ? calcMax(pointsRaw, axisX) : Number.NaN,
+    yMax: axisY ? calcMax(pointsRaw, axisY) : Number.NaN,
+    zMax: axisZ ? calcMax(pointsRaw, axisZ) : Number.NaN
   });
 
-  let fixedAssign: Map<string, number> = new Map();
-  let fixedCounts: Map<number, number> = new Map();
-  let fixedConfigKey = '';
-
-  function colorForCluster(id: number): string {
-    if (id < 0) return '#94a3b8';
-    const hue = (id * 47) % 360;
-    return `hsl(${hue} 70% 45%)`;
+  function colorForEntityField(code: string, colors: Record<string, string>): string {
+    return colors?.[keyForColor(code)] ?? DEFAULT_ENTITY_COLOR;
   }
 
-  function colorForEntityField(code: string): string {
-    // ✅ важное: не ломаем старое поведение, если мапа пустая
-    return entityFieldColors?.[code] ?? pointsColor ?? DEFAULT_ENTITY_COLOR;
+  // ✅ когда “формирование групп” убрали — всегда красим по полю
+  function applyColoring(input: SpacePoint[], colors: Record<string, string>): SpacePoint[] {
+    return (input ?? []).map((p) => ({
+      ...p,
+      color: colorForEntityField(p.sourceField, colors)
+    }));
   }
 
-  function getTextValue(p: SpacePoint, field: string): string {
-    if (p.sourceField === field) return p.label ?? '';
-    return '';
-  }
-
-  function makeFixedConfigKey(cfg: GroupingConfig): string {
-    return [
-      cfg.enabled ? '1' : '0',
-      cfg.principle,
-      cfg.featureFields.slice().sort().join('|'),
-      cfg.detail.toFixed(3),
-      cfg.customWeights ? '1' : '0',
-      cfg.wX.toFixed(2),
-      cfg.wY.toFixed(2),
-      cfg.wZ.toFixed(2),
-      String(cfg.minClusterSize),
-      cfg.recompute
-    ].join('::');
-  }
-
-  function computeClustersNow(input: SpacePoint[]): { labels: Int32Array; counts: Map<number, number> } {
-    const vecs = buildFeatureVec3({
-      points: input,
-      cfg: grouping,
-      axis: { x: axisX, y: axisY, z: axisZ },
-      getTextValue
-    });
-
-    const { eps, minPts } = dbscanParamsFromDetail(grouping.detail);
-    const w = weightsForCfg(grouping);
-
-    const labels = dbscan3(vecs, { eps, minPts }, w);
-
-    const counts = new Map<number, number>();
-    for (let i = 0; i < labels.length; i += 1) {
-      const id = labels[i];
-      counts.set(id, (counts.get(id) ?? 0) + 1);
-    }
-    return { labels, counts };
-  }
-
-  function rebuildFixedAssignments(input: SpacePoint[]): void {
-    const res = computeClustersNow(input);
-
-    const assign = new Map<string, number>();
-    for (let i = 0; i < input.length; i += 1) assign.set(input[i].id, res.labels[i]);
-
-    fixedAssign = assign;
-    fixedCounts = res.counts;
-    fixedConfigKey = makeFixedConfigKey(grouping);
-  }
-
-  function applyClustering(input: SpacePoint[]): SpacePoint[] {
-    // ✅ когда группировка выключена — красим по полю (если задано), иначе pointsColor
-    if (!grouping.enabled) {
-      return input.map((p) => ({ ...p, color: colorForEntityField(p.sourceField) }));
-    }
-
-    if (grouping.recompute === 'fixed') {
-      const cfgKey = makeFixedConfigKey(grouping);
-
-      if (cfgKey !== fixedConfigKey) {
-        fixedAssign = new Map();
-        fixedCounts = new Map();
-        fixedConfigKey = cfgKey;
-      }
-
-      if (fixedAssign.size === 0 && input.length) rebuildFixedAssignments(input);
-
-      return input.map((p) => {
-        const id = fixedAssign.get(p.id);
-        const clusterId = typeof id === 'number' ? id : -1;
-
-        const size = fixedCounts.get(clusterId) ?? 0;
-        const effectiveId = clusterId >= 0 && size < grouping.minClusterSize ? -1 : clusterId;
-
-        return { ...p, color: colorForCluster(effectiveId) };
-      });
-    }
-
-    if (grouping.recompute === 'manual') {
-      if (clusterSeed > 0) {
-        rebuildFixedAssignments(input);
-        clusterSeed = 0;
-      }
-
-      return input.map((p) => {
-        const id = fixedAssign.get(p.id);
-        const clusterId = typeof id === 'number' ? id : -1;
-
-        const size = fixedCounts.get(clusterId) ?? 0;
-        const effectiveId = clusterId >= 0 && size < grouping.minClusterSize ? -1 : clusterId;
-
-        return { ...p, color: colorForCluster(effectiveId) };
-      });
-    }
-
-    const res = computeClustersNow(input);
-
-    return input.map((p, i) => {
-      const clusterId = res.labels[i];
-      const size = res.counts.get(clusterId) ?? 0;
-      const effectiveId = clusterId >= 0 && size < grouping.minClusterSize ? -1 : clusterId;
-      return { ...p, color: colorForCluster(effectiveId) };
-    });
-  }
-
-  function recomputeClusters(): void {
-    if (grouping.recompute === 'fixed') {
-      rebuildFixedAssignments(points);
-      return;
-    }
-    if (grouping.recompute === 'manual') {
-      clusterSeed += 1;
-      return;
-    }
-  }
+  $: colored = applyColoring(points, entityFieldColors);
 
   $: if (scene) {
     scene.setTheme({ bg: visualBg, edge: visualEdge });
-    scene.setAxisCodes({ x: axisX, y: axisY, z: axisZ });
 
-    const clustered = applyClustering(points);
-    const info = scene.setPoints(clustered);
+    // ✅ важно: сюда передаём axisMaxOverride, иначе подписи будут “прыгать” от LOD
+    scene.setAxisCodes(
+      { x: axisX, y: axisY, z: axisZ },
+      { axisMaxOverride }
+    );
+
+    const info = scene.setPoints(colored, { axisMaxOverride });
 
     renderedCount = info.renderedCount;
     bboxLabel = info.bboxLabel;
@@ -286,41 +195,30 @@
 
   function toggleDisplayMenu(): void {
     showDisplayMenu = !showDisplayMenu;
-    if (showDisplayMenu) {
-      showPickDataMenu = false;
-      showGroupingMenu = false;
-    }
+    if (showDisplayMenu) showPickDataMenu = false;
   }
 
   function togglePickMenu(): void {
     showPickDataMenu = !showPickDataMenu;
-    if (showPickDataMenu) {
-      showDisplayMenu = false;
-      showGroupingMenu = false;
-    }
-  }
-
-  function toggleGroupingMenu(): void {
-    showGroupingMenu = !showGroupingMenu;
-    if (showGroupingMenu) {
-      showDisplayMenu = false;
-      showPickDataMenu = false;
-    }
+    if (showPickDataMenu) showDisplayMenu = false;
   }
 
   function closeAllMenus(): void {
     showDisplayMenu = false;
     showPickDataMenu = false;
-    showGroupingMenu = false;
   }
 
   function addEntityField(code: string): void {
     if (!code || selectedEntityFields.includes(code)) return;
     selectedEntityFields = [...selectedEntityFields, code];
+
+    const k = keyForColor(code);
+    if (!entityFieldColors?.[k]) setEntityColor(code, DEFAULT_ENTITY_COLOR);
   }
 
   function removeEntityField(code: string): void {
     selectedEntityFields = selectedEntityFields.filter((x) => x !== code);
+    deleteEntityColor(code);
   }
 
   function addCoordField(code: string): void {
@@ -338,6 +236,11 @@
     axisY = '';
     axisZ = '';
     search = '';
+    entityFieldColors = {};
+
+    lodEnabled = true;
+    lodDetail = 0.5;
+    lodMinCount = 5;
   }
 
   function loadStorages(): void {
@@ -437,7 +340,6 @@
       e.preventDefault();
       showPickDataMenu = true;
       showDisplayMenu = false;
-      showGroupingMenu = false;
     }
   }
 
@@ -463,8 +365,9 @@
 
     await tick();
 
-    const clustered = applyClustering(points);
-    const info = scene.setPoints(clustered);
+    // ✅ на старте — тоже с axisMaxOverride
+    scene.setAxisCodes({ x: axisX, y: axisY, z: axisZ }, { axisMaxOverride });
+    const info = scene.setPoints(colored, { axisMaxOverride });
     renderedCount = info.renderedCount;
     bboxLabel = info.bboxLabel;
   });
@@ -492,7 +395,6 @@
       <div class="hud-actions">
         <button class="btn" on:click={toggleDisplayMenu}>Настройка отображения</button>
         <button class="btn btn-primary" on:click={togglePickMenu}>Выбрать данные</button>
-        <button class="btn" on:click={toggleGroupingMenu}>Формирование групп</button>
       </div>
 
       <Crumbs crumbs={selectedCrumbs} onRemove={removeEntityField} />
@@ -530,30 +432,23 @@
       <PickDataMenu
         textFields={textFieldsAll}
         coordFields={coordFieldsAll}
-
         bind:selectedEntityFields
         bind:axisX
         bind:axisY
         bind:axisZ
         bind:search
-
         bind:period
         bind:fromDate
         bind:toDate
-
-        bind:pointsColor
-
         bind:entityFieldColors
         defaultEntityColor={DEFAULT_ENTITY_COLOR}
-
+        bind:lodEnabled
+        bind:lodDetail
+        bind:lodMinCount
         onAddEntity={addEntityField}
         onAddCoord={addCoordField}
         onClose={closeAllMenus}
       />
-    {/if}
-
-    {#if showGroupingMenu}
-      <GroupingMenu bind:cfg={grouping} numberFields={groupingNumberFields} textFields={groupingTextFields} onRecompute={recomputeClusters} />
     {/if}
 
     <Tooltip {tooltip} />
@@ -588,6 +483,7 @@
 
 
 <style>
+  /* стили без изменений */
   :global(:root) {
     --ink-900: 15 23 42;
     --ink-600: 100 116 139;
@@ -607,130 +503,47 @@
     --focus-ring: 0 0 0 4px rgba(var(--ink-900) / 0.10);
 
     --field-bg: #ffffff;
-    --field-bg-soft: rgba(248, 251, 255, 0.9); /* если вдруг захочешь обратно */
+    --field-bg-soft: rgba(248, 251, 255, 0.9);
   }
 
   :global(.graph-root) { width: 100%; }
-
-  :global(.stage) {
-    position: relative;
-    height: 560px;
-    border-radius: 18px;
-    overflow: hidden;
-    background: #ffffff;
-  }
-
+  :global(.stage) { position: relative; height: 560px; border-radius: 18px; overflow: hidden; background: #ffffff; }
   :global(.scene) { position: absolute; inset: 0; }
 
-  /* HUD layout */
-  :global(.hud) {
-    position: absolute;
-    pointer-events: none;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    z-index: 5;
-  }
+  :global(.hud) { position: absolute; pointer-events: none; display: flex; flex-direction: column; gap: 10px; z-index: 5; }
+  :global(.hud.top-right) { right: 14px; top: 12px; align-items: flex-end; }
+  :global(.hud.bottom-left) { left: 14px; bottom: 12px; align-items: flex-start; }
+  :global(.hud-actions) { display: flex; gap: 10px; pointer-events: auto; }
 
-  :global(.hud.top-right) {
-    right: 14px;
-    top: 12px;
-    align-items: flex-end;
-  }
-
-  :global(.hud.bottom-left) {
-    left: 14px;
-    bottom: 12px;
-    align-items: flex-start;
-  }
-
-  :global(.hud-actions) {
-    display: flex;
-    gap: 10px;
-    pointer-events: auto;
-  }
-
-  /* Buttons */
   :global(.btn) {
-    border: 0;
-    border-radius: 999px;
-    padding: 10px 14px;
-    font-size: 13px;
-    font-weight: 650;
-    cursor: pointer;
-    line-height: 1;
-    background: #f8fbff;
-    color: rgba(var(--ink-900) / 0.90);
-    box-shadow: var(--shadow-btn);
-    pointer-events: auto;
+    border: 0; border-radius: 999px; padding: 10px 14px; font-size: 13px; font-weight: 650;
+    cursor: pointer; line-height: 1; background: #f8fbff; color: rgba(var(--ink-900) / 0.90);
+    box-shadow: var(--shadow-btn); pointer-events: auto;
   }
   :global(.btn:hover) { transform: translateY(-0.5px); }
 
-  :global(.btn.btn-primary) {
-    background: #f8fbff;
-    box-shadow: var(--shadow-btn-strong);
-    position: relative;
-  }
-
+  :global(.btn.btn-primary) { background: #f8fbff; box-shadow: var(--shadow-btn-strong); position: relative; }
   :global(.btn.wide) { width: 100%; }
 
-  /* Menus данных */
   :global(.menu-pop) {
-    position: absolute;
-    top: 56px;
-    right: 14px;
-    width: 340px;
-  
+    position: absolute; top: 56px; right: 14px; width: 340px;
     background: rgba(255, 255, 255, 0.92);
-    border-radius: 18px;
-    padding: 12px;
+    border-radius: 18px; padding: 12px;
     box-shadow: 0 22px 60px rgba(15, 23, 42, 0.18);
     backdrop-filter: blur(14px);
-    pointer-events: auto;
-    z-index: 2000;
-    max-height: calc(100vh - 110px);
-    overflow: auto;
+    pointer-events: auto; z-index: 2000;
+    max-height: calc(100vh - 110px); overflow: auto;
   }
 
-  :global(.menu-title) {
-    font-weight: 800;
-    font-size: 13px;
-    color: rgba(var(--ink-900) / 0.90);
-    margin-bottom: 10px;
-  }
-
-  :global(.sub) {
-    margin-top: 10px;
-    font-size: 12px;
-    font-weight: 650;
-    color: rgba(var(--ink-900) / 0.78);
-    display: flex;
-    align-items: baseline;
-    gap: 6px;
-  }
-
+  :global(.menu-title) { font-weight: 800; font-size: 13px; color: rgba(var(--ink-900) / 0.90); margin-bottom: 10px; }
+  :global(.sub) { margin-top: 10px; font-size: 12px; font-weight: 650; color: rgba(var(--ink-900) / 0.78); display: flex; align-items: baseline; gap: 6px; }
   :global(.hint) { font-weight: 600; color: rgba(var(--ink-600) / 0.90); }
 
-  :global(.row) {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    margin-top: 10px;
-  }
-
-  :global(.row.two) {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-  }
-
+  :global(.row) { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
+  :global(.row.two) { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   :global(.label) { font-size: 12px; color: rgba(var(--ink-900) / 0.78); width: 52px; }
 
-  :global(.sep) {
-    height: 1px;
-    background: var(--divider);
-    margin: 12px 0;
-  }
+  :global(.sep) { height: 1px; background: var(--divider); margin: 12px 0; }
 
   :global(.select), :global(.input), :global(.hex) {
     width: 100%;
@@ -749,15 +562,7 @@
     border-color: var(--stroke-mid);
   }
 
-  :global(.list) {
-    margin-top: 8px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    max-height: 190px;
-    overflow: auto;
-    padding-right: 2px;
-  }
+  :global(.list) { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; max-height: 190px; overflow: auto; padding-right: 2px; }
 
   :global(.item) {
     width: 100%;
@@ -788,20 +593,9 @@
     box-sizing: border-box;
   }
 
-  /* crumbs (если Crumbs использует классы из глобала) */
-  :global(.crumbs) {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    justify-content: flex-end;
-    max-width: 520px;
-    pointer-events: auto;
-  }
-
+  :global(.crumbs) { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; max-width: 520px; pointer-events: auto; }
   :global(.crumb) {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
+    display: inline-flex; align-items: center; gap: 8px;
     padding: 8px 10px;
     border-radius: 999px;
     border: 1px solid var(--stroke-soft);
@@ -811,7 +605,6 @@
     cursor: pointer;
   }
 
-  /* info card (если InfoCard выводит .info-card) */
   :global(.info-card) {
     pointer-events: none;
     background: rgba(248, 251, 255, 0.88);
