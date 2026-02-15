@@ -50,6 +50,18 @@
   let visualBg = '#ffffff';
   let visualEdge = '#334155';
 
+  // ✅ Цвета точек задаём по текстовому полю (sourceField)
+  let entityColors: Record<string, string> = {
+    sku: '#111827',
+    campaign_id: '#1d4ed8'
+  };
+
+  function setEntityColor(code: string, color: string): void {
+    const c = String(color ?? '').trim();
+    if (!code || !c) return;
+    entityColors = { ...entityColors, [code]: c };
+  }
+
   let visualSchemes: VisualScheme[] = [];
   let selectedVisualId = '';
 
@@ -133,6 +145,12 @@
     dateFields: dateFieldsAll
   });
 
+  // ✅ базовый цвет для точек (кластеры потом могут перекрывать)
+  $: coloredPoints = points.map((p) => ({
+    ...p,
+    color: entityColors[p.sourceField] ?? '#111827'
+  }));
+
   // ---- FIXED caching: Map(point.id -> clusterId)
   let fixedAssign: Map<string, number> = new Map();
   let fixedCounts: Map<number, number> = new Map();
@@ -197,7 +215,8 @@
   }
 
   function applyClustering(input: SpacePoint[]): SpacePoint[] {
-    if (!grouping.enabled) return input.map((p) => ({ ...p, color: undefined }));
+    // ✅ ВАЖНО: если кластеры выключены — не затираем цвет точек
+    if (!grouping.enabled) return input;
 
     if (grouping.recompute === 'fixed') {
       const cfgKey = makeFixedConfigKey(grouping);
@@ -250,7 +269,7 @@
 
   function recomputeClusters(): void {
     if (grouping.recompute === 'fixed') {
-      rebuildFixedAssignments(points);
+      rebuildFixedAssignments(coloredPoints);
       return;
     }
     if (grouping.recompute === 'manual') {
@@ -263,7 +282,7 @@
     scene.setTheme({ bg: visualBg, edge: visualEdge });
     scene.setAxisCodes({ x: axisX, y: axisY, z: axisZ });
 
-    const clustered = applyClustering(points);
+    const clustered = applyClustering(coloredPoints);
     const info = scene.setPoints(clustered);
 
     renderedCount = info.renderedCount;
@@ -303,6 +322,9 @@
   function addEntityField(code: string): void {
     if (!code || selectedEntityFields.includes(code)) return;
     selectedEntityFields = [...selectedEntityFields, code];
+
+    // ✅ если цвет ещё не задан — ставим дефолт
+    if (!entityColors[code]) setEntityColor(code, '#111827');
   }
 
   function removeEntityField(code: string): void {
@@ -449,7 +471,7 @@
 
     await tick();
 
-    const clustered = applyClustering(points);
+    const clustered = applyClustering(coloredPoints);
     const info = scene.setPoints(clustered);
     renderedCount = info.renderedCount;
     bboxLabel = info.bboxLabel;
@@ -527,11 +549,18 @@
         onAddEntity={addEntityField}
         onAddCoord={addCoordField}
         onClose={closeAllMenus}
+        entityColors={entityColors}
+        onSetEntityColor={setEntityColor}
       />
     {/if}
 
     {#if showGroupingMenu}
-      <GroupingMenu bind:cfg={grouping} numberFields={groupingNumberFields} textFields={groupingTextFields} onRecompute={recomputeClusters} />
+      <GroupingMenu
+        bind:cfg={grouping}
+        numberFields={groupingNumberFields}
+        textFields={groupingTextFields}
+        onRecompute={recomputeClusters}
+      />
     {/if}
 
     <Tooltip {tooltip} />
@@ -584,7 +613,7 @@
     --focus-ring: 0 0 0 4px rgba(var(--ink-900) / 0.10);
 
     --field-bg: #ffffff;
-    --field-bg-soft: rgba(248, 251, 255, 0.9); /* если вдруг захочешь обратно */
+    --field-bg-soft: rgba(248, 251, 255, 0.9);
   }
 
   :global(.graph-root) { width: 100%; }
@@ -599,7 +628,6 @@
 
   :global(.scene) { position: absolute; inset: 0; }
 
-  /* HUD layout */
   :global(.hud) {
     position: absolute;
     pointer-events: none;
@@ -615,19 +643,12 @@
     align-items: flex-end;
   }
 
-  :global(.hud.bottom-left) {
-    left: 14px;
-    bottom: 12px;
-    align-items: flex-start;
-  }
-
   :global(.hud-actions) {
     display: flex;
     gap: 10px;
     pointer-events: auto;
   }
 
-  /* Buttons */
   :global(.btn) {
     border: 0;
     border-radius: 999px;
@@ -649,24 +670,22 @@
     position: relative;
   }
 
-  :global(.btn.wide) { width: 100%; }
-
-  /* Menus данных */
   :global(.menu-pop) {
     position: absolute;
     top: 56px;
     right: 14px;
     width: 340px;
-  
     background: rgba(255, 255, 255, 0.92);
     border-radius: 18px;
     padding: 12px;
-    box-shadow: 0 22px 60px rgba(15, 23, 42, 0.18);
+    box-shadow: var(--shadow-pop);
     backdrop-filter: blur(14px);
     pointer-events: auto;
     z-index: 2000;
     max-height: calc(100vh - 110px);
     overflow: auto;
+    border: 1px solid var(--stroke-soft);
+    box-sizing: border-box;
   }
 
   :global(.menu-title) {
@@ -675,33 +694,6 @@
     color: rgba(var(--ink-900) / 0.90);
     margin-bottom: 10px;
   }
-
-  :global(.sub) {
-    margin-top: 10px;
-    font-size: 12px;
-    font-weight: 650;
-    color: rgba(var(--ink-900) / 0.78);
-    display: flex;
-    align-items: baseline;
-    gap: 6px;
-  }
-
-  :global(.hint) { font-weight: 600; color: rgba(var(--ink-600) / 0.90); }
-
-  :global(.row) {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    margin-top: 10px;
-  }
-
-  :global(.row.two) {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-  }
-
-  :global(.label) { font-size: 12px; color: rgba(var(--ink-900) / 0.78); width: 52px; }
 
   :global(.sep) {
     height: 1px;
@@ -726,16 +718,6 @@
     border-color: var(--stroke-mid);
   }
 
-  :global(.list) {
-    margin-top: 8px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    max-height: 190px;
-    overflow: auto;
-    padding-right: 2px;
-  }
-
   :global(.item) {
     width: 100%;
     text-align: left;
@@ -749,10 +731,22 @@
     cursor: pointer;
     box-sizing: border-box;
   }
-  :global(.item:disabled) { opacity: .45; cursor: not-allowed; }
 
-  :global(.name) { font-size: 12px; font-weight: 650; color: rgba(var(--ink-900) / 0.88); }
-  :global(.tag) { font-size: 11px; color: rgba(var(--ink-600) / 0.90); }
+  /* ✅ Визуально различаем активные/выбранные поля.
+     В PickDataMenu я уже делал/делаю классы:
+     - .is-selected (текстовое поле выбрано)
+     - .is-axis (поле стоит на оси X/Y/Z)
+     Если у тебя в текущем PickDataMenu этих классов ещё нет — скажи, я дам точечный патч для него. */
+  :global(.item.is-selected) {
+    border-color: rgba(var(--ink-900) / 0.18);
+    background: rgba(255, 255, 255, 0.96);
+    box-shadow: 0 10px 26px rgba(var(--ink-900) / 0.12);
+  }
+
+  :global(.item.is-axis) {
+    border-color: rgba(var(--ink-900) / 0.18);
+    background: rgba(255, 255, 255, 0.96);
+  }
 
   :global(.limit) {
     margin-top: 8px;
@@ -765,30 +759,6 @@
     box-sizing: border-box;
   }
 
-  /* crumbs (если Crumbs использует классы из глобала) */
-  :global(.crumbs) {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    justify-content: flex-end;
-    max-width: 520px;
-    pointer-events: auto;
-  }
-
-  :global(.crumb) {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 10px;
-    border-radius: 999px;
-    border: 1px solid var(--stroke-soft);
-    background: rgba(248, 251, 255, 0.95);
-    color: rgba(var(--ink-900) / 0.90);
-    box-shadow: var(--shadow-btn);
-    cursor: pointer;
-  }
-
-  /* info card (если InfoCard выводит .info-card) */
   :global(.info-card) {
     pointer-events: none;
     background: rgba(248, 251, 255, 0.88);
@@ -799,9 +769,6 @@
     border: 1px solid var(--stroke-soft);
     box-sizing: border-box;
   }
-
-  :global(.info-title) { font-size: 12px; font-weight: 750; color: rgba(var(--ink-900) / 0.90); margin-bottom: 4px; }
-  :global(.info-sub) { font-size: 11px; color: rgba(var(--ink-600) / 0.92); line-height: 1.35; }
 
   :global(.tooltip) {
     position: absolute;
