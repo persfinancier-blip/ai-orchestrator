@@ -11,7 +11,6 @@ export type SpacePoint = {
   y: number;
   z: number;
   color?: string;
-  hull?: [number, number, number][];
 
   /**
    * ✅ LOD / voxel clustering
