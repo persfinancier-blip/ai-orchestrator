@@ -1,3 +1,5 @@
+// core/orchestrator/modules/advertising/interface/desk/components/space/pipeline.ts
+
 import type { ShowcaseField, ShowcaseRow } from '../data/showcaseStore';
 import type { BBox, PeriodMode, SpacePoint } from './types';
 
@@ -75,17 +77,14 @@ export function projectPoints(list: SpacePoint[], xCode: string, yCode: string, 
   const maxZ = Math.max(...zValues);
 
   return list.map((point) => {
-    const x = useX && Number.isFinite(point.metrics[xCode])
-      ? normalize(point.metrics[xCode], minX, maxX)
-      : hashToJitter(`${point.id}:x`);
+    const x =
+      useX && Number.isFinite(point.metrics[xCode]) ? normalize(point.metrics[xCode], minX, maxX) : hashToJitter(`${point.id}:x`);
 
-    const y = useY && Number.isFinite(point.metrics[yCode])
-      ? normalize(point.metrics[yCode], minY, maxY)
-      : hashToJitter(`${point.id}:y`);
+    const y =
+      useY && Number.isFinite(point.metrics[yCode]) ? normalize(point.metrics[yCode], minY, maxY) : hashToJitter(`${point.id}:y`);
 
-    const z = useZ && Number.isFinite(point.metrics[zCode])
-      ? normalize(point.metrics[zCode], minZ, maxZ)
-      : hashToJitter(`${point.id}:z`);
+    const z =
+      useZ && Number.isFinite(point.metrics[zCode]) ? normalize(point.metrics[zCode], minZ, maxZ) : hashToJitter(`${point.id}:z`);
 
     return { ...point, x, y, z };
   });
@@ -110,9 +109,12 @@ export function buildBBox(list: SpacePoint[]): BBox {
   const ys = list.map((p) => p.y);
   const zs = list.map((p) => p.z);
   return {
-    minX: Math.min(...xs), maxX: Math.max(...xs),
-    minY: Math.min(...ys), maxY: Math.max(...ys),
-    minZ: Math.min(...zs), maxZ: Math.max(...zs)
+    minX: Math.min(...xs),
+    maxX: Math.max(...xs),
+    minY: Math.min(...ys),
+    maxY: Math.max(...ys),
+    minZ: Math.min(...zs),
+    maxZ: Math.max(...zs)
   };
 }
 
@@ -186,6 +188,141 @@ export function formatValueByMetric(metricCode: string, maxValue: number, fields
   return formatNumberHuman(maxValue);
 }
 
+// ==============================
+// VOXEL / GRID LOD AGGREGATION
+// ==============================
+
+function clamp01(v: number): number {
+  return Math.min(1, Math.max(0, v));
+}
+
+/**
+ * detail: 0..1
+ * 0 => максимально детально (много ячеек)
+ * 1 => максимально грубо (мало ячеек)
+ */
+function voxelSizeFromDetailAndBBox(detail01: number, bbox: BBox): number {
+  const d = clamp01(detail01);
+
+  const spanX = Math.max(0.001, bbox.maxX - bbox.minX);
+  const spanY = Math.max(0.001, bbox.maxY - bbox.minY);
+  const spanZ = Math.max(0.001, bbox.maxZ - bbox.minZ);
+  const maxSpan = Math.max(spanX, spanY, spanZ);
+
+  const bins = 30 - 22 * d; // 30..8
+  const size = maxSpan / Math.max(4, bins);
+
+  return Math.max(2.5, Math.min(45, size));
+}
+
+function voxelKey(x: number, y: number, z: number, size: number): string {
+  const ix = Math.floor(x / size);
+  const iy = Math.floor(y / size);
+  const iz = Math.floor(z / size);
+  return `${ix}|${iy}|${iz}`;
+}
+
+/**
+ * Однородная агрегация: НЕ смешиваем разные sourceField.
+ * Возвращаем либо исходные точки, либо "кластер-точки" (isCluster).
+ */
+function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: number; detail: number }): SpacePoint[] {
+  const { minCount, detail } = opts;
+  if (!points.length) return [];
+
+  const byField = new Map<string, SpacePoint[]>();
+  for (const p of points) {
+    const k = String(p.sourceField ?? '');
+    const arr = byField.get(k);
+    if (arr) arr.push(p);
+    else byField.set(k, [p]);
+  }
+
+  const out: SpacePoint[] = [];
+
+  for (const [field, list] of byField.entries()) {
+    const bbox = buildBBox(list);
+    const size = voxelSizeFromDetailAndBBox(detail, bbox);
+
+    const grid = new Map<string, SpacePoint[]>();
+
+    for (const p of list) {
+      const k = voxelKey(p.x, p.y, p.z, size);
+      const arr = grid.get(k);
+      if (arr) arr.push(p);
+      else grid.set(k, [p]);
+    }
+
+    for (const [cell, cellPoints] of grid.entries()) {
+      if (cellPoints.length < minCount) {
+        out.push(...cellPoints);
+        continue;
+      }
+
+      let minX = Infinity, minY = Infinity, minZ = Infinity;
+      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+
+      let sx = 0, sy = 0, sz = 0;
+
+      const sums: Record<string, number> = {};
+      const counts: Record<string, number> = {};
+
+      let sumRevenue = 0;
+      let sumSpend = 0;
+      let sumOrders = 0;
+
+      for (const p of cellPoints) {
+        sx += p.x; sy += p.y; sz += p.z;
+
+        minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); minZ = Math.min(minZ, p.z);
+        maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); maxZ = Math.max(maxZ, p.z);
+
+        const m = p.metrics ?? {};
+        for (const k of Object.keys(m)) {
+          const v = Number(m[k]);
+          if (!Number.isFinite(v)) continue;
+          sums[k] = (sums[k] ?? 0) + v;
+          counts[k] = (counts[k] ?? 0) + 1;
+        }
+
+        sumRevenue += Number(m.revenue ?? 0);
+        sumSpend += Number(m.spend ?? 0);
+        sumOrders += Number(m.orders ?? 0);
+      }
+
+      const n = cellPoints.length;
+
+      const metrics: Record<string, number> = {};
+      for (const k of Object.keys(sums)) {
+        const c = counts[k] ?? 0;
+        metrics[k] = c ? sums[k] / c : Number.NaN;
+      }
+
+      metrics.revenue = sumRevenue;
+      metrics.spend = sumSpend;
+      metrics.orders = sumOrders;
+
+      metrics.drr = metrics.revenue > 0 ? (metrics.spend / metrics.revenue) * 100 : 0;
+      metrics.roi = metrics.spend > 0 ? metrics.revenue / metrics.spend : 0;
+
+      out.push({
+        id: `${field}:voxel:${cell}`,
+        label: `Кластер (${n})`,
+        sourceField: field,
+        metrics,
+        x: sx / n,
+        y: sy / n,
+        z: sz / n,
+        isCluster: true,
+        clusterCount: n,
+        span: { x: maxX - minX, y: maxY - minY, z: maxZ - minZ }
+      });
+    }
+  }
+
+  return out;
+}
+
 export function buildPoints(args: {
   rows: ShowcaseRow[];
   entityFields: string[];
@@ -194,8 +331,23 @@ export function buildPoints(args: {
   axisZ: string;
   numberFields: ShowcaseField[];
   dateFields: ShowcaseField[];
+
+  lodEnabled?: boolean;
+  lodDetail?: number;   // 0..1
+  lodMinCount?: number; // например 5
 }): SpacePoint[] {
-  const { rows, entityFields, axisX, axisY, axisZ, numberFields, dateFields } = args;
+  const {
+    rows,
+    entityFields,
+    axisX,
+    axisY,
+    axisZ,
+    numberFields,
+    dateFields,
+    lodEnabled = false,
+    lodDetail = 0.5,
+    lodMinCount = 5
+  } = args;
 
   if (!entityFields.length) return [];
 
@@ -254,5 +406,11 @@ export function buildPoints(args: {
     });
   });
 
-  return projectPoints(result, axisX, axisY, axisZ);
+  const projected = projectPoints(result, axisX, axisY, axisZ);
+
+  if (lodEnabled) {
+    return voxelAggregateHomogeneous(projected, { minCount: lodMinCount, detail: lodDetail });
+  }
+
+  return projected;
 }
