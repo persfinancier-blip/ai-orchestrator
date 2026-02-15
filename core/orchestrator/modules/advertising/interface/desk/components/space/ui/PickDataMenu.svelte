@@ -33,6 +33,21 @@
     date: 'дата'
   };
 
+  const norm = (s: string): string => String(s ?? '').trim().toLowerCase();
+
+  const tail = (s: string): string => {
+    const n = norm(s);
+    // берём последний сегмент после :, ., / (покрывает sales_fact:code, ads.code и т.п.)
+    return n.split(/[:./]/g).filter(Boolean).pop() ?? n;
+  };
+
+  const sameCode = (a: string, b: string): boolean => {
+    const na = norm(a);
+    const nb = norm(b);
+    if (na === nb) return true;
+    return tail(na) === tail(nb);
+  };
+
   // ✅ фикс рассинхрона: одинаково нормализуем коды
   const norm = (s: string): string => String(s ?? '').trim().toLowerCase();
 
