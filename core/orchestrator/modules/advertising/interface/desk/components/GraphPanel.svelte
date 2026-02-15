@@ -50,9 +50,6 @@
   let visualBg = '#ffffff';
   let visualEdge = '#334155';
 
-  // базовый цвет точек (UI его не меняет, кластеры всё равно перекрывают)
-  let pointColor = '#22c55e';
-
   let visualSchemes: VisualScheme[] = [];
   let selectedVisualId = '';
 
@@ -263,7 +260,7 @@
   }
 
   $: if (scene) {
-    scene.setTheme({ bg: visualBg, edge: visualEdge, pointColor });
+    scene.setTheme({ bg: visualBg, edge: visualEdge });
     scene.setAxisCodes({ x: axisX, y: axisY, z: axisZ });
 
     const clustered = applyClustering(points);
@@ -335,8 +332,7 @@
       id: String(v.id),
       name: String(v.name ?? ''),
       bg: String(v.bg ?? '#ffffff'),
-      edge: String(v.edge ?? '#334155'),
-      pointColor: String(v.pointColor ?? '#22c55e')
+      edge: String(v.edge ?? '#334155')
     }));
 
     datasetPresets = loadDatasetPresets(STORAGE_KEY_DATASETS);
@@ -350,8 +346,7 @@
       id: `${Date.now()}-${Math.random()}`,
       name: trimmed,
       bg: visualBg,
-      edge: visualEdge,
-      pointColor
+      edge: visualEdge
     };
 
     visualSchemes = [item, ...visualSchemes].slice(0, 30);
@@ -364,13 +359,11 @@
     if (!v) return;
     visualBg = v.bg;
     visualEdge = v.edge;
-    pointColor = v.pointColor ?? '#22c55e';
   }
 
   function resetVisual(): void {
     visualBg = '#ffffff';
     visualEdge = '#334155';
-    pointColor = '#22c55e';
     selectedVisualId = '';
   }
 
@@ -572,11 +565,10 @@
 </section>
 
 <style>
-  /* ---- DESIGN TOKENS (единые тени/обводки/фокус) */
   :global(:root) {
-    --ink-900: 15 23 42;      /* #0F172A */
-    --ink-600: 100 116 139;   /* #64748B */
-    --ink-200: 226 232 240;   /* #E2E8F0 */
+    --ink-900: 15 23 42;
+    --ink-600: 100 116 139;
+    --ink-200: 226 232 240;
 
     --stroke-soft: rgba(var(--ink-900) / 0.08);
     --stroke-mid: rgba(var(--ink-900) / 0.12);
@@ -589,7 +581,7 @@
     --shadow-pop: 0 22px 60px rgba(var(--ink-900) / 0.18);
     --shadow-modal: 0 30px 80px rgba(var(--ink-900) / 0.24);
 
-    --focus-ring: 0 0 0 4px rgba(var(--ink-900) / 0.10); /* без зелени */
+    --focus-ring: 0 0 0 4px rgba(var(--ink-900) / 0.10);
   }
 
   :global(.graph-root) { width: 100%; }
@@ -614,7 +606,6 @@
   }
 
   :global(.hud.top-right) { right: 14px; top: 12px; align-items: flex-end; }
-  :global(.hud.bottom-left) { left: 14px; bottom: 12px; align-items: flex-start; }
 
   :global(.hud-actions) { display: flex; gap: 10px; pointer-events: auto; }
 
@@ -641,235 +632,21 @@
 
   :global(.btn.wide) { width: 100%; }
 
-  :global(.crumbs) {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    justify-content: flex-end;
-    max-width: 520px;
-    pointer-events: auto;
-  }
-
-  :global(.crumb) {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 10px;
-    border-radius: 999px;
-    border: 0;
-    background: rgba(248, 251, 255, 0.95);
-    color: rgba(var(--ink-900) / 0.90);
-    box-shadow: var(--shadow-btn);
-    cursor: pointer;
-  }
-  :global(.crumb .t) { font-size: 12px; font-weight: 650; }
-  :global(.crumb .x) {
-    width: 18px;
-    height: 18px;
-    display: grid;
-    place-items: center;
-    border-radius: 999px;
-    background: rgba(var(--ink-900) / 0.06);
-    font-weight: 900;
-    line-height: 1;
-  }
-  :global(.crumb:hover .x) { background: rgba(var(--ink-900) / 0.10); }
-
-  :global(.info-card) {
-    pointer-events: none;
-    background: rgba(248, 251, 255, 0.88);
-    border-radius: 14px;
-    padding: 10px 12px;
-    box-shadow: var(--shadow-card);
-    max-width: 420px;
-    border: 1px solid var(--stroke-soft);
-  }
-  :global(.info-title) { font-size: 12px; font-weight: 750; color: rgba(var(--ink-900) / 0.90); margin-bottom: 4px; }
-  :global(.info-sub) { font-size: 11px; color: rgba(var(--ink-600) / 0.92); line-height: 1.35; }
-
-  :global(.menu-pop) {
-    position: absolute;
-    top: 56px;
-    right: 14px;
-    width: 340px;
-    background: rgba(255, 255, 255, 0.92);
-    border-radius: 18px;
-    padding: 12px;
-    box-shadow: var(--shadow-pop);
-    backdrop-filter: blur(14px);
-    pointer-events: auto;
-    z-index: 10;
-    border: 1px solid var(--stroke-soft);
-  }
-
-  :global(.menu-title) {
-    font-weight: 800;
-    font-size: 13px;
-    color: rgba(var(--ink-900) / 0.90);
-    margin-bottom: 10px;
-  }
-
-  :global(.sub) {
-    margin-top: 10px;
-    font-size: 12px;
-    font-weight: 650;
-    color: rgba(var(--ink-900) / 0.78);
-    display: flex;
-    align-items: baseline;
-    gap: 6px;
-  }
-  :global(.hint) { font-weight: 600; color: rgba(var(--ink-600) / 0.90); }
-
-  :global(.row) { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
-  :global(.row.two) { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-
-  :global(.label) { font-size: 12px; color: rgba(var(--ink-900) / 0.78); width: 52px; }
-
   :global(.sep) {
     height: 1px;
     background: var(--divider);
     margin: 12px 0;
   }
 
-  :global(.color-row) { display: flex; gap: 10px; align-items: center; width: 100%; }
-
-  :global(.hex) {
-    flex: 1;
-    border: 1px solid var(--stroke-soft);
-    outline: none;
-    background: rgba(248, 251, 255, 0.9);
-    border-radius: 12px;
-    padding: 10px 12px;
-    font-size: 12px;
-    color: rgba(var(--ink-900) / 0.90);
-  }
-
-  :global(.select), :global(.input) {
-    width: 100%;
+  :global(.select), :global(.input), :global(.hex) {
     border: 1px solid var(--stroke-soft);
     background: rgba(248, 251, 255, 0.9);
     border-radius: 12px;
-    padding: 10px 12px;
-    font-size: 12px;
     outline: none;
-    color: rgba(var(--ink-900) / 0.90);
   }
 
-  :global(.select:focus), :global(.input:focus) {
-    box-shadow: var(--focus-ring); /* ✅ без зелёного */
+  :global(.select:focus), :global(.input:focus), :global(.hex:focus) {
+    box-shadow: var(--focus-ring);
     border-color: var(--stroke-mid);
   }
-
-  :global(.list) {
-    margin-top: 8px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    max-height: 190px;
-    overflow: auto;
-    padding-right: 2px;
-  }
-
-  :global(.item) {
-    width: 100%;
-    text-align: left;
-    border: 1px solid var(--stroke-soft);
-    background: rgba(248, 251, 255, 0.92);
-    border-radius: 14px;
-    padding: 10px 10px;
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
-    cursor: pointer;
-  }
-  :global(.item:disabled) { opacity: .45; cursor: not-allowed; }
-
-  :global(.name) { font-size: 12px; font-weight: 650; color: rgba(var(--ink-900) / 0.88); }
-  :global(.tag) { font-size: 11px; color: rgba(var(--ink-600) / 0.90); }
-
-  :global(.limit) {
-    margin-top: 8px;
-    font-size: 12px;
-    color: rgba(var(--ink-600) / 0.95);
-    background: rgba(248, 251, 255, 0.92);
-    border-radius: 14px;
-    padding: 10px 12px;
-    border: 1px solid var(--stroke-soft);
-  }
-
-  :global(.tooltip) {
-    position: absolute;
-    pointer-events: none;
-    background: rgba(var(--ink-900) / 0.92);
-    color: #f8fafc;
-    font-size: 12px;
-    padding: 10px;
-    border-radius: 12px;
-    max-width: 360px;
-    z-index: 6;
-    box-shadow: var(--shadow-card);
-  }
-
-  :global(.modal-backdrop) {
-    position: fixed;
-    inset: 0;
-    background: rgba(var(--ink-900) / 0.35);
-    display: grid;
-    place-items: center;
-    z-index: 50;
-  }
-
-  :global(.modal) {
-    width: min(520px, calc(100vw - 24px));
-    background: rgba(255, 255, 255, 0.92);
-    border-radius: 18px;
-    padding: 14px;
-    box-shadow: var(--shadow-modal);
-    backdrop-filter: blur(14px);
-    border: 1px solid var(--stroke-soft);
-  }
-
-  :global(.modal-title) {
-    font-weight: 800;
-    font-size: 14px;
-    color: rgba(var(--ink-900) / 0.92);
-    margin-bottom: 10px;
-  }
-
-  :global(.chip3d) {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 10px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.92);
-    box-shadow: 0 10px 28px rgba(var(--ink-900) / 0.14);
-    border: 1px solid var(--stroke-soft);
-    font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial;
-    font-size: 12px;
-    font-weight: 720;
-    color: rgba(var(--ink-900) / 0.92);
-    white-space: nowrap;
-    transform: translate(-50%, -50%);
-  }
-
-  :global(.chip3d.accent) {
-    background: rgba(248, 251, 255, 0.95);
-    color: rgba(30, 64, 175, 0.98);
-  }
-
-  :global(.chip3d .x) {
-    border: 0;
-    width: 20px;
-    height: 20px;
-    border-radius: 999px;
-    background: rgba(var(--ink-900) / 0.06);
-    color: rgba(var(--ink-900) / 0.75);
-    cursor: pointer;
-    font-weight: 900;
-    line-height: 1;
-    display: grid;
-    place-items: center;
-  }
-  :global(.chip3d .x:hover) { background: rgba(var(--ink-900) / 0.10); color: rgba(var(--ink-900) / 0.90); }
 </style>
