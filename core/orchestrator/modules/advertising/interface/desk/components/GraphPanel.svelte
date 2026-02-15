@@ -43,7 +43,8 @@
   let showSaveVisualModal = false;
   let showGroupingMenu = false;
 
-  // ✅ по умолчанию группировка ВКЛЮЧЕНА
+  // ✅ ВАЖНО: по умолчанию группировка включена (как ты просил)
+  // ✅ Ползунок "Детализация групп" = grouping.detail (0..1) управляет LOD/вокселем
   let grouping: GroupingConfig = {
     enabled: true,
     principle: 'proximity',
@@ -57,7 +58,6 @@
     recompute: 'auto'
   };
 
-  // ✅ триггер "Пересчитать" (чтобы Svelte реально пересчитал points)
   let clusterSeed = 0;
 
   function fieldsAll(): ShowcaseField[] {
@@ -86,28 +86,23 @@
     selectedEntityFields
   });
 
-  // ✅ ВОКСЕЛЬ / LOD подключён сюда.
-  // Работает только для принципа "по близости".
-  // Выключение: чекбокс enabled или detail = 0.
-  $: points = (() => {
-    // важно: участвует в реактивности (кнопка "Пересчитать")
-    clusterSeed;
+  // ✅ КЛЮЧЕВАЯ ПРАВКА: подключили воксель/LOD к GroupingMenu
+  // - grouping.enabled: включает/выключает группировку
+  // - grouping.detail: 0..1, при 0 группировка отключена (как написано в UI)
+  // - grouping.minClusterSize: минимальный размер кластера (minCount для вокселя)
+  $: points = buildPoints({
+    rows: filteredRows,
+    entityFields: selectedEntityFields,
+    axisX,
+    axisY,
+    axisZ,
+    numberFields: numberFieldsAll,
+    dateFields: dateFieldsAll,
 
-    const lodEnabled = grouping.enabled && grouping.principle === 'proximity' && grouping.detail > 0;
-
-    return buildPoints({
-      rows: filteredRows,
-      entityFields: selectedEntityFields,
-      axisX,
-      axisY,
-      axisZ,
-      numberFields: numberFieldsAll,
-      dateFields: dateFieldsAll,
-      lodEnabled,
-      lodDetail: grouping.detail,
-      lodMinCount: Math.max(2, grouping.minClusterSize)
-    });
-  })();
+    lodEnabled: grouping.enabled && grouping.detail > 0.001,
+    lodDetail: grouping.detail,
+    lodMinCount: Math.max(2, grouping.minClusterSize)
+  });
 
   let scene: SpaceScene | null = null;
   let elScene: HTMLDivElement | null = null;
@@ -158,7 +153,7 @@
   }
 
   function recomputeClusters(): void {
-    // ✅ гарантируем пересчёт points даже если значения cfg не менялись
+    // хук под будущую логику (если понадобится)
     clusterSeed += 1;
   }
 
@@ -206,6 +201,7 @@
     scene.setTheme({ bg: scheme.bg, edge: scheme.edge });
     scene.setAxisCodes({ x: axisX, y: axisY, z: axisZ });
 
+    // просто перерисовываем точки при любых изменениях
     scene.setPoints(points);
   }
 </script>
@@ -263,14 +259,40 @@
   </div>
 
   {#if showSaveVisualModal}
-    <SaveModal title="Сохранить визуальную схему" bind:show={showSaveVisualModal} onSave={(name) => closeAllMenus()} />
+    <SaveModal
+      title="Сохранить визуальную схему"
+      bind:show={showSaveVisualModal}
+      onSave={(name) => {
+        // логика сохранения у тебя уже была в проекте — оставь как есть
+        closeAllMenus();
+      }}
+    />
   {/if}
 </div>
 
 <style>
-  .graph-panel { display: flex; flex-direction: column; gap: 10px; }
-  .topbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
-  .btn { padding: 8px 12px; border-radius: 8px; border: 1px solid #e2e8f0; background: #fff; cursor: pointer; }
-  .scene-wrap { position: relative; }
-  .scene { width: 100%; }
+  .graph-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+  }
+  .btn {
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
+    background: #fff;
+    cursor: pointer;
+  }
+  .scene-wrap {
+    position: relative;
+  }
+  .scene {
+    width: 100%;
+  }
 </style>
