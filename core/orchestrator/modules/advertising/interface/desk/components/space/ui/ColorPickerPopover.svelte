@@ -158,13 +158,7 @@
   </div>
 
   <div class="body">
-    <div
-      class="sv"
-      bind:this={svEl}
-      style={`--h:${hsv.h};`}
-      on:pointerdown={onSvDown}
-      on:pointermove={onSvMove}
-    >
+    <div class="sv" bind:this={svEl} style={`--h:${hsv.h};`} on:pointerdown={onSvDown} on:pointermove={onSvMove}>
       <div class="sv-white" />
       <div class="sv-black" />
       <div class="thumb" style={`left:${hsv.s * 100}%; top:${(1 - hsv.v) * 100}%;`} />
@@ -201,16 +195,13 @@
     top: 52px;
     right: 0;
     width: 320px;
-    max-width: 100%;
     padding: 12px;
     border-radius: 18px;
     background: rgba(255, 255, 255, 0.94);
     box-shadow: 0 22px 60px rgba(15, 23, 42, 0.18);
     backdrop-filter: blur(14px);
     z-index: 30;
-
     box-sizing: border-box;
-    overflow: hidden; /* ✅ режем всё по скруглению */
   }
 
   .head {
@@ -239,10 +230,9 @@
 
   .body {
     display: grid;
-    grid-template-columns: 1fr 116px; /* ✅ фикс правой колонки */
+    grid-template-columns: 1fr 110px; /* как было */
     gap: 10px;
     align-items: start;
-    box-sizing: border-box;
   }
 
   .sv {
@@ -285,15 +275,17 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    min-width: 0; /* ✅ не даём расширяться */
-    box-sizing: border-box;
+    min-width: 0;
   }
 
+  /* ✅ одинаковая ширина: preview + hex + hue */
   .preview {
+    width: 100%;
     height: 36px;
     border-radius: 14px;
     border: 1px solid rgba(15, 23, 42, 0.08);
     box-shadow: 0 10px 22px rgba(15, 23, 42, 0.10);
+    box-sizing: border-box;
   }
 
   .hex {
@@ -316,9 +308,8 @@
     margin-bottom: 6px;
   }
 
-  .hue-pad {
-    padding: 0 2px; /* ✅ чтобы круглый thumb не упирался в край */
-  }
+  /* ✅ отступы, чтобы thumb не упирался в край */
+  .hue-pad { padding: 0 2px; }
 
   .hue {
     -webkit-appearance: none;
@@ -328,8 +319,8 @@
     border-radius: 999px;
     border: 1px solid rgba(15, 23, 42, 0.06);
     outline: none;
-    box-sizing: border-box;
     display: block;
+    box-sizing: border-box;
   }
 
   .hue::-webkit-slider-thumb {
