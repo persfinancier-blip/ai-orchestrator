@@ -341,12 +341,6 @@
   }
 
   .hue::-moz-range-thumb {
-    width: 16px;
-    height: 16px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.95);
-    border: 1px solid var(--stroke-hard, rgba(15, 23, 42, 0.18));
-    box-shadow: 0 10px 22px rgba(15, 23, 42, 0.18));
-    cursor: pointer;
+    box-shadow: 0 10px 22px rgba(15, 23, 42, 0.18);
   }
 </style>
