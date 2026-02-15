@@ -54,6 +54,29 @@
   let entityFieldColors: Record<string, string> = {};
   const DEFAULT_ENTITY_COLOR = '#3b82f6';
 
+  // ✅ НОРМАЛИЗАЦИЯ КЛЮЧЕЙ (должна совпадать с PickDataMenu)
+  const norm = (s: string): string => String(s ?? '').trim().toLowerCase();
+  const tail = (s: string): string => {
+    const n = norm(s);
+    return n.split(/[:./]/g).filter(Boolean).pop() ?? n;
+  };
+  const keyForColor = (code: string): string => tail(code);
+
+  function setEntityColor(code: string, color: string): void {
+    const k = keyForColor(code);
+    const c = String(color ?? '').trim();
+    if (!k || !c) return;
+    entityFieldColors = { ...(entityFieldColors ?? {}), [k]: c };
+  }
+
+  function deleteEntityColor(code: string): void {
+    const k = keyForColor(code);
+    if (!entityFieldColors?.[k]) return;
+    const next = { ...(entityFieldColors ?? {}) };
+    delete next[k];
+    entityFieldColors = next;
+  }
+
   let visualSchemes: VisualScheme[] = [];
   let selectedVisualId = '';
 
@@ -148,9 +171,9 @@
     return `hsl(${hue} 70% 45%)`;
   }
 
-  // ✅ ВАЖНО: принимаем colors параметром -> Svelte видит зависимость так же, как у bg/edge
+  // ✅ ВАЖНО: colors параметром + ключ нормализуем (sourceField может быть с префиксом)
   function colorForEntityField(code: string, colors: Record<string, string>): string {
-    return colors?.[code] ?? DEFAULT_ENTITY_COLOR;
+    return colors?.[keyForColor(code)] ?? DEFAULT_ENTITY_COLOR;
   }
 
   function getTextValue(p: SpacePoint, field: string): string {
@@ -322,10 +345,17 @@
   function addEntityField(code: string): void {
     if (!code || selectedEntityFields.includes(code)) return;
     selectedEntityFields = [...selectedEntityFields, code];
+
+    // ✅ если добавили через внешний хук/кнопку — сразу заводим цвет
+    const k = keyForColor(code);
+    if (!entityFieldColors?.[k]) setEntityColor(code, DEFAULT_ENTITY_COLOR);
   }
 
   function removeEntityField(code: string): void {
     selectedEntityFields = selectedEntityFields.filter((x) => x !== code);
+
+    // ✅ если удалили не из PickDataMenu (например через Crumbs) — чистим цвет тоже
+    deleteEntityColor(code);
   }
 
   function addCoordField(code: string): void {
@@ -592,6 +622,7 @@
 </section>
 
 <style>
+  /* стили без изменений */
   :global(:root) {
     --ink-900: 15 23 42;
     --ink-600: 100 116 139;
@@ -611,150 +642,49 @@
     --focus-ring: 0 0 0 4px rgba(var(--ink-900) / 0.10);
 
     --field-bg: #ffffff;
-    --field-bg-soft: rgba(248, 251, 255, 0.9); /* если вдруг захочешь обратно */
+    --field-bg-soft: rgba(248, 251, 255, 0.9);
   }
 
-  :global(.graph-root) {
-    width: 100%;
-  }
+  :global(.graph-root) { width: 100%; }
+  :global(.stage) { position: relative; height: 560px; border-radius: 18px; overflow: hidden; background: #ffffff; }
+  :global(.scene) { position: absolute; inset: 0; }
 
-  :global(.stage) {
-    position: relative;
-    height: 560px;
-    border-radius: 18px;
-    overflow: hidden;
-    background: #ffffff;
-  }
+  :global(.hud) { position: absolute; pointer-events: none; display: flex; flex-direction: column; gap: 10px; z-index: 5; }
+  :global(.hud.top-right) { right: 14px; top: 12px; align-items: flex-end; }
+  :global(.hud.bottom-left) { left: 14px; bottom: 12px; align-items: flex-start; }
+  :global(.hud-actions) { display: flex; gap: 10px; pointer-events: auto; }
 
-  :global(.scene) {
-    position: absolute;
-    inset: 0;
-  }
-
-  /* HUD layout */
-  :global(.hud) {
-    position: absolute;
-    pointer-events: none;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    z-index: 5;
-  }
-
-  :global(.hud.top-right) {
-    right: 14px;
-    top: 12px;
-    align-items: flex-end;
-  }
-
-  :global(.hud.bottom-left) {
-    left: 14px;
-    bottom: 12px;
-    align-items: flex-start;
-  }
-
-  :global(.hud-actions) {
-    display: flex;
-    gap: 10px;
-    pointer-events: auto;
-  }
-
-  /* Buttons */
   :global(.btn) {
-    border: 0;
-    border-radius: 999px;
-    padding: 10px 14px;
-    font-size: 13px;
-    font-weight: 650;
-    cursor: pointer;
-    line-height: 1;
-    background: #f8fbff;
-    color: rgba(var(--ink-900) / 0.9);
-    box-shadow: var(--shadow-btn);
-    pointer-events: auto;
+    border: 0; border-radius: 999px; padding: 10px 14px; font-size: 13px; font-weight: 650;
+    cursor: pointer; line-height: 1; background: #f8fbff; color: rgba(var(--ink-900) / 0.90);
+    box-shadow: var(--shadow-btn); pointer-events: auto;
   }
-  :global(.btn:hover) {
-    transform: translateY(-0.5px);
-  }
+  :global(.btn:hover) { transform: translateY(-0.5px); }
 
-  :global(.btn.btn-primary) {
-    background: #f8fbff;
-    box-shadow: var(--shadow-btn-strong);
-    position: relative;
-  }
+  :global(.btn.btn-primary) { background: #f8fbff; box-shadow: var(--shadow-btn-strong); position: relative; }
+  :global(.btn.wide) { width: 100%; }
 
-  :global(.btn.wide) {
-    width: 100%;
-  }
-
-  /* Menus данных */
   :global(.menu-pop) {
-    position: absolute;
-    top: 56px;
-    right: 14px;
-    width: 340px;
-
+    position: absolute; top: 56px; right: 14px; width: 340px;
     background: rgba(255, 255, 255, 0.92);
-    border-radius: 18px;
-    padding: 12px;
+    border-radius: 18px; padding: 12px;
     box-shadow: 0 22px 60px rgba(15, 23, 42, 0.18);
     backdrop-filter: blur(14px);
-    pointer-events: auto;
-    z-index: 2000;
-    max-height: calc(100vh - 110px);
-    overflow: auto;
+    pointer-events: auto; z-index: 2000;
+    max-height: calc(100vh - 110px); overflow: auto;
   }
 
-  :global(.menu-title) {
-    font-weight: 800;
-    font-size: 13px;
-    color: rgba(var(--ink-900) / 0.9);
-    margin-bottom: 10px;
-  }
+  :global(.menu-title) { font-weight: 800; font-size: 13px; color: rgba(var(--ink-900) / 0.90); margin-bottom: 10px; }
+  :global(.sub) { margin-top: 10px; font-size: 12px; font-weight: 650; color: rgba(var(--ink-900) / 0.78); display: flex; align-items: baseline; gap: 6px; }
+  :global(.hint) { font-weight: 600; color: rgba(var(--ink-600) / 0.90); }
 
-  :global(.sub) {
-    margin-top: 10px;
-    font-size: 12px;
-    font-weight: 650;
-    color: rgba(var(--ink-900) / 0.78);
-    display: flex;
-    align-items: baseline;
-    gap: 6px;
-  }
+  :global(.row) { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
+  :global(.row.two) { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  :global(.label) { font-size: 12px; color: rgba(var(--ink-900) / 0.78); width: 52px; }
 
-  :global(.hint) {
-    font-weight: 600;
-    color: rgba(var(--ink-600) / 0.9);
-  }
+  :global(.sep) { height: 1px; background: var(--divider); margin: 12px 0; }
 
-  :global(.row) {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    margin-top: 10px;
-  }
-
-  :global(.row.two) {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-  }
-
-  :global(.label) {
-    font-size: 12px;
-    color: rgba(var(--ink-900) / 0.78);
-    width: 52px;
-  }
-
-  :global(.sep) {
-    height: 1px;
-    background: var(--divider);
-    margin: 12px 0;
-  }
-
-  :global(.select),
-  :global(.input),
-  :global(.hex) {
+  :global(.select), :global(.input), :global(.hex) {
     width: 100%;
     border: 1px solid var(--stroke-soft);
     background: var(--field-bg, #ffffff);
@@ -762,26 +692,16 @@
     padding: 10px 12px;
     font-size: 12px;
     outline: none;
-    color: rgba(var(--ink-900) / 0.9);
+    color: rgba(var(--ink-900) / 0.90);
     box-sizing: border-box;
   }
 
-  :global(.select:focus),
-  :global(.input:focus),
-  :global(.hex:focus) {
+  :global(.select:focus), :global(.input:focus), :global(.hex:focus) {
     box-shadow: var(--focus-ring);
     border-color: var(--stroke-mid);
   }
 
-  :global(.list) {
-    margin-top: 8px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    max-height: 190px;
-    overflow: auto;
-    padding-right: 2px;
-  }
+  :global(.list) { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; max-height: 190px; overflow: auto; padding-right: 2px; }
 
   :global(.item) {
     width: 100%;
@@ -796,20 +716,10 @@
     cursor: pointer;
     box-sizing: border-box;
   }
-  :global(.item:disabled) {
-    opacity: 0.45;
-    cursor: not-allowed;
-  }
+  :global(.item:disabled) { opacity: .45; cursor: not-allowed; }
 
-  :global(.name) {
-    font-size: 12px;
-    font-weight: 650;
-    color: rgba(var(--ink-900) / 0.88);
-  }
-  :global(.tag) {
-    font-size: 11px;
-    color: rgba(var(--ink-600) / 0.9);
-  }
+  :global(.name) { font-size: 12px; font-weight: 650; color: rgba(var(--ink-900) / 0.88); }
+  :global(.tag) { font-size: 11px; color: rgba(var(--ink-600) / 0.90); }
 
   :global(.limit) {
     margin-top: 8px;
@@ -822,30 +732,18 @@
     box-sizing: border-box;
   }
 
-  /* crumbs (если Crumbs использует классы из глобала) */
-  :global(.crumbs) {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    justify-content: flex-end;
-    max-width: 520px;
-    pointer-events: auto;
-  }
-
+  :global(.crumbs) { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; max-width: 520px; pointer-events: auto; }
   :global(.crumb) {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
+    display: inline-flex; align-items: center; gap: 8px;
     padding: 8px 10px;
     border-radius: 999px;
     border: 1px solid var(--stroke-soft);
     background: rgba(248, 251, 255, 0.95);
-    color: rgba(var(--ink-900) / 0.9);
+    color: rgba(var(--ink-900) / 0.90);
     box-shadow: var(--shadow-btn);
     cursor: pointer;
   }
 
-  /* info card (если InfoCard выводит .info-card) */
   :global(.info-card) {
     pointer-events: none;
     background: rgba(248, 251, 255, 0.88);
@@ -857,17 +755,8 @@
     box-sizing: border-box;
   }
 
-  :global(.info-title) {
-    font-size: 12px;
-    font-weight: 750;
-    color: rgba(var(--ink-900) / 0.9);
-    margin-bottom: 4px;
-  }
-  :global(.info-sub) {
-    font-size: 11px;
-    color: rgba(var(--ink-600) / 0.92);
-    line-height: 1.35;
-  }
+  :global(.info-title) { font-size: 12px; font-weight: 750; color: rgba(var(--ink-900) / 0.90); margin-bottom: 4px; }
+  :global(.info-sub) { font-size: 11px; color: rgba(var(--ink-600) / 0.92); line-height: 1.35; }
 
   :global(.tooltip) {
     position: absolute;
