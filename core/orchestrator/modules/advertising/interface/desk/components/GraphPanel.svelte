@@ -277,7 +277,7 @@
     <SaveModal
       title="Сохранить визуальную схему"
       bind:show={showSaveVisualModal}
-      onSave={(name: string) => {
+      onSave={(name) => {
         // тут у тебя логика сохранения
         closeAllMenus();
       }}
