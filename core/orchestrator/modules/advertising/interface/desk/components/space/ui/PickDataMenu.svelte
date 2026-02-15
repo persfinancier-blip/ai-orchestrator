@@ -49,7 +49,6 @@
   };
 
   // ✅ фикс рассинхрона: одинаково нормализуем коды
-  const norm = (s: string): string => String(s ?? '').trim().toLowerCase();
 
   $: selectedCoordCount = [axisX, axisY, axisZ].filter(Boolean).length;
   $: canAddCoord = selectedCoordCount < 3;
