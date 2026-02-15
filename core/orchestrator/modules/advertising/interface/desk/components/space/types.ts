@@ -11,16 +11,6 @@ export type SpacePoint = {
   y: number;
   z: number;
   color?: string;
-
-  /**
-   * ✅ LOD / voxel clustering
-   * isCluster: это агрегированная "кластер-точка"
-   * clusterCount: сколько исходных точек схлопнуто
-   * span: размеры "облака" по bbox (границы по крайним точкам)
-   */
-  isCluster?: boolean;
-  clusterCount?: number;
-  span?: { x: number; y: number; z: number };
 };
 
 export type BBox = {
