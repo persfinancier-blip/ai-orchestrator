@@ -24,7 +24,6 @@ export type VisualScheme = {
   name: string;
   bg: string;
   edge: string;
-  pointColor: string; // ✅ добавили
 };
 
 export type DatasetPresetValue = {
