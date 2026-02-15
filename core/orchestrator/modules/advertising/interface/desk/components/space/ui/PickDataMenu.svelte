@@ -5,7 +5,6 @@
   export let textFields: Array<{ code: string; name: string; kind: 'text' }>;
   export let coordFields: Array<{ code: string; name: string; kind: 'number' | 'date' }>;
 
-  // bind'ы из GraphPanel
   export let selectedEntityFields: string[] = [];
   export let axisX = '';
   export let axisY = '';
@@ -21,7 +20,7 @@
   export let onAddCoord: (code: string) => void;
   export let onClose: () => void;
 
-  // ✅ НОВОЕ: цвет точек (можно bind'ить из GraphPanel)
+  // ✅ цвет точек
   export let pointsColor = '#3b82f6';
 
   type AnyField =
@@ -45,7 +44,6 @@
       ? allFields
       : allFields.filter((f) => (f.name ?? '').toLowerCase().includes(q) || (f.code ?? '').toLowerCase().includes(q));
 
-  // для плашки: мапа code -> name
   $: nameByCode = new Map(allFields.map((f) => [f.code, f.name] as const));
 
   function toggleText(code: string): void {
@@ -99,21 +97,14 @@
   }
 
   function isDisabledField(f: AnyField): boolean {
-    // текст всегда можно кликать
     if (f.kind === 'text') return false;
-
-    // выбранные оси всегда кликабельны (чтобы снять)
     if (selectedAxis(f.code)) return false;
-
-    // новые координаты запрещаем, когда уже 3/3
     if (!canAddCoord) return true;
-
     return false;
   }
 
   function onPick(f: AnyField): void {
     if (isDisabledField(f)) return;
-
     if (f.kind === 'text') toggleText(f.code);
     else toggleCoord(f.code);
   }
@@ -125,12 +116,18 @@
     if (!cleaned) return;
     pointsColor = cleaned;
   }
+
+  // ✅ ВАЖНО: обработчик вынесли из шаблона, чтобы не было "as HTMLInputElement" внутри разметки
+  function onHexInput(e: Event): void {
+    const el = e.currentTarget as HTMLInputElement | null;
+    if (!el) return;
+    setPointsColor(el.value);
+  }
 </script>
 
 <div class="menu-pop pick">
   <div class="menu-title">Выбор данных</div>
 
-  <!-- ✅ ВЕРХНЯЯ ПЛАШКА: выбранные поля и оси -->
   <div class="selected-bar">
     <div class="selected-block">
       <div class="selected-title">Выбраны поля</div>
@@ -155,7 +152,7 @@
     </div>
   </div>
 
-  <!-- ✅ НОВОЕ: выбор цвета точек (аналогично настройкам) -->
+  <!-- ✅ выбор цвета точек -->
   <div class="row two">
     <div class="color-wrap">
       <label class="label">Цвет</label>
@@ -166,7 +163,7 @@
       class="hex"
       placeholder="#3b82f6"
       value={pointsColor}
-      on:input={(e) => setPointsColor((e.currentTarget as HTMLInputElement).value)}
+      on:input={onHexInput}
     />
   </div>
 
@@ -178,7 +175,6 @@
 
   <div class="sub">Поля</div>
 
-  <!-- ✅ Список без “active/галочек” -->
   <div class="list">
     {#each filteredFields as f (f.code)}
       <button class="item" disabled={isDisabledField(f)} on:click={() => onPick(f)}>
@@ -205,20 +201,10 @@
   .row { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
   .row.two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
-  .sep {
-    height: 1px;
-    background: var(--divider, rgba(226, 232, 240, 0.7));
-    margin: 12px 0 8px;
-  }
+  .sep { height: 1px; background: var(--divider, rgba(226, 232, 240, 0.7)); margin: 12px 0 8px; }
 
-  .sub {
-    margin-top: 2px;
-    font-size: 12px;
-    font-weight: 650;
-    color: rgba(15, 23, 42, 0.78);
-  }
+  .sub { margin-top: 2px; font-size: 12px; font-weight: 650; color: rgba(15, 23, 42, 0.78); }
 
-  /* ✅ верхняя плашка */
   .selected-bar {
     margin: 8px 0 10px;
     padding: 10px;
@@ -232,23 +218,11 @@
 
   .selected-block { display: flex; flex-direction: column; gap: 6px; }
 
-  .selected-title {
-    font-size: 11px;
-    font-weight: 800;
-    color: rgba(15, 23, 42, 0.70);
-  }
+  .selected-title { font-size: 11px; font-weight: 800; color: rgba(15, 23, 42, 0.70); }
 
-  .chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    align-items: center;
-  }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 
-  .empty {
-    font-size: 12px;
-    color: rgba(100, 116, 139, 0.9);
-  }
+  .empty { font-size: 12px; color: rgba(100, 116, 139, 0.9); }
 
   .chip {
     font-size: 11px;
@@ -262,23 +236,11 @@
     max-width: 100%;
   }
 
-  .chip.axis {
-    background: rgba(248, 251, 255, 0.92);
-  }
+  .chip.axis { background: rgba(248, 251, 255, 0.92); }
 
-  /* ✅ выбор цвета */
-  .label {
-    font-size: 12px;
-    color: rgba(15, 23, 42, 0.78);
-    width: 52px;
-  }
+  .label { font-size: 12px; color: rgba(15, 23, 42, 0.78); width: 52px; }
 
-  .color-wrap {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-  }
+  .color-wrap { display: flex; align-items: center; gap: 10px; min-width: 0; }
 
   .color {
     width: 44px;
@@ -334,21 +296,11 @@
     border-color: var(--stroke-mid, rgba(15, 23, 42, 0.12));
   }
 
-  .item:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-    box-shadow: none;
-    transform: none;
-  }
+  .item:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; transform: none; }
 
   .name { font-size: 12px; font-weight: 650; color: rgba(15,23,42,.88); }
 
-  .right {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    flex-shrink: 0;
-  }
+  .right { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
   .tag { font-size: 11px; color: rgba(100,116,139,.9); }
 
