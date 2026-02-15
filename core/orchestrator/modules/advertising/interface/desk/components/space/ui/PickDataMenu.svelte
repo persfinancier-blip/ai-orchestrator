@@ -61,6 +61,7 @@
   let isColorOpen = false;
   let activeColorCode: string | null = null;
   let activeColorValue = defaultEntityColor;
+  let entityFieldColors: Record<string, string> = {};
 
   function getFieldColor(code: string): string {
     return entityFieldColors?.[code] ?? defaultEntityColor;
@@ -86,7 +87,6 @@
   }
 
   function closeColor(): void {
-    if (activeColorCode) setFieldColor(activeColorCode, activeColorValue);
     isColorOpen = false;
     activeColorCode = null;
   }
@@ -164,6 +164,7 @@
     else toggleCoord(f.code);
   }
 </script>
+
 
 <div class="menu-pop pick">
   <div class="pick-inner">
