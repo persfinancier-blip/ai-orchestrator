@@ -17,12 +17,6 @@
   import Crumbs from './space/ui/Crumbs.svelte';
   import InfoCard from './space/ui/InfoCard.svelte';
 
-  import GroupingMenu from './space/ui/GroupingMenu.svelte';
-
-  import type { GroupingConfig } from './space/cluster/types';
-  import { dbscan3 } from './space/cluster/dbscan3';
-  import { buildFeatureVec3, dbscanParamsFromDetail, weightsForCfg } from './space/cluster/features';
-
   const STORAGE_KEY_VISUALS = 'desk-space-visual-schemes-v2';
   const STORAGE_KEY_DATASETS = 'desk-space-datasets-v2';
 
@@ -53,6 +47,11 @@
   // ✅ per-field colors: code -> hex (используем для точек)
   let entityFieldColors: Record<string, string> = {};
   const DEFAULT_ENTITY_COLOR = '#3b82f6';
+
+  // ✅ LOD / voxel settings (группировка ДО сцены)
+  let lodEnabled = true;
+  let lodDetail = 0.5; // средняя
+  let lodMinCount = 5;
 
   // ✅ НОРМАЛИЗАЦИЯ КЛЮЧЕЙ (должна совпадать с PickDataMenu)
   const norm = (s: string): string => String(s ?? '').trim().toLowerCase();
@@ -85,7 +84,6 @@
 
   let showDisplayMenu = false;
   let showPickDataMenu = false;
-  let showGroupingMenu = false;
 
   let showSaveVisualModal = false;
   let saveVisualName = '';
@@ -100,21 +98,6 @@
 
   let scene: SpaceScene | null = null;
 
-  let grouping: GroupingConfig = {
-    enabled: false,
-    principle: 'proximity',
-    featureFields: [],
-    detail: 0.45,
-    customWeights: false,
-    wX: 1,
-    wY: 1,
-    wZ: 1,
-    minClusterSize: 5,
-    recompute: 'auto'
-  };
-
-  let clusterSeed = 0;
-
   function fieldsAll(): ShowcaseField[] {
     return (showcase?.fields ?? []) as ShowcaseField[];
   }
@@ -128,9 +111,6 @@
   $: numberFieldsAll = fieldsFor('number');
   $: dateFieldsAll = fieldsFor('date');
   $: coordFieldsAll = [...numberFieldsAll, ...dateFieldsAll];
-
-  $: groupingNumberFields = numberFieldsAll;
-  $: groupingTextFields = textFieldsAll;
 
   $: if (coordFieldsAll.length) ensureDefaults();
 
@@ -150,6 +130,7 @@
     selectedEntityFields
   });
 
+  // ✅ точки строим с LOD (воксели) ДО сцены
   $: points = buildPoints({
     rows: filteredRows,
     entityFields: selectedEntityFields,
@@ -157,156 +138,28 @@
     axisY,
     axisZ,
     numberFields: numberFieldsAll,
-    dateFields: dateFieldsAll
+    dateFields: dateFieldsAll,
+    lodEnabled,
+    lodDetail,
+    lodMinCount
   });
 
-  // ---- FIXED caching: Map(point.id -> clusterId)
-  let fixedAssign: Map<string, number> = new Map();
-  let fixedCounts: Map<number, number> = new Map();
-  let fixedConfigKey = '';
-
-  function colorForCluster(id: number): string {
-    if (id < 0) return '#94a3b8';
-    const hue = (id * 47) % 360;
-    return `hsl(${hue} 70% 45%)`;
-  }
-
-  // ✅ ВАЖНО: colors параметром + ключ нормализуем (sourceField может быть с префиксом)
+  // ✅ красим только по полю (цвет задаётся при выборе точек)
   function colorForEntityField(code: string, colors: Record<string, string>): string {
     return colors?.[keyForColor(code)] ?? DEFAULT_ENTITY_COLOR;
   }
 
-  function getTextValue(p: SpacePoint, field: string): string {
-    if (p.sourceField === field) return p.label ?? '';
-    return '';
-  }
+  $: colored = (points ?? []).map((p: SpacePoint) => ({
+    ...p,
+    color: colorForEntityField(p.sourceField, entityFieldColors)
+  }));
 
-  function makeFixedConfigKey(cfg: GroupingConfig): string {
-    return [
-      cfg.enabled ? '1' : '0',
-      cfg.principle,
-      cfg.featureFields.slice().sort().join('|'),
-      cfg.detail.toFixed(3),
-      cfg.customWeights ? '1' : '0',
-      cfg.wX.toFixed(2),
-      cfg.wY.toFixed(2),
-      cfg.wZ.toFixed(2),
-      String(cfg.minClusterSize),
-      cfg.recompute
-    ].join('::');
-  }
-
-  function computeClustersNow(input: SpacePoint[]): { labels: Int32Array; counts: Map<number, number> } {
-    const vecs = buildFeatureVec3({
-      points: input,
-      cfg: grouping,
-      axis: { x: axisX, y: axisY, z: axisZ },
-      getTextValue
-    });
-
-    const { eps, minPts } = dbscanParamsFromDetail(grouping.detail);
-    const w = weightsForCfg(grouping);
-
-    const labels = dbscan3(vecs, { eps, minPts }, w);
-
-    const counts = new Map<number, number>();
-    for (let i = 0; i < labels.length; i += 1) {
-      const id = labels[i];
-      counts.set(id, (counts.get(id) ?? 0) + 1);
-    }
-    return { labels, counts };
-  }
-
-  function rebuildFixedAssignments(input: SpacePoint[]): void {
-    const res = computeClustersNow(input);
-
-    const assign = new Map<string, number>();
-    for (let i = 0; i < input.length; i += 1) assign.set(input[i].id, res.labels[i]);
-
-    fixedAssign = assign;
-    fixedCounts = res.counts;
-    fixedConfigKey = makeFixedConfigKey(grouping);
-  }
-
-  // ✅ ВАЖНО: colors параметром
-  function applyClustering(input: SpacePoint[], colors: Record<string, string>): SpacePoint[] {
-    // ✅ когда группировка выключена — красим точки по полю
-    if (!grouping.enabled) {
-      return input.map((p) => ({
-        ...p,
-        color: colorForEntityField(p.sourceField, colors)
-      }));
-    }
-
-    if (grouping.recompute === 'fixed') {
-      const cfgKey = makeFixedConfigKey(grouping);
-
-      if (cfgKey !== fixedConfigKey) {
-        fixedAssign = new Map();
-        fixedCounts = new Map();
-        fixedConfigKey = cfgKey;
-      }
-
-      if (fixedAssign.size === 0 && input.length) rebuildFixedAssignments(input);
-
-      return input.map((p) => {
-        const id = fixedAssign.get(p.id);
-        const clusterId = typeof id === 'number' ? id : -1;
-
-        const size = fixedCounts.get(clusterId) ?? 0;
-        const effectiveId = clusterId >= 0 && size < grouping.minClusterSize ? -1 : clusterId;
-
-        return { ...p, color: colorForCluster(effectiveId) };
-      });
-    }
-
-    if (grouping.recompute === 'manual') {
-      if (clusterSeed > 0) {
-        rebuildFixedAssignments(input);
-        clusterSeed = 0;
-      }
-
-      return input.map((p) => {
-        const id = fixedAssign.get(p.id);
-        const clusterId = typeof id === 'number' ? id : -1;
-
-        const size = fixedCounts.get(clusterId) ?? 0;
-        const effectiveId = clusterId >= 0 && size < grouping.minClusterSize ? -1 : clusterId;
-
-        return { ...p, color: colorForCluster(effectiveId) };
-      });
-    }
-
-    const res = computeClustersNow(input);
-
-    return input.map((p, i) => {
-      const clusterId = res.labels[i];
-      const size = res.counts.get(clusterId) ?? 0;
-      const effectiveId = clusterId >= 0 && size < grouping.minClusterSize ? -1 : clusterId;
-      return { ...p, color: colorForCluster(effectiveId) };
-    });
-  }
-
-  function recomputeClusters(): void {
-    if (grouping.recompute === 'fixed') {
-      rebuildFixedAssignments(points);
-      return;
-    }
-    if (grouping.recompute === 'manual') {
-      clusterSeed += 1;
-      return;
-    }
-  }
-
-  // ✅ КАК У ФОНА/РЁБЕР: отдельная реактивная переменная, зависящая от entityFieldColors
-  $: clustered = applyClustering(points, entityFieldColors);
-
-  // ✅ и тут используем clustered (а не вызываем функцию скрыто)
+  // ✅ и тут используем colored
   $: if (scene) {
     scene.setTheme({ bg: visualBg, edge: visualEdge });
     scene.setAxisCodes({ x: axisX, y: axisY, z: axisZ });
 
-    const info = scene.setPoints(clustered);
+    const info = scene.setPoints(colored);
 
     renderedCount = info.renderedCount;
     bboxLabel = info.bboxLabel;
@@ -316,7 +169,6 @@
     showDisplayMenu = !showDisplayMenu;
     if (showDisplayMenu) {
       showPickDataMenu = false;
-      showGroupingMenu = false;
     }
   }
 
@@ -324,22 +176,12 @@
     showPickDataMenu = !showPickDataMenu;
     if (showPickDataMenu) {
       showDisplayMenu = false;
-      showGroupingMenu = false;
-    }
-  }
-
-  function toggleGroupingMenu(): void {
-    showGroupingMenu = !showGroupingMenu;
-    if (showGroupingMenu) {
-      showDisplayMenu = false;
-      showPickDataMenu = false;
     }
   }
 
   function closeAllMenus(): void {
     showDisplayMenu = false;
     showPickDataMenu = false;
-    showGroupingMenu = false;
   }
 
   function addEntityField(code: string): void {
@@ -473,7 +315,6 @@
       e.preventDefault();
       showPickDataMenu = true;
       showDisplayMenu = false;
-      showGroupingMenu = false;
     }
   }
 
@@ -499,8 +340,8 @@
 
     await tick();
 
-    // ✅ на старте тоже используем clustered
-    const info = scene.setPoints(clustered);
+    // ✅ на старте тоже используем colored
+    const info = scene.setPoints(colored);
     renderedCount = info.renderedCount;
     bboxLabel = info.bboxLabel;
   });
@@ -528,7 +369,6 @@
       <div class="hud-actions">
         <button class="btn" on:click={toggleDisplayMenu}>Настройка отображения</button>
         <button class="btn btn-primary" on:click={togglePickMenu}>Выбрать данные</button>
-        <button class="btn" on:click={toggleGroupingMenu}>Формирование групп</button>
       </div>
 
       <Crumbs crumbs={selectedCrumbs} onRemove={removeEntityField} />
@@ -575,19 +415,13 @@
         bind:fromDate
         bind:toDate
         bind:entityFieldColors
+        bind:lodEnabled
+        bind:lodDetail
+        bind:lodMinCount
         defaultEntityColor={DEFAULT_ENTITY_COLOR}
         onAddEntity={addEntityField}
         onAddCoord={addCoordField}
         onClose={closeAllMenus}
-      />
-    {/if}
-
-    {#if showGroupingMenu}
-      <GroupingMenu
-        bind:cfg={grouping}
-        numberFields={groupingNumberFields}
-        textFields={groupingTextFields}
-        onRecompute={recomputeClusters}
       />
     {/if}
 
