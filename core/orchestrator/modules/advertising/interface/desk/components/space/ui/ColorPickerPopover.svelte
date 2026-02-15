@@ -198,10 +198,11 @@
     padding: 12px;
     border-radius: 18px;
     background: rgba(255, 255, 255, 0.94);
-    box-shadow: 0 22px 60px rgba(15, 23, 42, 0.18);
+    box-shadow: var(--shadow-pop, 0 22px 60px rgba(15, 23, 42, 0.18));
     backdrop-filter: blur(14px);
     z-index: 30;
     box-sizing: border-box;
+    border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
   }
 
   .head {
@@ -230,7 +231,7 @@
 
   .body {
     display: grid;
-    grid-template-columns: 1fr 110px; /* как было */
+    grid-template-columns: 1fr 110px;
     gap: 10px;
     align-items: start;
   }
@@ -243,7 +244,7 @@
     overflow: hidden;
     background: hsl(var(--h) 100% 50%);
     box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.06);
-    border: 1px solid rgba(15, 23, 42, 0.06);
+    border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
     touch-action: none;
     box-sizing: border-box;
   }
@@ -251,13 +252,13 @@
   .sv-white {
     position: absolute;
     inset: 0;
-    background: linear-gradient(90deg, rgba(255,255,255,1), rgba(255,255,255,0));
+    background: linear-gradient(90deg, rgba(255, 255, 255, 1), rgba(255, 255, 255, 0));
   }
 
   .sv-black {
     position: absolute;
     inset: 0;
-    background: linear-gradient(0deg, rgba(0,0,0,1), rgba(0,0,0,0));
+    background: linear-gradient(0deg, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0));
   }
 
   .thumb {
@@ -265,7 +266,7 @@
     width: 16px;
     height: 16px;
     border-radius: 999px;
-    border: 2px solid rgba(255,255,255,0.95);
+    border: 2px solid rgba(255, 255, 255, 0.95);
     box-shadow: 0 10px 22px rgba(15, 23, 42, 0.22);
     transform: translate(-50%, -50%);
     pointer-events: none;
@@ -278,19 +279,18 @@
     min-width: 0;
   }
 
-  /* ✅ одинаковая ширина: preview + hex + hue */
   .preview {
     width: 100%;
     height: 36px;
     border-radius: 14px;
-    border: 1px solid rgba(15, 23, 42, 0.08);
-    box-shadow: 0 10px 22px rgba(15, 23, 42, 0.10);
+    border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
+    box-shadow: var(--shadow-btn, 0 10px 22px rgba(15, 23, 42, 0.10));
     box-sizing: border-box;
   }
 
   .hex {
     width: 100%;
-    border: 0;
+    border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
     outline: none;
     background: rgba(248, 251, 255, 0.92);
     border-radius: 12px;
@@ -300,15 +300,20 @@
     box-sizing: border-box;
   }
 
+  .hex:focus {
+    box-shadow: var(--focus-ring, 0 0 0 4px rgba(15, 23, 42, 0.10));
+    border-color: var(--stroke-mid, rgba(15, 23, 42, 0.12));
+  }
+
   .hue-wrap { margin-top: 2px; }
+
   .hue-label {
     font-size: 11px;
     font-weight: 750;
-    color: rgba(15,23,42,.7);
+    color: rgba(15, 23, 42, 0.7);
     margin-bottom: 6px;
   }
 
-  /* ✅ отступы, чтобы thumb не упирался в край */
   .hue-pad { padding: 0 2px; }
 
   .hue {
@@ -317,7 +322,7 @@
     width: 100%;
     height: 10px;
     border-radius: 999px;
-    border: 1px solid rgba(15, 23, 42, 0.06);
+    border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
     outline: none;
     display: block;
     box-sizing: border-box;
@@ -330,7 +335,7 @@
     height: 16px;
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.95);
-    border: 1px solid rgba(15, 23, 42, 0.15);
+    border: 1px solid var(--stroke-hard, rgba(15, 23, 42, 0.18));
     box-shadow: 0 10px 22px rgba(15, 23, 42, 0.18);
     cursor: pointer;
   }
@@ -340,8 +345,8 @@
     height: 16px;
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.95);
-    border: 1px solid rgba(15, 23, 42, 0.15);
-    box-shadow: 0 10px 22px rgba(15, 23, 42, 0.18);
+    border: 1px solid var(--stroke-hard, rgba(15, 23, 42, 0.18));
+    box-shadow: 0 10px 22px rgba(15, 23, 42, 0.18));
     cursor: pointer;
   }
 </style>
