@@ -87,7 +87,6 @@
   .input {
     width: 100%;
     border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
-    background: rgba(248, 251, 255, 0.9);
     border-radius: 12px;
     padding: 10px 12px;
     font-size: 12px;
