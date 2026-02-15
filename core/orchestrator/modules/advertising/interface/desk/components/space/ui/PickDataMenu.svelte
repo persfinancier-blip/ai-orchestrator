@@ -138,31 +138,31 @@ axis: {JSON.stringify({ axisX, axisY, axisZ }, null, 2)}
 
   <div class="sub">Поля</div>
 
-  <div class="list">
-{#each filteredFields as f (f.code)}
-  {@const active = isActiveField(f)}
-  {@const ax = f.kind !== 'text' ? selectedAxis(f.code) : null}
+<div class="list">
+  {#each filteredFields as f, i (f.code + '::' + f.kind + '::' + i)}
+    {@const active = isActiveField(f)}
+    {@const ax = f.kind !== 'text' ? selectedAxis(f.code) : null}
 
-  <button
-    class="item"
-    class:active={active}
-    disabled={isDisabledField(f)}
-    on:click={() => onPick(f)}
-  >
-    <span class="left">
-      <span class="check" aria-hidden="true">{active ? '✓' : ''}</span>
-      <span class="name">{f.name}</span>
-    </span>
+    <button
+      class="item"
+      class:active={active}
+      disabled={isDisabledField(f)}
+      on:click={() => onPick(f)}
+    >
+      <span class="left">
+        <span class="check" aria-hidden="true">{active ? '✓' : ''}</span>
+        <span class="name">{f.name}</span>
+      </span>
 
-    <span class="right">
-      {#if ax}
-        <span class="pill">{ax.toUpperCase()}</span>
-      {/if}
-      <span class="tag">{kindLabel[f.kind]}</span>
-    </span>
-  </button>
-{/each}
-  </div>
+      <span class="right">
+        {#if ax}
+          <span class="pill">{ax.toUpperCase()}</span>
+        {/if}
+        <span class="tag">{kindLabel[f.kind]}</span>
+      </span>
+    </button>
+  {/each}
+</div>
 
   {#if !canAddCoord}
     <div class="limit">
