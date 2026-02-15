@@ -23,9 +23,75 @@ export function inPeriod(date: string, period: PeriodMode, fromDate: string, toD
     return true;
   }
 
-  // В вашей types.ts PeriodMode = '7 дней' | '14 дней' | '30 дней' | 'Даты'
-  // поэтому режимы 'Месяц'/'Год' не поддерживаем (как и было).
-  return true;
+  const days = period === '7 дней' ? 7 : period === '14 дней' ? 14 : 30;
+  const border = new Date();
+  border.setDate(border.getDate() - (days - 1));
+  return new Date(date) >= border;
+}
+
+export function applyRowsFilter(args: {
+  rows: ShowcaseRow[];
+  period: PeriodMode;
+  fromDate: string;
+  toDate: string;
+  search: string;
+  selectedEntityFields: string[];
+}): ShowcaseRow[] {
+  const { rows, period, fromDate, toDate, search, selectedEntityFields } = args;
+
+  return rows.filter((row) => {
+    const anyRow = row as any;
+    if (!inPeriod(String(anyRow?.date ?? ''), period, fromDate, toDate)) return false;
+
+    if (!search.trim()) return true;
+    const q = search.trim().toLowerCase();
+
+    return selectedEntityFields.some((field) =>
+      String((row as Record<string, unknown>)[field] ?? '').toLowerCase().includes(q)
+    );
+  });
+}
+
+export function normalize(value: number, min: number, max: number): number {
+  return ((value - min) / Math.max(max - min, 0.0001) - 0.5) * 180;
+}
+
+export function projectPoints(list: SpacePoint[], xCode: string, yCode: string, zCode: string): SpacePoint[] {
+  if (!list.length) return [];
+
+  const useX = !!xCode;
+  const useY = !!yCode;
+  const useZ = !!zCode;
+
+  const xValues = useX ? list.map((p) => p.metrics[xCode]).filter((n) => Number.isFinite(n)) : [0, 1];
+  const yValues = useY ? list.map((p) => p.metrics[yCode]).filter((n) => Number.isFinite(n)) : [0, 1];
+  const zValues = useZ ? list.map((p) => p.metrics[zCode]).filter((n) => Number.isFinite(n)) : [0, 1];
+
+  const minX = Math.min(...xValues);
+  const maxX = Math.max(...xValues);
+  const minY = Math.min(...yValues);
+  const maxY = Math.max(...yValues);
+  const minZ = Math.min(...zValues);
+  const maxZ = Math.max(...zValues);
+
+  return list.map((point) => {
+    const x =
+      useX && Number.isFinite(point.metrics[xCode])
+        ? normalize(point.metrics[xCode], minX, maxX)
+        : hashToJitter(`${point.id}:x`);
+
+    const y =
+      useY && Number.isFinite(point.metrics[yCode])
+        ? normalize(point.metrics[yCode], minY, maxY)
+        : hashToJitter(`${point.id}:y`);
+
+    const z =
+      useZ && Number.isFinite(point.metrics[zCode])
+        ? normalize(point.metrics[zCode], minZ, maxZ)
+        : hashToJitter(`${point.id}:z`);
+
+    return { ...point, x, y, z };
+  });
 }
 
 function sanitizeCoord(value: number, id: string, axis: 'x' | 'y' | 'z'): number {
@@ -33,93 +99,60 @@ function sanitizeCoord(value: number, id: string, axis: 'x' | 'y' | 'z'): number
   return value;
 }
 
-/**
- * sanitizePoints:
- * - НЕ джиттерит всё подряд
- * - джиттер только если координаты невалидны или точки полностью совпадают
- */
 export function sanitizePoints(input: SpacePoint[]): SpacePoint[] {
-  const base = input.map((p) => ({
-    ...p,
-    x: sanitizeCoord(p.x, p.id, 'x'),
-    y: sanitizeCoord(p.y, p.id, 'y'),
-    z: sanitizeCoord(p.z, p.id, 'z')
+  return input.map((point) => ({
+    ...point,
+    x: sanitizeCoord(point.x, point.id, 'x') + hashToJitter(`${point.id}:x`) * 0.05,
+    y: sanitizeCoord(point.y, point.id, 'y') + hashToJitter(`${point.id}:y`) * 0.05,
+    z: sanitizeCoord(point.z, point.id, 'z') + hashToJitter(`${point.id}:z`) * 0.05
   }));
-
-  const keyToIndices = new Map<string, number[]>();
-  for (let i = 0; i < base.length; i += 1) {
-    const p = base[i];
-    const k = `${p.x}|${p.y}|${p.z}`;
-    const arr = keyToIndices.get(k);
-    if (arr) arr.push(i);
-    else keyToIndices.set(k, [i]);
-  }
-
-  for (const indices of keyToIndices.values()) {
-    if (indices.length <= 1) continue;
-
-    for (let j = 0; j < indices.length; j += 1) {
-      const idx = indices[j];
-      const p = base[idx];
-      const s = 0.02 + j * 0.002;
-
-      base[idx] = {
-        ...p,
-        x: p.x + hashToJitter(`${p.id}:x`) * s,
-        y: p.y + hashToJitter(`${p.id}:y`) * s,
-        z: p.z + hashToJitter(`${p.id}:z`) * s
-      };
-    }
-  }
-
-  return base;
 }
 
 export function buildBBox(points: SpacePoint[]): BBox {
-  let minX = Infinity;
-  let minY = Infinity;
-  let minZ = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  let maxZ = -Infinity;
-
-  for (const p of points) {
-    if (!Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.z)) continue;
-    if (p.x < minX) minX = p.x;
-    if (p.y < minY) minY = p.y;
-    if (p.z < minZ) minZ = p.z;
-    if (p.x > maxX) maxX = p.x;
-    if (p.y > maxY) maxY = p.y;
-    if (p.z > maxZ) maxZ = p.z;
-  }
-
-  if (!Number.isFinite(minX)) return { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 1, maxZ: 1 };
-  return { minX, minY, minZ, maxX, maxY, maxZ };
-}
-
-export function normalizeBBox(bbox: BBox): BBox {
-  const spanX = Math.max(0.001, bbox.maxX - bbox.minX);
-  const spanY = Math.max(0.001, bbox.maxY - bbox.minY);
-  const spanZ = Math.max(0.001, bbox.maxZ - bbox.minZ);
-
-  const pad = 0.05;
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+  const zs = points.map((p) => p.z);
   return {
-    minX: bbox.minX - spanX * pad,
-    maxX: bbox.maxX + spanX * pad,
-    minY: bbox.minY - spanY * pad,
-    maxY: bbox.maxY + spanY * pad,
-    minZ: bbox.minZ - spanZ * pad,
-    maxZ: bbox.maxZ + spanZ * pad
+    minX: Math.min(...xs),
+    maxX: Math.max(...xs),
+    minY: Math.min(...ys),
+    maxY: Math.max(...ys),
+    minZ: Math.min(...zs),
+    maxZ: Math.max(...zs)
   };
 }
 
-export function formatNumberHuman(value: number): string {
-  if (!Number.isFinite(value)) return '—';
-  const abs = Math.abs(value);
-  if (abs >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`;
-  if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
-  if (abs >= 1_000) return `${(value / 1_000).toFixed(2)}K`;
-  return value.toFixed(2);
+/**
+ * ВАЖНО: SpaceScene (твой) вызывает normalizeBBox(bbox), поэтому оставляем именно такую сигнатуру.
+ */
+export function normalizeBBox(bbox: BBox): BBox {
+  const spanX = bbox.maxX - bbox.minX;
+  const spanY = bbox.maxY - bbox.minY;
+  const spanZ = bbox.maxZ - bbox.minZ;
+
+  if (spanX < 0.001 && spanY < 0.001 && spanZ < 0.001) {
+    const cx = (bbox.minX + bbox.maxX) / 2;
+    const cy = (bbox.minY + bbox.maxY) / 2;
+    const cz = (bbox.minZ + bbox.maxZ) / 2;
+    return { minX: cx - 1, maxX: cx + 1, minY: cy - 1, maxY: cy + 1, minZ: cz - 1, maxZ: cz + 1 };
+  }
+
+  return bbox;
+}
+
+/**
+ * GraphPanel ожидает: calcMax(pointsRaw, axisCode) -> number
+ */
+export function calcMax(pointsList: SpacePoint[], metricKey: string): number {
+  if (!metricKey) return Number.NaN;
+  let max = -Infinity;
+
+  for (const p of pointsList) {
+    const v = p?.metrics?.[metricKey];
+    if (Number.isFinite(v)) max = Math.max(max, v);
+  }
+
+  return Number.isFinite(max) ? max : Number.NaN;
 }
 
 export function formatValueByMetric(metric: string, value: number): string {
@@ -127,23 +160,16 @@ export function formatValueByMetric(metric: string, value: number): string {
   if (metric === 'drr') return `${value.toFixed(1)}%`;
   if (metric === 'roi') return value.toFixed(2);
   if (metric.includes('date') || metric.includes('Date')) return new Date(value).toISOString().slice(0, 10);
-  return formatNumberHuman(value);
-}
 
-export function calcMax(rows: ShowcaseRow[], axis: string): string {
-  if (!rows.length) return '—';
-  let maxValue = 0;
-
-  for (const row of rows) {
-    const v = Number((row as any)[axis] ?? 0);
-    if (Number.isFinite(v)) maxValue = Math.max(maxValue, v);
-  }
-
-  return formatNumberHuman(maxValue);
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`;
+  if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
+  if (abs >= 1_000) return `${(value / 1_000).toFixed(2)}K`;
+  return value.toFixed(2);
 }
 
 // ==============================
-// ✅ VOXEL LOD (гарантированный)
+// ✅ VOXEL LOD + HULL
 // ==============================
 
 function clamp01(v: number): number {
@@ -151,13 +177,11 @@ function clamp01(v: number): number {
 }
 
 /**
- * Гарантия:
- * - detail=0 -> minCountEff = N+1 => агрегирования нет
- * - detail=1 -> size >= 2*maxSpan => все точки попадают в 1 ячейку
+ * - detail=0 -> "почти по точкам"
+ * - detail=1 -> size >= 2*maxSpan => все точки в 1 ячейке
  */
 function voxelSizeFromDetailAndBBox(detail01: number, bbox: BBox): number {
   const d = clamp01(detail01);
-
   const spanX = Math.max(0.001, bbox.maxX - bbox.minX);
   const spanY = Math.max(0.001, bbox.maxY - bbox.minY);
   const spanZ = Math.max(0.001, bbox.maxZ - bbox.minZ);
@@ -193,10 +217,6 @@ function effectiveMinCount(detail01: number, total: number, baseMinCount: number
   return Math.max(1, Math.round(mid * (1 - u) + 1 * u));
 }
 
-/**
- * Семплы для hull: крайние точки + немного семплов из набора.
- * (SpaceScene строит ConvexGeometry по этим точкам)
- */
 function pickHullSamples(cellPoints: SpacePoint[], centroid: { x: number; y: number; z: number }): [number, number, number][] {
   const n = cellPoints.length;
   if (!n) return [];
@@ -292,10 +312,6 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
       const sums: Record<string, number> = {};
       const counts: Record<string, number> = {};
 
-      let sumRevenue = 0;
-      let sumSpend = 0;
-      let sumOrders = 0;
-
       for (const p of cellPoints) {
         sx += p.x; sy += p.y; sz += p.z;
 
@@ -309,25 +325,14 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
           sums[k] = (sums[k] ?? 0) + v;
           counts[k] = (counts[k] ?? 0) + 1;
         }
-
-        sumRevenue += Number(m.revenue ?? 0);
-        sumSpend += Number(m.spend ?? 0);
-        sumOrders += Number(m.orders ?? 0);
       }
 
       const n = cellPoints.length;
-
       const metrics: Record<string, number> = {};
       for (const k of Object.keys(sums)) {
         const c = counts[k] ?? 0;
         metrics[k] = c ? sums[k] / c : Number.NaN;
       }
-
-      metrics.revenue = sumRevenue;
-      metrics.spend = sumSpend;
-      metrics.orders = sumOrders;
-      metrics.drr = metrics.revenue > 0 ? (metrics.spend / metrics.revenue) * 100 : 0;
-      metrics.roi = metrics.spend > 0 ? metrics.revenue / metrics.spend : 0;
 
       const cx = sx / n;
       const cy = sy / n;
@@ -342,7 +347,7 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
       const hull = pickHullSamples(cellPoints, { x: cx, y: cy, z: cz });
 
       out.push({
-        id: `${field}:voxel:${cell}`,
+        id: `cluster:${field}:${cell}`,
         label: `Кластер (${n})`,
         sourceField: field,
         metrics,
@@ -352,9 +357,8 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
         isCluster: true,
         clusterCount: n,
         span,
-        // типизируй hull в types.ts (SpacePoint.hull?: ...)
         hull
-      } as SpacePoint & { hull: [number, number, number][] });
+      });
     }
   }
 
@@ -362,41 +366,8 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
 }
 
 // ==============================
-// ✅ PUBLIC PIPELINE API
+// ✅ buildPoints
 // ==============================
-
-export function applyRowsFilter(args: {
-  rows: ShowcaseRow[];
-  period: PeriodMode;
-  fromDate: string;
-  toDate: string;
-  dateFieldCode: string;
-}): ShowcaseRow[] {
-  const { rows, period, fromDate, toDate, dateFieldCode } = args;
-  if (!rows.length) return rows;
-  if (!dateFieldCode) return rows;
-
-  return rows.filter((row) => {
-    const date = String((row as any)[dateFieldCode] ?? '');
-    return inPeriod(date, period, fromDate, toDate);
-  });
-}
-
-export function projectPoints(points: SpacePoint[], axisX: string, axisY: string, axisZ: string): SpacePoint[] {
-  const get = (p: SpacePoint, code: string): number => {
-    if (code === 'x') return p.x;
-    if (code === 'y') return p.y;
-    if (code === 'z') return p.z;
-    return Number((p.metrics ?? {})[code]);
-  };
-
-  return points.map((p) => ({
-    ...p,
-    x: get(p, axisX),
-    y: get(p, axisY),
-    z: get(p, axisZ)
-  }));
-}
 
 export function buildPoints(args: {
   rows: ShowcaseRow[];
@@ -407,7 +378,7 @@ export function buildPoints(args: {
   numberFields: ShowcaseField[];
   dateFields: ShowcaseField[];
   lodEnabled?: boolean;
-  lodDetail?: number; // 0..1
+  lodDetail?: number;
   lodMinCount?: number;
 }): SpacePoint[] {
   const {
