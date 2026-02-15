@@ -66,7 +66,7 @@
     if (axisX === code || axisY === code || axisZ === code) return;
     if (!canAddCoord) return;
 
-    // тот же приоритет что и в GraphPanel: X -> Y -> Z
+    // X -> Y -> Z
     if (!axisX) axisX = code;
     else if (!axisY) axisY = code;
     else if (!axisZ) axisZ = code;
@@ -76,20 +76,24 @@
 
   function toggleText(code: string): void {
     if (!code) return;
+
     if (isSelectedText(code)) {
       selectedEntityFields = selectedEntityFields.filter((x) => x !== code);
       return;
     }
+
     selectedEntityFields = [...selectedEntityFields, code];
     onAddEntity?.(code);
   }
 
   function toggleCoord(code: string): void {
     if (!code) return;
+
     if (selectedAxis(code)) {
       removeCoord(code);
       return;
     }
+
     addCoord(code);
   }
 
@@ -102,6 +106,11 @@
     if (f.kind !== 'text' && !canAddCoord) return true;
 
     return false;
+  }
+
+  function isActiveField(f: AnyField): boolean {
+    if (f.kind === 'text') return isSelectedText(f.code);
+    return Boolean(selectedAxis(f.code));
   }
 
   function onPick(f: AnyField): void {
@@ -125,21 +134,24 @@
 
   <div class="list">
     {#each filteredFields as f (f.code)}
-      {@const ax = selectedAxis(f.code)}
+      {@const ax = f.kind === 'text' ? null : selectedAxis(f.code)}
+      {@const active = isActiveField(f)}
+
       <button
         class="item"
-        class:is-selected={f.kind === 'text' && isSelectedText(f.code)}
-        class:is-axis={f.kind !== 'text' && !!ax}
+        class:active={active}
+        class:disabledish={isDisabledField(f)}
         disabled={isDisabledField(f)}
         on:click={() => onPick(f)}
       >
-        <span class="name">
-          {f.name}
+        <span class="name">{f.name}</span>
+
+        <span class="right">
           {#if ax}
-            <span class="axis-pill">ось {ax.toUpperCase()}</span>
+            <span class="pill">{ax.toUpperCase()}</span>
           {/if}
+          <span class="tag">{kindLabel[f.kind]}</span>
         </span>
-        <span class="tag">{kindLabel[f.kind]}</span>
       </button>
     {/each}
   </div>
@@ -164,7 +176,7 @@
     margin-top: 2px;
     font-size: 12px;
     font-weight: 650;
-    color: rgba(var(--ink-900, 15 23 42) / 0.78);
+    color: rgba(15, 23, 42, 0.78);
   }
 
   .list {
@@ -181,7 +193,7 @@
     width: 100%;
     text-align: left;
     border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
-    background: rgba(248, 251, 255, 0.92);
+    background: #ffffff;
     border-radius: 14px;
     padding: 10px 10px;
     display: flex;
@@ -189,49 +201,57 @@
     gap: 10px;
     cursor: pointer;
     box-sizing: border-box;
-    transition: transform .06s ease, box-shadow .12s ease, background .12s ease, border-color .12s ease;
+    transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease, background 120ms ease;
   }
 
-  .item:hover { transform: translateY(-0.5px); }
-
-  /* ✅ выбранные — заметно отличаются */
-  .item.is-selected,
-  .item.is-axis {
-    background: rgba(255, 255, 255, 0.96);
-    border-color: var(--stroke-hard, rgba(15, 23, 42, 0.18));
+  .item:hover {
+    transform: translateY(-0.5px);
     box-shadow: var(--shadow-btn, 0 10px 26px rgba(15, 23, 42, 0.10));
+    border-color: var(--stroke-mid, rgba(15, 23, 42, 0.12));
   }
 
-  .item:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow: none; }
+  /* ✅ выбранное поле */
+  .item.active {
+    background: rgba(248, 251, 255, 0.92);
+    border-color: var(--stroke-hard, rgba(15, 23, 42, 0.18));
+    box-shadow: var(--shadow-btn-strong, 0 12px 30px rgba(15, 23, 42, 0.12));
+  }
 
-  .name {
-    font-size: 12px;
-    font-weight: 650;
-    color: rgba(var(--ink-900, 15 23 42) / 0.88);
+  .item:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    box-shadow: none;
+    transform: none;
+  }
+
+  .name { font-size: 12px; font-weight: 650; color: rgba(15,23,42,.88); }
+
+  .right {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    min-width: 0;
+    flex-shrink: 0;
   }
 
-  .tag { font-size: 11px; color: rgba(var(--ink-600, 100 116 139) / 0.90); }
+  .tag { font-size: 11px; color: rgba(100,116,139,.9); }
 
-  .axis-pill {
-    font-size: 10px;
-    font-weight: 750;
+  /* ✅ бейдж X/Y/Z */
+  .pill {
+    font-size: 11px;
+    font-weight: 800;
+    color: rgba(15, 23, 42, 0.82);
+    background: rgba(15, 23, 42, 0.06);
+    border: 1px solid rgba(15, 23, 42, 0.10);
     padding: 4px 8px;
     border-radius: 999px;
-    border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
-    background: #ffffff;
-    color: rgba(var(--ink-900, 15 23 42) / 0.72);
-    white-space: nowrap;
+    line-height: 1;
   }
 
   .limit {
     margin-top: 8px;
     font-size: 12px;
-    color: rgba(var(--ink-600, 100 116 139) / 0.95);
-    background: rgba(248, 251, 255, 0.92);
+    color: rgba(100, 116, 139, 0.95);
+    background: #ffffff;
     border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
     border-radius: 14px;
     padding: 10px 12px;
