@@ -146,7 +146,6 @@ export function normalizeBBox(bbox: BBox): BBox {
   return bbox;
 }
 
-/** GraphPanel ожидает number */
 export function calcMax(pointsList: SpacePoint[], metricKey: string): number {
   if (!metricKey) return Number.NaN;
   let max = -Infinity;
@@ -175,7 +174,7 @@ export function formatValueByMetric(metric: string, value: number): string {
 }
 
 // ==============================
-// ✅ VOXEL LOD (починили как ты хотел)
+// ✅ VOXEL + "cloud boundary points"
 // ==============================
 
 function clamp01(v: number): number {
@@ -183,8 +182,8 @@ function clamp01(v: number): number {
 }
 
 /**
- * detail=0  -> почти по точкам
- * detail=1  -> size >= 2*maxSpan => ВСЁ в одной ячейке => 1 кластер
+ * detail=0 -> почти по точкам
+ * detail=1 -> size >= 2*maxSpan => ВСЁ в одной ячейке => 1 кластер
  */
 function voxelSizeFromDetailAndBBox(detail01: number, bbox: BBox): number {
   const d = clamp01(detail01);
@@ -199,7 +198,6 @@ function voxelSizeFromDetailAndBBox(detail01: number, bbox: BBox): number {
   return minSize + (maxSize - minSize) * d;
 }
 
-/** КЛЮЧ ДОЛЖЕН БЫТЬ ОТ bbox.min*, иначе отрицательные координаты ломают “1 кластер” */
 function voxelKey(p: SpacePoint, bbox: BBox, size: number): string {
   const ix = Math.floor((p.x - bbox.minX) / size);
   const iy = Math.floor((p.y - bbox.minY) / size);
@@ -207,10 +205,6 @@ function voxelKey(p: SpacePoint, bbox: BBox, size: number): string {
   return `${ix}|${iy}|${iz}`;
 }
 
-/**
- * detail=0 -> minCountEff=N+1 => не агрегируем
- * detail=1 -> minCountEff=1   => агрегируем
- */
 function effectiveMinCount(detail01: number, total: number, baseMinCount: number): number {
   const d = clamp01(detail01);
   if (total <= 1) return 2;
@@ -229,58 +223,79 @@ function effectiveMinCount(detail01: number, total: number, baseMinCount: number
   return Math.max(1, Math.round(mid * (1 - u) + 1 * u));
 }
 
-function pickHullSamples(cellPoints: SpacePoint[], centroid: { x: number; y: number; z: number }): [number, number, number][] {
-  const n = cellPoints.length;
-  if (!n) return [];
+/**
+ * "Облако по границам массива точек":
+ * берём support-экстремумы по множеству направлений (как приближённая оболочка),
+ * а не bbox.
+ */
+function buildBoundaryCloud(points: SpacePoint[], cx: number, cy: number, cz: number): [number, number, number][] {
+  const dirs: Array<[number, number, number]> = [
+    [1, 0, 0],
+    [-1, 0, 0],
+    [0, 1, 0],
+    [0, -1, 0],
+    [0, 0, 1],
+    [0, 0, -1],
 
-  let minX = cellPoints[0], maxX = cellPoints[0];
-  let minY = cellPoints[0], maxY = cellPoints[0];
-  let minZ = cellPoints[0], maxZ = cellPoints[0];
+    [1, 1, 0],
+    [1, -1, 0],
+    [-1, 1, 0],
+    [-1, -1, 0],
 
-  for (const p of cellPoints) {
-    if (p.x < minX.x) minX = p;
-    if (p.x > maxX.x) maxX = p;
-    if (p.y < minY.y) minY = p;
-    if (p.y > maxY.y) maxY = p;
-    if (p.z < minZ.z) minZ = p;
-    if (p.z > maxZ.z) maxZ = p;
-  }
+    [1, 0, 1],
+    [1, 0, -1],
+    [-1, 0, 1],
+    [-1, 0, -1],
 
-  const raw: [number, number, number][] = [
-    [minX.x, minX.y, minX.z],
-    [maxX.x, maxX.y, maxX.z],
-    [minY.x, minY.y, minY.z],
-    [maxY.x, maxY.y, maxY.z],
-    [minZ.x, minZ.y, minZ.z],
-    [maxZ.x, maxZ.y, maxZ.z]
+    [0, 1, 1],
+    [0, 1, -1],
+    [0, -1, 1],
+    [0, -1, -1],
+
+    [1, 1, 1],
+    [1, 1, -1],
+    [1, -1, 1],
+    [1, -1, -1],
+    [-1, 1, 1],
+    [-1, 1, -1],
+    [-1, -1, 1],
+    [-1, -1, -1]
   ];
 
-  const target = 24;
-  if (n > raw.length) {
-    const stride = Math.max(1, Math.ceil(n / (target - raw.length)));
-    for (let i = 0; i < n && raw.length < target; i += stride) {
-      const p = cellPoints[i];
-      raw.push([p.x, p.y, p.z]);
-    }
-  }
-
-  const uniq: [number, number, number][] = [];
+  const out: [number, number, number][] = [];
   const seen = new Set<string>();
-  for (const v of raw) {
-    const k = `${v[0].toFixed(6)}|${v[1].toFixed(6)}|${v[2].toFixed(6)}`;
+
+  for (const [dx, dy, dz] of dirs) {
+    let best: SpacePoint | null = null;
+    let bestScore = -Infinity;
+
+    for (const p of points) {
+      const sx = p.x - cx;
+      const sy = p.y - cy;
+      const sz = p.z - cz;
+      const score = sx * dx + sy * dy + sz * dz;
+      if (score > bestScore) {
+        bestScore = score;
+        best = p;
+      }
+    }
+
+    if (!best) continue;
+    const k = `${best.x.toFixed(6)}|${best.y.toFixed(6)}|${best.z.toFixed(6)}`;
     if (seen.has(k)) continue;
     seen.add(k);
-    uniq.push(v);
+    out.push([best.x, best.y, best.z]);
   }
 
-  if (uniq.length < 4) {
+  // ConvexGeometry любит >=4 некомпланарных точек
+  if (out.length < 4) {
     const j = 0.001;
-    uniq.push([centroid.x + j, centroid.y, centroid.z]);
-    uniq.push([centroid.x, centroid.y + j, centroid.z]);
-    uniq.push([centroid.x, centroid.y, centroid.z + j]);
+    out.push([cx + j, cy, cz]);
+    out.push([cx, cy + j, cz]);
+    out.push([cx, cy, cz + j]);
   }
 
-  return uniq;
+  return out;
 }
 
 function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: number; detail: number }): SpacePoint[] {
@@ -303,7 +318,7 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
     const minCountEff = effectiveMinCount(detail, list.length, minCount);
 
     const grid = new Map<string, SpacePoint[]>();
-    for (const p of list) {
+    remember: for (const p of list) {
       const k = voxelKey(p, bbox, size);
       const arr = grid.get(k);
       if (arr) arr.push(p);
@@ -316,10 +331,16 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
         continue;
       }
 
-      let minX = Infinity, minY = Infinity, minZ = Infinity;
-      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+      let minX = Infinity,
+        minY = Infinity,
+        minZ = Infinity;
+      let maxX = -Infinity,
+        maxY = -Infinity,
+        maxZ = -Infinity;
 
-      let sx = 0, sy = 0, sz = 0;
+      let sx = 0,
+        sy = 0,
+        sz = 0;
 
       const sums: Record<string, number> = {};
       const counts: Record<string, number> = {};
@@ -329,10 +350,17 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
       let sumOrders = 0;
 
       for (const p of cellPoints) {
-        sx += p.x; sy += p.y; sz += p.z;
+        sx += p.x;
+        sy += p.y;
+        sz += p.z;
 
-        minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); minZ = Math.min(minZ, p.z);
-        maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); maxZ = Math.max(maxZ, p.z);
+        minX = Math.min(minX, p.x);
+        minY = Math.min(minY, p.y);
+        minZ = Math.min(minZ, p.z);
+
+        maxX = Math.max(maxX, p.x);
+        maxY = Math.max(maxY, p.y);
+        maxZ = Math.max(maxZ, p.z);
 
         const m = p.metrics ?? {};
         for (const k of Object.keys(m)) {
@@ -365,8 +393,10 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
       const cy = sy / n;
       const cz = sz / n;
 
-      const span = { x: maxX - minX, y: maxY - minY, z: maxZ - minZ };
-      const hull = pickHullSamples(cellPoints, { x: cx, y: cy, z: cz });
+      const span = { x: Math.max(0.001, maxX - minX), y: Math.max(0.001, maxY - minY), z: Math.max(0.001, maxZ - minZ) };
+
+      // ✅ ВОТ ОНО: "облако по границам массива точек"
+      const hull = buildBoundaryCloud(cellPoints, cx, cy, cz);
 
       out.push({
         id: `${field}:voxel:${cell}`,
