@@ -125,8 +125,20 @@
 
   <div class="list">
     {#each filteredFields as f (f.code)}
-      <button class="item" disabled={isDisabledField(f)} on:click={() => onPick(f)}>
-        <span class="name">{f.name}</span>
+      {@const ax = selectedAxis(f.code)}
+      <button
+        class="item"
+        class:is-selected={f.kind === 'text' && isSelectedText(f.code)}
+        class:is-axis={f.kind !== 'text' && !!ax}
+        disabled={isDisabledField(f)}
+        on:click={() => onPick(f)}
+      >
+        <span class="name">
+          {f.name}
+          {#if ax}
+            <span class="axis-pill">ось {ax.toUpperCase()}</span>
+          {/if}
+        </span>
         <span class="tag">{kindLabel[f.kind]}</span>
       </button>
     {/each}
@@ -144,7 +156,7 @@
 
   .sep {
     height: 1px;
-    background: rgba(226, 232, 240, 0.7);
+    background: var(--divider, rgba(226, 232, 240, 0.7));
     margin: 12px 0 8px;
   }
 
@@ -152,7 +164,7 @@
     margin-top: 2px;
     font-size: 12px;
     font-weight: 650;
-    color: rgba(15, 23, 42, 0.78);
+    color: rgba(var(--ink-900, 15 23 42) / 0.78);
   }
 
   .list {
@@ -168,7 +180,7 @@
   .item {
     width: 100%;
     text-align: left;
-    border: 0;
+    border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
     background: rgba(248, 251, 255, 0.92);
     border-radius: 14px;
     padding: 10px 10px;
@@ -176,19 +188,53 @@
     justify-content: space-between;
     gap: 10px;
     cursor: pointer;
+    box-sizing: border-box;
+    transition: transform .06s ease, box-shadow .12s ease, background .12s ease, border-color .12s ease;
   }
 
-  .item:disabled { opacity: .45; cursor: not-allowed; }
+  .item:hover { transform: translateY(-0.5px); }
 
-  .name { font-size: 12px; font-weight: 650; color: rgba(15,23,42,.88); }
-  .tag { font-size: 11px; color: rgba(100,116,139,.9); }
+  /* ✅ выбранные — заметно отличаются */
+  .item.is-selected,
+  .item.is-axis {
+    background: rgba(255, 255, 255, 0.96);
+    border-color: var(--stroke-hard, rgba(15, 23, 42, 0.18));
+    box-shadow: var(--shadow-btn, 0 10px 26px rgba(15, 23, 42, 0.10));
+  }
+
+  .item:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow: none; }
+
+  .name {
+    font-size: 12px;
+    font-weight: 650;
+    color: rgba(var(--ink-900, 15 23 42) / 0.88);
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .tag { font-size: 11px; color: rgba(var(--ink-600, 100 116 139) / 0.90); }
+
+  .axis-pill {
+    font-size: 10px;
+    font-weight: 750;
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
+    background: #ffffff;
+    color: rgba(var(--ink-900, 15 23 42) / 0.72);
+    white-space: nowrap;
+  }
 
   .limit {
     margin-top: 8px;
     font-size: 12px;
-    color: rgba(100, 116, 139, 0.95);
+    color: rgba(var(--ink-600, 100 116 139) / 0.95);
     background: rgba(248, 251, 255, 0.92);
+    border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
     border-radius: 14px;
     padding: 10px 12px;
+    box-sizing: border-box;
   }
 </style>
