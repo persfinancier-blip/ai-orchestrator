@@ -1,16 +1,18 @@
+<!-- core/orchestrator/modules/advertising/interface/desk/components/space/ui/PickDataMenu.svelte -->
 <script lang="ts">
-  import type { ShowcaseField } from '../../data/showcaseStore';
+  import type { PeriodMode } from '../types';
 
-  export let textFields: ShowcaseField[] = [];
-  export let coordFields: ShowcaseField[] = [];
+  export let textFields: Array<{ code: string; name: string; kind: 'text' }>;
+  export let coordFields: Array<{ code: string; name: string; kind: 'number' | 'date' }>;
 
   export let selectedEntityFields: string[] = [];
+
   export let axisX = '';
   export let axisY = '';
   export let axisZ = '';
 
   export let search = '';
-  export let period: '7 дней' | '14 дней' | '30 дней' | 'Даты';
+  export let period: PeriodMode = '30 дней';
   export let fromDate = '';
   export let toDate = '';
 
@@ -18,48 +20,83 @@
   export let onAddCoord: (code: string) => void;
   export let onClose: () => void;
 
+  type AnyField =
+    | { code: string; name: string; kind: 'text' }
+    | { code: string; name: string; kind: 'number' | 'date' };
+
+  const kindLabel: Record<string, string> = {
+    text: 'текст',
+    number: 'число',
+    date: 'дата'
+  };
+
   $: selectedCoordCount = [axisX, axisY, axisZ].filter(Boolean).length;
   $: canAddCoord = selectedCoordCount < 3;
+
+  $: allFields = [
+    ...(textFields ?? []),
+    ...(coordFields ?? [])
+  ] as AnyField[];
+
+  $: q = search.trim().toLowerCase();
+
+  $: filteredFields =
+    !q
+      ? allFields
+      : allFields.filter((f) => (f.name ?? '').toLowerCase().includes(q) || (f.code ?? '').toLowerCase().includes(q));
+
+  function isSelectedText(code: string): boolean {
+    return selectedEntityFields.includes(code);
+  }
+
+  function isSelectedCoord(code: string): boolean {
+    return axisX === code || axisY === code || axisZ === code;
+  }
+
+  function isDisabledField(f: AnyField): boolean {
+    if (f.kind === 'text') return isSelectedText(f.code);
+    if (isSelectedCoord(f.code)) return true;
+    return !canAddCoord;
+  }
+
+  function onPick(f: AnyField): void {
+    if (isDisabledField(f)) return;
+
+    if (f.kind === 'text') onAddEntity(f.code);
+    else onAddCoord(f.code);
+  }
 </script>
 
 <div class="menu-pop pick">
   <div class="menu-title">Выбор данных</div>
 
-  <div class="sub">Текстовые → точки</div>
+  <div class="row">
+    <input class="input" placeholder="Поиск по полям (Ctrl+K)" bind:value={search} />
+  </div>
+
+  <div class="sub">
+    Поля
+    <span class="hint">
+      (точки: {selectedEntityFields.length} · оси: {selectedCoordCount}/3)
+    </span>
+  </div>
+
   <div class="list">
-    {#each textFields as f (f.code)}
-      <button class="item" disabled={selectedEntityFields.includes(f.code)} on:click={() => onAddEntity(f.code)}>
+    {#each filteredFields as f (f.code)}
+      <button class="item" disabled={isDisabledField(f)} on:click={() => onPick(f)}>
         <span class="name">{f.name}</span>
-        <span class="tag">текст</span>
+        <span class="tag">{kindLabel[f.kind]}</span>
       </button>
     {/each}
   </div>
 
-  <div class="sub">
-    Координаты → оси (числа/даты)
-    <span class="hint">({selectedCoordCount}/3)</span>
-  </div>
-
-  {#if canAddCoord}
-    <div class="list">
-      {#each coordFields as f (f.code)}
-        <button class="item" disabled={axisX === f.code || axisY === f.code || axisZ === f.code} on:click={() => onAddCoord(f.code)}>
-          <span class="name">{f.name}</span>
-          <span class="tag">{f.kind === 'date' ? 'дата' : 'число'}</span>
-        </button>
-      {/each}
-    </div>
-  {:else}
+  {#if !canAddCoord}
     <div class="limit">
       Уже выбрано 3 координаты (X/Y/Z). Удалите одну прямо на ребре куба (×), чтобы добавить другую.
     </div>
   {/if}
 
   <div class="sep" />
-
-  <div class="row">
-    <input class="input" placeholder="Поиск по точкам (Ctrl+K)" bind:value={search} />
-  </div>
 
   <div class="row">
     <select class="select" bind:value={period}>
