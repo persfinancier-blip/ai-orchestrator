@@ -2,6 +2,8 @@
 <script lang="ts">
   import type { PeriodMode } from '../types';
 
+  import ColorPickerPopover from './ColorPickerPopover.svelte';
+
   export let textFields: Array<{ code: string; name: string; kind: 'text' }>;
   export let coordFields: Array<{ code: string; name: string; kind: 'number' | 'date' }>;
 
@@ -22,6 +24,7 @@
 
   // ✅ цвет точек
   export let pointsColor = '#3b82f6';
+  let isPointsColorOpen = false;
 
   type AnyField =
     | { code: string; name: string; kind: 'text' }
@@ -122,6 +125,14 @@
     const el = e.currentTarget as HTMLInputElement | null;
     if (!el) return;
     setPointsColor(el.value);
+  }
+
+  function openPointsColor(): void {
+    isPointsColorOpen = true;
+  }
+
+  function closePointsColor(): void {
+    isPointsColorOpen = false;
   }
 </script>
 
