@@ -197,7 +197,7 @@
     width: 320px;
     padding: 12px;
     border-radius: 18px;
-    background: rgba(255, 255, 255, 0.94);
+    background: var(--field-bg, #ffffff);
     box-shadow: var(--shadow-pop, 0 22px 60px rgba(15, 23, 42, 0.18));
     backdrop-filter: blur(14px);
     z-index: 30;
