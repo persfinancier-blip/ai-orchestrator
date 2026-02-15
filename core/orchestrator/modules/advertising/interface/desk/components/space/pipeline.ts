@@ -198,8 +198,8 @@ function clamp01(v: number): number {
 // “средняя” = 0.5
 function voxelSizeFromDetail(detail01: number): number {
   const d = clamp01(detail01);
-  const min = 4;   // тонко (много точек)
-  const max = 18;  // грубо (мало точек)
+  const min = 4; // тонко (много точек)
+  const max = 18; // грубо (мало точек)
   return min + (max - min) * d;
 }
 
@@ -244,11 +244,17 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
       }
 
       // bbox границы облака
-      let minX = Infinity, minY = Infinity, minZ = Infinity;
-      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+      let minX = Infinity,
+        minY = Infinity,
+        minZ = Infinity;
+      let maxX = -Infinity,
+        maxY = -Infinity,
+        maxZ = -Infinity;
 
       // центроид
-      let sx = 0, sy = 0, sz = 0;
+      let sx = 0,
+        sy = 0,
+        sz = 0;
 
       // metrics: revenue/spend/orders SUM, остальные AVG
       const sums: Record<string, number> = {};
@@ -259,10 +265,16 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
       let sumOrders = 0;
 
       for (const p of cellPoints) {
-        sx += p.x; sy += p.y; sz += p.z;
+        sx += p.x;
+        sy += p.y;
+        sz += p.z;
 
-        minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); minZ = Math.min(minZ, p.z);
-        maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); maxZ = Math.max(maxZ, p.z);
+        minX = Math.min(minX, p.x);
+        minY = Math.min(minY, p.y);
+        minZ = Math.min(minZ, p.z);
+        maxX = Math.max(maxX, p.x);
+        maxY = Math.max(maxY, p.y);
+        maxZ = Math.max(maxZ, p.z);
 
         const m = p.metrics ?? {};
         for (const k of Object.keys(m)) {
@@ -328,8 +340,8 @@ export function buildPoints(args: {
    * По умолчанию: включено, средняя детализация, minCount=5
    */
   lodEnabled?: boolean;
-  lodDetail?: number;       // 0..1
-  lodMinCount?: number;     // например 5
+  lodDetail?: number; // 0..1
+  lodMinCount?: number; // например 5
 }): SpacePoint[] {
   const {
     rows,
