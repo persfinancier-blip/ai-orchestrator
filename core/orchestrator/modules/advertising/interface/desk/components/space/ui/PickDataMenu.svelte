@@ -13,12 +13,10 @@
 
   export let search = '';
 
-  // оставляем, чтобы не ломать GraphPanel bind'ы (UI для периода убран)
   export let period: PeriodMode = '30 дней';
   export let fromDate = '';
   export let toDate = '';
 
-  // оставляем, чтобы не ломать интерфейс (используем только для add)
   export let onAddEntity: (code: string) => void;
   export let onAddCoord: (code: string) => void;
   export let onClose: () => void;
@@ -33,12 +31,6 @@
     date: 'дата'
   };
 
-  // ✅ фикс рассинхрона: одинаково нормализуем коды (для TEXT)
-  const norm = (s: string): string => String(s ?? '').trim().toLowerCase();
-
-  // быстрый set для проверки выбранности (TEXT)
-  $: selectedTextSet = new Set((selectedEntityFields ?? []).map(norm));
-
   $: selectedCoordCount = [axisX, axisY, axisZ].filter(Boolean).length;
   $: canAddCoord = selectedCoordCount < 3;
 
@@ -50,18 +42,15 @@
       ? allFields
       : allFields.filter((f) => (f.name ?? '').toLowerCase().includes(q) || (f.code ?? '').toLowerCase().includes(q));
 
-  function isSelectedText(code: string): boolean {
-    return selectedTextSet.has(norm(code));
-  }
+  // для плашки: мапа code -> name
+  $: nameByCode = new Map(allFields.map((f) => [f.code, f.name] as const));
 
   function toggleText(code: string): void {
     const cleaned = String(code ?? '').trim();
     if (!cleaned) return;
 
-    const n = norm(cleaned);
-
-    if (selectedTextSet.has(n)) {
-      selectedEntityFields = selectedEntityFields.filter((x) => norm(x) !== n);
+    if (selectedEntityFields.includes(cleaned)) {
+      selectedEntityFields = selectedEntityFields.filter((x) => x !== cleaned);
       return;
     }
 
@@ -95,30 +84,28 @@
   }
 
   function toggleCoord(code: string): void {
-    if (!code) return;
+    const cleaned = String(code ?? '').trim();
+    if (!cleaned) return;
 
-    if (selectedAxis(code)) {
-      removeCoord(code);
+    if (selectedAxis(cleaned)) {
+      removeCoord(cleaned);
       return;
     }
 
-    addCoord(code);
+    addCoord(cleaned);
   }
 
   function isDisabledField(f: AnyField): boolean {
-    // выбранные всегда кликабельны (для снятия выбора)
+    // текст всегда можно кликать
     if (f.kind === 'text') return false;
+
+    // выбранные оси всегда кликабельны (чтобы снять)
     if (selectedAxis(f.code)) return false;
 
     // новые координаты запрещаем, когда уже 3/3
-    if (f.kind !== 'text' && !canAddCoord) return true;
+    if (!canAddCoord) return true;
 
     return false;
-  }
-
-  function isActiveField(f: AnyField): boolean {
-    if (f.kind === 'text') return isSelectedText(f.code);
-    return Boolean(selectedAxis(f.code));
   }
 
   function onPick(f: AnyField): void {
@@ -127,15 +114,38 @@
     if (f.kind === 'text') toggleText(f.code);
     else toggleCoord(f.code);
   }
+
+  // для плашки
+  const chipLabel = (code: string): string => nameByCode.get(code) ?? code;
 </script>
 
 <div class="menu-pop pick">
   <div class="menu-title">Выбор данных</div>
 
-  <pre class="dbg">
-selectedEntityFields: {JSON.stringify(selectedEntityFields, null, 2)}
-axis: {JSON.stringify({ axisX, axisY, axisZ }, null, 2)}
-  </pre>
+  <!-- ✅ ВЕРХНЯЯ ПЛАШКА: выбранные поля и оси -->
+  <div class="selected-bar">
+    <div class="selected-block">
+      <div class="selected-title">Выбраны поля</div>
+      <div class="chips">
+        {#if (selectedEntityFields?.length ?? 0) === 0}
+          <span class="empty">ничего</span>
+        {:else}
+          {#each selectedEntityFields as c (c)}
+            <span class="chip">{chipLabel(c)}</span>
+          {/each}
+        {/if}
+      </div>
+    </div>
+
+    <div class="selected-block">
+      <div class="selected-title">Оси</div>
+      <div class="chips">
+        <span class="chip axis">X: {axisX ? chipLabel(axisX) : '—'}</span>
+        <span class="chip axis">Y: {axisY ? chipLabel(axisY) : '—'}</span>
+        <span class="chip axis">Z: {axisZ ? chipLabel(axisZ) : '—'}</span>
+      </div>
+    </div>
+  </div>
 
   <div class="row">
     <input class="input" placeholder="Поиск по полям (Ctrl+K)" bind:value={search} />
@@ -145,25 +155,15 @@ axis: {JSON.stringify({ axisX, axisY, axisZ }, null, 2)}
 
   <div class="sub">Поля</div>
 
+  <!-- ✅ Список без “active/галочек” -->
   <div class="list">
-    {#each filteredFields as f, i (f.code + '::' + f.kind + '::' + i)}
-      {@const active = isActiveField(f)}
-      {@const ax = f.kind !== 'text' ? selectedAxis(f.code) : null}
-
-      <button
-        class="item"
-        class:active={active}
-        disabled={isDisabledField(f)}
-        on:click={() => onPick(f)}
-      >
-        <span class="left">
-          <span class="check" aria-hidden="true">{active ? '✓' : ''}</span>
-          <span class="name">{f.name}</span>
-        </span>
+    {#each filteredFields as f (f.code)}
+      <button class="item" disabled={isDisabledField(f)} on:click={() => onPick(f)}>
+        <span class="name">{f.name}</span>
 
         <span class="right">
-          {#if ax}
-            <span class="pill">{ax.toUpperCase()}</span>
+          {#if f.kind !== 'text' && selectedAxis(f.code)}
+            <span class="pill">{selectedAxis(f.code)?.toUpperCase()}</span>
           {/if}
           <span class="tag">{kindLabel[f.kind]}</span>
         </span>
@@ -192,6 +192,54 @@ axis: {JSON.stringify({ axisX, axisY, axisZ }, null, 2)}
     font-size: 12px;
     font-weight: 650;
     color: rgba(15, 23, 42, 0.78);
+  }
+
+  /* ✅ верхняя плашка */
+  .selected-bar {
+    margin: 8px 0 10px;
+    padding: 10px;
+    border-radius: 14px;
+    background: rgba(15, 23, 42, 0.04);
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .selected-block { display: flex; flex-direction: column; gap: 6px; }
+
+  .selected-title {
+    font-size: 11px;
+    font-weight: 800;
+    color: rgba(15, 23, 42, 0.70);
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .empty {
+    font-size: 12px;
+    color: rgba(100, 116, 139, 0.9);
+  }
+
+  .chip {
+    font-size: 11px;
+    font-weight: 700;
+    color: rgba(15, 23, 42, 0.86);
+    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid rgba(15, 23, 42, 0.10);
+    padding: 6px 10px;
+    border-radius: 999px;
+    line-height: 1;
+    max-width: 100%;
+  }
+
+  .chip.axis {
+    background: rgba(248, 251, 255, 0.92);
   }
 
   .list {
@@ -223,12 +271,6 @@ axis: {JSON.stringify({ axisX, axisY, axisZ }, null, 2)}
     transform: translateY(-0.5px);
     box-shadow: var(--shadow-btn, 0 10px 26px rgba(15, 23, 42, 0.10));
     border-color: var(--stroke-mid, rgba(15, 23, 42, 0.12));
-  }
-
-  .list .item.active {
-    background: rgba(248, 251, 255, 0.92);
-    border-color: var(--stroke-hard, rgba(15, 23, 42, 0.18));
-    box-shadow: var(--shadow-btn-strong, 0 12px 30px rgba(15, 23, 42, 0.12));
   }
 
   .item:disabled {
@@ -269,35 +311,5 @@ axis: {JSON.stringify({ axisX, axisY, axisZ }, null, 2)}
     border-radius: 14px;
     padding: 10px 12px;
     box-sizing: border-box;
-  }
-
-  .left {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-  }
-
-  .check {
-    width: 16px;
-    height: 16px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 12px;
-    font-weight: 900;
-    color: rgba(15, 23, 42, 0.75);
-    flex: 0 0 16px;
-  }
-
-  .dbg {
-    margin: 8px 0;
-    padding: 8px;
-    font-size: 11px;
-    background: rgba(15,23,42,0.04);
-    border: 1px solid rgba(15,23,42,0.08);
-    border-radius: 10px;
-    max-height: 140px;
-    overflow: auto;
   }
 </style>
