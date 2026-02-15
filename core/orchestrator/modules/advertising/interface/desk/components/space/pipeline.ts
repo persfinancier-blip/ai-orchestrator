@@ -23,16 +23,8 @@ export function inPeriod(date: string, period: PeriodMode, fromDate: string, toD
     return true;
   }
 
-  if (period === 'Месяц') {
-    if (!fromDate) return true;
-    return date.slice(0, 7) === fromDate.slice(0, 7);
-  }
-
-  if (period === 'Год') {
-    if (!fromDate) return true;
-    return date.slice(0, 4) === fromDate.slice(0, 4);
-  }
-
+  // В вашей types.ts PeriodMode = '7 дней' | '14 дней' | '30 дней' | 'Даты'
+  // поэтому режимы 'Месяц'/'Год' не поддерживаем (как и было).
   return true;
 }
 
@@ -43,8 +35,8 @@ function sanitizeCoord(value: number, id: string, axis: 'x' | 'y' | 'z'): number
 
 /**
  * sanitizePoints:
- * - не добавляет jitter всем подряд
- * - jitter только для полных дублей (x,y,z) и невалидных координат
+ * - НЕ джиттерит всё подряд
+ * - джиттер только если координаты невалидны или точки полностью совпадают
  */
 export function sanitizePoints(input: SpacePoint[]): SpacePoint[] {
   const base = input.map((p) => ({
@@ -65,10 +57,12 @@ export function sanitizePoints(input: SpacePoint[]): SpacePoint[] {
 
   for (const indices of keyToIndices.values()) {
     if (indices.length <= 1) continue;
+
     for (let j = 0; j < indices.length; j += 1) {
       const idx = indices[j];
       const p = base[idx];
       const s = 0.02 + j * 0.002;
+
       base[idx] = {
         ...p,
         x: p.x + hashToJitter(`${p.id}:x`) * s,
@@ -119,11 +113,6 @@ export function normalizeBBox(bbox: BBox): BBox {
   };
 }
 
-export function normalize(v: number, min: number, max: number): number {
-  const s = Math.max(1e-9, max - min);
-  return (v - min) / s;
-}
-
 export function formatNumberHuman(value: number): string {
   if (!Number.isFinite(value)) return '—';
   const abs = Math.abs(value);
@@ -154,7 +143,7 @@ export function calcMax(rows: ShowcaseRow[], axis: string): string {
 }
 
 // ==============================
-// ✅ VOXEL / GRID LOD AGGREGATION
+// ✅ VOXEL LOD (гарантированный)
 // ==============================
 
 function clamp01(v: number): number {
@@ -162,9 +151,9 @@ function clamp01(v: number): number {
 }
 
 /**
- * ✅ Гарантированный LOD:
- * - detail=0 -> почти "по точкам"
- * - detail=1 -> гарантированно "один воксель" (вся сцена в одной ячейке)
+ * Гарантия:
+ * - detail=0 -> minCountEff = N+1 => агрегирования нет
+ * - detail=1 -> size >= 2*maxSpan => все точки попадают в 1 ячейку
  */
 function voxelSizeFromDetailAndBBox(detail01: number, bbox: BBox): number {
   const d = clamp01(detail01);
@@ -176,7 +165,6 @@ function voxelSizeFromDetailAndBBox(detail01: number, bbox: BBox): number {
 
   const minSize = Math.max(1e-9, maxSpan / 10_000);
   const maxSize = maxSpan * 2;
-
   return minSize + (maxSize - minSize) * d;
 }
 
@@ -205,9 +193,13 @@ function effectiveMinCount(detail01: number, total: number, baseMinCount: number
   return Math.max(1, Math.round(mid * (1 - u) + 1 * u));
 }
 
+/**
+ * Семплы для hull: крайние точки + немного семплов из набора.
+ * (SpaceScene строит ConvexGeometry по этим точкам)
+ */
 function pickHullSamples(cellPoints: SpacePoint[], centroid: { x: number; y: number; z: number }): [number, number, number][] {
   const n = cellPoints.length;
-  if (n === 0) return [];
+  if (!n) return [];
 
   let minX = cellPoints[0], maxX = cellPoints[0];
   let minY = cellPoints[0], maxY = cellPoints[0];
@@ -279,7 +271,6 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
     const minCountEff = effectiveMinCount(detail, list.length, minCount);
 
     const grid = new Map<string, SpacePoint[]>();
-
     for (const p of list) {
       const k = voxelKey(p, bbox, size);
       const arr = grid.get(k);
@@ -306,17 +297,10 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
       let sumOrders = 0;
 
       for (const p of cellPoints) {
-        sx += p.x;
-        sy += p.y;
-        sz += p.z;
+        sx += p.x; sy += p.y; sz += p.z;
 
-        minX = Math.min(minX, p.x);
-        minY = Math.min(minY, p.y);
-        minZ = Math.min(minZ, p.z);
-
-        maxX = Math.max(maxX, p.x);
-        maxY = Math.max(maxY, p.y);
-        maxZ = Math.max(maxZ, p.z);
+        minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); minZ = Math.min(minZ, p.z);
+        maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); maxZ = Math.max(maxZ, p.z);
 
         const m = p.metrics ?? {};
         for (const k of Object.keys(m)) {
@@ -368,9 +352,9 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
         isCluster: true,
         clusterCount: n,
         span,
-        // @ts-expect-error: расширение SpacePoint (добавь hull?: [number,number,number][] в types.ts если хочешь типизировать)
+        // типизируй hull в types.ts (SpacePoint.hull?: ...)
         hull
-      });
+      } as SpacePoint & { hull: [number, number, number][] });
     }
   }
 
@@ -378,7 +362,7 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
 }
 
 // ==============================
-// ✅ MAIN BUILD PIPELINE
+// ✅ PUBLIC PIPELINE API
 // ==============================
 
 export function applyRowsFilter(args: {
@@ -422,10 +406,9 @@ export function buildPoints(args: {
   axisZ: string;
   numberFields: ShowcaseField[];
   dateFields: ShowcaseField[];
-
   lodEnabled?: boolean;
   lodDetail?: number; // 0..1
-  lodMinCount?: number; // например 5
+  lodMinCount?: number;
 }): SpacePoint[] {
   const {
     rows,
@@ -498,10 +481,5 @@ export function buildPoints(args: {
   });
 
   const projected = projectPoints(result, axisX, axisY, axisZ);
-
-  if (lodEnabled) {
-    return voxelAggregateHomogeneous(projected, { minCount: lodMinCount, detail: lodDetail });
-  }
-
-  return projected;
+  return lodEnabled ? voxelAggregateHomogeneous(projected, { minCount: lodMinCount, detail: lodDetail }) : projected;
 }
