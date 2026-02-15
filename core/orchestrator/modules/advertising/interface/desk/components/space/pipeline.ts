@@ -194,13 +194,18 @@ function clamp01(v: number): number {
   return Math.min(1, Math.max(0, v));
 }
 
-// detail: 0..1, чем больше — тем крупнее воксель (меньше точек, быстрее)
-// “средняя” = 0.5
+// ✅ ВАЖНО: "детализация" должна работать так:
+// больше детализация -> МЕНЬШЕ воксель -> МЕНЬШЕ схлопываем
 function voxelSizeFromDetail(detail01: number): number {
   const d = clamp01(detail01);
-  const min = 4;
-  const max = 18;
-  return min + (max - min) * d;
+
+  // диапазон под твою нормализацию координат (-90..90)
+  // 0.0 => грубо (большие воксели, много схлопывания)
+  // 1.0 => тонко (малые воксели, мало схлопывания)
+  const min = 6;   // очень детально
+  const max = 36;  // очень грубо
+
+  return max - (max - min) * d;
 }
 
 function voxelKey(x: number, y: number, z: number, size: number): string {
@@ -243,11 +248,11 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
         continue;
       }
 
-      // bbox границы облака
       let minX = Infinity, minY = Infinity, minZ = Infinity;
       let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
 
-      // metrics: revenue/spend/orders SUM, остальные AVG
+      let sx = 0, sy = 0, sz = 0;
+
       const sums: Record<string, number> = {};
       const counts: Record<string, number> = {};
 
@@ -256,6 +261,8 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
       let sumOrders = 0;
 
       for (const p of cellPoints) {
+        sx += p.x; sy += p.y; sz += p.z;
+
         minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); minZ = Math.min(minZ, p.z);
         maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); maxZ = Math.max(maxZ, p.z);
 
@@ -273,8 +280,8 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
       }
 
       const n = cellPoints.length;
-
       const metrics: Record<string, number> = {};
+
       for (const k of Object.keys(sums)) {
         const c = counts[k] ?? 0;
         metrics[k] = c ? sums[k] / c : Number.NaN;
@@ -287,19 +294,14 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
       metrics.drr = metrics.revenue > 0 ? (metrics.spend / metrics.revenue) * 100 : 0;
       metrics.roi = metrics.spend > 0 ? metrics.revenue / metrics.spend : 0;
 
-      // ✅ центр bbox (по крайним точкам) — чтобы “облако” было корректно
-      const cx = (minX + maxX) / 2;
-      const cy = (minY + maxY) / 2;
-      const cz = (minZ + maxZ) / 2;
-
       out.push({
         id: `${field}:voxel:${cell}`,
         label: `Кластер (${n})`,
         sourceField: field,
         metrics,
-        x: cx,
-        y: cy,
-        z: cz,
+        x: sx / n,
+        y: sy / n,
+        z: sz / n,
         isCluster: true,
         clusterCount: n,
         span: { x: maxX - minX, y: maxY - minY, z: maxZ - minZ }
@@ -318,9 +320,13 @@ export function buildPoints(args: {
   axisZ: string;
   numberFields: ShowcaseField[];
   dateFields: ShowcaseField[];
+
   lodEnabled?: boolean;
-  lodDetail?: number;
-  lodMinCount?: number;
+  lodDetail?: number;       // 0..1
+  lodMinCount?: number;     // например 5
+
+  // ✅ отдаём max по осям ДО LOD (чтобы подписи осей не прыгали)
+  onAxisMax?: (v: { xMax: number; yMax: number; zMax: number }) => void;
 }): SpacePoint[] {
   const {
     rows,
@@ -332,7 +338,8 @@ export function buildPoints(args: {
     dateFields,
     lodEnabled = true,
     lodDetail = 0.5,
-    lodMinCount = 5
+    lodMinCount = 5,
+    onAxisMax
   } = args;
 
   if (!entityFields.length) return [];
@@ -392,8 +399,17 @@ export function buildPoints(args: {
     });
   });
 
+  // 1) проекция (как было)
   const projected = projectPoints(result, axisX, axisY, axisZ);
 
+  // ✅ max по осям считаем ДО LOD и отдаём наружу
+  onAxisMax?.({
+    xMax: axisX ? calcMax(projected, axisX) : Number.NaN,
+    yMax: axisY ? calcMax(projected, axisY) : Number.NaN,
+    zMax: axisZ ? calcMax(projected, axisZ) : Number.NaN
+  });
+
+  // 2) LOD ДО сцены
   if (lodEnabled) {
     return voxelAggregateHomogeneous(projected, { minCount: lodMinCount, detail: lodDetail });
   }
