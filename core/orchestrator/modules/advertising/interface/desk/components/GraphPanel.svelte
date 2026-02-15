@@ -445,7 +445,7 @@
 
     window.addEventListener('resize', onResize);
     window.addEventListener('keydown', onKey);
-    window.addEventListener('click', onGlobalClick);
+    window.addEventListener('click', onGlobalClick, true);
 
     await tick();
 
@@ -460,7 +460,7 @@
 
     window.removeEventListener('resize', onResize);
     window.removeEventListener('keydown', onKey);
-    window.removeEventListener('click', onGlobalClick);
+    window.removeEventListener('click', onGlobalClick, true);
 
     scene?.dispose();
     scene = null;
