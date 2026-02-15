@@ -194,18 +194,23 @@ function clamp01(v: number): number {
   return Math.min(1, Math.max(0, v));
 }
 
-// ✅ ВАЖНО: "детализация" должна работать так:
-// больше детализация -> МЕНЬШЕ воксель -> МЕНЬШЕ схлопываем
-function voxelSizeFromDetail(detail01: number): number {
+// ✅ Адаптивный размер вокселя: зависит от bbox и detail
+// detail: 0..1, чем больше — тем грубее (крупнее воксель)
+function voxelSizeFromDetailAndBBox(detail01: number, bbox: BBox): number {
   const d = clamp01(detail01);
 
-  // диапазон под твою нормализацию координат (-90..90)
-  // 0.0 => грубо (большие воксели, много схлопывания)
-  // 1.0 => тонко (малые воксели, мало схлопывания)
-  const min = 6;   // очень детально
-  const max = 36;  // очень грубо
+  const spanX = Math.max(0.001, bbox.maxX - bbox.minX);
+  const spanY = Math.max(0.001, bbox.maxY - bbox.minY);
+  const spanZ = Math.max(0.001, bbox.maxZ - bbox.minZ);
+  const maxSpan = Math.max(spanX, spanY, spanZ);
 
-  return max - (max - min) * d;
+  // хотим в среднем 30 ячеек на максимальном span при detail=0 (мелко),
+  // и ~8 ячеек при detail=1 (крупно)
+  const bins = 30 - 22 * d; // 30..8
+  const size = maxSpan / Math.max(4, bins);
+
+  // clamp чтобы не было слишком мелко/слишком крупно
+  return Math.max(2.5, Math.min(45, size));
 }
 
 function voxelKey(x: number, y: number, z: number, size: number): string {
@@ -219,8 +224,6 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
   const { minCount, detail } = opts;
   if (!points.length) return [];
 
-  const size = voxelSizeFromDetail(detail);
-
   // ✅ строго однородно: по sourceField
   const byField = new Map<string, SpacePoint[]>();
   for (const p of points) {
@@ -233,6 +236,9 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
   const out: SpacePoint[] = [];
 
   for (const [field, list] of byField.entries()) {
+    const bbox = buildBBox(list);
+    const size = voxelSizeFromDetailAndBBox(detail, bbox);
+
     const grid = new Map<string, SpacePoint[]>();
 
     for (const p of list) {
@@ -248,11 +254,14 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
         continue;
       }
 
+      // bbox границы облака
       let minX = Infinity, minY = Infinity, minZ = Infinity;
       let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
 
+      // центроид
       let sx = 0, sy = 0, sz = 0;
 
+      // metrics: revenue/spend/orders SUM, остальные AVG
       const sums: Record<string, number> = {};
       const counts: Record<string, number> = {};
 
@@ -280,17 +289,21 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
       }
 
       const n = cellPoints.length;
+
       const metrics: Record<string, number> = {};
 
+      // средние для всего
       for (const k of Object.keys(sums)) {
         const c = counts[k] ?? 0;
         metrics[k] = c ? sums[k] / c : Number.NaN;
       }
 
+      // суммы для ключевых
       metrics.revenue = sumRevenue;
       metrics.spend = sumSpend;
       metrics.orders = sumOrders;
 
+      // эффективность от агрегатов
       metrics.drr = metrics.revenue > 0 ? (metrics.spend / metrics.revenue) * 100 : 0;
       metrics.roi = metrics.spend > 0 ? metrics.revenue / metrics.spend : 0;
 
@@ -324,9 +337,6 @@ export function buildPoints(args: {
   lodEnabled?: boolean;
   lodDetail?: number;       // 0..1
   lodMinCount?: number;     // например 5
-
-  // ✅ отдаём max по осям ДО LOD (чтобы подписи осей не прыгали)
-  onAxisMax?: (v: { xMax: number; yMax: number; zMax: number }) => void;
 }): SpacePoint[] {
   const {
     rows,
@@ -338,8 +348,7 @@ export function buildPoints(args: {
     dateFields,
     lodEnabled = true,
     lodDetail = 0.5,
-    lodMinCount = 5,
-    onAxisMax
+    lodMinCount = 5
   } = args;
 
   if (!entityFields.length) return [];
@@ -399,17 +408,10 @@ export function buildPoints(args: {
     });
   });
 
-  // 1) проекция (как было)
+  // 1) проекция
   const projected = projectPoints(result, axisX, axisY, axisZ);
 
-  // ✅ max по осям считаем ДО LOD и отдаём наружу
-  onAxisMax?.({
-    xMax: axisX ? calcMax(projected, axisX) : Number.NaN,
-    yMax: axisY ? calcMax(projected, axisY) : Number.NaN,
-    zMax: axisZ ? calcMax(projected, axisZ) : Number.NaN
-  });
-
-  // 2) LOD ДО сцены
+  // 2) LOD voxel clustering ДО сцены
   if (lodEnabled) {
     return voxelAggregateHomogeneous(projected, { minCount: lodMinCount, detail: lodDetail });
   }
