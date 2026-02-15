@@ -20,6 +20,7 @@
   export let onAddEntity: (code: string) => void;
   export let onAddCoord: (code: string) => void;
   export let onClose: () => void;
+  $: void onClose;
 
   /**
    * ✅ Цвет для каждого выбранного поля: code -> hex
