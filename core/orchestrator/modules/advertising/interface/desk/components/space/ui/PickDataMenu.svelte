@@ -163,20 +163,36 @@
     </div>
   </div>
 
-  <!-- ✅ выбор цвета точек -->
-  <div class="row two">
-    <div class="color-wrap">
-      <label class="label">Цвет</label>
-      <input class="color" type="color" bind:value={pointsColor} aria-label="Цвет точек" />
-    </div>
+<!-- ✅ выбор цвета точек -->
+<div class="row two">
+  <div class="color-wrap" style="position:relative;">
+    <label class="label">Цвет</label>
 
-    <input
-      class="hex"
-      placeholder="#3b82f6"
-      value={pointsColor}
-      on:input={onHexInput}
+    <!-- свотч-кнопка, открывает плашку -->
+    <button
+      type="button"
+      class="color color-btn"
+      aria-label="Цвет точек"
+      style={`background:${pointsColor};`}
+      on:click={openPointsColor}
     />
+
+    {#if isPointsColorOpen}
+      <ColorPickerPopover
+        bind:value={pointsColor}
+        title="Цвет точек"
+        onClose={closePointsColor}
+      />
+    {/if}
   </div>
+
+  <input
+    class="hex"
+    placeholder="#3b82f6"
+    value={pointsColor}
+    on:input={onHexInput}
+  />
+</div>
 
   <div class="row">
     <input class="input" placeholder="Поиск по полям (Ctrl+K)" bind:value={search} />
@@ -336,4 +352,14 @@
     padding: 10px 12px;
     box-sizing: border-box;
   }
+
+.color-btn {
+  border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
+  border-radius: 10px;
+  width: 44px;
+  height: 34px;
+  padding: 0;
+  cursor: pointer;
+}
+
 </style>
