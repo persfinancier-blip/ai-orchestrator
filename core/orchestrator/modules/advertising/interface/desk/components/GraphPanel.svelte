@@ -50,6 +50,9 @@
   let visualBg = '#ffffff';
   let visualEdge = '#334155';
 
+  // ✅ цвет точек (управляется из PickDataMenu)
+  let pointsColor = '#3b82f6';
+
   let visualSchemes: VisualScheme[] = [];
   let selectedVisualId = '';
 
@@ -197,7 +200,8 @@
   }
 
   function applyClustering(input: SpacePoint[]): SpacePoint[] {
-    if (!grouping.enabled) return input.map((p) => ({ ...p, color: undefined }));
+    // ✅ когда группировка выключена — красим все точки выбранным цветом
+    if (!grouping.enabled) return input.map((p) => ({ ...p, color: pointsColor }));
 
     if (grouping.recompute === 'fixed') {
       const cfgKey = makeFixedConfigKey(grouping);
@@ -526,6 +530,8 @@
         bind:period
         bind:fromDate
         bind:toDate
+
+        bind:pointsColor
 
         onAddEntity={addEntityField}
         onAddCoord={addCoordField}
