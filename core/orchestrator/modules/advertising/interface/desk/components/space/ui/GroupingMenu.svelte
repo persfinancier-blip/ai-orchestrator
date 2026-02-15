@@ -1,232 +1,105 @@
+<!-- core/orchestrator/modules/advertising/interface/desk/components/space/ui/GroupingMenu.svelte -->
 <script lang="ts">
-  import type { ShowcaseField } from '../../data/showcaseStore';
-  import type { GroupingConfig, GroupingPrinciple, RecomputeMode } from '../cluster/types';
+  import type { ShowcaseField } from '../../../data/showcaseStore';
+  import type { GroupingConfig, GroupingPrinciple } from '../cluster/types';
 
   export let cfg: GroupingConfig;
-
   export let numberFields: ShowcaseField[] = [];
   export let textFields: ShowcaseField[] = [];
-
   export let onRecompute: () => void;
 
-  const principles: Array<{ id: GroupingPrinciple; name: string }> = [
-    { id: 'efficiency', name: 'По эффективности' },
-    { id: 'behavior', name: 'По поведению' },
-    { id: 'proximity', name: 'По близости' }
-  ];
-
-  const recomputeModes: Array<{ id: RecomputeMode; name: string }> = [
-    { id: 'auto', name: 'Авто' },
-    { id: 'fixed', name: 'Фиксировать группы' },
-    { id: 'manual', name: 'Ручной' }
-  ];
-
-  // ---- smart labels
-  const CODE_ALIASES: Record<string, string> = {
-    sku: 'Артикул',
-    campaign_id: 'Кампания',
-    keyword: 'Ключевое слово',
-    query: 'Поисковый запрос',
-    phrase: 'Поисковая фраза',
-    product_id: 'Товар',
-    brand: 'Бренд',
-    category: 'Категория',
-
-    revenue: 'Выручка',
-    spend: 'Расход',
-    cost: 'Стоимость',
-    budget: 'Бюджет',
-    profit: 'Прибыль',
-    margin: 'Маржа',
-    orders: 'Заказы',
-    clicks: 'Клики',
-    views: 'Показы',
-    impressions: 'Показы',
-    ctr: 'CTR',
-    cpc: 'CPC',
-    cpm: 'CPM',
-    roi: 'ROI',
-    drr: 'ДРР',
-    cr: 'Конверсия'
-  };
-
-  function titleFromCode(code: string): string {
-    const c = String(code ?? '').trim();
-    if (!c) return '—';
-
-    if (CODE_ALIASES[c]) return CODE_ALIASES[c];
-
-    const norm = c.replace(/[_-]+/g, ' ').trim();
-    const pretty = norm.charAt(0).toUpperCase() + norm.slice(1);
-    return pretty;
-  }
-
-  function fieldTitle(f: ShowcaseField): string {
-    const name = String((f as any)?.name ?? '').trim();
-    if (name && name !== f.code) return name;
-    return titleFromCode(f.code);
-  }
-
-  function groupForNumber(code: string): string {
-    const c = code.toLowerCase();
-    if (/(revenue|spend|cost|budget|profit|margin|price|gmv|turnover)/.test(c)) return 'Деньги';
-    if (/(roi|drr|ctr|cr|conversion|rate|share|percent|pct)/.test(c)) return 'Эффективность';
-    if (/(orders|order|qty|quantity|units)/.test(c)) return 'Заказы';
-    if (/(click|view|impression|reach|traffic)/.test(c)) return 'Трафик';
-    return 'Другое';
-  }
-
-  function groupForText(code: string): string {
-    const c = code.toLowerCase();
-    if (/(query|keyword|phrase|search)/.test(c)) return 'Поиск';
-    if (/(campaign|adgroup|ad_group)/.test(c)) return 'Реклама';
-    if (/(sku|product|item|offer)/.test(c)) return 'Товар';
-    if (/(brand|category|catalog)/.test(c)) return 'Каталог';
-    return 'Другое';
-  }
-
-  function sortByTitle(a: ShowcaseField, b: ShowcaseField): number {
-    return fieldTitle(a).localeCompare(fieldTitle(b), 'ru');
-  }
-
-  function toggleField(code: string): void {
-    const cur = new Set(cfg.featureFields);
-    if (cur.has(code)) cur.delete(code);
-    else {
-      if (cur.size >= 3) return;
-      cur.add(code);
-    }
-    cfg = { ...cfg, featureFields: [...cur] };
-  }
-
   function setPrinciple(p: GroupingPrinciple): void {
-    cfg = { ...cfg, principle: p, featureFields: [] };
+    cfg = { ...cfg, principle: p };
   }
 
-  $: canPickFields = cfg.principle !== 'proximity';
+  function toggleEnabled(): void {
+    cfg = { ...cfg, enabled: !cfg.enabled };
+  }
 
-  $: availableFields =
-    cfg.principle === 'efficiency'
-      ? [...numberFields].sort(sortByTitle)
-      : cfg.principle === 'behavior'
-        ? [...textFields].sort(sortByTitle)
-        : [];
+  function toggleCustomWeights(): void {
+    cfg = { ...cfg, customWeights: !cfg.customWeights };
+  }
 
-  $: grouped = (() => {
-    const m = new Map<string, ShowcaseField[]>();
-    for (const f of availableFields) {
-      const group = cfg.principle === 'efficiency' ? groupForNumber(f.code) : groupForText(f.code);
-      if (!m.has(group)) m.set(group, []);
-      m.get(group)!.push(f);
-    }
-    const order =
-      cfg.principle === 'efficiency'
-        ? ['Деньги', 'Эффективность', 'Заказы', 'Трафик', 'Другое']
-        : ['Поиск', 'Реклама', 'Товар', 'Каталог', 'Другое'];
+  function setRecompute(mode: 'auto' | 'fixed' | 'manual'): void {
+    cfg = { ...cfg, recompute: mode };
+  }
 
-    const res: Array<{ title: string; items: ShowcaseField[] }> = [];
-    for (const key of order) {
-      const items = m.get(key);
-      if (items?.length) res.push({ title: key, items: items.sort(sortByTitle) });
-    }
-    // на всякий — если появились неизвестные группы
-    for (const [k, items] of m.entries()) {
-      if (order.includes(k)) continue;
-      if (items.length) res.push({ title: k, items: items.sort(sortByTitle) });
-    }
-    return res;
-  })();
+  function setFeatureField(code: string): void {
+    if (!code) return;
+    if (cfg.featureFields.includes(code)) return;
+    cfg = { ...cfg, featureFields: [...cfg.featureFields, code] };
+  }
+
+  function removeFeatureField(code: string): void {
+    cfg = { ...cfg, featureFields: cfg.featureFields.filter((x) => x !== code) };
+  }
 </script>
 
-<div class="menu-pop pick" style="top: 56px; right: 368px; width: 360px;">
-  <div class="menu-title">Формирование групп</div>
+<div class="menu">
+  <div class="title">Группировка</div>
 
-  <div class="row">
-    <label style="display:flex; gap:10px; align-items:center; pointer-events:auto;">
-      <input type="checkbox" bind:checked={cfg.enabled} />
-      <span style="font-size:12px; font-weight:650;">Включить группировку</span>
-    </label>
-  </div>
+  <label class="row">
+    <input type="checkbox" checked={cfg.enabled} on:change={toggleEnabled} />
+    <span>Включить группировку</span>
+  </label>
 
-  <div class="sep" />
+  <div class="section">
+    <div class="label">Принцип объединения</div>
 
-  <div class="sub">Принцип объединения</div>
-  <div class="row" style="flex-wrap:wrap;">
-    {#each principles as p}
-      <button
-        class="btn"
-        style={`padding:8px 12px; opacity:${cfg.principle === p.id ? 1 : 0.65};`}
-        on:click={() => setPrinciple(p.id)}
-      >
-        {p.name}
+    <div class="chips">
+      <button type="button" class:active={cfg.principle === 'efficiency'} on:click={() => setPrinciple('efficiency')}>
+        По эффективности
       </button>
-    {/each}
+      <button type="button" class:active={cfg.principle === 'behavior'} on:click={() => setPrinciple('behavior')}>
+        По поведению
+      </button>
+      <button type="button" class:active={cfg.principle === 'proximity'} on:click={() => setPrinciple('proximity')}>
+        По близости
+      </button>
+    </div>
   </div>
 
-  <div class="sub">Детализация групп</div>
-  <div class="row">
-    <input class="input" type="range" min="0" max="1" step="0.01" bind:value={cfg.detail} />
+  <div class="section">
+    <div class="label">Детализация групп (0 = без группировки)</div>
+    <input
+      type="range"
+      min="0"
+      max="1"
+      step="0.01"
+      bind:value={cfg.detail}
+    />
   </div>
 
-  {#if canPickFields}
-    <div class="sub">
-      Признаки для похожести (до 3)
-      <span class="hint">({cfg.featureFields.length}/3)</span>
-    </div>
-
-    <div class="list" style="max-height: 260px;">
-      {#each grouped as g (g.title)}
-        <div style="margin-top:10px; font-size:11px; font-weight:800; color: rgba(15,23,42,.75);">
-          {g.title}
-        </div>
-
-        {#each g.items as f (f.code)}
-          <button class="item" on:click={() => toggleField(f.code)} style="opacity:1;">
-            <span class="name">{fieldTitle(f)}</span>
-            <span class="tag">{cfg.featureFields.includes(f.code) ? 'выбрано' : ' '}</span>
-          </button>
-        {/each}
-      {/each}
-    </div>
-  {/if}
-
-  {#if cfg.principle === 'proximity'}
-    <div class="sub">Приоритет измерений</div>
-    <div class="row">
-      <label style="display:flex; gap:10px; align-items:center; pointer-events:auto;">
-        <input type="checkbox" bind:checked={cfg.customWeights} />
-        <span style="font-size:12px;">Свой режим</span>
-      </label>
-    </div>
-
-    {#if cfg.customWeights}
-      <div class="row two">
-        <input class="input" type="number" min="0.2" max="5" step="0.1" bind:value={cfg.wX} />
-        <input class="input" type="number" min="0.2" max="5" step="0.1" bind:value={cfg.wY} />
-      </div>
-      <div class="row">
-        <input class="input" type="number" min="0.2" max="5" step="0.1" bind:value={cfg.wZ} />
-      </div>
-    {/if}
-  {/if}
-
-  <div class="sub">Минимальный размер группы</div>
-  <div class="row">
-    <input class="input" type="number" min="1" step="1" bind:value={cfg.minClusterSize} />
+  <div class="section">
+    <div class="label">Размер кластера (min)</div>
+    <input
+      type="number"
+      min="2"
+      step="1"
+      bind:value={cfg.minClusterSize}
+    />
   </div>
 
-  <div class="sub">Режим пересчёта</div>
-  <div class="row">
-    <select class="select" bind:value={cfg.recompute}>
-      {#each recomputeModes as m}
-        <option value={m.id}>{m.name}</option>
-      {/each}
-    </select>
-  </div>
-
-  {#if cfg.recompute !== 'auto'}
-    <div class="row">
-      <button class="btn btn-primary wide" on:click={onRecompute}>Пересчитать группы</button>
+  <div class="section">
+    <div class="label">Режим пересчёта</div>
+    <div class="chips">
+      <button type="button" class:active={cfg.recompute === 'auto'} on:click={() => setRecompute('auto')}>Авто</button>
+      <button type="button" class:active={cfg.recompute === 'fixed'} on:click={() => setRecompute('fixed')}>Фикс</button>
+      <button type="button" class:active={cfg.recompute === 'manual'} on:click={() => setRecompute('manual')}>Вручную</button>
     </div>
-  {/if}
+
+    <button class="recompute" type="button" on:click={onRecompute}>Пересчитать</button>
+  </div>
 </div>
+
+<style>
+  .menu { position: absolute; right: 12px; top: 12px; width: 320px; background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px; }
+  .title { font-weight: 700; margin-bottom: 8px; }
+  .row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .section { margin-top: 12px; }
+  .label { font-size: 12px; color: #475569; margin-bottom: 6px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chips button { padding: 6px 10px; border-radius: 999px; border: 1px solid #e2e8f0; background: #fff; cursor: pointer; }
+  .chips button.active { border-color: #64748b; }
+  .recompute { margin-top: 10px; width: 100%; padding: 8px 10px; border-radius: 10px; border: 1px solid #e2e8f0; background: #fff; cursor: pointer; }
+</style>
