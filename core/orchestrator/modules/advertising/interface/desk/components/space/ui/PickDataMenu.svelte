@@ -63,15 +63,13 @@
       : allFields.filter((f) => (f.name ?? '').toLowerCase().includes(q) || (f.code ?? '').toLowerCase().includes(q));
 
   function isSelectedText(code: string): boolean {
-    const c = norm(code);
-    return selectedEntityFields.some((x) => norm(x) === c);
+    return selectedEntityFields.some((x) => sameCode(x, code));
   }
 
   function selectedAxis(code: string): 'x' | 'y' | 'z' | null {
-    const c = norm(code);
-    if (norm(axisX) === c) return 'x';
-    if (norm(axisY) === c) return 'y';
-    if (norm(axisZ) === c) return 'z';
+    if (axisX && sameCode(axisX, code)) return 'x';
+    if (axisY && sameCode(axisY, code)) return 'y';
+    if (axisZ && sameCode(axisZ, code)) return 'z';
     return null;
   }
 
@@ -103,7 +101,7 @@
 
     if (isSelectedText(cleaned)) {
       const c = norm(cleaned);
-      selectedEntityFields = selectedEntityFields.filter((x) => norm(x) !== c);
+selectedEntityFields = selectedEntityFields.filter((x) => !sameCode(x, code));
       return;
     }
 
