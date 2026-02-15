@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
+import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js';
 
 import type { ShowcaseField } from '../../data/showcaseStore';
 import type { SpacePoint } from '../types';
@@ -41,6 +42,9 @@ export class SpaceScene {
   private axisLabelObjects: CSS2DObject[] = [];
 
   private pointsMesh?: THREE.InstancedMesh;
+
+  // ✅ clouds: hull meshes when possible, else instanced ellipsoids
+  private clusterCloudGroup: THREE.Group | null = null;
   private clusterCloudMesh?: THREE.InstancedMesh;
 
   private renderPoints: SpacePoint[] = [];
@@ -177,6 +181,29 @@ export class SpaceScene {
     return Math.min(6, Math.max(1.35, s));
   }
 
+  private clearGroup(group: THREE.Group | null): void {
+    if (!group || !this.scene) return;
+    this.scene.remove(group);
+    group.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (mesh.geometry) mesh.geometry.dispose();
+      const mat = (mesh as any).material as THREE.Material | THREE.Material[] | undefined;
+      if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+      else mat?.dispose();
+    });
+  }
+
+  private getHull(p: SpacePoint): [number, number, number][] | null {
+    const hull = (p as any)?.hull as [number, number, number][] | undefined;
+    if (!Array.isArray(hull) || hull.length < 4) return null;
+    return hull;
+  }
+
+  // NOTE: pipeline в разных версиях имел 2 или 3 аргумента; не ломаем совместимость
+  private fmt(metric: string, value: number, fields: ShowcaseField[]): string {
+    return (formatValueByMetric as any)(metric, value, fields);
+  }
+
   public setPoints(
     points: SpacePoint[],
     opts?: { axisMaxOverride?: { xMax: number; yMax: number; zMax: number } }
@@ -197,6 +224,9 @@ export class SpaceScene {
 
     this.clearMesh(this.clusterCloudMesh);
     this.clusterCloudMesh = undefined;
+
+    this.clearGroup(this.clusterCloudGroup);
+    this.clusterCloudGroup = null;
 
     const sanitized = sanitizePoints(points);
 
@@ -235,20 +265,71 @@ export class SpaceScene {
       this.scene.add(this.pointsMesh);
     }
 
-    // 2) CLUSTER CLOUDS (✅ wireframe bbox по крайним точкам)
+    // 2) CLUSTER CLOUDS
     const clusterIdx: number[] = [];
     for (let i = 0; i < this.renderPoints.length; i += 1) {
       if (this.isClusterPoint(this.renderPoints[i]) && this.clusterSpan(this.renderPoints[i])) clusterIdx.push(i);
     }
 
-    if (clusterIdx.length) {
-      const geom = new THREE.BoxGeometry(1, 1, 1);
-      const mat = new THREE.MeshBasicMaterial({
+    // ✅ LOD: Convex hull до лимита, иначе cheap instanced ellipsoid
+    const HULL_CLUSTER_LIMIT = 220;
+    const HULL_POINT_LIMIT = 64;
+
+    // 2a) Hull clouds (ConvexGeometry) – это и есть "облако по границам"
+    if (clusterIdx.length && clusterIdx.length <= HULL_CLUSTER_LIMIT) {
+      const group = new THREE.Group();
+      const baseMat = new THREE.MeshBasicMaterial({
         transparent: true,
         opacity: 0.22,
         depthWrite: false,
+        wireframe: true
+      });
+
+      const col = new THREE.Color();
+
+      for (const idx of clusterIdx) {
+        const p = this.renderPoints[idx];
+        const hull = this.getHull(p);
+        if (!hull) continue;
+
+        const hp = hull.slice(0, HULL_POINT_LIMIT);
+        const pts = hp.map(([x, y, z]) => new THREE.Vector3(x - p.x, y - p.y, z - p.z));
+
+        try {
+          const geom = new ConvexGeometry(pts);
+          const mat = baseMat.clone();
+
+          const hex = p.color ?? this.theme.pointColor;
+          col.set(hex);
+          (mat as THREE.MeshBasicMaterial).color.copy(col);
+
+          const mesh = new THREE.Mesh(geom, mat);
+          mesh.position.set(p.x, p.y, p.z);
+
+          group.add(mesh);
+        } catch {
+          // упал convex — пусть будет ellipsoid fallback ниже
+        }
+      }
+
+      if (group.children.length) {
+        this.clusterCloudGroup = group;
+        this.scene.add(group);
+      }
+    }
+
+    // 2b) Fallback: instanced "облака-эллипсоиды" (НЕ bbox!)
+    // Рисуем либо когда hull-группа не построилась, либо когда кластеров слишком много.
+    const needEllipsoidFallback = clusterIdx.length && (!this.clusterCloudGroup || clusterIdx.length > HULL_CLUSTER_LIMIT);
+
+    if (needEllipsoidFallback) {
+      const geom = new THREE.SphereGeometry(0.5, 12, 10);
+      const mat = new THREE.MeshBasicMaterial({
+        transparent: true,
+        opacity: 0.18,
+        depthWrite: false,
         vertexColors: true,
-        wireframe: true // ✅ не “кубик-кирпич”, а границы
+        wireframe: true
       });
 
       this.clusterCloudMesh = new THREE.InstancedMesh(geom, mat, clusterIdx.length);
@@ -262,11 +343,10 @@ export class SpaceScene {
         if (!span) continue;
 
         o.position.set(p.x, p.y, p.z);
-
         const pad = 1.10;
         o.scale.set(span.x * pad, span.y * pad, span.z * pad);
-
         o.updateMatrix();
+
         this.clusterCloudMesh.setMatrixAt(ii, o.matrix);
 
         const hex = p.color ?? this.theme.pointColor;
@@ -301,6 +381,7 @@ export class SpaceScene {
 
     this.clearMesh(this.pointsMesh);
     this.clearMesh(this.clusterCloudMesh);
+    this.clearGroup(this.clusterCloudGroup);
 
     this.renderer?.dispose();
     this.controls?.dispose();
@@ -430,9 +511,18 @@ export class SpaceScene {
     const Cyz = new THREE.Vector3(bbox.minX, bbox.maxY, bbox.maxZ);
 
     const segments: Array<[THREE.Vector3, THREE.Vector3]> = [
-      [A, Bx], [Bx, Cxy], [Cxy, By], [By, A],
-      [A, Bx], [Bx, Cxz], [Cxz, Bz], [Bz, A],
-      [A, By], [By, Cyz], [Cyz, Bz], [Bz, A]
+      [A, Bx],
+      [Bx, Cxy],
+      [Cxy, By],
+      [By, A],
+      [A, Bx],
+      [Bx, Cxz],
+      [Cxz, Bz],
+      [Bz, A],
+      [A, By],
+      [By, Cyz],
+      [Cyz, Bz],
+      [Bz, A]
     ];
 
     const vertices: number[] = [];
@@ -454,34 +544,51 @@ export class SpaceScene {
     const axisZ = this.axisCodes.z;
 
     const xChip = axisX
-      ? this.createChipLabel(this.deps.fieldName(axisX), { removable: true, onRemove: () => this.cb.onAxisRemove?.('x') })
+      ? this.createChipLabel(this.deps.fieldName(axisX), {
+          removable: true,
+          onRemove: () => this.cb.onAxisRemove?.('x')
+        })
       : this.createChipLabel('X: выберите', { tone: 'accent' });
     xChip.position.copy(midX);
 
     const yChip = axisY
-      ? this.createChipLabel(this.deps.fieldName(axisY), { removable: true, onRemove: () => this.cb.onAxisRemove?.('y') })
+      ? this.createChipLabel(this.deps.fieldName(axisY), {
+          removable: true,
+          onRemove: () => this.cb.onAxisRemove?.('y')
+        })
       : this.createChipLabel('Y: выберите', { tone: 'accent' });
     yChip.position.copy(midY);
 
     const zChip = axisZ
-      ? this.createChipLabel(this.deps.fieldName(axisZ), { removable: true, onRemove: () => this.cb.onAxisRemove?.('z') })
+      ? this.createChipLabel(this.deps.fieldName(axisZ), {
+          removable: true,
+          onRemove: () => this.cb.onAxisRemove?.('z')
+        })
       : this.createChipLabel('Z: выберите', { tone: 'accent' });
     zChip.position.copy(midZ);
 
     const fields = this.deps.getFields();
 
-    // ✅ max берём из override (до LOD), иначе fallback на текущее list
     const xMax = this.axisMaxOverride?.xMax;
     const yMax = this.axisMaxOverride?.yMax;
     const zMax = this.axisMaxOverride?.zMax;
 
-    const mx = this.createChipLabel(formatValueByMetric(axisX, axisX ? (Number.isFinite(xMax!) ? xMax! : Number.NaN) : Number.NaN, fields), { tone: 'accent' });
+    const mx = this.createChipLabel(
+      this.fmt(axisX, axisX ? (Number.isFinite(xMax!) ? xMax! : Number.NaN) : Number.NaN, fields),
+      { tone: 'accent' }
+    );
     mx.position.copy(Bx);
 
-    const my = this.createChipLabel(formatValueByMetric(axisY, axisY ? (Number.isFinite(yMax!) ? yMax! : Number.NaN) : Number.NaN, fields), { tone: 'accent' });
+    const my = this.createChipLabel(
+      this.fmt(axisY, axisY ? (Number.isFinite(yMax!) ? yMax! : Number.NaN) : Number.NaN, fields),
+      { tone: 'accent' }
+    );
     my.position.copy(By);
 
-    const mz = this.createChipLabel(formatValueByMetric(axisZ, axisZ ? (Number.isFinite(zMax!) ? zMax! : Number.NaN) : Number.NaN, fields), { tone: 'accent' });
+    const mz = this.createChipLabel(
+      this.fmt(axisZ, axisZ ? (Number.isFinite(zMax!) ? zMax! : Number.NaN) : Number.NaN, fields),
+      { tone: 'accent' }
+    );
     mz.position.copy(Bz);
 
     this.axisLabelObjects = [xChip, yChip, zChip, mx, my, mz];
