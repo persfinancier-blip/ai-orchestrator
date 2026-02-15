@@ -21,8 +21,16 @@
   export let onAddCoord: (code: string) => void;
   export let onClose: () => void;
 
-  export let pointsColor = '#3b82f6';
-  let isPointsColorOpen = false;
+  /**
+   * ✅ Цвет для каждого выбранного поля: code -> hex
+   * Родитель должен передавать bind:entityFieldColors
+   */
+  export let entityFieldColors: Record<string, string> = {};
+
+  /**
+   * ✅ Цвет по умолчанию для новых полей (можешь поменять)
+   */
+  export let defaultEntityColor = '#3b82f6';
 
   type AnyField =
     | { code: string; name: string; kind: 'text' }
@@ -44,13 +52,63 @@
 
   $: nameByCode = new Map(allFields.map((f) => [f.code, f.name] as const));
 
+  const chipLabel = (code: string): string => nameByCode.get(code) ?? code;
+
+  // --- per-field color popover state ---
+  let isColorOpen = false;
+  let activeColorCode: string | null = null;
+  let activeColorValue = defaultEntityColor;
+
+  function getFieldColor(code: string): string {
+    return entityFieldColors?.[code] ?? defaultEntityColor;
+  }
+
+  function setFieldColor(code: string, color: string): void {
+    const cleaned = String(color ?? '').trim();
+    if (!cleaned) return;
+    entityFieldColors = { ...(entityFieldColors ?? {}), [code]: cleaned };
+  }
+
+  function deleteFieldColor(code: string): void {
+    if (!entityFieldColors?.[code]) return;
+    const next = { ...(entityFieldColors ?? {}) };
+    delete next[code];
+    entityFieldColors = next;
+  }
+
+  function openColorFor(code: string): void {
+    activeColorCode = code;
+    activeColorValue = getFieldColor(code);
+    isColorOpen = true;
+  }
+
+  function closeColor(): void {
+    if (activeColorCode) setFieldColor(activeColorCode, activeColorValue);
+    isColorOpen = false;
+    activeColorCode = null;
+  }
+
+  function onActiveHexInput(e: Event): void {
+    const el = e.currentTarget as HTMLInputElement | null;
+    if (!el) return;
+    activeColorValue = String(el.value ?? '').trim();
+  }
+
+  // --- selection logic ---
   function toggleText(code: string): void {
     const cleaned = String(code ?? '').trim();
     if (!cleaned) return;
 
-    selectedEntityFields = selectedEntityFields.includes(cleaned)
-      ? selectedEntityFields.filter((x) => x !== cleaned)
-      : [...selectedEntityFields, cleaned];
+    if (selectedEntityFields.includes(cleaned)) {
+      selectedEntityFields = selectedEntityFields.filter((x) => x !== cleaned);
+      deleteFieldColor(cleaned);
+      return;
+    }
+
+    selectedEntityFields = [...selectedEntityFields, cleaned];
+
+    // автозаполняем цвет при добавлении (чтобы свотч сразу был)
+    if (!entityFieldColors?.[cleaned]) setFieldColor(cleaned, defaultEntityColor);
   }
 
   function selectedAxis(code: string): 'x' | 'y' | 'z' | null {
@@ -83,8 +141,12 @@
     const cleaned = String(code ?? '').trim();
     if (!cleaned) return;
 
-    if (selectedAxis(cleaned)) removeCoord(cleaned);
-    else addCoord(cleaned);
+    if (selectedAxis(cleaned)) {
+      removeCoord(cleaned);
+      return;
+    }
+
+    addCoord(cleaned);
   }
 
   function isDisabledField(f: AnyField): boolean {
@@ -98,28 +160,6 @@
     if (f.kind === 'text') toggleText(f.code);
     else toggleCoord(f.code);
   }
-
-  const chipLabel = (code: string): string => nameByCode.get(code) ?? code;
-
-  function setPointsColor(v: string): void {
-    const cleaned = String(v ?? '').trim();
-    if (!cleaned) return;
-    pointsColor = cleaned;
-  }
-
-  function onHexInput(e: Event): void {
-    const el = e.currentTarget as HTMLInputElement | null;
-    if (!el) return;
-    setPointsColor(el.value);
-  }
-
-  function togglePointsColor(): void {
-    isPointsColorOpen = !isPointsColorOpen;
-  }
-
-  function closePointsColor(): void {
-    isPointsColorOpen = false;
-  }
 </script>
 
 <div class="menu-pop pick">
@@ -128,29 +168,24 @@
 
     <div class="selected-bar">
       <div class="selected-block">
-        <div class="selected-head">
-          <div class="selected-title">Выбраны поля</div>
-
-          <!-- ✅ перенесённый контрол цвета точек -->
-          <div class="points-color-inline">
-            <button
-              type="button"
-              class="color"
-              aria-label="Цвет точек"
-              style={`background:${pointsColor};`}
-              on:click|stopPropagation={togglePointsColor}
-            ></button>
-
-            <input class="hex mini" placeholder="#3b82f6" value={pointsColor} on:input={onHexInput} />
-          </div>
-        </div>
+        <div class="selected-title">Выбраны поля</div>
 
         <div class="chips">
           {#if (selectedEntityFields?.length ?? 0) === 0}
             <span class="empty">ничего</span>
           {:else}
             {#each selectedEntityFields as c (c)}
-              <span class="chip">{chipLabel(c)}</span>
+              <span class="chip">
+                <button
+                  type="button"
+                  class="swatch"
+                  aria-label="Цвет поля"
+                  style={`background:${getFieldColor(c)};`}
+                  on:click|stopPropagation={() => openColorFor(c)}
+                ></button>
+
+                <span class="chip-text">{chipLabel(c)}</span>
+              </span>
             {/each}
           {/if}
         </div>
@@ -195,12 +230,17 @@
       </div>
     {/if}
 
-    <!-- ✅ модалка выбора цвета -->
-    {#if isPointsColorOpen}
-      <div class="picker-overlay" on:click={closePointsColor}></div>
+    <!-- ✅ модалка выбора цвета для активного поля -->
+    {#if isColorOpen}
+      <div class="picker-overlay" on:click={closeColor}></div>
 
-      <div class="picker-layer" aria-label="Цвет точек">
-        <ColorPickerPopover bind:value={pointsColor} title="Цвет точек" onClose={closePointsColor} />
+      <div class="picker-layer" aria-label="Цвет поля">
+        <ColorPickerPopover bind:value={activeColorValue} title="Цвет поля" onClose={closeColor} />
+
+        <!-- мини-поле hex под поповером (опционально) -->
+        <div class="active-hex">
+          <input class="hex" value={activeColorValue} on:input={onActiveHexInput} />
+        </div>
       </div>
     {/if}
   </div>
@@ -248,25 +288,10 @@
     gap: 6px;
   }
 
-  .selected-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-  }
-
   .selected-title {
     font-size: 11px;
     font-weight: 800;
     color: rgba(15, 23, 42, 0.7);
-    white-space: nowrap;
-  }
-
-  .points-color-inline {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
   }
 
   .chips {
@@ -282,6 +307,9 @@
   }
 
   .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     font-size: 11px;
     font-weight: 700;
     color: rgba(15, 23, 42, 0.86);
@@ -297,14 +325,18 @@
     background: rgba(248, 251, 255, 0.92);
   }
 
-  .color {
-    width: 44px;
-    height: 34px;
-    padding: 0;
-    border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
-    border-radius: 10px;
-    background: #ffffff;
+  .chip-text {
+    min-width: 0;
+    white-space: nowrap;
+  }
+
+  .swatch {
+    width: 16px;
+    height: 16px;
+    border-radius: 999px;
+    border: 1px solid rgba(15, 23, 42, 0.12);
     cursor: pointer;
+    padding: 0;
     flex: 0 0 auto;
   }
 
@@ -318,12 +350,6 @@
     outline: none;
     color: rgba(15, 23, 42, 0.9);
     box-sizing: border-box;
-  }
-
-  .hex.mini {
-    width: 110px;
-    padding: 8px 10px;
-    font-size: 12px;
   }
 
   .hex:focus {
@@ -352,11 +378,7 @@
     gap: 10px;
     cursor: pointer;
     box-sizing: border-box;
-    transition:
-      transform 120ms ease,
-      box-shadow 120ms ease,
-      border-color 120ms ease,
-      background 120ms ease;
+    transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease, background 120ms ease;
   }
 
   .item:hover {
@@ -412,6 +434,7 @@
     box-sizing: border-box;
   }
 
+  /* overlay только внутри меню */
   .picker-overlay {
     position: absolute;
     inset: 0;
@@ -437,10 +460,23 @@
     max-width: min(92vw, 360px);
   }
 
+  .active-hex {
+    position: absolute;
+    left: 50%;
+    top: calc(50% + 170px);
+    transform: translateX(-50%);
+    width: min(280px, 92%);
+    pointer-events: auto;
+    z-index: 202;
+  }
+
   @media (max-height: 560px) {
     .picker-layer :global(.picker) {
       top: 12px !important;
       transform: translate(-50%, 0) !important;
+    }
+    .active-hex {
+      top: 340px;
     }
   }
 </style>
