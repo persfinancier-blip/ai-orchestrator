@@ -180,7 +180,7 @@ export function formatValueByMetric(metricCode: string, maxValue: number, fields
   return formatNumberHuman(maxValue);
 }
 
-// ====== voxel LOD ======
+// ====== voxel LOD (FIXED) ======
 
 function clamp01(v: number): number {
   return Math.min(1, Math.max(0, v));
@@ -199,14 +199,12 @@ function voxelSizeFromDetailAndBBox(detail01: number, bbox: BBox): number {
   const spanZ = Math.max(0.001, bbox.maxZ - bbox.minZ);
   const maxSpan = Math.max(spanX, spanY, spanZ);
 
-  // d=0 => очень мелкая сетка (почти "одна точка = одна ячейка")
-  // d=1 => одна ячейка на весь bbox (всё объединяется)
   const bins = 2000 - Math.round(1999 * d); // 2000..1
-  const size = maxSpan / Math.max(1, bins);
+  const base = maxSpan / Math.max(1, bins);
 
-  // гарантируем что при d≈1 размер > maxSpan => 1 ячейка
+  // при d≈1 гарантируем size > maxSpan => одна ячейка на bbox
   const boost = 1 + 4 * d; // 1..5
-  return Math.max(0.0001, size * boost);
+  return Math.max(0.0001, base * boost);
 }
 
 function voxelKey(x: number, y: number, z: number, size: number, bbox: BBox): string {
@@ -217,10 +215,10 @@ function voxelKey(x: number, y: number, z: number, size: number, bbox: BBox): st
 }
 
 /**
- * Воксельная агрегация.
- * detail: 0..1
- * 0 => без слияния (максимальная детализация)
- * 1 => всё сливается в один кластер
+ * Воксельная агрегация (LOD).
+ * Требование:
+ * - detail=min => одиночки
+ * - detail=max => один кластер
  */
 function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: number; detail: number }): SpacePoint[] {
   const { minCount, detail } = opts;
@@ -277,9 +275,9 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
         counts[k] = (counts[k] ?? 0) + 1;
       }
 
-      sumRevenue += Number(m.revenue ?? 0);
-      sumSpend += Number(m.spend ?? 0);
-      sumOrders += Number(m.orders ?? 0);
+      sumRevenue += Number((m as any).revenue ?? 0);
+      sumSpend += Number((m as any).spend ?? 0);
+      sumOrders += Number((m as any).orders ?? 0);
     }
 
     const n = cellPoints.length;
@@ -325,7 +323,7 @@ export function buildPoints(args: {
 
   lodEnabled?: boolean;
   lodDetail?: number; // 0..1
-  lodMinCount?: number; // например 1
+  lodMinCount?: number;
 }): SpacePoint[] {
   const {
     rows,
