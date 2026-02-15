@@ -1,4 +1,5 @@
 <!-- core/orchestrator/modules/advertising/interface/desk/components/GraphPanel.svelte -->
+
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
   import { get } from 'svelte/store';
