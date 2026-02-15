@@ -43,8 +43,8 @@
   let showSaveVisualModal = false;
   let showGroupingMenu = false;
 
-  // ✅ ВАЖНО: по умолчанию группировка включена (как ты просил).
-  // Выключение делается ползунком: detail=0.
+  // ✅ ВАЖНО: по умолчанию группировка включена (как ты просил)
+  // ✅ Ползунок "Детализация групп" = grouping.detail (0..1) управляет LOD/вокселем
   let grouping: GroupingConfig = {
     enabled: true,
     principle: 'proximity',
@@ -86,8 +86,10 @@
     selectedEntityFields
   });
 
-  // ✅ ВОТ ГЛАВНОЕ: ползунок "Детализация групп" реально управляет voxel/LOD.
-  // detail=0 => группировка выключена, точки обычные.
+  // ✅ КЛЮЧЕВАЯ ПРАВКА: подключили воксель/LOD к GroupingMenu
+  // - grouping.enabled: включает/выключает группировку
+  // - grouping.detail: 0..1, при 0 группировка отключена (как написано в UI)
+  // - grouping.minClusterSize: минимальный размер кластера (minCount для вокселя)
   $: points = buildPoints({
     rows: filteredRows,
     entityFields: selectedEntityFields,
@@ -97,8 +99,7 @@
     numberFields: numberFieldsAll,
     dateFields: dateFieldsAll,
 
-    // ✅ VOXEL/LOD (управляется ползунком "Детализация групп")
-    lodEnabled: grouping.enabled && grouping.detail > 0,
+    lodEnabled: grouping.enabled && grouping.detail > 0.001,
     lodDetail: grouping.detail,
     lodMinCount: Math.max(2, grouping.minClusterSize)
   });
@@ -169,33 +170,6 @@
     scene?.resetView();
   }
 
-  function calcAxisMaxOverride(): { xMax: number; yMax: number; zMax: number } | null {
-    if (!axisX && !axisY && !axisZ) return null;
-
-    const list = buildPoints({
-      rows: filteredRows,
-      entityFields: selectedEntityFields,
-      axisX,
-      axisY,
-      axisZ,
-      numberFields: numberFieldsAll,
-      dateFields: dateFieldsAll,
-      lodEnabled: false
-    });
-
-    const xMax = axisX ? Math.max(...list.map((p) => p.metrics[axisX]).filter((n) => Number.isFinite(n))) : Number.NaN;
-    const yMax = axisY ? Math.max(...list.map((p) => p.metrics[axisY]).filter((n) => Number.isFinite(n))) : Number.NaN;
-    const zMax = axisZ ? Math.max(...list.map((p) => p.metrics[axisZ]).filter((n) => Number.isFinite(n))) : Number.NaN;
-
-    return {
-      xMax: Number.isFinite(xMax) ? xMax : Number.NaN,
-      yMax: Number.isFinite(yMax) ? yMax : Number.NaN,
-      zMax: Number.isFinite(zMax) ? zMax : Number.NaN
-    };
-  }
-
-  $: axisMaxOverride = calcAxisMaxOverride();
-
   onMount(async () => {
     showcase = get(showcaseStore) as ShowcaseSafe;
     schemes = loadVisualSchemes();
@@ -226,7 +200,9 @@
 
     scene.setTheme({ bg: scheme.bg, edge: scheme.edge });
     scene.setAxisCodes({ x: axisX, y: axisY, z: axisZ });
-    scene.setPoints(points, { axisMaxOverride: axisMaxOverride ?? undefined });
+
+    // просто перерисовываем точки при любых изменениях
+    scene.setPoints(points);
   }
 </script>
 
@@ -287,7 +263,7 @@
       title="Сохранить визуальную схему"
       bind:show={showSaveVisualModal}
       onSave={(name) => {
-        // тут у тебя логика сохранения
+        // логика сохранения у тебя уже была в проекте — оставь как есть
         closeAllMenus();
       }}
     />
@@ -295,9 +271,28 @@
 </div>
 
 <style>
-  .graph-panel { display: flex; flex-direction: column; gap: 10px; }
-  .topbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
-  .btn { padding: 8px 12px; border-radius: 8px; border: 1px solid #e2e8f0; background: #fff; cursor: pointer; }
-  .scene-wrap { position: relative; }
-  .scene { width: 100%; }
+  .graph-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+  }
+  .btn {
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
+    background: #fff;
+    cursor: pointer;
+  }
+  .scene-wrap {
+    position: relative;
+  }
+  .scene {
+    width: 100%;
+  }
 </style>
