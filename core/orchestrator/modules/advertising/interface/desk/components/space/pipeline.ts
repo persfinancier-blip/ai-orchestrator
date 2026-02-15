@@ -174,23 +174,13 @@ export function formatValueByMetric(metricCode: string, maxValue: number, fields
     return `${dd}.${mm}.${yy}`;
   }
 
-  const money = new Set(['revenue', 'spend', 'margin', 'profit']);
-  if (money.has(metricCode)) return `${formatNumberHuman(maxValue)} ₽`;
-
-  const percent = new Set(['drr', 'cr0', 'cr1', 'cr2', 'roi_pct']);
-  if (percent.has(metricCode)) {
-    const v = maxValue <= 1 ? maxValue * 100 : maxValue;
-    return `${v.toFixed(1).replace('.', ',')}%`;
-  }
-
-  if (metricCode === 'roi') return maxValue.toFixed(2).replace('.', ',');
+  const money = new Set(['revenue', 'spend', 'cost', 'budget', 'profit', 'margin']);
+  if (money.has(metricCode)) return formatNumberHuman(maxValue) + ' ₽';
 
   return formatNumberHuman(maxValue);
 }
 
-// ==============================
-// VOXEL / GRID LOD AGGREGATION
-// ==============================
+// ====== voxel LOD ======
 
 function clamp01(v: number): number {
   return Math.min(1, Math.max(0, v));
@@ -198,8 +188,8 @@ function clamp01(v: number): number {
 
 /**
  * detail: 0..1
- * 0 => максимально детально (много ячеек)
- * 1 => максимально грубо (мало ячеек)
+ * 0 => максимально детально (почти без слияния)
+ * 1 => максимально грубо (всё в один кластер)
  */
 function voxelSizeFromDetailAndBBox(detail01: number, bbox: BBox): number {
   const d = clamp01(detail01);
@@ -209,115 +199,116 @@ function voxelSizeFromDetailAndBBox(detail01: number, bbox: BBox): number {
   const spanZ = Math.max(0.001, bbox.maxZ - bbox.minZ);
   const maxSpan = Math.max(spanX, spanY, spanZ);
 
-  const bins = 30 - 22 * d; // 30..8
-  const size = maxSpan / Math.max(4, bins);
+  // d=0 => очень мелкая сетка (почти "одна точка = одна ячейка")
+  // d=1 => одна ячейка на весь bbox (всё объединяется)
+  const bins = 2000 - Math.round(1999 * d); // 2000..1
+  const size = maxSpan / Math.max(1, bins);
 
-  return Math.max(2.5, Math.min(45, size));
+  // гарантируем что при d≈1 размер > maxSpan => 1 ячейка
+  const boost = 1 + 4 * d; // 1..5
+  return Math.max(0.0001, size * boost);
 }
 
-function voxelKey(x: number, y: number, z: number, size: number): string {
-  const ix = Math.floor(x / size);
-  const iy = Math.floor(y / size);
-  const iz = Math.floor(z / size);
+function voxelKey(x: number, y: number, z: number, size: number, bbox: BBox): string {
+  const ix = Math.floor((x - bbox.minX) / size);
+  const iy = Math.floor((y - bbox.minY) / size);
+  const iz = Math.floor((z - bbox.minZ) / size);
   return `${ix}|${iy}|${iz}`;
 }
 
 /**
- * Однородная агрегация: НЕ смешиваем разные sourceField.
- * Возвращаем либо исходные точки, либо "кластер-точки" (isCluster).
+ * Воксельная агрегация.
+ * detail: 0..1
+ * 0 => без слияния (максимальная детализация)
+ * 1 => всё сливается в один кластер
  */
 function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: number; detail: number }): SpacePoint[] {
   const { minCount, detail } = opts;
   if (!points.length) return [];
 
-  const byField = new Map<string, SpacePoint[]>();
+  const bbox = buildBBox(points);
+  const size = voxelSizeFromDetailAndBBox(detail, bbox);
+
+  const grid = new Map<string, SpacePoint[]>();
   for (const p of points) {
-    const k = String(p.sourceField ?? '');
-    const arr = byField.get(k);
+    const k = voxelKey(p.x, p.y, p.z, size, bbox);
+    const arr = grid.get(k);
     if (arr) arr.push(p);
-    else byField.set(k, [p]);
+    else grid.set(k, [p]);
   }
 
   const out: SpacePoint[] = [];
 
-  for (const [field, list] of byField.entries()) {
-    const bbox = buildBBox(list);
-    const size = voxelSizeFromDetailAndBBox(detail, bbox);
-
-    const grid = new Map<string, SpacePoint[]>();
-
-    for (const p of list) {
-      const k = voxelKey(p.x, p.y, p.z, size);
-      const arr = grid.get(k);
-      if (arr) arr.push(p);
-      else grid.set(k, [p]);
+  for (const [cell, cellPoints] of grid.entries()) {
+    if (cellPoints.length < minCount) {
+      out.push(...cellPoints);
+      continue;
     }
 
-    for (const [cell, cellPoints] of grid.entries()) {
-      if (cellPoints.length < minCount) {
-        out.push(...cellPoints);
-        continue;
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+
+    let sx = 0, sy = 0, sz = 0;
+
+    const sums: Record<string, number> = {};
+    const counts: Record<string, number> = {};
+
+    let sumRevenue = 0;
+    let sumSpend = 0;
+    let sumOrders = 0;
+
+    for (const p of cellPoints) {
+      sx += p.x;
+      sy += p.y;
+      sz += p.z;
+
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      minZ = Math.min(minZ, p.z);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+      maxZ = Math.max(maxZ, p.z);
+
+      const m = p.metrics ?? {};
+      for (const k of Object.keys(m)) {
+        const v = Number(m[k]);
+        if (!Number.isFinite(v)) continue;
+        sums[k] = (sums[k] ?? 0) + v;
+        counts[k] = (counts[k] ?? 0) + 1;
       }
 
-      let minX = Infinity, minY = Infinity, minZ = Infinity;
-      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-
-      let sx = 0, sy = 0, sz = 0;
-
-      const sums: Record<string, number> = {};
-      const counts: Record<string, number> = {};
-
-      let sumRevenue = 0;
-      let sumSpend = 0;
-      let sumOrders = 0;
-
-      for (const p of cellPoints) {
-        sx += p.x; sy += p.y; sz += p.z;
-
-        minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); minZ = Math.min(minZ, p.z);
-        maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); maxZ = Math.max(maxZ, p.z);
-
-        const m = p.metrics ?? {};
-        for (const k of Object.keys(m)) {
-          const v = Number(m[k]);
-          if (!Number.isFinite(v)) continue;
-          sums[k] = (sums[k] ?? 0) + v;
-          counts[k] = (counts[k] ?? 0) + 1;
-        }
-
-        sumRevenue += Number(m.revenue ?? 0);
-        sumSpend += Number(m.spend ?? 0);
-        sumOrders += Number(m.orders ?? 0);
-      }
-
-      const n = cellPoints.length;
-
-      const metrics: Record<string, number> = {};
-      for (const k of Object.keys(sums)) {
-        const c = counts[k] ?? 0;
-        metrics[k] = c ? sums[k] / c : Number.NaN;
-      }
-
-      metrics.revenue = sumRevenue;
-      metrics.spend = sumSpend;
-      metrics.orders = sumOrders;
-
-      metrics.drr = metrics.revenue > 0 ? (metrics.spend / metrics.revenue) * 100 : 0;
-      metrics.roi = metrics.spend > 0 ? metrics.revenue / metrics.spend : 0;
-
-      out.push({
-        id: `${field}:voxel:${cell}`,
-        label: `Кластер (${n})`,
-        sourceField: field,
-        metrics,
-        x: sx / n,
-        y: sy / n,
-        z: sz / n,
-        isCluster: true,
-        clusterCount: n,
-        span: { x: maxX - minX, y: maxY - minY, z: maxZ - minZ }
-      });
+      sumRevenue += Number(m.revenue ?? 0);
+      sumSpend += Number(m.spend ?? 0);
+      sumOrders += Number(m.orders ?? 0);
     }
+
+    const n = cellPoints.length;
+
+    const metrics: Record<string, number> = {};
+    for (const k of Object.keys(sums)) {
+      const c = counts[k] ?? 0;
+      metrics[k] = c ? sums[k] / c : Number.NaN;
+    }
+
+    metrics.revenue = sumRevenue;
+    metrics.spend = sumSpend;
+    metrics.orders = sumOrders;
+
+    metrics.drr = metrics.revenue > 0 ? (metrics.spend / metrics.revenue) * 100 : 0;
+    metrics.roi = metrics.spend > 0 ? metrics.revenue / metrics.spend : 0;
+
+    out.push({
+      id: `voxel:${cell}`,
+      label: `Кластер (${n})`,
+      sourceField: cellPoints[0]?.sourceField ?? '',
+      metrics,
+      x: sx / n,
+      y: sy / n,
+      z: sz / n,
+      isCluster: true,
+      clusterCount: n,
+      span: { x: maxX - minX, y: maxY - minY, z: maxZ - minZ }
+    });
   }
 
   return out;
@@ -333,8 +324,8 @@ export function buildPoints(args: {
   dateFields: ShowcaseField[];
 
   lodEnabled?: boolean;
-  lodDetail?: number;   // 0..1
-  lodMinCount?: number; // например 5
+  lodDetail?: number; // 0..1
+  lodMinCount?: number; // например 1
 }): SpacePoint[] {
   const {
     rows,
