@@ -1,3 +1,5 @@
+// core/orchestrator/modules/advertising/interface/desk/components/space/pipeline.ts
+
 import type { ShowcaseField, ShowcaseRow } from '../data/showcaseStore';
 import type { BBox, PeriodMode, SpacePoint } from './types';
 
@@ -187,15 +189,18 @@ export function formatValueByMetric(metricCode: string, maxValue: number, fields
 }
 
 // ==============================
-// ✅ VOXEL / GRID LOD AGGREGATION
+// VOXEL / GRID LOD AGGREGATION
 // ==============================
 
 function clamp01(v: number): number {
   return Math.min(1, Math.max(0, v));
 }
 
-// ✅ Адаптивный размер вокселя: зависит от bbox и detail
-// detail: 0..1, чем больше — тем грубее (крупнее воксель)
+/**
+ * detail: 0..1
+ * 0 => максимально детально (много ячеек)
+ * 1 => максимально грубо (мало ячеек)
+ */
 function voxelSizeFromDetailAndBBox(detail01: number, bbox: BBox): number {
   const d = clamp01(detail01);
 
@@ -204,12 +209,9 @@ function voxelSizeFromDetailAndBBox(detail01: number, bbox: BBox): number {
   const spanZ = Math.max(0.001, bbox.maxZ - bbox.minZ);
   const maxSpan = Math.max(spanX, spanY, spanZ);
 
-  // хотим в среднем 30 ячеек на максимальном span при detail=0 (мелко),
-  // и ~8 ячеек при detail=1 (крупно)
   const bins = 30 - 22 * d; // 30..8
   const size = maxSpan / Math.max(4, bins);
 
-  // clamp чтобы не было слишком мелко/слишком крупно
   return Math.max(2.5, Math.min(45, size));
 }
 
@@ -220,11 +222,14 @@ function voxelKey(x: number, y: number, z: number, size: number): string {
   return `${ix}|${iy}|${iz}`;
 }
 
+/**
+ * Однородная агрегация: НЕ смешиваем разные sourceField.
+ * Возвращаем либо исходные точки, либо "кластер-точки" (isCluster).
+ */
 function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: number; detail: number }): SpacePoint[] {
   const { minCount, detail } = opts;
   if (!points.length) return [];
 
-  // ✅ строго однородно: по sourceField
   const byField = new Map<string, SpacePoint[]>();
   for (const p of points) {
     const k = String(p.sourceField ?? '');
@@ -254,14 +259,11 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
         continue;
       }
 
-      // bbox границы облака
       let minX = Infinity, minY = Infinity, minZ = Infinity;
       let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
 
-      // центроид
       let sx = 0, sy = 0, sz = 0;
 
-      // metrics: revenue/spend/orders SUM, остальные AVG
       const sums: Record<string, number> = {};
       const counts: Record<string, number> = {};
 
@@ -277,33 +279,29 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
 
         const m = p.metrics ?? {};
         for (const k of Object.keys(m)) {
-          const v = Number((m as any)[k]);
+          const v = Number(m[k]);
           if (!Number.isFinite(v)) continue;
           sums[k] = (sums[k] ?? 0) + v;
           counts[k] = (counts[k] ?? 0) + 1;
         }
 
-        sumRevenue += Number((m as any).revenue ?? 0);
-        sumSpend += Number((m as any).spend ?? 0);
-        sumOrders += Number((m as any).orders ?? 0);
+        sumRevenue += Number(m.revenue ?? 0);
+        sumSpend += Number(m.spend ?? 0);
+        sumOrders += Number(m.orders ?? 0);
       }
 
       const n = cellPoints.length;
 
       const metrics: Record<string, number> = {};
-
-      // средние для всего
       for (const k of Object.keys(sums)) {
         const c = counts[k] ?? 0;
         metrics[k] = c ? sums[k] / c : Number.NaN;
       }
 
-      // суммы для ключевых
       metrics.revenue = sumRevenue;
       metrics.spend = sumSpend;
       metrics.orders = sumOrders;
 
-      // эффективность от агрегатов
       metrics.drr = metrics.revenue > 0 ? (metrics.spend / metrics.revenue) * 100 : 0;
       metrics.roi = metrics.spend > 0 ? metrics.revenue / metrics.spend : 0;
 
@@ -318,7 +316,7 @@ function voxelAggregateHomogeneous(points: SpacePoint[], opts: { minCount: numbe
         isCluster: true,
         clusterCount: n,
         span: { x: maxX - minX, y: maxY - minY, z: maxZ - minZ }
-      } as any);
+      });
     }
   }
 
@@ -335,8 +333,8 @@ export function buildPoints(args: {
   dateFields: ShowcaseField[];
 
   lodEnabled?: boolean;
-  lodDetail?: number;       // 0..1
-  lodMinCount?: number;     // например 5
+  lodDetail?: number;   // 0..1
+  lodMinCount?: number; // например 5
 }): SpacePoint[] {
   const {
     rows,
@@ -346,9 +344,7 @@ export function buildPoints(args: {
     axisZ,
     numberFields,
     dateFields,
-
-    // ✅ ВАЖНО: по умолчанию включено (но GraphPanel всё равно передаёт явно)
-    lodEnabled = true,
+    lodEnabled = false,
     lodDetail = 0.5,
     lodMinCount = 5
   } = args;
@@ -410,12 +406,9 @@ export function buildPoints(args: {
     });
   });
 
-  // 1) проекция
   const projected = projectPoints(result, axisX, axisY, axisZ);
 
-  // 2) LOD voxel clustering ДО сцены
-  // ✅ detail=0 => группировка выключена
-  if (lodEnabled && lodDetail > 0) {
+  if (lodEnabled) {
     return voxelAggregateHomogeneous(projected, { minCount: lodMinCount, detail: lodDetail });
   }
 
