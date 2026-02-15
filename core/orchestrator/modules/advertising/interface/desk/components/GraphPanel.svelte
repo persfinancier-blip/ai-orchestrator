@@ -137,14 +137,6 @@
     dateFields: dateFieldsAll
   });
 
-  // ✅ ВАЖНО: делаем явную реактивную зависимость от цветов,
-  // чтобы график перекрашивался сразу, как фон/рёбра.
-  // Svelte НЕ видит, что entityFieldColors используется внутри applyClustering().
-  $: entityColorsKey = Object.entries(entityFieldColors ?? {})
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([k, v]) => `${k}:${v}`)
-    .join('|');
-
   // ---- FIXED caching: Map(point.id -> clusterId)
   let fixedAssign: Map<string, number> = new Map();
   let fixedCounts: Map<number, number> = new Map();
@@ -156,8 +148,9 @@
     return `hsl(${hue} 70% 45%)`;
   }
 
-  function colorForEntityField(code: string): string {
-    return entityFieldColors?.[code] ?? DEFAULT_ENTITY_COLOR;
+  // ✅ ВАЖНО: принимаем colors параметром -> Svelte видит зависимость так же, как у bg/edge
+  function colorForEntityField(code: string, colors: Record<string, string>): string {
+    return colors?.[code] ?? DEFAULT_ENTITY_COLOR;
   }
 
   function getTextValue(p: SpacePoint, field: string): string {
@@ -212,12 +205,13 @@
     fixedConfigKey = makeFixedConfigKey(grouping);
   }
 
-  function applyClustering(input: SpacePoint[]): SpacePoint[] {
-    // ✅ когда группировка выключена — красим точки по полю (sku / campaign_id и т.д.)
+  // ✅ ВАЖНО: colors параметром
+  function applyClustering(input: SpacePoint[], colors: Record<string, string>): SpacePoint[] {
+    // ✅ когда группировка выключена — красим точки по полю
     if (!grouping.enabled) {
       return input.map((p) => ({
         ...p,
-        color: colorForEntityField(p.sourceField)
+        color: colorForEntityField(p.sourceField, colors)
       }));
     }
 
@@ -281,15 +275,14 @@
     }
   }
 
-  // ✅ теперь этот блок будет срабатывать и на смену цветов, т.к. entityColorsKey используется явно
-  $: if (scene) {
-    // just to bind reactivity
-    entityColorsKey;
+  // ✅ КАК У ФОНА/РЁБЕР: отдельная реактивная переменная, зависящая от entityFieldColors
+  $: clustered = applyClustering(points, entityFieldColors);
 
+  // ✅ и тут используем clustered (а не вызываем функцию скрыто)
+  $: if (scene) {
     scene.setTheme({ bg: visualBg, edge: visualEdge });
     scene.setAxisCodes({ x: axisX, y: axisY, z: axisZ });
 
-    const clustered = applyClustering(points);
     const info = scene.setPoints(clustered);
 
     renderedCount = info.renderedCount;
@@ -476,7 +469,7 @@
 
     await tick();
 
-    const clustered = applyClustering(points);
+    // ✅ на старте тоже используем clustered
     const info = scene.setPoints(clustered);
     renderedCount = info.renderedCount;
     bboxLabel = info.bboxLabel;
@@ -598,8 +591,6 @@
   {/if}
 </section>
 
-
-
 <style>
   :global(:root) {
     --ink-900: 15 23 42;
@@ -623,7 +614,9 @@
     --field-bg-soft: rgba(248, 251, 255, 0.9); /* если вдруг захочешь обратно */
   }
 
-  :global(.graph-root) { width: 100%; }
+  :global(.graph-root) {
+    width: 100%;
+  }
 
   :global(.stage) {
     position: relative;
@@ -633,7 +626,10 @@
     background: #ffffff;
   }
 
-  :global(.scene) { position: absolute; inset: 0; }
+  :global(.scene) {
+    position: absolute;
+    inset: 0;
+  }
 
   /* HUD layout */
   :global(.hud) {
@@ -673,11 +669,13 @@
     cursor: pointer;
     line-height: 1;
     background: #f8fbff;
-    color: rgba(var(--ink-900) / 0.90);
+    color: rgba(var(--ink-900) / 0.9);
     box-shadow: var(--shadow-btn);
     pointer-events: auto;
   }
-  :global(.btn:hover) { transform: translateY(-0.5px); }
+  :global(.btn:hover) {
+    transform: translateY(-0.5px);
+  }
 
   :global(.btn.btn-primary) {
     background: #f8fbff;
@@ -685,7 +683,9 @@
     position: relative;
   }
 
-  :global(.btn.wide) { width: 100%; }
+  :global(.btn.wide) {
+    width: 100%;
+  }
 
   /* Menus данных */
   :global(.menu-pop) {
@@ -693,7 +693,7 @@
     top: 56px;
     right: 14px;
     width: 340px;
-  
+
     background: rgba(255, 255, 255, 0.92);
     border-radius: 18px;
     padding: 12px;
@@ -708,7 +708,7 @@
   :global(.menu-title) {
     font-weight: 800;
     font-size: 13px;
-    color: rgba(var(--ink-900) / 0.90);
+    color: rgba(var(--ink-900) / 0.9);
     margin-bottom: 10px;
   }
 
@@ -722,7 +722,10 @@
     gap: 6px;
   }
 
-  :global(.hint) { font-weight: 600; color: rgba(var(--ink-600) / 0.90); }
+  :global(.hint) {
+    font-weight: 600;
+    color: rgba(var(--ink-600) / 0.9);
+  }
 
   :global(.row) {
     display: flex;
@@ -737,7 +740,11 @@
     gap: 10px;
   }
 
-  :global(.label) { font-size: 12px; color: rgba(var(--ink-900) / 0.78); width: 52px; }
+  :global(.label) {
+    font-size: 12px;
+    color: rgba(var(--ink-900) / 0.78);
+    width: 52px;
+  }
 
   :global(.sep) {
     height: 1px;
@@ -745,7 +752,9 @@
     margin: 12px 0;
   }
 
-  :global(.select), :global(.input), :global(.hex) {
+  :global(.select),
+  :global(.input),
+  :global(.hex) {
     width: 100%;
     border: 1px solid var(--stroke-soft);
     background: var(--field-bg, #ffffff);
@@ -753,11 +762,13 @@
     padding: 10px 12px;
     font-size: 12px;
     outline: none;
-    color: rgba(var(--ink-900) / 0.90);
+    color: rgba(var(--ink-900) / 0.9);
     box-sizing: border-box;
   }
 
-  :global(.select:focus), :global(.input:focus), :global(.hex:focus) {
+  :global(.select:focus),
+  :global(.input:focus),
+  :global(.hex:focus) {
     box-shadow: var(--focus-ring);
     border-color: var(--stroke-mid);
   }
@@ -785,10 +796,20 @@
     cursor: pointer;
     box-sizing: border-box;
   }
-  :global(.item:disabled) { opacity: .45; cursor: not-allowed; }
+  :global(.item:disabled) {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
 
-  :global(.name) { font-size: 12px; font-weight: 650; color: rgba(var(--ink-900) / 0.88); }
-  :global(.tag) { font-size: 11px; color: rgba(var(--ink-600) / 0.90); }
+  :global(.name) {
+    font-size: 12px;
+    font-weight: 650;
+    color: rgba(var(--ink-900) / 0.88);
+  }
+  :global(.tag) {
+    font-size: 11px;
+    color: rgba(var(--ink-600) / 0.9);
+  }
 
   :global(.limit) {
     margin-top: 8px;
@@ -819,7 +840,7 @@
     border-radius: 999px;
     border: 1px solid var(--stroke-soft);
     background: rgba(248, 251, 255, 0.95);
-    color: rgba(var(--ink-900) / 0.90);
+    color: rgba(var(--ink-900) / 0.9);
     box-shadow: var(--shadow-btn);
     cursor: pointer;
   }
@@ -836,8 +857,17 @@
     box-sizing: border-box;
   }
 
-  :global(.info-title) { font-size: 12px; font-weight: 750; color: rgba(var(--ink-900) / 0.90); margin-bottom: 4px; }
-  :global(.info-sub) { font-size: 11px; color: rgba(var(--ink-600) / 0.92); line-height: 1.35; }
+  :global(.info-title) {
+    font-size: 12px;
+    font-weight: 750;
+    color: rgba(var(--ink-900) / 0.9);
+    margin-bottom: 4px;
+  }
+  :global(.info-sub) {
+    font-size: 11px;
+    color: rgba(var(--ink-600) / 0.92);
+    line-height: 1.35;
+  }
 
   :global(.tooltip) {
     position: absolute;
