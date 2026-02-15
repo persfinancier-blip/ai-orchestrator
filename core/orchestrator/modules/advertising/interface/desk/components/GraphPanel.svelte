@@ -137,6 +137,14 @@
     dateFields: dateFieldsAll
   });
 
+  // ✅ ВАЖНО: делаем явную реактивную зависимость от цветов,
+  // чтобы график перекрашивался сразу, как фон/рёбра.
+  // Svelte НЕ видит, что entityFieldColors используется внутри applyClustering().
+  $: entityColorsKey = Object.entries(entityFieldColors ?? {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => `${k}:${v}`)
+    .join('|');
+
   // ---- FIXED caching: Map(point.id -> clusterId)
   let fixedAssign: Map<string, number> = new Map();
   let fixedCounts: Map<number, number> = new Map();
@@ -273,7 +281,11 @@
     }
   }
 
+  // ✅ теперь этот блок будет срабатывать и на смену цветов, т.к. entityColorsKey используется явно
   $: if (scene) {
+    // just to bind reactivity
+    entityColorsKey;
+
     scene.setTheme({ bg: visualBg, edge: visualEdge });
     scene.setAxisCodes({ x: axisX, y: axisY, z: axisZ });
 
@@ -321,10 +333,6 @@
 
   function removeEntityField(code: string): void {
     selectedEntityFields = selectedEntityFields.filter((x) => x !== code);
-    // опционально: можно и цвет удалить, но не обязательно
-    // const next = { ...(entityFieldColors ?? {}) };
-    // delete next[code];
-    // entityFieldColors = next;
   }
 
   function addCoordField(code: string): void {
@@ -552,7 +560,12 @@
     {/if}
 
     {#if showGroupingMenu}
-      <GroupingMenu bind:cfg={grouping} numberFields={groupingNumberFields} textFields={groupingTextFields} onRecompute={recomputeClusters} />
+      <GroupingMenu
+        bind:cfg={grouping}
+        numberFields={groupingNumberFields}
+        textFields={groupingTextFields}
+        onRecompute={recomputeClusters}
+      />
     {/if}
 
     <Tooltip {tooltip} />
@@ -584,7 +597,6 @@
     />
   {/if}
 </section>
-
 
 
 
