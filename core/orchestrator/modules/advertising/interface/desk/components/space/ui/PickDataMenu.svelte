@@ -33,7 +33,11 @@
     date: 'дата'
   };
 
-  // ✅ фикс рассинхрона: одинаково нормализуем коды
+  // ✅ фикс рассинхрона: одинаково нормализуем коды (для TEXT)
+  const norm = (s: string): string => String(s ?? '').trim().toLowerCase();
+
+  // быстрый set для проверки выбранности (TEXT)
+  $: selectedTextSet = new Set((selectedEntityFields ?? []).map(norm));
 
   $: selectedCoordCount = [axisX, axisY, axisZ].filter(Boolean).length;
   $: canAddCoord = selectedCoordCount < 3;
@@ -46,37 +50,30 @@
       ? allFields
       : allFields.filter((f) => (f.name ?? '').toLowerCase().includes(q) || (f.code ?? '').toLowerCase().includes(q));
 
-const norm = (s: string): string => String(s ?? '').trim().toLowerCase();
-
-// быстрый set для проверки выбранности - 11111
-$: selectedTextSet = new Set((selectedEntityFields ?? []).map(norm));
-
-function isSelectedText(code: string): boolean {
-  return selectedTextSet.has(norm(code));
-}
-
-function toggleText(code: string): void {
-  const cleaned = String(code ?? '').trim();
-  if (!cleaned) return;
-
-  const n = norm(cleaned);
-
-  if (selectedTextSet.has(n)) {
-    // удаляем по нормализованному совпадению
-    selectedEntityFields = selectedEntityFields.filter((x) => norm(x) !== n);
-    return;
+  function isSelectedText(code: string): boolean {
+    return selectedTextSet.has(norm(code));
   }
 
-  // добавляем именно cleaned (без пробелов), чтобы дальше стабильно матчиться
-  selectedEntityFields = [...selectedEntityFields, cleaned];
-}
+  function toggleText(code: string): void {
+    const cleaned = String(code ?? '').trim();
+    if (!cleaned) return;
 
-function selectedAxis(code: string): 'x' | 'y' | 'z' | null {
-  if (axisX === code) return 'x';
-  if (axisY === code) return 'y';
-  if (axisZ === code) return 'z';
-  return null;
-}
+    const n = norm(cleaned);
+
+    if (selectedTextSet.has(n)) {
+      selectedEntityFields = selectedEntityFields.filter((x) => norm(x) !== n);
+      return;
+    }
+
+    selectedEntityFields = [...selectedEntityFields, cleaned];
+  }
+
+  function selectedAxis(code: string): 'x' | 'y' | 'z' | null {
+    if (axisX === code) return 'x';
+    if (axisY === code) return 'y';
+    if (axisZ === code) return 'z';
+    return null;
+  }
 
   function removeCoord(code: string): void {
     const ax = selectedAxis(code);
@@ -85,20 +82,17 @@ function selectedAxis(code: string): 'x' | 'y' | 'z' | null {
     if (ax === 'z') axisZ = '';
   }
 
-function addCoord(code: string): void {
-  const cleaned = String(code ?? '').trim();
-  if (!cleaned) return;
+  function addCoord(code: string): void {
+    const cleaned = String(code ?? '').trim();
+    if (!cleaned) return;
 
-  if (axisX === cleaned || axisY === cleaned || axisZ === cleaned) return;
-  if (!canAddCoord) return;
+    if (axisX === cleaned || axisY === cleaned || axisZ === cleaned) return;
+    if (!canAddCoord) return;
 
-  if (!axisX) axisX = cleaned;
-  else if (!axisY) axisY = cleaned;
-  else if (!axisZ) axisZ = cleaned;
-}
-
-  selectedEntityFields = [...selectedEntityFields, cleaned];
-}
+    if (!axisX) axisX = cleaned;
+    else if (!axisY) axisY = cleaned;
+    else if (!axisZ) axisZ = cleaned;
+  }
 
   function toggleCoord(code: string): void {
     if (!code) return;
@@ -137,6 +131,7 @@ function addCoord(code: string): void {
 
 <div class="menu-pop pick">
   <div class="menu-title">Выбор данных</div>
+
   <pre class="dbg">
 selectedEntityFields: {JSON.stringify(selectedEntityFields, null, 2)}
 axis: {JSON.stringify({ axisX, axisY, axisZ }, null, 2)}
@@ -150,31 +145,31 @@ axis: {JSON.stringify({ axisX, axisY, axisZ }, null, 2)}
 
   <div class="sub">Поля</div>
 
-<div class="list">
-  {#each filteredFields as f, i (f.code + '::' + f.kind + '::' + i)}
-    {@const active = isActiveField(f)}
-    {@const ax = f.kind !== 'text' ? selectedAxis(f.code) : null}
+  <div class="list">
+    {#each filteredFields as f, i (f.code + '::' + f.kind + '::' + i)}
+      {@const active = isActiveField(f)}
+      {@const ax = f.kind !== 'text' ? selectedAxis(f.code) : null}
 
-    <button
-      class="item"
-      class:active={active}
-      disabled={isDisabledField(f)}
-      on:click={() => onPick(f)}
-    >
-      <span class="left">
-        <span class="check" aria-hidden="true">{active ? '✓' : ''}</span>
-        <span class="name">{f.name}</span>
-      </span>
+      <button
+        class="item"
+        class:active={active}
+        disabled={isDisabledField(f)}
+        on:click={() => onPick(f)}
+      >
+        <span class="left">
+          <span class="check" aria-hidden="true">{active ? '✓' : ''}</span>
+          <span class="name">{f.name}</span>
+        </span>
 
-      <span class="right">
-        {#if ax}
-          <span class="pill">{ax.toUpperCase()}</span>
-        {/if}
-        <span class="tag">{kindLabel[f.kind]}</span>
-      </span>
-    </button>
-  {/each}
-</div>
+        <span class="right">
+          {#if ax}
+            <span class="pill">{ax.toUpperCase()}</span>
+          {/if}
+          <span class="tag">{kindLabel[f.kind]}</span>
+        </span>
+      </button>
+    {/each}
+  </div>
 
   {#if !canAddCoord}
     <div class="limit">
@@ -230,7 +225,6 @@ axis: {JSON.stringify({ axisX, axisY, axisZ }, null, 2)}
     border-color: var(--stroke-mid, rgba(15, 23, 42, 0.12));
   }
 
-  /* ✅ выбранное поле (усилили селектор, чтобы не перебивалось глобалом) */
   .list .item.active {
     background: rgba(248, 251, 255, 0.92);
     border-color: var(--stroke-hard, rgba(15, 23, 42, 0.18));
@@ -255,7 +249,6 @@ axis: {JSON.stringify({ axisX, axisY, axisZ }, null, 2)}
 
   .tag { font-size: 11px; color: rgba(100,116,139,.9); }
 
-  /* ✅ бейдж X/Y/Z */
   .pill {
     font-size: 11px;
     font-weight: 800;
@@ -277,33 +270,34 @@ axis: {JSON.stringify({ axisX, axisY, axisZ }, null, 2)}
     padding: 10px 12px;
     box-sizing: border-box;
   }
-.left {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
 
-.check {
-  width: 16px;
-  height: 16px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  font-weight: 900;
-  color: rgba(15, 23, 42, 0.75);
-  flex: 0 0 16px;
-}
+  .left {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
 
-.dbg {
-  margin: 8px 0;
-  padding: 8px;
-  font-size: 11px;
-  background: rgba(15,23,42,0.04);
-  border: 1px solid rgba(15,23,42,0.08);
-  border-radius: 10px;
-  max-height: 140px;
-  overflow: auto;
-}
+  .check {
+    width: 16px;
+    height: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 900;
+    color: rgba(15, 23, 42, 0.75);
+    flex: 0 0 16px;
+  }
+
+  .dbg {
+    margin: 8px 0;
+    padding: 8px;
+    font-size: 11px;
+    background: rgba(15,23,42,0.04);
+    border: 1px solid rgba(15,23,42,0.08);
+    border-radius: 10px;
+    max-height: 140px;
+    overflow: auto;
+  }
 </style>
