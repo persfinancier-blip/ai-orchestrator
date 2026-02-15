@@ -114,51 +114,60 @@
   }
 </script>
 
-<!-- ... -->
+<div class="menu-pop pick">
+  <!-- ... -->
 
-<div class="row two">
-  <div class="color-wrap">
-    <label class="label">Цвет</label>
+  <div class="row two">
+    <div class="color-wrap">
+      <label class="label">Цвет</label>
 
-  <button
-    type="button"
-    class="color"
-    aria-label="Цвет точек"
-    style={`background:${pointsColor};`}
-    on:click={togglePointsColor}
-  ></button>
+      <button
+        type="button"
+        class="color"
+        aria-label="Цвет точек"
+        style={`background:${pointsColor};`}
+        on:click={togglePointsColor}
+      ></button>
 
-    {#if isPointsColorOpen}
-      <div class="picker-overlay" on:click={closePointsColor} />
-      <div class="picker-layer" aria-label="Цвет точек">
-        <ColorPickerPopover bind:value={pointsColor} title="Цвет точек" onClose={closePointsColor} />
-      </div>
-    {/if}
+      {#if isPointsColorOpen}
+        <div class="picker-overlay" on:click={closePointsColor}></div>
+
+        <div class="picker-layer" aria-label="Цвет точек">
+          <ColorPickerPopover bind:value={pointsColor} title="Цвет точек" onClose={closePointsColor} />
+        </div>
+      {/if}
+    </div>
+
+    <input class="hex" placeholder="#3b82f6" value={pointsColor} on:input={onHexInput} />
   </div>
 
-  <input class="hex" placeholder="#3b82f6" value={pointsColor} on:input={onHexInput} />
+  <!-- ... -->
 </div>
 
 <style>
-  /* ... твои стили ... */
+  /* ключ: overlay ограничен меню */
+  .menu-pop.pick {
+    position: relative;
+  }
 
   .picker-overlay{
-    position: fixed;
+    position: absolute;
     inset: 0;
     background: rgba(15, 23, 42, 0.25);
     backdrop-filter: blur(2px);
-    z-index: 9998;
+    z-index: 30;
   }
 
   .picker-layer{
-    position: fixed;
+    position: absolute;
     inset: 0;
-    z-index: 9999;
+    z-index: 31;
     pointer-events: none;
   }
 
+  /* центрируем поповер внутри меню (не всей страницы) */
   .picker-layer :global(.picker){
-    position: fixed;
+    position: absolute;
     top: 50%;
     left: 50%;
     right: auto;
@@ -167,10 +176,5 @@
     max-width: min(92vw, 360px);
   }
 
-  @media (max-height: 560px){
-    .picker-layer :global(.picker){
-      top: 12px;
-      transform: translate(-50%, 0);
-    }
-  }
+  /* остальной твой css как был */
 </style>
