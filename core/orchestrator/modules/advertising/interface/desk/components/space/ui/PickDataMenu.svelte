@@ -33,6 +33,9 @@
     date: 'дата'
   };
 
+  // ✅ фикс рассинхрона: одинаково нормализуем коды
+  const norm = (s: string): string => String(s ?? '').trim().toLowerCase();
+
   $: selectedCoordCount = [axisX, axisY, axisZ].filter(Boolean).length;
   $: canAddCoord = selectedCoordCount < 3;
 
@@ -45,13 +48,15 @@
       : allFields.filter((f) => (f.name ?? '').toLowerCase().includes(q) || (f.code ?? '').toLowerCase().includes(q));
 
   function isSelectedText(code: string): boolean {
-    return selectedEntityFields.includes(code);
+    const c = norm(code);
+    return selectedEntityFields.some((x) => norm(x) === c);
   }
 
   function selectedAxis(code: string): 'x' | 'y' | 'z' | null {
-    if (axisX === code) return 'x';
-    if (axisY === code) return 'y';
-    if (axisZ === code) return 'z';
+    const c = norm(code);
+    if (norm(axisX) === c) return 'x';
+    if (norm(axisY) === c) return 'y';
+    if (norm(axisZ) === c) return 'z';
     return null;
   }
 
@@ -63,27 +68,32 @@
   }
 
   function addCoord(code: string): void {
-    if (axisX === code || axisY === code || axisZ === code) return;
+    const cleaned = String(code ?? '').trim();
+    if (!cleaned) return;
+
+    if (selectedAxis(cleaned)) return;
     if (!canAddCoord) return;
 
     // X -> Y -> Z
-    if (!axisX) axisX = code;
-    else if (!axisY) axisY = code;
-    else if (!axisZ) axisZ = code;
+    if (!axisX) axisX = cleaned;
+    else if (!axisY) axisY = cleaned;
+    else if (!axisZ) axisZ = cleaned;
 
-    onAddCoord?.(code);
+    onAddCoord?.(cleaned);
   }
 
   function toggleText(code: string): void {
-    if (!code) return;
+    const cleaned = String(code ?? '').trim();
+    if (!cleaned) return;
 
-    if (isSelectedText(code)) {
-      selectedEntityFields = selectedEntityFields.filter((x) => x !== code);
+    if (isSelectedText(cleaned)) {
+      const c = norm(cleaned);
+      selectedEntityFields = selectedEntityFields.filter((x) => norm(x) !== c);
       return;
     }
 
-    selectedEntityFields = [...selectedEntityFields, code];
-    onAddEntity?.(code);
+    selectedEntityFields = [...selectedEntityFields, cleaned];
+    onAddEntity?.(cleaned);
   }
 
   function toggleCoord(code: string): void {
@@ -210,8 +220,8 @@
     border-color: var(--stroke-mid, rgba(15, 23, 42, 0.12));
   }
 
-  /* ✅ выбранное поле */
-  .item.active {
+  /* ✅ выбранное поле (усилили селектор, чтобы не перебивалось глобалом) */
+  .list .item.active {
     background: rgba(248, 251, 255, 0.92);
     border-color: var(--stroke-hard, rgba(15, 23, 42, 0.18));
     box-shadow: var(--shadow-btn-strong, 0 12px 30px rgba(15, 23, 42, 0.12));
