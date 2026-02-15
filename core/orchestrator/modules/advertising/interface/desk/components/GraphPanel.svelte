@@ -51,7 +51,8 @@
   let visualEdge = '#334155';
 
   // ✅ цвет точек (управляется из PickDataMenu)
-  let pointsColor = '#3b82f6';
+  let entityFieldColors: Record<string, string> = {};
+  const DEFAULT_ENTITY_COLOR = '#3b82f6';
 
   let visualSchemes: VisualScheme[] = [];
   let selectedVisualId = '';
@@ -201,7 +202,12 @@
 
   function applyClustering(input: SpacePoint[]): SpacePoint[] {
     // ✅ когда группировка выключена — красим все точки выбранным цветом
-    if (!grouping.enabled) return input.map((p) => ({ ...p, color: pointsColor }));
+    if (!grouping.enabled) {
+      return input.map((p) => ({
+        ...p,
+        color: colorForEntityField(p.sourceField),
+      }));
+    }
 
     if (grouping.recompute === 'fixed') {
       const cfgKey = makeFixedConfigKey(grouping);
@@ -435,6 +441,11 @@
     scene?.resize(560);
   }
 
+  function colorForEntityField(code: string): string {
+    return entityFieldColors?.[code] ?? DEFAULT_ENTITY_COLOR;
+  }
+
+
   onMount(async () => {
     loadStorages();
     await tick();
@@ -531,7 +542,8 @@
         bind:fromDate
         bind:toDate
 
-        bind:pointsColor
+        bind:entityFieldColors
+        defaultEntityColor={DEFAULT_ENTITY_COLOR}
 
         onAddEntity={addEntityField}
         onAddCoord={addCoordField}
