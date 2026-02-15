@@ -134,11 +134,10 @@
     axisZ,
     numberFields: numberFieldsAll,
     dateFields: dateFieldsAll,
-
-    // ✅ FIX: "Детализация групп" → voxel (min => одиночки, max => 1 кластер)
+  
     lodEnabled: grouping.enabled,
     lodDetail: Number(grouping.detail),
-    lodMinCount: 1
+    lodMinCount: 2
   });
 
   // ---- FIXED caching: Map(point.id -> clusterId)
