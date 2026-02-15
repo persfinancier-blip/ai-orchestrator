@@ -33,19 +33,23 @@
     date: 'дата'
   };
 
+  const tail = (s: string): string => {
   const norm = (s: string): string => String(s ?? '').trim().toLowerCase();
 
-  const tail = (s: string): string => {
-    const n = norm(s);
-    // берём последний сегмент после :, ., / (покрывает sales_fact:code, ads.code и т.п.)
-    return n.split(/[:./]/g).filter(Boolean).pop() ?? n;
-  };
+  // разбиваем код на токены: sales_fact:sku.keyword -> ["sales_fact","sku","keyword"]
+  const tokens = (s: string): string[] => norm(s).split(/[:./]/g).filter(Boolean);
 
   const sameCode = (a: string, b: string): boolean => {
-    const na = norm(a);
-    const nb = norm(b);
-    if (na === nb) return true;
-    return tail(na) === tail(nb);
+    const ta = tokens(a);
+    const tb = tokens(b);
+
+    if (ta.length === 0 || tb.length === 0) return false;
+
+    // быстрое совпадение целиком
+    if (norm(a) === norm(b)) return true;
+
+    const setB = new Set(tb);
+    return ta.some((t) => setB.has(t));
   };
 
   // ✅ фикс рассинхрона: одинаково нормализуем коды
@@ -99,9 +103,13 @@
     if (!cleaned) return;
 
     if (isSelectedText(cleaned)) {
-      selectedEntityFields = selectedEntityFields.filter((x) => !sameCode(x, code));
+      selectedEntityFields = selectedEntityFields.filter((x) => !sameCode(x, cleaned));
       return;
     }
+
+    selectedEntityFields = [...selectedEntityFields, cleaned];
+    onAddEntity?.(cleaned);
+  }
 
     selectedEntityFields = [...selectedEntityFields, cleaned];
     onAddEntity?.(cleaned);
