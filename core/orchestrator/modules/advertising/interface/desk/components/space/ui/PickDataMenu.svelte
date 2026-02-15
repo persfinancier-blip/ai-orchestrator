@@ -33,21 +33,6 @@
     date: 'дата'
   };
 
-  const norm = (s: string): string => String(s ?? '').trim().toLowerCase();
-
-  const tail = (s: string): string => {
-    const n = norm(s);
-    // берём последний сегмент после :, ., / (покрывает sales_fact:code, ads.code и т.п.)
-    return n.split(/[:./]/g).filter(Boolean).pop() ?? n;
-  };
-
-  const sameCode = (a: string, b: string): boolean => {
-    const na = norm(a);
-    const nb = norm(b);
-    if (na === nb) return true;
-    return tail(na) === tail(nb);
-  };
-
   // ✅ фикс рассинхрона: одинаково нормализуем коды
 
   $: selectedCoordCount = [axisX, axisY, axisZ].filter(Boolean).length;
@@ -61,16 +46,16 @@
       ? allFields
       : allFields.filter((f) => (f.name ?? '').toLowerCase().includes(q) || (f.code ?? '').toLowerCase().includes(q));
 
-  function isSelectedText(code: string): boolean {
-    return selectedEntityFields.some((x) => sameCode(x, code));
-  }
+function isSelectedText(code: string): boolean {
+  return selectedEntityFields.includes(code);
+}
 
-  function selectedAxis(code: string): 'x' | 'y' | 'z' | null {
-    if (axisX && sameCode(axisX, code)) return 'x';
-    if (axisY && sameCode(axisY, code)) return 'y';
-    if (axisZ && sameCode(axisZ, code)) return 'z';
-    return null;
-  }
+function selectedAxis(code: string): 'x' | 'y' | 'z' | null {
+  if (axisX === code) return 'x';
+  if (axisY === code) return 'y';
+  if (axisZ === code) return 'z';
+  return null;
+}
 
   function removeCoord(code: string): void {
     const ax = selectedAxis(code);
@@ -83,22 +68,20 @@ function addCoord(code: string): void {
   const cleaned = String(code ?? '').trim();
   if (!cleaned) return;
 
-  if (selectedAxis(cleaned)) return;
+  if (axisX === cleaned || axisY === cleaned || axisZ === cleaned) return;
   if (!canAddCoord) return;
 
   if (!axisX) axisX = cleaned;
   else if (!axisY) axisY = cleaned;
   else if (!axisZ) axisZ = cleaned;
-
-  // ВАЖНО: не вызываем onAddCoord — иначе родитель перетирает состояние
 }
 
 function toggleText(code: string): void {
   const cleaned = String(code ?? '').trim();
   if (!cleaned) return;
 
-  if (isSelectedText(cleaned)) {
-    selectedEntityFields = selectedEntityFields.filter((x) => !sameCode(x, cleaned));
+  if (selectedEntityFields.includes(cleaned)) {
+    selectedEntityFields = selectedEntityFields.filter((x) => x !== cleaned);
     return;
   }
 
