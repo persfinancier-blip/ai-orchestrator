@@ -120,13 +120,13 @@
   <div class="color-wrap">
     <label class="label">Цвет</label>
 
-    <button
-      type="button"
-      class="color"
-      aria-label="Цвет точек"
-      style={`background:${pointsColor};`}
-      on:click={togglePointsColor}
-    />
+  <button
+    type="button"
+    class="color"
+    aria-label="Цвет точек"
+    style={`background:${pointsColor};`}
+    on:click={togglePointsColor}
+  ></button>
 
     {#if isPointsColorOpen}
       <div class="picker-overlay" on:click={closePointsColor} />
