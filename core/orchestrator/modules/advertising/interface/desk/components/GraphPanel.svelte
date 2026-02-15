@@ -151,12 +151,6 @@
     return `hsl(${hue} 70% 45%)`;
   }
 
-  function stableHash32(input: string): number {
-    let h = 0;
-    for (let i = 0; i < input.length; i += 1) h = (h * 31 + input.charCodeAt(i)) | 0;
-    return Math.abs(h);
-  }
-
   function getTextValue(p: SpacePoint, field: string): string {
     if (p.sourceField === field) return p.label ?? '';
     return '';
