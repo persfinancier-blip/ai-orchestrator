@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
-import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js';
-
+import { CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
+import type { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import type { ShowcaseField } from '../../data/showcaseStore';
+import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js';
 import type { SpacePoint } from '../types';
 import { buildBBox, normalizeBBox, sanitizePoints, formatValueByMetric } from '../pipeline';
 
