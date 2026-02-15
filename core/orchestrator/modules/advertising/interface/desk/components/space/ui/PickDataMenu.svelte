@@ -150,7 +150,7 @@
   }
 </script>
 
-<div class="menu-pop pick">
+<div class="menu-pop pick" on:click|stopPropagation>
   <div class="menu-title">Выбор данных</div>
 
   <div class="row">
