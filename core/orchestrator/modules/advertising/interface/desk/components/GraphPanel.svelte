@@ -513,17 +513,21 @@
     {/if}
 
     {#if showPickDataMenu}
+{#if showPickDataMenu}
       <PickDataMenu
         textFields={textFieldsAll}
         coordFields={coordFieldsAll}
+    
         bind:selectedEntityFields
         bind:axisX
         bind:axisY
         bind:axisZ
         bind:search
+    
         bind:period
         bind:fromDate
         bind:toDate
+    
         onAddEntity={addEntityField}
         onAddCoord={addCoordField}
         onClose={closeAllMenus}
