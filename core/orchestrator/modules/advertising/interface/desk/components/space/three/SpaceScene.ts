@@ -159,7 +159,6 @@ export class SpaceScene {
     const sy = Number(s?.y);
     const sz = Number(s?.z);
     if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(sz)) return null;
-    // span 0 тоже допустим, но “облако” тогда смысла не имеет
     if (sx <= 0 && sy <= 0 && sz <= 0) return null;
     return { x: Math.max(0.001, sx), y: Math.max(0.001, sy), z: Math.max(0.001, sz) };
   }
@@ -172,9 +171,7 @@ export class SpaceScene {
     const denom = Math.log(n + 1);
     const raw = denom > 0 ? Math.sqrt(n) / denom : 1;
 
-    // базовый множитель под текущий радиус 1.55
-    // clamp: чтобы кластер не превращался в планету
-    const s = 0.55 * raw; // эмпирически, потом подкрутим
+    const s = 0.55 * raw;
     return Math.min(6, Math.max(1.35, s));
   }
 
@@ -220,10 +217,13 @@ export class SpaceScene {
       this.renderPoints.forEach((point, idx) => {
         const s = this.pointScale(point);
         o.position.set(point.x, point.y, point.z);
-        o.scale.set(s, s, s); // ✅ масштаб инстанса
+        o.scale.set(s, s, s);
         o.updateMatrix();
         this.pointsMesh!.setMatrixAt(idx, o.matrix);
       });
+
+      // ✅ важно для инстансов
+      this.pointsMesh.instanceMatrix.needsUpdate = true;
 
       const c = new THREE.Color();
       for (let i = 0; i < this.renderPoints.length; i += 1) {
@@ -237,7 +237,7 @@ export class SpaceScene {
     }
 
     // ---------------------------------------
-    // 2) CLUSTER CLOUDS (bbox as translucent box)
+    // 2) CLUSTER CLOUDS (bbox wireframe box)
     // ---------------------------------------
     const clusterIdx: number[] = [];
     for (let i = 0; i < this.renderPoints.length; i += 1) {
@@ -245,13 +245,13 @@ export class SpaceScene {
     }
 
     if (clusterIdx.length) {
-      // box 1x1x1, дальше масштабируем до span
       const geom = new THREE.BoxGeometry(1, 1, 1);
       const mat = new THREE.MeshBasicMaterial({
         transparent: true,
-        opacity: 0.12,
+        opacity: 0.22,
         depthWrite: false,
-        vertexColors: true
+        vertexColors: true,
+        wireframe: true // ✅ границы “облака”
       });
 
       this.clusterCloudMesh = new THREE.InstancedMesh(geom, mat, clusterIdx.length);
@@ -264,7 +264,6 @@ export class SpaceScene {
         const span = this.clusterSpan(p);
         if (!span) continue;
 
-        // ✅ центр — точка кластера, размер — span (границы по крайним)
         o.position.set(p.x, p.y, p.z);
 
         // небольшой буфер, чтобы не было “впритык”
@@ -475,13 +474,22 @@ export class SpaceScene {
 
     const fields = this.deps.getFields();
 
-    const mx = this.createChipLabel(formatValueByMetric(axisX, axisX ? calcMax(list, axisX) : Number.NaN, fields), { tone: 'accent' });
+    const mx = this.createChipLabel(
+      formatValueByMetric(axisX, axisX ? calcMax(list, axisX) : Number.NaN, fields),
+      { tone: 'accent' }
+    );
     mx.position.copy(Bx);
 
-    const my = this.createChipLabel(formatValueByMetric(axisY, axisY ? calcMax(list, axisY) : Number.NaN, fields), { tone: 'accent' });
+    const my = this.createChipLabel(
+      formatValueByMetric(axisY, axisY ? calcMax(list, axisY) : Number.NaN, fields),
+      { tone: 'accent' }
+    );
     my.position.copy(By);
 
-    const mz = this.createChipLabel(formatValueByMetric(axisZ, axisZ ? calcMax(list, axisZ) : Number.NaN, fields), { tone: 'accent' });
+    const mz = this.createChipLabel(
+      formatValueByMetric(axisZ, axisZ ? calcMax(list, axisZ) : Number.NaN, fields),
+      { tone: 'accent' }
+    );
     mz.position.copy(Bz);
 
     this.axisLabelObjects = [xChip, yChip, zChip, mx, my, mz];
