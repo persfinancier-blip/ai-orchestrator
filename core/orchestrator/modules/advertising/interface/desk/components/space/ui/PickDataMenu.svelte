@@ -208,40 +208,43 @@
   }
 
   /* ✅ ВАЖНО: усиливаем специфичность, чтобы не перебивалось :global(.item) из GraphPanel */
-  .menu-pop.pick .item {
-    width: 100%;
-    text-align: left;
-    border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
-    background: #ffffff;
-    border-radius: 14px;
-    padding: 10px 10px;
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
-    cursor: pointer;
-    box-sizing: border-box;
-    transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease, background 120ms ease;
-  }
+/* ВАЖНО: повышаем специфичность, чтобы перебить :global(.item) из GraphPanel */
+.menu-pop.pick .list .item {
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
+  background: #ffffff !important; /* перебиваем глобальный голубой фон */
+  border-radius: 14px;
+  padding: 10px 10px;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  box-sizing: border-box;
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease, background 120ms ease;
+}
 
-  .menu-pop.pick .item:hover {
-    transform: translateY(-0.5px);
-    box-shadow: var(--shadow-btn, 0 10px 26px rgba(15, 23, 42, 0.10));
-    border-color: var(--stroke-mid, rgba(15, 23, 42, 0.12));
-  }
+.menu-pop.pick .list .item:hover {
+  transform: translateY(-0.5px);
+  box-shadow: var(--shadow-btn, 0 10px 26px rgba(15, 23, 42, 0.10));
+  border-color: var(--stroke-mid, rgba(15, 23, 42, 0.12));
+}
 
-  /* ✅ выбранное поле */
-  .menu-pop.pick .item.active {
-    background: rgba(248, 251, 255, 0.92);
-    border-color: var(--stroke-hard, rgba(15, 23, 42, 0.18));
-    box-shadow: var(--shadow-btn-strong, 0 12px 30px rgba(15, 23, 42, 0.12));
-  }
+/* АКТИВНОЕ (выбранное) */
+.menu-pop.pick .list .item.active {
+  background: rgba(248, 251, 255, 0.92) !important; /* будет явно отличаться */
+  border-color: var(--stroke-hard, rgba(15, 23, 42, 0.18));
+  box-shadow: var(--shadow-btn-strong, 0 12px 30px rgba(15, 23, 42, 0.12));
+}
 
-  .menu-pop.pick .item:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-    box-shadow: none;
-    transform: none;
-  }
+/* DISABLED */
+.menu-pop.pick .list .item:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+  background: #ffffff !important; /* тоже перебить глобал */
+}
 
   .name { font-size: 12px; font-weight: 650; color: rgba(15,23,42,.88); }
 
