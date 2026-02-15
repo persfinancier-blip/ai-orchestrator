@@ -51,7 +51,10 @@
         );
 
   $: nameByCode = new Map(allFields.map((f) => [f.code, f.name] as const));
-
+  $: if (isColorOpen && activeColorCode) {
+    // чтобы свотч менялся сразу при движении ползунков
+    entityFieldColors = { ...(entityFieldColors ?? {}), [activeColorCode]: activeColorValue };
+  }
   const chipLabel = (code: string): string => nameByCode.get(code) ?? code;
 
   // --- per-field color popover state ---
