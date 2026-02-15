@@ -21,6 +21,9 @@
   export let onAddCoord: (code: string) => void;
   export let onClose: () => void;
 
+  // ✅ НОВОЕ: цвет точек (можно bind'ить из GraphPanel)
+  export let pointsColor = '#3b82f6';
+
   type AnyField =
     | { code: string; name: string; kind: 'text' }
     | { code: string; name: string; kind: 'number' | 'date' };
@@ -115,8 +118,13 @@
     else toggleCoord(f.code);
   }
 
-  // для плашки
   const chipLabel = (code: string): string => nameByCode.get(code) ?? code;
+
+  function setPointsColor(v: string): void {
+    const cleaned = String(v ?? '').trim();
+    if (!cleaned) return;
+    pointsColor = cleaned;
+  }
 </script>
 
 <div class="menu-pop pick">
@@ -145,6 +153,21 @@
         <span class="chip axis">Z: {axisZ ? chipLabel(axisZ) : '—'}</span>
       </div>
     </div>
+  </div>
+
+  <!-- ✅ НОВОЕ: выбор цвета точек (аналогично настройкам) -->
+  <div class="row two">
+    <div class="color-wrap">
+      <label class="label">Цвет</label>
+      <input class="color" type="color" bind:value={pointsColor} aria-label="Цвет точек" />
+    </div>
+
+    <input
+      class="hex"
+      placeholder="#3b82f6"
+      value={pointsColor}
+      on:input={(e) => setPointsColor((e.currentTarget as HTMLInputElement).value)}
+    />
   </div>
 
   <div class="row">
@@ -180,6 +203,7 @@
 
 <style>
   .row { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
+  .row.two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
   .sep {
     height: 1px;
@@ -241,6 +265,43 @@
   .chip.axis {
     background: rgba(248, 251, 255, 0.92);
   }
+
+  /* ✅ выбор цвета */
+  .label {
+    font-size: 12px;
+    color: rgba(15, 23, 42, 0.78);
+    width: 52px;
+  }
+
+  .color-wrap {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .color {
+    width: 44px;
+    height: 34px;
+    padding: 0;
+    border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
+    border-radius: 10px;
+    background: #ffffff;
+    cursor: pointer;
+  }
+
+  .hex {
+    width: 100%;
+    border: 1px solid var(--stroke-soft, rgba(15, 23, 42, 0.08));
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 10px 12px;
+    font-size: 12px;
+    outline: none;
+    color: rgba(15, 23, 42, 0.90);
+    box-sizing: border-box;
+  }
+  .hex:focus { box-shadow: var(--focus-ring, 0 0 0 4px rgba(15, 23, 42, 0.10)); }
 
   .list {
     margin-top: 8px;
