@@ -155,27 +155,24 @@ selectedEntityFields = selectedEntityFields.filter((x) => !sameCode(x, code));
   <div class="sub">Поля</div>
 
   <div class="list">
-    {#each filteredFields as f (f.code)}
-      {@const ax = f.kind === 'text' ? null : selectedAxis(f.code)}
-      {@const active = isActiveField(f)}
+{#each filteredFields as f (f.code)}
+  <button
+    class="item"
+    class:active={isActiveField(f)}
+    class:disabledish={isDisabledField(f)}
+    disabled={isDisabledField(f)}
+    on:click={() => onPick(f)}
+  >
+    <span class="name">{f.name}</span>
 
-      <button
-        class="item"
-        class:active={active}
-        class:disabledish={isDisabledField(f)}
-        disabled={isDisabledField(f)}
-        on:click={() => onPick(f)}
-      >
-        <span class="name">{f.name}</span>
-
-        <span class="right">
-          {#if ax}
-            <span class="pill">{ax.toUpperCase()}</span>
-          {/if}
-          <span class="tag">{kindLabel[f.kind]}</span>
-        </span>
-      </button>
-    {/each}
+    <span class="right">
+      {#if f.kind !== 'text' && selectedAxis(f.code)}
+        <span class="pill">{selectedAxis(f.code)?.toUpperCase()}</span>
+      {/if}
+      <span class="tag">{kindLabel[f.kind]}</span>
+    </span>
+  </button>
+{/each}
   </div>
 
   {#if !canAddCoord}
