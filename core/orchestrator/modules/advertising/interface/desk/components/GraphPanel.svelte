@@ -134,7 +134,8 @@
     axisZ,
     numberFields: numberFieldsAll,
     dateFields: dateFieldsAll,
-  
+
+    // ✅ FIX: прокидываем параметры voxel-LOD (ползунок "Детализация групп")
     lodEnabled: grouping.enabled,
     lodDetail: Number(grouping.detail),
     lodMinCount: 2
@@ -208,13 +209,14 @@
     for (let i = 0; i < input.length; i += 1) h = (h * 31 + input.charCodeAt(i)) | 0;
     return Math.abs(h);
   }
-  
+
   function applyClustering(input: SpacePoint[]): SpacePoint[] {
+    // ✅ когда группировка выключена — красим все точки выбранным цветом
     if (!grouping.enabled) return input.map((p) => ({ ...p, color: pointsColor }));
-  
+
     // voxel-LOD сам меняет число точек:
-    // detail=min => почти все одиночки (isCluster=false)
-    // detail=max => одна точка-кластер (isCluster=true)
+    // detail=min => почти все одиночки
+    // detail=max => одна точка-кластер
     return input.map((p) => {
       if (p.isCluster) return { ...p, color: colorForCluster(stableHash32(p.id)) };
       return { ...p, color: pointsColor };
@@ -443,6 +445,101 @@
   $: axesLabel = `Оси: ${fieldName(axisX || '—')} / ${fieldName(axisY || '—')} / ${fieldName(axisZ || '—')}`;
 </script>
 
+<section class="graph-root">
+  <div class="stage">
+    <div bind:this={container3d} class="scene" />
+
+    <div class="hud top-right">
+      <div class="hud-actions">
+        <button class="btn" on:click={toggleDisplayMenu}>Настройка отображения</button>
+        <button class="btn btn-primary" on:click={togglePickMenu}>Выбрать данные</button>
+        <button class="btn" on:click={toggleGroupingMenu}>Формирование групп</button>
+      </div>
+
+      <Crumbs crumbs={selectedCrumbs} onRemove={removeEntityField} />
+    </div>
+
+    <InfoCard pointsCount={renderedCount} axesLabel={axesLabel} bboxLabel={bboxLabel} />
+
+    {#if showDisplayMenu}
+      <DisplayMenu
+        bind:visualBg
+        bind:visualEdge
+        bind:selectedVisualId
+        bind:selectedDatasetPresetId
+        {visualSchemes}
+        {datasetPresets}
+        onResetVisual={resetVisual}
+        onOpenSaveVisual={() => {
+          saveVisualName = '';
+          showSaveVisualModal = true;
+          closeAllMenus();
+        }}
+        onClearAllDataSelection={clearAllDataSelection}
+        onOpenSaveDataset={() => {
+          saveDatasetName = '';
+          showSaveDatasetModal = true;
+          closeAllMenus();
+        }}
+        onApplyVisual={applyVisualScheme}
+        onApplyDataset={applyDatasetPreset}
+        onResetView={() => scene?.resetView()}
+      />
+    {/if}
+
+    {#if showPickDataMenu}
+      <PickDataMenu
+        textFields={textFieldsAll}
+        coordFields={coordFieldsAll}
+        bind:selectedEntityFields
+        bind:axisX
+        bind:axisY
+        bind:axisZ
+        bind:search
+        bind:period
+        bind:fromDate
+        bind:toDate
+        bind:pointsColor
+        onAddEntity={addEntityField}
+        onAddCoord={addCoordField}
+        onClose={closeAllMenus}
+      />
+    {/if}
+
+    {#if showGroupingMenu}
+      <GroupingMenu bind:cfg={grouping} numberFields={groupingNumberFields} textFields={groupingTextFields} onRecompute={recomputeClusters} />
+    {/if}
+
+    <Tooltip {tooltip} />
+  </div>
+
+  {#if showSaveVisualModal}
+    <SaveModal
+      title="Сохранить визуальную схему"
+      placeholder="Например: Светлый фон"
+      bind:value={saveVisualName}
+      onCancel={() => (showSaveVisualModal = false)}
+      onSave={(v) => {
+        saveVisualScheme(v);
+        showSaveVisualModal = false;
+      }}
+    />
+  {/if}
+
+  {#if showSaveDatasetModal}
+    <SaveModal
+      title="Сохранить набор данных"
+      placeholder="Например: Артикул + Выручка/Заказы/Расход"
+      bind:value={saveDatasetName}
+      onCancel={() => (showSaveDatasetModal = false)}
+      onSave={(v) => {
+        saveDatasetPreset(v);
+        showSaveDatasetModal = false;
+      }}
+    />
+  {/if}
+</section>
+
 <style>
   :global(:root) {
     --ink-900: 15 23 42;
@@ -466,18 +563,28 @@
     --field-bg-soft: rgba(248, 251, 255, 0.9);
   }
 
-  :global(.graph-root) { width: 100%; }
+  :global(.graph-root) {
+    width: 100%;
+    display: block;
+  }
 
   :global(.stage) {
     position: relative;
     height: 560px;
+    min-height: 560px;
     border-radius: 18px;
     overflow: hidden;
     background: #ffffff;
   }
 
-  :global(.scene) { position: absolute; inset: 0; }
+  :global(.scene) {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
 
+  /* HUD layout */
   :global(.hud) {
     position: absolute;
     pointer-events: none;
@@ -505,6 +612,7 @@
     pointer-events: auto;
   }
 
+  /* Buttons */
   :global(.btn) {
     border: 0;
     border-radius: 999px;
@@ -528,6 +636,7 @@
 
   :global(.btn.wide) { width: 100%; }
 
+  /* Menus данных */
   :global(.menu-pop) {
     position: absolute;
     top: 56px;
@@ -641,6 +750,7 @@
     box-sizing: border-box;
   }
 
+  /* crumbs */
   :global(.crumbs) {
     display: flex;
     flex-wrap: wrap;
@@ -663,6 +773,7 @@
     cursor: pointer;
   }
 
+  /* info card */
   :global(.info-card) {
     pointer-events: none;
     background: rgba(248, 251, 255, 0.88);
