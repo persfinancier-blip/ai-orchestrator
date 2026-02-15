@@ -41,6 +41,8 @@ export class SpaceScene {
   private axisLabelObjects: CSS2DObject[] = [];
 
   private pointsMesh?: THREE.InstancedMesh;
+  private clusterCloudMesh?: THREE.InstancedMesh; // ✅ “облако” кластера (границы)
+
   private renderPoints: SpacePoint[] = [];
 
   private anim = 0;
@@ -139,66 +141,160 @@ export class SpaceScene {
     this.controls.update();
   }
 
-public setPoints(points: SpacePoint[]): { renderedCount: number; bboxLabel: string } {
-  if (!this.scene || !this.camera || !this.controls || !this.renderer) {
-    return { renderedCount: 0, bboxLabel: '—' };
+  // -----------------------
+  // ✅ helpers for clusters
+  // -----------------------
+  private isClusterPoint(p: SpacePoint): boolean {
+    return Boolean((p as any)?.isCluster);
   }
 
-  this.scene.background = new THREE.Color(this.theme.bg);
+  private clusterCount(p: SpacePoint): number {
+    const n = Number((p as any)?.clusterCount);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  }
 
-  // ✅ ВАЖНО: сохраняем входные цвета по id до sanitizePoints(),
-  // потому что sanitize часто режет поля и может выкинуть `color`.
-  const colorById = new Map<string, string | undefined>();
-  for (const p of points ?? []) colorById.set(p.id, p.color);
+  private clusterSpan(p: SpacePoint): { x: number; y: number; z: number } | null {
+    const s = (p as any)?.span;
+    const sx = Number(s?.x);
+    const sy = Number(s?.y);
+    const sz = Number(s?.z);
+    if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(sz)) return null;
+    // span 0 тоже допустим, но “облако” тогда смысла не имеет
+    if (sx <= 0 && sy <= 0 && sz <= 0) return null;
+    return { x: Math.max(0.001, sx), y: Math.max(0.001, sy), z: Math.max(0.001, sz) };
+  }
 
-  this.clearMesh(this.pointsMesh);
-  this.pointsMesh = undefined;
+  // sqrt(n)/log(n+1) с клампом чтобы не улетало
+  private pointScale(p: SpacePoint): number {
+    if (!this.isClusterPoint(p)) return 1;
 
-  const sanitized = sanitizePoints(points);
+    const n = this.clusterCount(p);
+    const denom = Math.log(n + 1);
+    const raw = denom > 0 ? Math.sqrt(n) / denom : 1;
 
-  // ✅ возвращаем цвет обратно после sanitize
-  const renderable = sanitized.map((p) => ({
-    ...p,
-    color: colorById.get(p.id) ?? p.color
-  }));
+    // базовый множитель под текущий радиус 1.55
+    // clamp: чтобы кластер не превращался в планету
+    const s = 0.55 * raw; // эмпирически, потом подкрутим
+    return Math.min(6, Math.max(1.35, s));
+  }
 
-  this.renderPoints = renderable;
-
-  if (this.renderPoints.length) {
-    this.pointsMesh = new THREE.InstancedMesh(
-      new THREE.SphereGeometry(1.55, 10, 10),
-      new THREE.MeshBasicMaterial({ vertexColors: true }),
-      this.renderPoints.length
-    );
-
-    const o = new THREE.Object3D();
-    this.renderPoints.forEach((point, idx) => {
-      o.position.set(point.x, point.y, point.z);
-      o.updateMatrix();
-      this.pointsMesh!.setMatrixAt(idx, o.matrix);
-    });
-
-    const c = new THREE.Color();
-    for (let i = 0; i < this.renderPoints.length; i += 1) {
-      const hex = this.renderPoints[i].color ?? this.theme.pointColor;
-      c.set(hex);
-      this.pointsMesh!.setColorAt(i, c);
+  public setPoints(points: SpacePoint[]): { renderedCount: number; bboxLabel: string } {
+    if (!this.scene || !this.camera || !this.controls || !this.renderer) {
+      return { renderedCount: 0, bboxLabel: '—' };
     }
-    this.pointsMesh!.instanceColor!.needsUpdate = true;
 
-    this.scene.add(this.pointsMesh);
+    this.scene.background = new THREE.Color(this.theme.bg);
+
+    // ✅ сохраняем цвета до sanitizePoints
+    const colorById = new Map<string, string | undefined>();
+    for (const p of points ?? []) colorById.set(p.id, p.color);
+
+    // ✅ чистим старое
+    this.clearMesh(this.pointsMesh);
+    this.pointsMesh = undefined;
+
+    this.clearMesh(this.clusterCloudMesh);
+    this.clusterCloudMesh = undefined;
+
+    const sanitized = sanitizePoints(points);
+
+    // ✅ возвращаем цвет обратно
+    const renderable = sanitized.map((p) => ({
+      ...p,
+      color: colorById.get(p.id) ?? p.color
+    }));
+
+    this.renderPoints = renderable;
+
+    // -----------------------
+    // 1) MAIN POINTS (spheres)
+    // -----------------------
+    if (this.renderPoints.length) {
+      this.pointsMesh = new THREE.InstancedMesh(
+        new THREE.SphereGeometry(1.55, 10, 10),
+        new THREE.MeshBasicMaterial({ vertexColors: true }),
+        this.renderPoints.length
+      );
+
+      const o = new THREE.Object3D();
+      this.renderPoints.forEach((point, idx) => {
+        const s = this.pointScale(point);
+        o.position.set(point.x, point.y, point.z);
+        o.scale.set(s, s, s); // ✅ масштаб инстанса
+        o.updateMatrix();
+        this.pointsMesh!.setMatrixAt(idx, o.matrix);
+      });
+
+      const c = new THREE.Color();
+      for (let i = 0; i < this.renderPoints.length; i += 1) {
+        const hex = this.renderPoints[i].color ?? this.theme.pointColor;
+        c.set(hex);
+        this.pointsMesh!.setColorAt(i, c);
+      }
+      this.pointsMesh!.instanceColor!.needsUpdate = true;
+
+      this.scene.add(this.pointsMesh);
+    }
+
+    // ---------------------------------------
+    // 2) CLUSTER CLOUDS (bbox as translucent box)
+    // ---------------------------------------
+    const clusterIdx: number[] = [];
+    for (let i = 0; i < this.renderPoints.length; i += 1) {
+      if (this.isClusterPoint(this.renderPoints[i]) && this.clusterSpan(this.renderPoints[i])) clusterIdx.push(i);
+    }
+
+    if (clusterIdx.length) {
+      // box 1x1x1, дальше масштабируем до span
+      const geom = new THREE.BoxGeometry(1, 1, 1);
+      const mat = new THREE.MeshBasicMaterial({
+        transparent: true,
+        opacity: 0.12,
+        depthWrite: false,
+        vertexColors: true
+      });
+
+      this.clusterCloudMesh = new THREE.InstancedMesh(geom, mat, clusterIdx.length);
+
+      const o = new THREE.Object3D();
+      const col = new THREE.Color();
+
+      for (let ii = 0; ii < clusterIdx.length; ii += 1) {
+        const p = this.renderPoints[clusterIdx[ii]];
+        const span = this.clusterSpan(p);
+        if (!span) continue;
+
+        // ✅ центр — точка кластера, размер — span (границы по крайним)
+        o.position.set(p.x, p.y, p.z);
+
+        // небольшой буфер, чтобы не было “впритык”
+        const pad = 1.08;
+        o.scale.set(span.x * pad, span.y * pad, span.z * pad);
+
+        o.updateMatrix();
+        this.clusterCloudMesh.setMatrixAt(ii, o.matrix);
+
+        const hex = p.color ?? this.theme.pointColor;
+        col.set(hex);
+        this.clusterCloudMesh.setColorAt(ii, col);
+      }
+
+      this.clusterCloudMesh.instanceMatrix.needsUpdate = true;
+      this.clusterCloudMesh.instanceColor!.needsUpdate = true;
+
+      this.scene.add(this.clusterCloudMesh);
+    }
+
+    this.rebuildPlanes(renderable);
+
+    const bbox = renderable.length ? buildBBox(renderable) : null;
+    const bboxLabel = bbox
+      ? `x ${bbox.minX.toFixed(2)}..${bbox.maxX.toFixed(2)} | y ${bbox.minY.toFixed(2)}..${bbox.maxY.toFixed(2)} | z ${bbox.minZ.toFixed(2)}..${bbox.maxZ.toFixed(2)}`
+      : '—';
+
+    this.fitCamera(renderable);
+    return { renderedCount: renderable.length, bboxLabel };
   }
-
-  this.rebuildPlanes(renderable);
-
-  const bbox = renderable.length ? buildBBox(renderable) : null;
-  const bboxLabel = bbox
-    ? `x ${bbox.minX.toFixed(2)}..${bbox.maxX.toFixed(2)} | y ${bbox.minY.toFixed(2)}..${bbox.maxY.toFixed(2)} | z ${bbox.minZ.toFixed(2)}..${bbox.maxZ.toFixed(2)}`
-    : '—';
-
-  this.fitCamera(renderable);
-  return { renderedCount: renderable.length, bboxLabel };
-}
 
   public dispose(): void {
     cancelAnimationFrame(this.anim);
@@ -209,6 +305,7 @@ public setPoints(points: SpacePoint[]): { renderedCount: number; bboxLabel: stri
     this.renderer?.domElement?.removeEventListener('mousemove', this.onMove3d);
 
     this.clearMesh(this.pointsMesh);
+    this.clearMesh(this.clusterCloudMesh);
 
     this.renderer?.dispose();
     this.controls?.dispose();
@@ -408,6 +505,32 @@ public setPoints(points: SpacePoint[]): { renderedCount: number; bboxLabel: stri
 
     const point = this.renderPoints[hit.instanceId];
     if (!point) return;
+
+    // ✅ TOOLTIP: кластер/обычная точка
+    if (this.isClusterPoint(point)) {
+      const n = this.clusterCount(point);
+
+      const revenue = Math.round(point.metrics.revenue ?? 0);
+      const spend = Math.round(point.metrics.spend ?? 0);
+      const orders = Math.round(point.metrics.orders ?? 0);
+      const drr = Number(point.metrics.drr ?? 0);
+      const roi = Number(point.metrics.roi ?? 0);
+
+      this.cb.onTooltip({
+        visible: true,
+        x: event.clientX - rect.left + 12,
+        y: event.clientY - rect.top + 12,
+        lines: [
+          `Кластер (${n})`,
+          `Поле: ${this.deps.fieldName(point.sourceField)}`,
+          `Выручка: ${revenue.toLocaleString('ru-RU')} ₽`,
+          `Расход: ${spend.toLocaleString('ru-RU')} ₽`,
+          `Заказы: ${orders.toLocaleString('ru-RU')}`,
+          `ДРР: ${drr.toFixed(2)}% · ROI: ${roi.toFixed(2)}`
+        ]
+      });
+      return;
+    }
 
     this.cb.onTooltip({
       visible: true,
