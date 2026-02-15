@@ -6,7 +6,7 @@
   import { showcaseStore, fieldName, type DatasetId, type ShowcaseField } from '../data/showcaseStore';
 
   import type { DatasetPreset, PeriodMode, TooltipState, VisualScheme, ShowcaseSafe, SpacePoint } from './space/types';
-  import { applyRowsFilter, buildPoints } from './space/pipeline';
+  import { applyRowsFilter, buildPoints, calcMax } from './space/pipeline';
   import { loadDatasetPresets, loadVisualSchemes, saveDatasetPresets, saveVisualSchemes } from './space/presetsStorage';
   import { SpaceScene } from './space/three/SpaceScene';
 
@@ -48,13 +48,10 @@
   let entityFieldColors: Record<string, string> = {};
   const DEFAULT_ENTITY_COLOR = '#3b82f6';
 
-  // ✅ LOD / voxel settings (группировка ДО сцены)
+  // ✅ LOD state (по умолчанию включено, средняя детализация, min=5)
   let lodEnabled = true;
-  let lodDetail = 0.5; // средняя
+  let lodDetail = 0.5; // 0..1
   let lodMinCount = 5;
-
-  // ✅ max по осям до LOD (для стабильных подписей)
-  let axisMax = { xMax: Number.NaN, yMax: Number.NaN, zMax: Number.NaN };
 
   // ✅ НОРМАЛИЗАЦИЯ КЛЮЧЕЙ (должна совпадать с PickDataMenu)
   const norm = (s: string): string => String(s ?? '').trim().toLowerCase();
@@ -133,46 +130,64 @@
     selectedEntityFields
   });
 
-  // ✅ точки строим с LOD (воксели) ДО сцены
-  $: points = buildPoints({
-    rows: filteredRows,
-    entityFields: selectedEntityFields,
-    axisX,
-    axisY,
-    axisZ,
-    numberFields: numberFieldsAll,
-    dateFields: dateFieldsAll,
-
-    lodEnabled,
-    lodDetail,
-    lodMinCount,
-
-    onAxisMax: (v) => {
-      // ✅ чтобы не создавать лишние реактивные циклы
-      if (
-        v.xMax !== axisMax.xMax ||
-        v.yMax !== axisMax.yMax ||
-        v.zMax !== axisMax.zMax
-      ) axisMax = v;
+  function safeBuildPoints(opts: { lodEnabled: boolean; lodDetail: number; lodMinCount: number }): SpacePoint[] {
+    try {
+      return buildPoints({
+        rows: filteredRows,
+        entityFields: selectedEntityFields,
+        axisX,
+        axisY,
+        axisZ,
+        numberFields: numberFieldsAll,
+        dateFields: dateFieldsAll,
+        lodEnabled: opts.lodEnabled,
+        lodDetail: opts.lodDetail,
+        lodMinCount: opts.lodMinCount
+      });
+    } catch (e) {
+      // чтобы UI не умирал и кнопки не “умирали” вместе с компонентом
+      console.error('[GraphPanel] buildPoints failed', e);
+      return [];
     }
+  }
+
+  // ✅ raw points (без LOD) — только для max значений осей
+  $: pointsRaw = safeBuildPoints({ lodEnabled: false, lodDetail, lodMinCount });
+
+  // ✅ render points (с LOD) — то, что реально рисуем
+  $: points = safeBuildPoints({ lodEnabled, lodDetail, lodMinCount });
+
+  // ✅ max по осям считаем по raw (не зависят от LOD)
+  $: axisMaxOverride = ({
+    xMax: axisX ? calcMax(pointsRaw, axisX) : Number.NaN,
+    yMax: axisY ? calcMax(pointsRaw, axisY) : Number.NaN,
+    zMax: axisZ ? calcMax(pointsRaw, axisZ) : Number.NaN
   });
 
-  // ✅ красим только по полю (цвет задаётся при выборе точек)
   function colorForEntityField(code: string, colors: Record<string, string>): string {
     return colors?.[keyForColor(code)] ?? DEFAULT_ENTITY_COLOR;
   }
 
-  $: colored = (points ?? []).map((p: SpacePoint) => ({
-    ...p,
-    color: colorForEntityField(p.sourceField, entityFieldColors)
-  }));
+  // ✅ когда “формирование групп” убрали — всегда красим по полю
+  function applyColoring(input: SpacePoint[], colors: Record<string, string>): SpacePoint[] {
+    return (input ?? []).map((p) => ({
+      ...p,
+      color: colorForEntityField(p.sourceField, colors)
+    }));
+  }
 
-  // ✅ и тут используем colored
+  $: colored = applyColoring(points, entityFieldColors);
+
   $: if (scene) {
     scene.setTheme({ bg: visualBg, edge: visualEdge });
-    scene.setAxisCodes({ x: axisX, y: axisY, z: axisZ });
 
-    const info = scene.setPoints(clustered, { axisMaxOverride: axisMax });
+    // ✅ важно: сюда передаём axisMaxOverride, иначе подписи будут “прыгать” от LOD
+    scene.setAxisCodes(
+      { x: axisX, y: axisY, z: axisZ },
+      { axisMaxOverride }
+    );
+
+    const info = scene.setPoints(colored, { axisMaxOverride });
 
     renderedCount = info.renderedCount;
     bboxLabel = info.bboxLabel;
@@ -180,16 +195,12 @@
 
   function toggleDisplayMenu(): void {
     showDisplayMenu = !showDisplayMenu;
-    if (showDisplayMenu) {
-      showPickDataMenu = false;
-    }
+    if (showDisplayMenu) showPickDataMenu = false;
   }
 
   function togglePickMenu(): void {
     showPickDataMenu = !showPickDataMenu;
-    if (showPickDataMenu) {
-      showDisplayMenu = false;
-    }
+    if (showPickDataMenu) showDisplayMenu = false;
   }
 
   function closeAllMenus(): void {
@@ -201,15 +212,12 @@
     if (!code || selectedEntityFields.includes(code)) return;
     selectedEntityFields = [...selectedEntityFields, code];
 
-    // ✅ если добавили через внешний хук/кнопку — сразу заводим цвет
     const k = keyForColor(code);
     if (!entityFieldColors?.[k]) setEntityColor(code, DEFAULT_ENTITY_COLOR);
   }
 
   function removeEntityField(code: string): void {
     selectedEntityFields = selectedEntityFields.filter((x) => x !== code);
-
-    // ✅ если удалили не из PickDataMenu (например через Crumbs) — чистим цвет тоже
     deleteEntityColor(code);
   }
 
@@ -229,6 +237,10 @@
     axisZ = '';
     search = '';
     entityFieldColors = {};
+
+    lodEnabled = true;
+    lodDetail = 0.5;
+    lodMinCount = 5;
   }
 
   function loadStorages(): void {
@@ -353,8 +365,9 @@
 
     await tick();
 
-    // ✅ на старте тоже используем colored
-    const info = scene.setPoints(clustered, { axisMaxOverride: axisMax });;
+    // ✅ на старте — тоже с axisMaxOverride
+    scene.setAxisCodes({ x: axisX, y: axisY, z: axisZ }, { axisMaxOverride });
+    const info = scene.setPoints(colored, { axisMaxOverride });
     renderedCount = info.renderedCount;
     bboxLabel = info.bboxLabel;
   });
@@ -428,10 +441,10 @@
         bind:fromDate
         bind:toDate
         bind:entityFieldColors
+        defaultEntityColor={DEFAULT_ENTITY_COLOR}
         bind:lodEnabled
         bind:lodDetail
         bind:lodMinCount
-        defaultEntityColor={DEFAULT_ENTITY_COLOR}
         onAddEntity={addEntityField}
         onAddCoord={addCoordField}
         onClose={closeAllMenus}
@@ -467,6 +480,10 @@
     />
   {/if}
 </section>
+
+<style>
+  /* твои стили без изменений */
+</style>
 
 <style>
   /* стили без изменений */
