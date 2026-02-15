@@ -79,34 +79,31 @@
     if (ax === 'z') axisZ = '';
   }
 
-  function addCoord(code: string): void {
-    const cleaned = String(code ?? '').trim();
-    if (!cleaned) return;
+function addCoord(code: string): void {
+  const cleaned = String(code ?? '').trim();
+  if (!cleaned) return;
 
-    if (selectedAxis(cleaned)) return;
-    if (!canAddCoord) return;
+  if (selectedAxis(cleaned)) return;
+  if (!canAddCoord) return;
 
-    // X -> Y -> Z
-    if (!axisX) axisX = cleaned;
-    else if (!axisY) axisY = cleaned;
-    else if (!axisZ) axisZ = cleaned;
+  if (!axisX) axisX = cleaned;
+  else if (!axisY) axisY = cleaned;
+  else if (!axisZ) axisZ = cleaned;
 
-    onAddCoord?.(cleaned);
+  // ВАЖНО: не вызываем onAddCoord — иначе родитель перетирает состояние
+}
+
+function toggleText(code: string): void {
+  const cleaned = String(code ?? '').trim();
+  if (!cleaned) return;
+
+  if (isSelectedText(cleaned)) {
+    selectedEntityFields = selectedEntityFields.filter((x) => !sameCode(x, cleaned));
+    return;
   }
 
-  function toggleText(code: string): void {
-    const cleaned = String(code ?? '').trim();
-    if (!cleaned) return;
-
-    if (isSelectedText(cleaned)) {
-      const c = norm(cleaned);
-selectedEntityFields = selectedEntityFields.filter((x) => !sameCode(x, code));
-      return;
-    }
-
-    selectedEntityFields = [...selectedEntityFields, cleaned];
-    onAddEntity?.(cleaned);
-  }
+  selectedEntityFields = [...selectedEntityFields, cleaned];
+}
 
   function toggleCoord(code: string): void {
     if (!code) return;
