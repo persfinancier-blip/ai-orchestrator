@@ -367,6 +367,16 @@
 
     // ✅ на старте — тоже с axisMaxOverride
     scene.setAxisCodes({ x: axisX, y: axisY, z: axisZ }, { axisMaxOverride });
+
+console.log('[GraphPanel] selection', {
+  selectedEntityFields,
+  axisX, axisY, axisZ,
+  lodEnabled, lodDetail, lodMinCount,
+  rows: filteredRows?.length,
+  points: points?.length,
+  colored: colored?.length
+});
+
     const info = scene.setPoints(colored, { axisMaxOverride });
     renderedCount = info.renderedCount;
     bboxLabel = info.bboxLabel;
