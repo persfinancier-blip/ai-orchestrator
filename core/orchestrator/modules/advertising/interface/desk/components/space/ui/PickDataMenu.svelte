@@ -125,6 +125,10 @@ function toggleText(code: string): void {
 
 <div class="menu-pop pick">
   <div class="menu-title">Выбор данных</div>
+  <pre class="dbg">
+selectedEntityFields: {JSON.stringify(selectedEntityFields, null, 2)}
+axis: {JSON.stringify({ axisX, axisY, axisZ }, null, 2)}
+  </pre>
 
   <div class="row">
     <input class="input" placeholder="Поиск по полям (Ctrl+K)" bind:value={search} />
@@ -280,4 +284,14 @@ function toggleText(code: string): void {
   flex: 0 0 16px;
 }
 
+.dbg {
+  margin: 8px 0;
+  padding: 8px;
+  font-size: 11px;
+  background: rgba(15,23,42,0.04);
+  border: 1px solid rgba(15,23,42,0.08);
+  border-radius: 10px;
+  max-height: 140px;
+  overflow: auto;
+}
 </style>
