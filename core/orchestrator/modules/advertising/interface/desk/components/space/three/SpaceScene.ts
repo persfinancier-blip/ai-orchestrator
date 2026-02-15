@@ -139,23 +139,37 @@ export class SpaceScene {
     this.controls.update();
   }
 
-  public setPoints(points: SpacePoint[]): { renderedCount: number; bboxLabel: string } {
-    if (!this.scene || !this.camera || !this.controls || !this.renderer) return { renderedCount: 0, bboxLabel: '—' };
+public setPoints(points: SpacePoint[]): { renderedCount: number; bboxLabel: string } {
+  if (!this.scene || !this.camera || !this.controls || !this.renderer) {
+    return { renderedCount: 0, bboxLabel: '—' };
+  }
 
-    this.scene.background = new THREE.Color(this.theme.bg);
+  this.scene.background = new THREE.Color(this.theme.bg);
 
-    this.clearMesh(this.pointsMesh);
-    this.pointsMesh = undefined;
+  // ✅ ВАЖНО: сохраняем входные цвета по id до sanitizePoints(),
+  // потому что sanitize часто режет поля и может выкинуть `color`.
+  const colorById = new Map<string, string | undefined>();
+  for (const p of points ?? []) colorById.set(p.id, p.color);
 
-    const renderable = sanitizePoints(points);
-    this.renderPoints = renderable;
+  this.clearMesh(this.pointsMesh);
+  this.pointsMesh = undefined;
 
-    if (this.renderPoints.length) {
-        this.pointsMesh = new THREE.InstancedMesh(
-          new THREE.SphereGeometry(1.55, 10, 10),
-          new THREE.MeshBasicMaterial({ vertexColors: true }),
-          this.renderPoints.length
-        );
+  const sanitized = sanitizePoints(points);
+
+  // ✅ возвращаем цвет обратно после sanitize
+  const renderable = sanitized.map((p) => ({
+    ...p,
+    color: colorById.get(p.id) ?? p.color
+  }));
+
+  this.renderPoints = renderable;
+
+  if (this.renderPoints.length) {
+    this.pointsMesh = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(1.55, 10, 10),
+      new THREE.MeshBasicMaterial({ vertexColors: true }),
+      this.renderPoints.length
+    );
 
     const o = new THREE.Object3D();
     this.renderPoints.forEach((point, idx) => {
@@ -163,7 +177,7 @@ export class SpaceScene {
       o.updateMatrix();
       this.pointsMesh!.setMatrixAt(idx, o.matrix);
     });
-    
+
     const c = new THREE.Color();
     for (let i = 0; i < this.renderPoints.length; i += 1) {
       const hex = this.renderPoints[i].color ?? this.theme.pointColor;
@@ -171,20 +185,20 @@ export class SpaceScene {
       this.pointsMesh!.setColorAt(i, c);
     }
     this.pointsMesh!.instanceColor!.needsUpdate = true;
-    
+
     this.scene.add(this.pointsMesh);
-        }
-
-    this.rebuildPlanes(renderable);
-
-    const bbox = renderable.length ? buildBBox(renderable) : null;
-    const bboxLabel = bbox
-      ? `x ${bbox.minX.toFixed(2)}..${bbox.maxX.toFixed(2)} | y ${bbox.minY.toFixed(2)}..${bbox.maxY.toFixed(2)} | z ${bbox.minZ.toFixed(2)}..${bbox.maxZ.toFixed(2)}`
-      : '—';
-
-    this.fitCamera(renderable);
-    return { renderedCount: renderable.length, bboxLabel };
   }
+
+  this.rebuildPlanes(renderable);
+
+  const bbox = renderable.length ? buildBBox(renderable) : null;
+  const bboxLabel = bbox
+    ? `x ${bbox.minX.toFixed(2)}..${bbox.maxX.toFixed(2)} | y ${bbox.minY.toFixed(2)}..${bbox.maxY.toFixed(2)} | z ${bbox.minZ.toFixed(2)}..${bbox.maxZ.toFixed(2)}`
+    : '—';
+
+  this.fitCamera(renderable);
+  return { renderedCount: renderable.length, bboxLabel };
+}
 
   public dispose(): void {
     cancelAnimationFrame(this.anim);
