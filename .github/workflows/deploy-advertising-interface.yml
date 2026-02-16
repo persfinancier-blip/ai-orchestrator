@@ -1,14 +1,14 @@
-name: Deploy Advertising Interface (UI + API)
+name: Deploy Advertising (UI + API)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
     paths:
       - "core/orchestrator/modules/advertising/interface/**"
       - ".github/workflows/deploy-advertising-interface.yml"
 
 concurrency:
-  group: deploy-advertising-interface
+  group: deploy-advertising-ui-api
   cancel-in-progress: true
 
 jobs:
@@ -19,14 +19,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Use Node
+      - name: Use Node 18
         uses: actions/setup-node@v4
         with:
           node-version: "18"
           cache: "npm"
           cache-dependency-path: core/orchestrator/modules/advertising/interface/package-lock.json
 
-      # ---------- Build UI ----------
+      # ---------------- UI BUILD ----------------
       - name: Install UI deps
         working-directory: core/orchestrator/modules/advertising/interface
         run: npm ci
@@ -35,7 +35,7 @@ jobs:
         working-directory: core/orchestrator/modules/advertising/interface
         run: npm run build
 
-      # ---------- SSH setup ----------
+      # ---------------- SSH SETUP ----------------
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
@@ -43,59 +43,88 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -p "${{ secrets.DEPLOY_PORT }}" "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
 
-      # ---------- Deploy UI dist ----------
-      - name: Deploy UI dist via rsync
+      # ---------------- DEPLOY UI DIST ----------------
+      - name: Deploy UI dist (rsync)
         run: |
           rsync -az --delete \
             core/orchestrator/modules/advertising/interface/dist/ \
             "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ secrets.WEB_ROOT }}/core/orchestrator/modules/advertising/interface/dist/"
 
-      # ---------- Deploy API code + restart via PM2 ----------
-      - name: Deploy API (git pull + npm ci + pm2 reload)
+      # ---------------- DEPLOY API (SERVER) ----------------
+      - name: Deploy API code + restart PM2
+        env:
+          REPO_SSH_URL: ${{ secrets.REPO_SSH_URL }}
+
+          PGHOST: ${{ secrets.PGHOST }}
+          PGPORT: ${{ secrets.PGPORT }}
+          PGUSER: ${{ secrets.PGUSER }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+          PGDATABASE: ${{ secrets.PGDATABASE }}
+
+          API_HOST: ${{ secrets.API_HOST }}
+          API_PORT: ${{ secrets.API_PORT }}
+          API_BASE: ${{ secrets.API_BASE }}
         run: |
-          ssh -p "${{ secrets.DEPLOY_PORT }}" "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" << 'SSH'
+          ssh -p "${{ secrets.DEPLOY_PORT }}" "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" << SSH
             set -euo pipefail
 
-            # 1) Source repo location on server (ВАЖНО: фиксируем одно место)
             REPO_DIR="/srv/ai-src/ai-orchestrator"
-            APP_DIR="$REPO_DIR/core/orchestrator/modules/advertising/interface"
+            APP_DIR="\$REPO_DIR/core/orchestrator/modules/advertising/interface"
 
-            # 2) Ensure repo exists (if not, clone)
-            if [ ! -d "$REPO_DIR/.git" ]; then
-              mkdir -p "$(dirname "$REPO_DIR")"
-              git clone "${REPO_SSH_URL:-}" "$REPO_DIR" || true
+            # 1) Ensure repo exists
+            if [ ! -d "\$REPO_DIR/.git" ]; then
+              mkdir -p "\$(dirname "\$REPO_DIR")"
+              git clone "${REPO_SSH_URL}" "\$REPO_DIR"
             fi
 
-            # 3) Pull latest
-            cd "$REPO_DIR"
+            # 2) Update code
+            cd "\$REPO_DIR"
             git fetch --all
             git reset --hard origin/main
 
-            # 4) Install deps for API/UI workspace (same folder)
-            cd "$APP_DIR"
+            # 3) Install deps (same folder contains server/*)
+            cd "\$APP_DIR"
             npm ci
 
-            # 5) Ensure pm2 installed
+            # 4) Ensure pm2 installed
             if ! command -v pm2 >/dev/null 2>&1; then
-              npm i -g pm2
+              sudo npm i -g pm2
             fi
 
-            # 6) Start or reload API
+            # 5) Export env from GitHub Secrets (no hardcoded addresses)
+            export PGHOST="${PGHOST}"
+            export PGPORT="${PGPORT}"
+            export PGUSER="${PGUSER}"
+            export PGPASSWORD="${PGPASSWORD}"
+            export PGDATABASE="${PGDATABASE}"
+
+            export SPACE_API_PORT="${API_PORT}"
+
+            export API_HOST="${API_HOST}"
+            export API_PORT="${API_PORT}"
+            export API_BASE="${API_BASE}"
+
+            # 6) Start/reload API via PM2
             pm2 startOrReload ecosystem.config.cjs --update-env
             pm2 save
 
-            # 7) Local health check (route must exist)
-            curl -fsS "http://127.0.0.1:8787/ai-orchestrator/api/space" >/dev/null
-            echo "API OK: /api/space"
-SSH
-        env:
-          # Если у тебя есть secret REPO_SSH_URL — лучше использовать его.
-          # Иначе убери блок clone выше, раз repo уже существует.
-          REPO_SSH_URL: ${{ secrets.REPO_SSH_URL }}
+            # 7) Local health checks (no hardcoded host/port/path)
+            API_URL="http://\${API_HOST}:\${API_PORT}\${API_BASE}"
 
-      # ---------- Optional: public health check (requires Apache ProxyPass) ----------
-      - name: Public health check (requires Apache proxy)
+            curl -fsS "\${API_URL}/space" >/dev/null
+            echo "OK: \${API_BASE}/space"
+
+            STATUS=\$(curl -s -o /dev/null -w "%{http_code}" "\${API_URL}/tables" || true)
+            echo "Local \${API_BASE}/tables status: \${STATUS}"
+SSH
+
+      # ---------------- PUBLIC CHECK (optional) ----------------
+      - name: Public health check (optional)
+        if: ${{ secrets.PUBLIC_BASE_URL != '' }}
         continue-on-error: true
+        env:
+          PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}
+          API_BASE: ${{ secrets.API_BASE }}
         run: |
-          curl -i "http://${{ secrets.DEPLOY_HOST }}/ai-orchestrator/api/space" || true
-          curl -i "http://${{ secrets.DEPLOY_HOST }}/ai-orchestrator/api/tables" || true
+          curl -i "${PUBLIC_BASE_URL}${API_BASE}/space" || true
+          curl -i "${PUBLIC_BASE_URL}${API_BASE}/tables" || true
