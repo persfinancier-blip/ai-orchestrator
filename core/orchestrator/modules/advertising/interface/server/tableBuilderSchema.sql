@@ -1,36 +1,46 @@
-create table if not exists ao_table_definitions (
-  id uuid primary key default gen_random_uuid(),
-  schema_name text not null,
-  table_name text not null,
-  table_class text not null, -- bronze_raw | silver_table | showcase_table
-  status text not null default 'draft', -- draft | applied
-  options jsonb not null default '{}'::jsonb,
-  created_by text not null default 'unknown',
-  created_at timestamptz not null default now(),
-  applied_at timestamptz null
+-- core/orchestrator/modules/advertising/interface/server/tableBuilderSchema.sql
+-- Table Builder registry (MVP)
+-- Run once:
+--   create extension if not exists pgcrypto;
+--   psql -d ai_orchestrator -f tableBuilderSchema.sql
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE IF NOT EXISTS ao_table_drafts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  schema_name text NOT NULL,
+  table_name  text NOT NULL,
+  table_class text NOT NULL DEFAULT 'custom',
+  description text NOT NULL DEFAULT '',
+  status      text NOT NULL DEFAULT 'draft', -- draft/applied/failed
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  created_by  text NOT NULL DEFAULT 'ui',
+  applied_at  timestamptz NULL,
+  applied_by  text NULL,
+  last_error  text NULL,
+  UNIQUE (schema_name, table_name)
 );
 
-create table if not exists ao_table_fields (
-  id uuid primary key default gen_random_uuid(),
-  table_definition_id uuid not null references ao_table_definitions(id) on delete cascade,
-  field_name text not null,
-  field_type text not null,
-  description text not null,
-  created_at timestamptz not null default now()
+CREATE TABLE IF NOT EXISTS ao_table_draft_columns (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  draft_id uuid NOT NULL REFERENCES ao_table_drafts(id) ON DELETE CASCADE,
+  ordinal int NOT NULL,
+  column_name text NOT NULL,
+  data_type text NOT NULL,         -- e.g. text, bigint, timestamptz, jsonb, numeric(18,2)
+  is_nullable boolean NOT NULL DEFAULT true,
+  default_expr text NULL,          -- e.g. now(), '{}'::jsonb
+  description text NOT NULL DEFAULT '',
+  UNIQUE (draft_id, column_name),
+  UNIQUE (draft_id, ordinal)
 );
 
-create table if not exists ao_migrations_applied (
-  id uuid primary key default gen_random_uuid(),
-  table_definition_id uuid not null references ao_table_definitions(id) on delete restrict,
-  schema_name text not null,
-  table_name text not null,
-  migration_sql text not null,
-  applied_by text not null default 'unknown',
-  applied_at timestamptz not null default now()
-);
-
-create index if not exists idx_ao_table_definitions_schema_table
-  on ao_table_definitions(schema_name, table_name);
-
-create index if not exists idx_ao_table_fields_definition
-  on ao_table_fields(table_definition_id);
+-- Helpful view: non-system tables
+CREATE OR REPLACE VIEW ao_user_tables AS
+SELECT
+  n.nspname AS schema_name,
+  c.relname AS table_name
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind = 'r'
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+ORDER BY 1, 2;
