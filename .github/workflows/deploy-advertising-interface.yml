@@ -14,7 +14,6 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,15 +25,13 @@ jobs:
           cache: "npm"
           cache-dependency-path: core/orchestrator/modules/advertising/interface/package-lock.json
 
-      # ---------------- UI BUILD ----------------
       - name: Install & build UI
         working-directory: core/orchestrator/modules/advertising/interface
         run: |
           npm ci
           npm run build
 
-      # ---------------- DEPLOY UI DIST ----------------
-      # Используем ТВОЙ рабочий способ (никаких ручных ~/.ssh/id_rsa)
+      # UI deploy — как в работающем
       - name: Rsync dist to server
         uses: burnett01/rsync-deployments@6.0.0
         with:
@@ -46,8 +43,7 @@ jobs:
           remote_port: ${{ secrets.DEPLOY_PORT }}
           remote_key: ${{ secrets.DEPLOY_SSH_KEY }}
 
-      # ---------------- DEPLOY API (SERVER) ----------------
-      # Тоже через appleboy/ssh-action (как у тебя работает)
+      # API deploy — тоже как в работающем (appleboy ssh-action)
       - name: Update API repo + restart PM2
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -60,23 +56,26 @@ jobs:
 
             REPO_DIR="/srv/ai-src/ai-orchestrator"
             APP_DIR="$REPO_DIR/core/orchestrator/modules/advertising/interface"
-            API_NAME="ai-orchestrator-adv-api"
 
-            # 1) Обновляем код репозитория на сервере
+            # ВАЖНО: один владелец репы = тот, под кем зашли (DEPLOY_USER)
+            # Это убирает "dubious ownership" без safe.directory.
+            if [ -d "$REPO_DIR" ]; then
+              sudo chown -R "$USER":"$USER" "$REPO_DIR"
+            fi
+
             if [ ! -d "$REPO_DIR/.git" ]; then
               mkdir -p "$(dirname "$REPO_DIR")"
               git clone "${{ secrets.REPO_SSH_URL }}" "$REPO_DIR"
+              sudo chown -R "$USER":"$USER" "$REPO_DIR"
             fi
 
             cd "$REPO_DIR"
             git fetch --all
             git reset --hard origin/main
 
-            # 2) Ставим зависимости (нужно для server/*.mjs)
             cd "$APP_DIR"
             npm ci
 
-            # 3) Перезапуск API через PM2 (как у тебя в ручном запуске)
             sudo env \
               PGHOST="${{ secrets.PGHOST }}" \
               PGPORT="${{ secrets.PGPORT }}" \
@@ -86,17 +85,11 @@ jobs:
               SPACE_API_PORT="${{ secrets.AIR_PORT }}" \
               pm2 startOrReload ecosystem.config.cjs --update-env
 
-            # 4) Сохранить автозапуск
             sudo pm2 save --force
 
-            # 5) Локальная проверка
             curl -fsS "http://127.0.0.1:${{ secrets.AIR_PORT }}${{ secrets.API_BASE }}/health" >/dev/null
             echo "OK: health"
 
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${{ secrets.AIR_PORT }}${{ secrets.API_BASE }}/tables" || true)
-            echo "Local tables status: $STATUS"
-
-      # ---------------- Reload Apache ----------------
       - name: Reload Apache
         uses: appleboy/ssh-action@v1.2.0
         with:
