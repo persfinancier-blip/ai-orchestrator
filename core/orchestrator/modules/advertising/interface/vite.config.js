@@ -9,16 +9,22 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname),
       '@components': path.resolve(__dirname, 'components'),
-      '@stores': path.resolve(__dirname, 'stores')
-    }
+      '@stores': path.resolve(__dirname, 'stores'),
+    },
   },
   server: {
     port: 3000,
-    open: true
+    open: true,
+    proxy: {
+      '/ai-orchestrator/api': {
+        target: process.env.SPACE_API_URL || 'http://localhost:8787',
+        changeOrigin: true,
+      },
+    },
   },
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
-    sourcemap: true
-  }
+    sourcemap: true,
+  },
 });
