@@ -1,4 +1,5 @@
 // core/orchestrator/modules/advertising/interface/server/spaceServer.mjs
+
 import express from 'express';
 import { pool } from './db.mjs';
 import { tableBuilderRouter } from './tableBuilder.mjs';
