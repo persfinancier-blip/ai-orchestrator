@@ -70,6 +70,7 @@ jobs:
 
             npm ci
 
+            # Порт фиксируем (как в Apache ProxyPass)
             sudo /usr/bin/env \
               PGHOST="${{ secrets.PGHOST }}" \
               PGPORT="${{ secrets.PGPORT }}" \
@@ -81,8 +82,15 @@ jobs:
 
             sudo /usr/local/bin/pm2 save --force
 
-            curl -fsS "http://127.0.0.1:${{ secrets.AIR_PORT }}${{ secrets.API_BASE }}/space" >/dev/null
-            echo "OK: space"
+            # Даем серверу 2 секунды подняться
+            sleep 2
+
+            # Диагностика: слушаем ли порт
+            sudo /usr/bin/ss -lntp | grep 8787 || true
+
+            # Проверка API напрямую
+            curl -fsS "http://127.0.0.1:8787/ai-orchestrator/api/space" >/dev/null
+            echo "OK: /api/space"
 
       - name: Reload Apache
         uses: appleboy/ssh-action@v1.2.0
