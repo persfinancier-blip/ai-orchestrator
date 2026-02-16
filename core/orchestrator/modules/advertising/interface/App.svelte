@@ -1,5 +1,6 @@
 <script>
   import AdvertisingDashboard from './components/layout/AdvertisingDashboard.svelte';
+  import DataDesk from './desk/DataDesk.svelte';
   import AdvertisingDesk from './desk/AdvertisingDesk.svelte';
   import WorkflowDesk from './desk/WorkflowDesk.svelte';
 
@@ -14,12 +15,15 @@
 
 <nav class="top-nav">
   <a href="#desk" class:active={route === 'desk'}>Пространство</a>
+  <a href="#desk/data" class:active={route === 'desk/data'}>Данные</a>
   <a href="#desk/workflow" class:active={route === 'desk/workflow'}>Workflow</a>
   <a href="#legacy" class:active={route === 'legacy'}>Старый дашборд</a>
 </nav>
 
 {#if route === 'legacy'}
   <div class="app"><AdvertisingDashboard /></div>
+{:else if route === 'desk/data'}
+  <DataDesk />
 {:else if route === 'desk/workflow'}
   <WorkflowDesk />
 {:else}
