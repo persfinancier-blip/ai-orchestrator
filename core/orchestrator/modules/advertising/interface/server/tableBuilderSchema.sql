@@ -1,5 +1,6 @@
 -- core/orchestrator/modules/advertising/interface/server/tableBuilderSchema.sql
 
+
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 create table if not exists ao_table_definitions (
