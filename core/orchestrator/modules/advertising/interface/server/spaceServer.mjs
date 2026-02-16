@@ -6,10 +6,16 @@ import { tableBuilderRouter } from './tableBuilder.mjs';
 const app = express();
 const port = Number(process.env.SPACE_API_PORT || 8787);
 
+// ✅ ВАЖНО: это должно быть ДО роутов и ДО tableBuilderRouter
+app.use(express.json({ limit: '2mb' }));
+
+// Table Builder API (будет обслуживать /ai-orchestrator/api/tables, /tables/draft, etc.)
 app.use('/ai-orchestrator/api', tableBuilderRouter);
 
+// Простая витрина (пример)
 app.get('/ai-orchestrator/api/space', async (req, res) => {
   const period = Number(req.query.period || 30);
+
   const query = `
     WITH date_series AS (
       SELECT generate_series(
@@ -36,10 +42,18 @@ app.get('/ai-orchestrator/api/space', async (req, res) => {
 
   try {
     const result = await pool.query(query, [period]);
-    res.json({ points: result.rows });
+    return res.json({ points: result.rows });
   } catch (error) {
-    res.status(500).json({ error: 'Ошибка чтения витрины' });
+    // почему: чтобы в pm2 logs была реальная причина 500
+    // eslint-disable-next-line no-console
+    console.error('space endpoint error:', error);
+    return res.status(500).json({ error: 'Ошибка чтения витрины' });
   }
+});
+
+// Healthcheck (удобно для деплоя)
+app.get('/ai-orchestrator/api/health', (_req, res) => {
+  res.json({ ok: true });
 });
 
 app.listen(port, () => {
