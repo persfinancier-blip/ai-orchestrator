@@ -72,51 +72,38 @@ jobs:
             REPO_DIR="/srv/ai-src/ai-orchestrator"
             APP_DIR="\$REPO_DIR/core/orchestrator/modules/advertising/interface"
 
-            # 1) Ensure repo exists
             if [ ! -d "\$REPO_DIR/.git" ]; then
               mkdir -p "\$(dirname "\$REPO_DIR")"
               git clone "${REPO_SSH_URL}" "\$REPO_DIR"
             fi
 
-            # 2) Update code
             cd "\$REPO_DIR"
             git fetch --all
             git reset --hard origin/main
 
-            # 3) Install deps (same folder contains server/*)
             cd "\$APP_DIR"
             npm ci
 
-            # 4) Ensure pm2 installed
-            if ! command -v pm2 >/dev/null 2>&1; then
-              sudo npm i -g pm2
-            fi
+            # Запуск/перезапуск API через root PM2 (pm2-root)
+            sudo env \
+              PGHOST="${PGHOST}" \
+              PGPORT="${PGPORT}" \
+              PGUSER="${PGUSER}" \
+              PGPASSWORD="${PGPASSWORD}" \
+              PGDATABASE="${PGDATABASE}" \
+              SPACE_API_PORT="${API_PORT}" \
+              pm2 startOrReload ecosystem.config.cjs --update-env
 
-            # 5) Export env from GitHub Secrets (no hardcoded addresses)
-            export PGHOST="${PGHOST}"
-            export PGPORT="${PGPORT}"
-            export PGUSER="${PGUSER}"
-            export PGPASSWORD="${PGPASSWORD}"
-            export PGDATABASE="${PGDATABASE}"
+            # ВАЖНО: сохраняем список процессов для автозапуска после ребута
+            sudo pm2 save --force
 
-            export SPACE_API_PORT="${API_PORT}"
+            # Health-check (без хардкода)
+            API_URL="http://${API_HOST}:${API_PORT}${API_BASE}"
+            curl -fsS "${API_URL}/space" >/dev/null
+            echo "OK: ${API_BASE}/space"
 
-            export API_HOST="${API_HOST}"
-            export API_PORT="${API_PORT}"
-            export API_BASE="${API_BASE}"
-
-            # 6) Start/reload API via PM2
-            pm2 startOrReload ecosystem.config.cjs --update-env
-            pm2 save
-
-            # 7) Local health checks (no hardcoded host/port/path)
-            API_URL="http://\${API_HOST}:\${API_PORT}\${API_BASE}"
-
-            curl -fsS "\${API_URL}/space" >/dev/null
-            echo "OK: \${API_BASE}/space"
-
-            STATUS=\$(curl -s -o /dev/null -w "%{http_code}" "\${API_URL}/tables" || true)
-            echo "Local \${API_BASE}/tables status: \${STATUS}"
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${API_URL}/tables" || true)
+            echo "Local ${API_BASE}/tables status: ${STATUS}"
 SSH
 
       # ---------------- PUBLIC CHECK (optional) ----------------
