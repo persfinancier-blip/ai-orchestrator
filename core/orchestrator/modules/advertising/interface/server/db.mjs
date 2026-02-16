@@ -1,34 +1,23 @@
+// core/orchestrator/modules/advertising/interface/server/db.mjs
 import pg from 'pg';
 
 const { Pool } = pg;
 
-export const pool = new Pool({
-  host: process.env.PGHOST || '127.0.0.1',
-  port: Number(process.env.PGPORT || 5432),
-  user: process.env.PGUSER,
-  password: process.env.PGPASSWORD,
-  database: process.env.PGDATABASE,
+function required(name) {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing env: ${name}`);
+  return v;
+}
+
+const pool = new Pool({
+  host: process.env.PGHOST,
+  port: Number(process.env.PGPORT),
+  user: process.env.PGUSER || required('PGUSER'),
+  password: process.env.PGPASSWORD || required('PGPASSWORD'),
+  database: process.env.PGDATABASE || required('PGDATABASE'),
+  max: Number(process.env.PGPOOL_MAX || 10),
+  idleTimeoutMillis: Number(process.env.PGPOOL_IDLE_MS || 30_000),
+  connectionTimeoutMillis: Number(process.env.PGPOOL_CONN_MS || 10_000),
 });
 
-export async function withClient(fn) {
-  const client = await pool.connect();
-  try {
-    return await fn(client);
-  } finally {
-    client.release();
-  }
-}
-
-export async function withTx(fn) {
-  return withClient(async (client) => {
-    await client.query('begin');
-    try {
-      const out = await fn(client);
-      await client.query('commit');
-      return out;
-    } catch (e) {
-      await client.query('rollback');
-      throw e;
-    }
-  });
-}
+export { pool };
