@@ -1,4 +1,3 @@
-
 name: Deploy Advertising (UI + API)
 
 on:
@@ -38,81 +37,73 @@ jobs:
 
       # ---------------- SSH SETUP ----------------
       - name: Setup SSH
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p ~/.ssh
-          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_rsa
+          printf "%s" "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -p "${{ secrets.DEPLOY_PORT }}" "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
 
       # ---------------- DEPLOY UI DIST ----------------
       - name: Deploy UI dist (rsync)
+        shell: bash
         run: |
-          rsync -az --delete \
+          set -euo pipefail
+          rsync -az --delete -e "ssh -p ${{ secrets.DEPLOY_PORT }} -i ~/.ssh/id_rsa" \
             core/orchestrator/modules/advertising/interface/dist/ \
             "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ secrets.WEB_ROOT }}/core/orchestrator/modules/advertising/interface/dist/"
 
       # ---------------- DEPLOY API (SERVER) ----------------
       - name: Deploy API code + restart PM2
-        env:
-          REPO_SSH_URL: ${{ secrets.REPO_SSH_URL }}
-
-          PGHOST: ${{ secrets.PGHOST }}
-          PGPORT: ${{ secrets.PGPORT }}
-          PGUSER: ${{ secrets.PGUSER }}
-          PGPASSWORD: ${{ secrets.PGPASSWORD }}
-          PGDATABASE: ${{ secrets.PGDATABASE }}
-
-          API_HOST: ${{ secrets.API_HOST }}
-          API_PORT: ${{ secrets.API_PORT }}
-          API_BASE: ${{ secrets.API_BASE }}
+        shell: bash
         run: |
-          ssh -p "${{ secrets.DEPLOY_PORT }}" "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" << SSH
+          set -euo pipefail
+
+          ssh -p "${{ secrets.DEPLOY_PORT }}" -i ~/.ssh/id_rsa "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+          "bash -lc '
             set -euo pipefail
 
-            REPO_DIR="/srv/ai-src/ai-orchestrator"
-            APP_DIR="\$REPO_DIR/core/orchestrator/modules/advertising/interface"
+            REPO_DIR=/srv/ai-src/ai-orchestrator
+            APP_DIR=\$REPO_DIR/core/orchestrator/modules/advertising/interface
+            API_NAME=ai-orchestrator-adv-api
 
-            if [ ! -d "\$REPO_DIR/.git" ]; then
-              mkdir -p "\$(dirname "\$REPO_DIR")"
-              git clone "${REPO_SSH_URL}" "\$REPO_DIR"
+            if [ ! -d \"\$REPO_DIR/.git\" ]; then
+              mkdir -p \"\$(dirname \"\$REPO_DIR\")\"
+              git clone \"${{ secrets.REPO_SSH_URL }}\" \"\$REPO_DIR\"
             fi
 
-            cd "\$REPO_DIR"
+            cd \"\$REPO_DIR\"
             git fetch --all
             git reset --hard origin/main
 
-            cd "\$APP_DIR"
+            cd \"\$APP_DIR\"
             npm ci
 
-            # Запуск/перезапуск API через root PM2 (pm2-root)
             sudo env \
-              PGHOST="${PGHOST}" \
-              PGPORT="${PGPORT}" \
-              PGUSER="${PGUSER}" \
-              PGPASSWORD="${PGPASSWORD}" \
-              PGDATABASE="${PGDATABASE}" \
-              SPACE_API_PORT="${API_PORT}" \
+              PGHOST=\"${{ secrets.PGHOST }}\" \
+              PGPORT=\"${{ secrets.PGPORT }}\" \
+              PGUSER=\"${{ secrets.PGUSER }}\" \
+              PGPASSWORD=\"${{ secrets.PGPASSWORD }}\" \
+              PGDATABASE=\"${{ secrets.PGDATABASE }}\" \
+              SPACE_API_PORT=\"${{ secrets.AIR_PORT }}\" \
               pm2 startOrReload ecosystem.config.cjs --update-env
 
-            # ВАЖНО: сохраняем список процессов для автозапуска после ребута
             sudo pm2 save --force
 
-            # Health-check (без хардкода)
-            API_URL="http://${API_HOST}:${API_PORT}${API_BASE}"
-            curl -fsS "${API_URL}/space" >/dev/null
-            echo "OK: ${API_BASE}/space"
+            curl -fsS \"http://127.0.0.1:${{ secrets.AIR_PORT }}${{ secrets.API_BASE }}/health\" >/dev/null
+            echo OK: health
 
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${API_URL}/tables" || true)
-            echo "Local ${API_BASE}/tables status: ${STATUS}"
-SSH
+            STATUS=\$(curl -s -o /dev/null -w \"%{http_code}\" \"http://127.0.0.1:${{ secrets.AIR_PORT }}${{ secrets.API_BASE }}/tables\" || true)
+            echo Local tables status: \$STATUS
+          '"
 
       # ---------------- PUBLIC CHECK (optional) ----------------
       - name: Public health check (optional)
-        if: ${{ secrets.PUBLIC_BASE_URL != '' }}
+        if: ${{ secrets.PUBLIC_BASE_URL }}
         continue-on-error: true
-        env:
-          PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}
-          API_BASE: ${{ secrets.API_BASE }}
+        shell: bash
         run: |
-          curl -i "${PUBLIC_BASE_URL}${API_BASE}/space" || true
-          curl -i "${PUBLIC_BASE_URL}${API_BASE}/tables" || true
+          set -euo pipefail
+          curl -i "${{ secrets.PUBLIC_BASE_URL }}${{ secrets.API_BASE }}/space" || true
+          curl -i "${{ secrets.PUBLIC_BASE_URL }}${{ secrets.API_BASE }}/tables" || true
