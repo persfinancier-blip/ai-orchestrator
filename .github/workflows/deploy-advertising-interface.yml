@@ -1,0 +1,101 @@
+name: Deploy Advertising Interface (UI + API)
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "core/orchestrator/modules/advertising/interface/**"
+      - ".github/workflows/deploy-advertising-interface.yml"
+
+concurrency:
+  group: deploy-advertising-interface
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: core/orchestrator/modules/advertising/interface/package-lock.json
+
+      # ---------- Build UI ----------
+      - name: Install UI deps
+        working-directory: core/orchestrator/modules/advertising/interface
+        run: npm ci
+
+      - name: Build UI
+        working-directory: core/orchestrator/modules/advertising/interface
+        run: npm run build
+
+      # ---------- SSH setup ----------
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p "${{ secrets.DEPLOY_PORT }}" "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
+      # ---------- Deploy UI dist ----------
+      - name: Deploy UI dist via rsync
+        run: |
+          rsync -az --delete \
+            core/orchestrator/modules/advertising/interface/dist/ \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ secrets.WEB_ROOT }}/core/orchestrator/modules/advertising/interface/dist/"
+
+      # ---------- Deploy API code + restart via PM2 ----------
+      - name: Deploy API (git pull + npm ci + pm2 reload)
+        run: |
+          ssh -p "${{ secrets.DEPLOY_PORT }}" "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" << 'SSH'
+            set -euo pipefail
+
+            # 1) Source repo location on server (ВАЖНО: фиксируем одно место)
+            REPO_DIR="/srv/ai-src/ai-orchestrator"
+            APP_DIR="$REPO_DIR/core/orchestrator/modules/advertising/interface"
+
+            # 2) Ensure repo exists (if not, clone)
+            if [ ! -d "$REPO_DIR/.git" ]; then
+              mkdir -p "$(dirname "$REPO_DIR")"
+              git clone "${REPO_SSH_URL:-}" "$REPO_DIR" || true
+            fi
+
+            # 3) Pull latest
+            cd "$REPO_DIR"
+            git fetch --all
+            git reset --hard origin/main
+
+            # 4) Install deps for API/UI workspace (same folder)
+            cd "$APP_DIR"
+            npm ci
+
+            # 5) Ensure pm2 installed
+            if ! command -v pm2 >/dev/null 2>&1; then
+              npm i -g pm2
+            fi
+
+            # 6) Start or reload API
+            pm2 startOrReload ecosystem.config.cjs --update-env
+            pm2 save
+
+            # 7) Local health check (route must exist)
+            curl -fsS "http://127.0.0.1:8787/ai-orchestrator/api/space" >/dev/null
+            echo "API OK: /api/space"
+SSH
+        env:
+          # Если у тебя есть secret REPO_SSH_URL — лучше использовать его.
+          # Иначе убери блок clone выше, раз repo уже существует.
+          REPO_SSH_URL: ${{ secrets.REPO_SSH_URL }}
+
+      # ---------- Optional: public health check (requires Apache ProxyPass) ----------
+      - name: Public health check (requires Apache proxy)
+        continue-on-error: true
+        run: |
+          curl -i "http://${{ secrets.DEPLOY_HOST }}/ai-orchestrator/api/space" || true
+          curl -i "http://${{ secrets.DEPLOY_HOST }}/ai-orchestrator/api/tables" || true
