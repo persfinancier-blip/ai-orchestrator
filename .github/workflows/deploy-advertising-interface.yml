@@ -43,7 +43,7 @@ jobs:
           remote_port: ${{ secrets.DEPLOY_PORT }}
           remote_key: ${{ secrets.DEPLOY_SSH_KEY }}
 
-      # API deploy — тоже как в работающем (appleboy ssh-action), БЕЗ sudo для pm2
+      # API deploy — тоже как в работающем (appleboy ssh-action) — БЕЗ sudo/паролей
       - name: Update API repo + restart PM2
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -54,14 +54,12 @@ jobs:
           script: |
             set -euo pipefail
 
-            REPO_DIR="/srv/ai-src/ai-orchestrator"
+            # ВАЖНО: repo в HOME пользователя деплоя -> нет проблем с правами
+            REPO_DIR="$HOME/ai-orchestrator"
             APP_DIR="$REPO_DIR/core/orchestrator/modules/advertising/interface"
-
-            # Чтобы git не ругался на владельца — без sudo
-            git config --global --add safe.directory "$REPO_DIR" || true
+            API_NAME="ai-orchestrator-adv-api"
 
             if [ ! -d "$REPO_DIR/.git" ]; then
-              mkdir -p "$(dirname "$REPO_DIR")"
               git clone "${{ secrets.REPO_SSH_URL }}" "$REPO_DIR"
             fi
 
@@ -72,15 +70,12 @@ jobs:
             cd "$APP_DIR"
             npm ci
 
-            # PM2 запускаем от текущего DEPLOY_USER (без sudo)
             export PGHOST="${{ secrets.PGHOST }}"
             export PGPORT="${{ secrets.PGPORT }}"
             export PGUSER="${{ secrets.PGUSER }}"
             export PGPASSWORD="${{ secrets.PGPASSWORD }}"
             export PGDATABASE="${{ secrets.PGDATABASE }}"
             export SPACE_API_PORT="${{ secrets.AIR_PORT }}"
-
-            # ВАЖНО: pm2 должен работать в user-space
             export PM2_HOME="$HOME/.pm2"
 
             pm2 startOrReload ecosystem.config.cjs --update-env
