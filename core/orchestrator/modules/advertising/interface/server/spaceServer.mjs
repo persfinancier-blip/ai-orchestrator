@@ -1,35 +1,37 @@
+// core/orchestrator/modules/advertising/interface/server/spaceServer.mjs
 import express from 'express';
-import pg from 'pg';
+import { pool } from './db.mjs';
+import { tableBuilderRouter } from './tableBuilder.mjs';
 
-const { Pool } = pg;
 const app = express();
 const port = Number(process.env.SPACE_API_PORT || 8787);
 
-const pool = new Pool({
-  host: process.env.PGHOST || '127.0.0.1',
-  port: Number(process.env.PGPORT || 5432),
-  user: process.env.PGUSER,
-  password: process.env.PGPASSWORD,
-  database: process.env.PGDATABASE,
-});
+app.use('/ai-orchestrator/api', tableBuilderRouter);
 
 app.get('/ai-orchestrator/api/space', async (req, res) => {
   const period = Number(req.query.period || 30);
   const query = `
-    with latest as (
-      select e.id as entity_id, e.entity_type, e.entity_key, e.name,
-             m.date, m.revenue, m.orders, m.spend, m.drr, m.roi, m.cr0, m.cr1, m.cr2,
-             m.position, m.stock_days, m.search_share, m.shelf_share,
-             row_number() over(partition by e.id order by m.date desc) rn
-      from ao_entities e
-      join ao_metrics_daily m on m.entity_id = e.id
-      where m.date >= current_date - ($1::int || ' days')::interval
+    WITH date_series AS (
+      SELECT generate_series(
+        CURRENT_DATE - $1::int,
+        CURRENT_DATE,
+        '1 day'::interval
+      )::date AS date
+    ),
+    aggregated AS (
+      SELECT
+        date_trunc('day', created_at)::date AS date,
+        count(*) AS count
+      FROM ao_events
+      WHERE created_at >= CURRENT_DATE - $1::int
+      GROUP BY 1
     )
-    select entity_id as id, entity_type, entity_key, name, to_char(date, 'YYYY-MM-DD') as date,
-           revenue, orders, spend, drr, roi, cr0, cr1, cr2, position, stock_days, search_share, shelf_share
-    from latest
-    where rn = 1
-    order by entity_type, entity_key;
+    SELECT
+      ds.date,
+      COALESCE(a.count, 0) AS count
+    FROM date_series ds
+    LEFT JOIN aggregated a ON a.date = ds.date
+    ORDER BY ds.date;
   `;
 
   try {
@@ -41,5 +43,6 @@ app.get('/ai-orchestrator/api/space', async (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`Space API запущен: http://localhost:${port}/ai-orchestrator/api/space`);
+  // eslint-disable-next-line no-console
+  console.log(`Space API running on :${port}`);
 });
