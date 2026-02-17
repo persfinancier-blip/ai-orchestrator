@@ -6,258 +6,251 @@ export const tableBuilderRouter = express.Router();
 
 tableBuilderRouter.use(express.json({ limit: '4mb' }));
 
+/**
+ * Примитивная роль: UI кладёт X-AO-ROLE.
+ * Сейчас это больше "переключатель", чем настоящая безопасность.
+ */
 function requireDataAdmin(req, res, next) {
-  const role = String(req.header('X-AO-ROLE') || '').toLowerCase();
+  const role = String(req.header('X-AO-ROLE') || '').trim();
   if (role !== 'data_admin') {
-    return res.status(403).json({ error: 'forbidden', details: 'Нужна роль data_admin (X-AO-ROLE: data_admin)' });
+    return res.status(403).json({ error: 'forbidden', details: 'Требуется роль data_admin' });
   }
   next();
 }
 
-function isSafeIdent(s) {
-  return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s);
+function qIdent(name) {
+  // простое экранирование идентификаторов Postgres
+  const s = String(name ?? '');
+  if (!s) throw new Error('empty_identifier');
+  return `"${s.replaceAll('"', '""')}"`;
 }
 
-function qIdent(s) {
-  // двойные кавычки для безопасной работы с регистром/ключевыми словами
-  return `"${String(s).replace(/"/g, '""')}"`;
+function normalizeType(t) {
+  const x = String(t || '').trim().toLowerCase();
+  const allowed = new Set([
+    'text',
+    'int',
+    'integer',
+    'bigint',
+    'numeric',
+    'boolean',
+    'date',
+    'timestamptz',
+    'timestamp with time zone',
+    'jsonb',
+    'uuid'
+  ]);
+  if (!allowed.has(x)) throw new Error(`unsupported_type:${t}`);
+  if (x === 'int') return 'integer';
+  if (x === 'timestamptz') return 'timestamp with time zone';
+  return x;
 }
 
-function mapType(t) {
-  const v = String(t || '').toLowerCase();
-  const allowed = new Set(['text', 'int', 'bigint', 'numeric', 'boolean', 'date', 'timestamptz', 'jsonb', 'uuid']);
-  if (!allowed.has(v)) throw new Error(`unsupported_type: ${t}`);
-  if (v === 'int') return 'integer';
-  if (v === 'timestamptz') return 'timestamptz';
-  return v;
-}
-
-async function listExistingTables() {
-  // Берём реальные таблицы из information_schema (кроме системных)
-  const r = await pool.query(
-    `
-    SELECT table_schema AS schema_name, table_name
-    FROM information_schema.tables
-    WHERE table_type='BASE TABLE'
-      AND table_schema NOT IN ('pg_catalog','information_schema')
-    ORDER BY table_schema, table_name
-  `
-  );
-  return r.rows || [];
+function validateNamePart(label, v) {
+  const s = String(v || '').trim();
+  if (!s) throw new Error(`${label}_required`);
+  // мягкая валидация: буквы/цифры/подчеркивание, без точек
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s)) {
+    throw new Error(`${label}_invalid: используйте латиницу/цифры/_ и без точек`);
+  }
+  return s;
 }
 
 /**
  * GET /ai-orchestrator/api/tables
  * Возвращает:
- * - drafts (если используются)
- * - existing_tables (реальные таблицы, которые есть в базе)
+ * - drafts: (пока пусто/или история если вы используете)
+ * - existing_tables: реальные таблицы/представления из базы
  */
 tableBuilderRouter.get('/tables', async (_req, res) => {
   try {
-    const existing_tables = await listExistingTables();
+    const existing = await pool.query(`
+      SELECT table_schema AS schema_name, table_name
+      FROM information_schema.tables
+      WHERE table_type='BASE TABLE'
+        AND table_schema NOT IN ('pg_catalog','information_schema')
+      ORDER BY table_schema, table_name
+    `);
 
-    // drafts — не обязательны, но пусть история остаётся, если таблицы meta существуют
+    // черновики: если таблицы не созданы — просто отдаём пусто
     let drafts = [];
     try {
-      const d = await pool.query(
-        `
+      const d = await pool.query(`
         SELECT
-          d.id::text,
-          d.schema_name,
-          d.table_name,
-          d.table_class,
-          d.status,
-          d.description,
-          d.created_at,
-          d.applied_at,
-          d.last_error,
-          d.options
-        FROM public.ao_table_definitions d
-        WHERE d.status IN ('draft','error')
-        ORDER BY d.created_at DESC
+          id::text,
+          schema_name,
+          table_name,
+          table_class,
+          status,
+          description,
+          created_at,
+          applied_at,
+          last_error,
+          options,
+          fields
+        FROM public.ao_table_definitions
+        ORDER BY created_at DESC
         LIMIT 50
-      `
-      );
-
-      const ids = d.rows.map((x) => x.id);
-      const fieldsBy = new Map();
-
-      if (ids.length) {
-        const f = await pool.query(
-          `
-          SELECT
-            table_definition_id::text AS id,
-            field_name,
-            field_type,
-            description
-          FROM public.ao_table_fields
-          WHERE table_definition_id = ANY($1::uuid[])
-          ORDER BY created_at ASC
-        `,
-          [ids]
-        );
-
-        for (const row of f.rows) {
-          if (!fieldsBy.has(row.id)) fieldsBy.set(row.id, []);
-          fieldsBy.get(row.id).push({
-            field_name: row.field_name,
-            field_type: row.field_type,
-            description: row.description
-          });
-        }
-      }
-
-      drafts = d.rows.map((x) => ({ ...x, fields: fieldsBy.get(x.id) || [] }));
+      `);
+      drafts = d.rows || [];
     } catch {
       drafts = [];
     }
 
-    return res.json({ drafts, existing_tables });
+    res.json({
+      drafts,
+      existing_tables: existing.rows || []
+    });
   } catch (e) {
-    return res.status(500).json({ error: 'tables_list_failed', details: String(e?.message || e) });
+    res.status(500).json({ error: 'tables_list_failed', details: String(e?.message || e) });
   }
 });
 
 /**
  * GET /ai-orchestrator/api/preview?schema=...&table=...&limit=5
- * Предпросмотр 5 строк
+ * Возвращает 5 строк для предпросмотра.
  */
 tableBuilderRouter.get('/preview', async (req, res) => {
   try {
-    const schema = String(req.query.schema || '');
-    const table = String(req.query.table || '');
+    const schema = validateNamePart('schema', req.query.schema);
+    const table = validateNamePart('table', req.query.table);
     const limit = Math.max(1, Math.min(50, Number(req.query.limit || 5)));
 
-    if (!isSafeIdent(schema) || !isSafeIdent(table)) {
-      return res.status(400).json({ error: 'invalid_ident', details: 'Некорректное имя схемы/таблицы' });
-    }
-
-    const sql = `SELECT * FROM ${qIdent(schema)}.${qIdent(table)} LIMIT ${limit}`;
-    const r = await pool.query(sql);
-    return res.json({ rows: r.rows || [] });
+    const fullName = `${qIdent(schema)}.${qIdent(table)}`;
+    const r = await pool.query(`SELECT * FROM ${fullName} LIMIT $1`, [limit]);
+    res.json({ rows: r.rows || [] });
   } catch (e) {
-    return res.status(500).json({ error: 'preview_failed', details: String(e?.message || e) });
+    res.status(400).json({ error: 'preview_failed', details: String(e?.message || e) });
   }
 });
 
 /**
  * POST /ai-orchestrator/api/tables/create
- * Создаёт схему → таблицу → колонки (сразу, без черновиков).
+ * Создаёт схему/таблицу/поля (+ партиции опционально) и опционально вставляет 1 тестовую строку.
+ *
  * body:
  * {
- *   schema_name, table_name, columns:[{field_name, field_type, description?}],
- *   partitioning:{enabled:boolean, column?, interval?},
- *   test_row?: object
+ *   schema_name, table_name, table_class?, description?,
+ *   columns: [{field_name, field_type, description?}],
+ *   partitioning?: { enabled: true/false, column?: string, interval?: 'day'|'month' },
+ *   test_row?: object|null
  * }
  */
 tableBuilderRouter.post('/tables/create', requireDataAdmin, async (req, res) => {
-  const body = req.body || {};
-  const schema_name = String(body.schema_name || '').trim();
-  const table_name = String(body.table_name || '').trim();
-  const columns = Array.isArray(body.columns) ? body.columns : [];
-  const partitioning = body.partitioning || { enabled: false };
-  const test_row = body.test_row || null;
-
+  const client = await pool.connect();
   try {
-    if (!isSafeIdent(schema_name)) throw new Error('invalid_schema_name');
-    if (!isSafeIdent(table_name)) throw new Error('invalid_table_name');
+    const schema_name = validateNamePart('schema_name', req.body?.schema_name);
+    const table_name = validateNamePart('table_name', req.body?.table_name);
 
-    const cleanCols = columns
-      .map((c) => ({
-        field_name: String(c.field_name || '').trim(),
-        field_type: mapType(c.field_type),
-        description: String(c.description || '')
-      }))
-      .filter((c) => c.field_name);
+    const description = String(req.body?.description || '').trim();
+    const table_class = String(req.body?.table_class || 'custom').trim();
 
-    if (!cleanCols.length) throw new Error('no_columns');
+    const columns = Array.isArray(req.body?.columns) ? req.body.columns : [];
+    if (!columns.length) throw new Error('columns_required');
 
-    for (const c of cleanCols) {
-      if (!isSafeIdent(c.field_name)) throw new Error(`invalid_column_name: ${c.field_name}`);
+    // колонки
+    const seen = new Set();
+    const normalizedColumns = columns.map((c, idx) => {
+      const field_name = validateNamePart(`columns[${idx}].field_name`, c.field_name);
+      if (seen.has(field_name)) throw new Error(`duplicate_field:${field_name}`);
+      seen.add(field_name);
+
+      const field_type = normalizeType(c.field_type);
+      const colDesc = String(c.description || '').trim();
+
+      return { field_name, field_type, description: colDesc };
+    });
+
+    const partitioning = req.body?.partitioning || { enabled: false };
+    const partitionEnabled = !!partitioning?.enabled;
+    const partitionColumn = partitionEnabled ? validateNamePart('partitioning.column', partitioning.column || '') : null;
+    const partInterval = partitionEnabled ? String(partitioning.interval || 'day') : 'day';
+    if (partitionEnabled && !['day', 'month'].includes(partInterval)) {
+      throw new Error('partitioning.interval must be day|month');
     }
 
-    const partEnabled = !!partitioning?.enabled;
-    const partColumn = String(partitioning?.column || '').trim();
-    const partInterval = String(partitioning?.interval || 'day').toLowerCase();
-
-    if (partEnabled) {
-      if (!partColumn || !isSafeIdent(partColumn)) throw new Error('invalid_partition_column');
-      if (!['day', 'month'].includes(partInterval)) throw new Error('invalid_partition_interval');
-      const exists = cleanCols.some((c) => c.field_name === partColumn);
-      if (!exists) throw new Error('partition_column_not_in_columns');
+    const test_row = req.body?.test_row ?? null;
+    if (test_row !== null && (typeof test_row !== 'object' || Array.isArray(test_row))) {
+      throw new Error('test_row must be object or null');
     }
-
-    // 1) schema
-    await pool.query(`CREATE SCHEMA IF NOT EXISTS ${qIdent(schema_name)}`);
-
-    // 2) table DDL
-    const colSql = cleanCols.map((c) => `${qIdent(c.field_name)} ${c.field_type}`).join(',\n  ');
 
     const fullName = `${qIdent(schema_name)}.${qIdent(table_name)}`;
 
-    if (!partEnabled) {
-      await pool.query(`CREATE TABLE IF NOT EXISTS ${fullName} (\n  ${colSql}\n)`);
+    // строим SQL колонок
+    const colsSql = normalizedColumns
+      .map((c) => `${qIdent(c.field_name)} ${c.field_type}`)
+      .join(', ');
+
+    await client.query('BEGIN');
+
+    // 1) schema
+    await client.query(`CREATE SCHEMA IF NOT EXISTS ${qIdent(schema_name)}`);
+
+    // 2) table
+    if (!partitionEnabled) {
+      await client.query(`CREATE TABLE IF NOT EXISTS ${fullName} (${colsSql})`);
     } else {
-      // partitioned table
-      await pool.query(
-        `CREATE TABLE IF NOT EXISTS ${fullName} (\n  ${colSql}\n) PARTITION BY RANGE (${qIdent(partColumn)})`
-      );
+      // база партиционированная
+      const pcol = partitionColumn;
+      await client.query(`CREATE TABLE IF NOT EXISTS ${fullName} (${colsSql}) PARTITION BY RANGE (${qIdent(pcol)})`);
 
       // минимальная авто-настройка: создаём "текущую" партицию + default
       // day: [today, tomorrow)
       // month: [monthStart, nextMonthStart)
+      const partToday = `${qIdent(schema_name)}.${qIdent(`${table_name}__p_today`)}`;
+      const partMonth = `${qIdent(schema_name)}.${qIdent(`${table_name}__p_month`)}`;
+      const partDefault = `${qIdent(schema_name)}.${qIdent(`${table_name}__p_default`)}`;
+
       if (partInterval === 'day') {
-        await pool.query(
-          `CREATE TABLE IF NOT EXISTS ${fullName}__p_today PARTITION OF ${fullName}
+        await client.query(
+          `CREATE TABLE IF NOT EXISTS ${partToday} PARTITION OF ${fullName}
            FOR VALUES FROM (CURRENT_DATE) TO (CURRENT_DATE + INTERVAL '1 day')`
         );
       } else {
-        await pool.query(
-          `CREATE TABLE IF NOT EXISTS ${fullName}__p_month PARTITION OF ${fullName}
+        await client.query(
+          `CREATE TABLE IF NOT EXISTS ${partMonth} PARTITION OF ${fullName}
            FOR VALUES FROM (date_trunc('month', CURRENT_DATE)::date)
            TO (date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month')`
         );
       }
 
-      await pool.query(`CREATE TABLE IF NOT EXISTS ${fullName}__p_default PARTITION OF ${fullName} DEFAULT`);
+      await client.query(`CREATE TABLE IF NOT EXISTS ${partDefault} PARTITION OF ${fullName} DEFAULT`);
     }
 
-    // 3) comments (опционально)
-    for (const c of cleanCols) {
+    // 3) комментарии (по желанию)
+    if (description) {
+      await client.query(`COMMENT ON TABLE ${fullName} IS $1`, [description]);
+    }
+    for (const c of normalizedColumns) {
       if (c.description) {
-        await pool.query(
-          `COMMENT ON COLUMN ${fullName}.${qIdent(c.field_name)} IS $1`,
-          [c.description]
-        );
+        await client.query(`COMMENT ON COLUMN ${fullName}.${qIdent(c.field_name)} IS $1`, [c.description]);
       }
     }
 
-    // 4) test row (опционально)
+    // 4) тестовая запись (если дали)
     if (test_row) {
-      if (typeof test_row !== 'object' || Array.isArray(test_row)) throw new Error('test_row_invalid');
-
       const keys = Object.keys(test_row);
       if (!keys.length) throw new Error('test_row_empty');
+      const cols = keys.map((k) => qIdent(k)).join(', ');
+      const vals = keys.map((_, i) => `$${i + 1}`).join(', ');
 
-      // берём только те ключи, которые реально есть в колонках
-      const allowed = new Set(cleanCols.map((c) => c.field_name));
-      const useKeys = keys.filter((k) => allowed.has(k));
-
-      if (!useKeys.length) throw new Error('test_row_no_matching_columns');
-
-      const colsList = useKeys.map((k) => qIdent(k)).join(',');
-      const params = useKeys.map((_, i) => `$${i + 1}`).join(',');
-      const values = useKeys.map((k) => test_row[k]);
-
-      await pool.query(`INSERT INTO ${fullName} (${colsList}) VALUES (${params})`, values);
+      const params = keys.map((k) => test_row[k]);
+      await client.query(`INSERT INTO ${fullName} (${cols}) VALUES (${vals})`, params);
     }
 
-    return res.json({
+    await client.query('COMMIT');
+
+    res.json({
       ok: true,
-      created: `${schema_name}.${table_name}`,
-      partitioning: partEnabled ? { enabled: true, column: partColumn, interval: partInterval } : { enabled: false }
+      created: { schema_name, table_name, full_name: `${schema_name}.${table_name}` },
+      table_class
     });
   } catch (e) {
-    return res.status(500).json({ error: 'create_failed', details: String(e?.message || e) });
+    try {
+      await pool.query('ROLLBACK');
+    } catch {}
+    res.status(400).json({ error: 'create_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
   }
 });
