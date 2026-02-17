@@ -3,8 +3,14 @@
 
   type Role = 'viewer' | 'operator' | 'data_admin';
 
-  type ColumnDef = { field_name: string; field_type: string; description?: string };
   type ExistingTable = { schema_name: string; table_name: string };
+
+  type ColumnMeta = {
+    name: string;
+    type: string;
+    nullable: boolean;
+    default: string | null;
+  };
 
   const API_BASE = '/ai-orchestrator/api';
 
@@ -15,42 +21,54 @@
 
   let existingTables: ExistingTable[] = [];
 
-  // CREATE TABLE form
+  // Создание таблицы
   let schema_name = '';
   let table_name = '';
   let description = '';
   let table_class = 'custom';
 
   const typeOptions = ['text', 'int', 'bigint', 'numeric', 'boolean', 'date', 'timestamptz', 'jsonb', 'uuid'];
-  let columns: ColumnDef[] = [{ field_name: '', field_type: 'text', description: '' }];
 
+  let columns: { field_name: string; field_type: string; description?: string }[] = [
+    { field_name: '', field_type: 'text', description: '' }
+  ];
+
+  // Партиционирование
   let partition_enabled = false;
   let partition_column = 'event_date';
   let partition_interval: 'day' | 'month' = 'day';
 
+  // Тестовая строка (JSON)
   let test_row_text = '';
+  const testRowPlaceholder = `{"dataset":"ads","event_date":"2026-02-17","payload":{"a":1}}`;
 
-  const TEST_ROW_PLACEHOLDER =
-    '{"dataset":"ads","event_date":"2026-02-17","payload":{"a":1}}';
-
-  // Preview + CRUD
+  // Предпросмотр
   let preview_schema = '';
   let preview_table = '';
-
   let preview_rows: any[] = [];
-  let preview_columns: { column_name: string; data_type: string }[] = [];
-
+  let preview_columns: ColumnMeta[] = [];
   let preview_error = '';
   let preview_loading = false;
 
-  // Add column modal (simple inline)
-  let add_col_name = '';
-  let add_col_type = 'text';
-  let add_col_desc = '';
+  // Ввод новой строки (inline в таблице)
+  let newRow: Record<string, any> = {};
+  let rowActionError = '';
+  let rowActionLoading = false;
 
-  // Add row
-  let add_row_text = '';
-  const ADD_ROW_PLACEHOLDER = '{"col1":"value","col2":123}';
+  // Модалка: добавить столбец
+  let showAddColumnModal = false;
+  let addColName = '';
+  let addColType = 'text';
+  let addColDesc = '';
+  let addColError = '';
+  let addColLoading = false;
+
+  // Модалка: подтверждение удаления таблицы/колонки
+  let confirmText = '';
+  let showConfirm = false;
+  let confirmLoading = false;
+  let confirmError = '';
+  let confirmAction: null | (() => Promise<void>) = null;
 
   function canWrite() {
     return role === 'data_admin';
@@ -75,61 +93,18 @@
     return j;
   }
 
-  function normalizeColumns(cols: ColumnDef[]): ColumnDef[] {
-    return cols
-      .map((c) => ({
-        field_name: (c.field_name || '').trim(),
-        field_type: (c.field_type || '').trim(),
-        description: (c.description || '').trim()
-      }))
-      .filter((c) => c.field_name.length > 0);
-  }
-
-  function parseJsonObject(text: string, errMsg: string): any | null {
-    const t = (text || '').trim();
-    if (!t) return null;
-    const parsed = JSON.parse(t);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error(errMsg);
-    }
-    return parsed;
-  }
-
-  function validateCreate() {
-    const s = schema_name.trim();
-    const t = table_name.trim();
-    const cols = normalizeColumns(columns);
-
-    if (!s) throw new Error('Укажи схему');
-    if (!t) throw new Error('Укажи таблицу');
-    if (!cols.length) throw new Error('Добавь хотя бы одно поле');
-
-    for (const c of cols) {
-      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(c.field_name)) {
-        throw new Error(`Некорректное имя поля: ${c.field_name}`);
-      }
-      if (!typeOptions.includes(c.field_type)) {
-        throw new Error(`Некорректный тип поля: ${c.field_type}`);
-      }
-    }
-
-    if (partition_enabled) {
-      const pc = partition_column.trim();
-      if (!pc) throw new Error('Укажи колонку для партиций');
-      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(pc)) throw new Error('Некорректное имя колонки для партиций');
-    }
-  }
-
   async function refresh() {
     loading = true;
     error = '';
     try {
-      const j = await apiJson(`${API_BASE}/tables`, { method: 'GET' });
+      const j = await apiJson(`${API_BASE}/tables`);
       existingTables = j.existing_tables || [];
 
       if (!preview_schema && existingTables.length) {
         preview_schema = existingTables[0].schema_name;
         preview_table = existingTables[0].table_name;
+        await loadMeta();
+        await loadPreview();
       }
     } catch (e: any) {
       setErr(e);
@@ -147,7 +122,47 @@
     if (!columns.length) columns = [{ field_name: '', field_type: 'text', description: '' }];
   }
 
-  // Создать таблицу СРАЗУ
+  function normalizeColumns(cols: any[]) {
+    return (cols || [])
+      .map((c) => ({
+        field_name: String(c?.field_name || '').trim(),
+        field_type: String(c?.field_type || '').trim(),
+        description: String(c?.description || '').trim()
+      }))
+      .filter((c) => c.field_name.length > 0);
+  }
+
+  function parseTestRow(): any | null {
+    const t = (test_row_text || '').trim();
+    if (!t) return null;
+    const parsed = JSON.parse(t);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Тестовая запись должна быть JSON-объектом (например {"a":1})');
+    }
+    return parsed;
+  }
+
+  function validateCreate() {
+    const s = schema_name.trim();
+    const t = table_name.trim();
+    const cols = normalizeColumns(columns);
+
+    if (!s) throw new Error('Укажи схему');
+    if (!t) throw new Error('Укажи таблицу');
+    if (!cols.length) throw new Error('Добавь хотя бы одно поле');
+
+    for (const c of cols) {
+      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(c.field_name)) throw new Error(`Некорректное имя поля: ${c.field_name}`);
+      if (!typeOptions.includes(c.field_type)) throw new Error(`Некорректный тип поля: ${c.field_type}`);
+    }
+
+    if (partition_enabled) {
+      const pc = partition_column.trim();
+      if (!pc) throw new Error('Укажи колонку для партиций');
+    }
+  }
+
+  // СОЗДАТЬ ТАБЛИЦУ СРАЗУ (без черновиков)
   async function createTableNow() {
     error = '';
     try {
@@ -155,12 +170,9 @@
       validateCreate();
 
       const cols = normalizeColumns(columns);
-      const test_row = parseJsonObject(
-        test_row_text,
-        'Тестовая запись должна быть JSON-объектом (например {"a":1})'
-      );
+      const test_row = parseTestRow();
 
-      await apiJson(`${API_BASE}/table/create`, {
+      await apiJson(`${API_BASE}/tables/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-AO-ROLE': role },
         body: JSON.stringify({
@@ -178,8 +190,10 @@
 
       await refresh();
 
+      // открыть предпросмотр на созданную
       preview_schema = schema_name.trim();
       preview_table = table_name.trim();
+      await loadMeta();
       await loadPreview();
 
       alert(`Таблица создана: ${preview_schema}.${preview_table}`);
@@ -188,25 +202,34 @@
     }
   }
 
+  async function loadMeta() {
+    preview_error = '';
+    try {
+      if (!preview_schema || !preview_table) return;
+      const j = await apiJson(
+        `${API_BASE}/meta?schema=${encodeURIComponent(preview_schema)}&table=${encodeURIComponent(preview_table)}`
+      );
+      preview_columns = j.columns || [];
+      // подготовим объект новой строки
+      const nr: Record<string, any> = {};
+      for (const c of preview_columns) nr[c.name] = '';
+      newRow = nr;
+    } catch (e: any) {
+      preview_error = String(e?.message || e);
+    }
+  }
+
   async function loadPreview() {
     preview_loading = true;
     preview_error = '';
     preview_rows = [];
-    preview_columns = [];
     try {
       if (!preview_schema || !preview_table) throw new Error('Выбери схему и таблицу');
 
-      const cols = await apiJson(
-        `${API_BASE}/table/columns?schema=${encodeURIComponent(preview_schema)}&table=${encodeURIComponent(preview_table)}`,
-        { method: 'GET' }
+      const j = await apiJson(
+        `${API_BASE}/preview?schema=${encodeURIComponent(preview_schema)}&table=${encodeURIComponent(preview_table)}&limit=5`
       );
-      preview_columns = cols.columns || [];
-
-      const rows = await apiJson(
-        `${API_BASE}/table/rows?schema=${encodeURIComponent(preview_schema)}&table=${encodeURIComponent(preview_table)}&limit=5&offset=0`,
-        { method: 'GET' }
-      );
-      preview_rows = rows.rows || [];
+      preview_rows = j.rows || [];
     } catch (e: any) {
       preview_error = String(e?.message || e);
     } finally {
@@ -214,122 +237,182 @@
     }
   }
 
-  async function dropTable() {
-    error = '';
-    try {
-      if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
-      if (!preview_schema || !preview_table) throw new Error('Выбери таблицу');
-
-      const ok = confirm(`Удалить таблицу ${preview_schema}.${preview_table}? Это необратимо.`);
-      if (!ok) return;
-
-      await apiJson(`${API_BASE}/table/drop`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-AO-ROLE': role },
-        body: JSON.stringify({ schema: preview_schema, table: preview_table })
-      });
-
-      await refresh();
-      preview_rows = [];
-      preview_columns = [];
-      alert('Таблица удалена');
-    } catch (e: any) {
-      setErr(e);
-    }
+  // UI: выбрать таблицу (клик по “чипу”)
+  async function pickTable(s: string, t: string) {
+    preview_schema = s;
+    preview_table = t;
+    preview_rows = [];
+    await loadMeta();
+    await loadPreview();
   }
 
-  async function addDbColumn() {
-    error = '';
+  // ---------- КОЛОНКИ (из предпросмотра) ----------
+
+  function openAddColumnModal() {
+    addColName = '';
+    addColType = 'text';
+    addColDesc = '';
+    addColError = '';
+    showAddColumnModal = true;
+  }
+
+  async function addColumnToTable() {
+    addColError = '';
     try {
-      if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
-      if (!preview_schema || !preview_table) throw new Error('Выбери таблицу');
+      if (!canWrite()) throw new Error('Нужна роль data_admin');
+      const name = addColName.trim();
+      if (!name) throw new Error('Укажи имя столбца');
+      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) throw new Error('Некорректное имя столбца');
+      if (!typeOptions.includes(addColType)) throw new Error('Некорректный тип');
 
-      const name = add_col_name.trim();
-      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) throw new Error('Некорректное имя колонки');
-      if (!typeOptions.includes(add_col_type)) throw new Error('Некорректный тип колонки');
+      addColLoading = true;
 
-      await apiJson(`${API_BASE}/table/column/add`, {
+      await apiJson(`${API_BASE}/tables/column/add`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-AO-ROLE': role },
         body: JSON.stringify({
           schema: preview_schema,
           table: preview_table,
           column_name: name,
-          data_type: add_col_type,
-          description: add_col_desc.trim()
+          column_type: addColType,
+          description: addColDesc.trim()
         })
       });
 
-      add_col_name = '';
-      add_col_type = 'text';
-      add_col_desc = '';
+      showAddColumnModal = false;
+      await loadMeta();
       await loadPreview();
     } catch (e: any) {
-      setErr(e);
+      addColError = String(e?.message || e);
+    } finally {
+      addColLoading = false;
     }
   }
 
-  async function dropDbColumn(col: string) {
-    error = '';
-    try {
-      if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
-      if (!preview_schema || !preview_table) throw new Error('Выбери таблицу');
-
-      const ok = confirm(`Удалить колонку "${col}" из ${preview_schema}.${preview_table}?`);
-      if (!ok) return;
-
-      await apiJson(`${API_BASE}/table/column/drop`, {
+  function confirmDropColumn(col: string) {
+    confirmText = `Удалить столбец "${col}"? Это удалит данные этого столбца.`;
+    confirmError = '';
+    showConfirm = true;
+    confirmAction = async () => {
+      if (!canWrite()) throw new Error('Нужна роль data_admin');
+      await apiJson(`${API_BASE}/tables/column/drop`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-AO-ROLE': role },
         body: JSON.stringify({ schema: preview_schema, table: preview_table, column_name: col })
       });
-
+      await loadMeta();
       await loadPreview();
-    } catch (e: any) {
-      setErr(e);
+    };
+  }
+
+  // ---------- СТРОКИ (из предпросмотра) ----------
+
+  function coerceValueByType(type: string, v: any) {
+    const s = String(v ?? '').trim();
+    if (s === '') return null;
+
+    switch (type) {
+      case 'int':
+      case 'bigint':
+        return Number(s);
+      case 'numeric':
+        return Number(s);
+      case 'boolean':
+        return s === 'true' || s === '1' || s === 'yes';
+      case 'jsonb':
+        // разрешаем вводить JSON строкой
+        return JSON.parse(s);
+      case 'date':
+        return s; // yyyy-mm-dd
+      case 'timestamptz':
+        return s; // ISO
+      default:
+        return s;
     }
   }
 
-  async function insertRow() {
-    error = '';
+  async function addRowInline() {
+    rowActionError = '';
     try {
-      if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
-      if (!preview_schema || !preview_table) throw new Error('Выбери таблицу');
+      if (!canWrite()) throw new Error('Нужна роль data_admin');
 
-      const row = parseJsonObject(add_row_text, 'Строка должна быть JSON-объектом (пример {"a":1})');
-      if (!row) throw new Error('Заполни JSON строки');
+      rowActionLoading = true;
 
-      await apiJson(`${API_BASE}/table/row/insert`, {
+      const payload: Record<string, any> = {};
+      for (const c of preview_columns) {
+        // __ctid не колонка таблицы
+        if (c.name === '__ctid') continue;
+        if (c.name in newRow) {
+          payload[c.name] = coerceValueByType(c.type, newRow[c.name]);
+        }
+      }
+
+      await apiJson(`${API_BASE}/tables/row/add`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-AO-ROLE': role },
-        body: JSON.stringify({ schema: preview_schema, table: preview_table, row })
+        body: JSON.stringify({ schema: preview_schema, table: preview_table, row: payload })
       });
 
-      add_row_text = '';
       await loadPreview();
+
+      // очистим поля ввода
+      const nr: Record<string, any> = {};
+      for (const c of preview_columns) nr[c.name] = '';
+      newRow = nr;
     } catch (e: any) {
-      setErr(e);
+      rowActionError = String(e?.message || e);
+    } finally {
+      rowActionLoading = false;
     }
   }
 
-  async function deleteRowByCtid(ctid: string) {
-    error = '';
-    try {
-      if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
-      if (!preview_schema || !preview_table) throw new Error('Выбери таблицу');
-
-      const ok = confirm('Удалить эту строку?');
-      if (!ok) return;
-
-      await apiJson(`${API_BASE}/table/row/delete`, {
+  function confirmDeleteRow(ctid: string) {
+    confirmText = `Удалить эту строку?`;
+    confirmError = '';
+    showConfirm = true;
+    confirmAction = async () => {
+      if (!canWrite()) throw new Error('Нужна роль data_admin');
+      await apiJson(`${API_BASE}/tables/row/delete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-AO-ROLE': role },
         body: JSON.stringify({ schema: preview_schema, table: preview_table, ctid })
       });
-
       await loadPreview();
+    };
+  }
+
+  // ---------- УДАЛИТЬ ТАБЛИЦУ ----------
+
+  function confirmDropTable() {
+    confirmText = `Удалить таблицу ${preview_schema}.${preview_table}? (CASCADE)`;
+    confirmError = '';
+    showConfirm = true;
+    confirmAction = async () => {
+      if (!canWrite()) throw new Error('Нужна роль data_admin');
+      await apiJson(`${API_BASE}/tables/drop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-AO-ROLE': role },
+        body: JSON.stringify({ schema: preview_schema, table: preview_table })
+      });
+      await refresh();
+      preview_rows = [];
+      preview_columns = [];
+      preview_schema = '';
+      preview_table = '';
+    };
+  }
+
+  async function runConfirm() {
+    if (!confirmAction) return;
+    confirmLoading = true;
+    confirmError = '';
+    try {
+      await confirmAction();
+      showConfirm = false;
     } catch (e: any) {
-      setErr(e);
+      confirmError = String(e?.message || e);
+    } finally {
+      confirmLoading = false;
     }
   }
 
@@ -360,7 +443,7 @@
     <div>
       <h1>Конструктор таблиц</h1>
       <p class="sub">
-        Создаёт схему/таблицу/поля по твоему вводу. Справа: текущие таблицы + предпросмотр и кнопки управления.
+        Создаёт схему/таблицу/поля. Справа — предпросмотр 5 строк + действия (столбцы/строки/удаление таблицы).
       </p>
     </div>
 
@@ -382,13 +465,13 @@
   {/if}
 
   <section class="grid">
-    <!-- LEFT -->
+    <!-- ЛЕВО: СОЗДАНИЕ -->
     <div class="panel">
       <div class="panel-head">
         <h2>Создать таблицу</h2>
         <div class="quick">
-          <button on:click={pickTemplateBronze}>Заполнить шаблоном Bronze</button>
-          <button on:click={refresh}>Обновить список</button>
+          <button on:click={pickTemplateBronze}>Заполнить шаблон Bronze</button>
+          <button on:click={refresh} disabled={loading}>{loading ? 'Загрузка…' : 'Обновить список'}</button>
         </div>
       </div>
 
@@ -437,6 +520,7 @@
           </div>
         {/each}
 
+        <!-- КНОПКА ВНИЗУ БЛОКА -->
         <div class="fields-footer">
           <button on:click={addColumn}>+ Добавить поле</button>
         </div>
@@ -469,7 +553,7 @@
       <div class="panel2">
         <h3>Тестовая запись (опционально)</h3>
         <p class="hint">Если заполнить JSON — одна строка будет вставлена сразу после создания таблицы.</p>
-        <textarea bind:value={test_row_text} placeholder={TEST_ROW_PLACEHOLDER} />
+        <textarea bind:value={test_row_text} placeholder={testRowPlaceholder} />
       </div>
 
       <div class="actions">
@@ -479,11 +563,11 @@
       </div>
 
       {#if !canWrite()}
-        <p class="hint">Кнопка активна только для роли <b>data_admin</b>.</p>
+        <p class="hint">Кнопка активна только при роли <b>data_admin</b>.</p>
       {/if}
     </div>
 
-    <!-- RIGHT -->
+    <!-- ПРАВО: ТЕКУЩИЕ + ПРЕДПРОСМОТР С КНОПКАМИ -->
     <div class="panel">
       <div class="panel-head">
         <h2>Текущие таблицы</h2>
@@ -499,17 +583,7 @@
       {:else}
         <div class="tables-list">
           {#each existingTables as t}
-            <button
-              class="chip"
-              on:click={() => {
-                preview_schema = t.schema_name;
-                preview_table = t.table_name;
-                preview_rows = [];
-                preview_columns = [];
-                preview_error = '';
-              }}
-              title="Выбрать таблицу"
-            >
+            <button class="chip" on:click={() => pickTable(t.schema_name, t.table_name)}>
               {t.schema_name}.{t.table_name}
             </button>
           {/each}
@@ -522,7 +596,7 @@
           <button on:click={loadPreview} disabled={preview_loading}>
             {preview_loading ? 'Загрузка…' : 'Показать 5 строк'}
           </button>
-          <button class="danger" on:click={dropTable} disabled={!canWrite() || !preview_schema || !preview_table}>
+          <button class="danger" on:click={confirmDropTable} disabled={!canWrite() || !preview_schema || !preview_table}>
             Удалить таблицу
           </button>
         </div>
@@ -538,7 +612,13 @@
       <div class="form">
         <label>
           Схема
-          <select bind:value={preview_schema} on:change={() => { preview_rows = []; preview_columns=[]; }}>
+          <select
+            bind:value={preview_schema}
+            on:change={async () => {
+              preview_rows = [];
+              await loadMeta();
+            }}
+          >
             {#each Array.from(new Set(existingTables.map((t) => t.schema_name))) as s}
               <option value={s}>{s}</option>
             {/each}
@@ -547,7 +627,13 @@
 
         <label>
           Таблица
-          <select bind:value={preview_table} on:change={() => { preview_rows = []; preview_columns=[]; }}>
+          <select
+            bind:value={preview_table}
+            on:change={async () => {
+              preview_rows = [];
+              await loadMeta();
+            }}
+          >
             {#each existingTables.filter((t) => t.schema_name === preview_schema) as t}
               <option value={t.table_name}>{t.schema_name}.{t.table_name}</option>
             {/each}
@@ -555,94 +641,183 @@
         </label>
       </div>
 
-      <!-- Column controls -->
-      <div class="panel2">
-        <h3>Колонки</h3>
-        <div class="col-add">
-          <input placeholder="имя колонки" bind:value={add_col_name} />
-          <select bind:value={add_col_type}>
-            {#each typeOptions as t}
-              <option value={t}>{t}</option>
-            {/each}
-          </select>
-          <input placeholder="описание (опц.)" bind:value={add_col_desc} />
-          <button class="primary" on:click={addDbColumn} disabled={!canWrite() || !preview_schema || !preview_table}>
-            + Добавить колонку
-          </button>
+      {#if rowActionError}
+        <div class="alert">
+          <div class="alert-title">Ошибка действия</div>
+          <pre>{rowActionError}</pre>
         </div>
+      {/if}
 
-        {#if preview_columns.length}
-          <div class="cols-list">
-            {#each preview_columns as c}
-              <div class="col-item">
-                <div class="col-name">{c.column_name}</div>
-                <div class="col-type">{c.data_type}</div>
-                <button class="danger" on:click={() => dropDbColumn(c.column_name)} disabled={!canWrite()}>
-                  ✕
-                </button>
-              </div>
-            {/each}
-          </div>
-        {:else}
-          <p class="hint">Нажми “Показать 5 строк”, чтобы подтянуть список колонок.</p>
-        {/if}
-      </div>
-
-      <!-- Row controls -->
-      <div class="panel2">
-        <h3>Строки</h3>
-        <p class="hint">Добавление строки: вставь JSON-объект (ключи = имена колонок).</p>
-        <textarea bind:value={add_row_text} placeholder={ADD_ROW_PLACEHOLDER} />
-        <div class="actions">
-          <button class="primary" on:click={insertRow} disabled={!canWrite() || !preview_schema || !preview_table}>
-            + Добавить строку
-          </button>
-        </div>
-      </div>
-
-      <!-- Preview table -->
-      {#if preview_rows.length > 0}
+      {#if preview_schema && preview_table}
         <div class="preview">
           <table>
             <thead>
               <tr>
-                {#each Object.keys(preview_rows[0]) as k}
-                  <th>{k}</th>
+                {#each preview_columns as c}
+                  {#if c.name !== '__ctid'}
+                    <th>
+                      <div class="th-wrap">
+                        <span>{c.name}</span>
+                        <button
+                          class="icon danger"
+                          title="Удалить столбец"
+                          on:click={() => confirmDropColumn(c.name)}
+                          disabled={!canWrite()}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    </th>
+                  {/if}
                 {/each}
-                <th style="width:1%;">Действия</th>
+
+                <!-- последняя “пустая колонка” = ДОБАВИТЬ СТОЛБЕЦ -->
+                <th class="th-add">
+                  <button class="icon" title="Добавить столбец" on:click={openAddColumnModal} disabled={!canWrite()}>
+                    +
+                  </button>
+                </th>
+
+                <!-- колонка действий строк -->
+                <th class="th-actions">Действия</th>
               </tr>
             </thead>
+
             <tbody>
-              {#each preview_rows as r}
-                <tr>
-                  {#each Object.keys(preview_rows[0]) as k}
-                    <td>{typeof r[k] === 'object' ? JSON.stringify(r[k]) : String(r[k])}</td>
-                  {/each}
-                  <td>
-                    <button
-                      class="danger"
-                      on:click={() => deleteRowByCtid(String(r.__ctid))}
-                      disabled={!canWrite() || !r.__ctid}
-                      title="Удалить строку"
-                    >
-                      ✕
-                    </button>
-                  </td>
-                </tr>
-              {/each}
+              {#if preview_rows.length > 0}
+                {#each preview_rows as r}
+                  <tr>
+                    {#each preview_columns as c}
+                      {#if c.name !== '__ctid'}
+                        <td>{typeof r[c.name] === 'object' ? JSON.stringify(r[c.name]) : String(r[c.name] ?? '')}</td>
+                      {/if}
+                    {/each}
+
+                    <!-- “пустая” колонка add-col -->
+                    <td></td>
+
+                    <!-- действия по строке -->
+                    <td class="td-actions">
+                      <button
+                        class="icon danger"
+                        title="Удалить строку"
+                        on:click={() => confirmDeleteRow(String(r.__ctid || ''))}
+                        disabled={!canWrite() || !r.__ctid}
+                      >
+                        🗑
+                      </button>
+                    </td>
+                  </tr>
+                {/each}
+              {/if}
+
+              <!-- ПОСЛЕДНЯЯ СТРОКА: ДОБАВИТЬ СТРОКУ (как продолжение таблицы) -->
+              <tr class="add-row">
+                {#each preview_columns as c}
+                  {#if c.name !== '__ctid'}
+                    <td>
+                      <input
+                        class="cell-input"
+                        placeholder={c.type}
+                        bind:value={newRow[c.name]}
+                        disabled={!canWrite()}
+                      />
+                    </td>
+                  {/if}
+                {/each}
+
+                <td></td>
+
+                <td class="td-actions">
+                  <button class="icon" title="Добавить строку" on:click={addRowInline} disabled={!canWrite() || rowActionLoading}>
+                    +
+                  </button>
+                </td>
+              </tr>
             </tbody>
           </table>
+
+          {#if preview_rows.length === 0}
+            <p class="hint" style="padding:10px 12px;">Нет данных (таблица может быть пустой). Добавь строку снизу.</p>
+          {/if}
         </div>
       {:else}
-        <p class="hint">Нет данных для предпросмотра (таблица может быть пустой).</p>
+        <p class="hint">Выбери схему и таблицу.</p>
       {/if}
     </div>
   </section>
+
+  <!-- МОДАЛКА: добавить столбец -->
+  {#if showAddColumnModal}
+    <div class="modal-backdrop" on:click={() => (showAddColumnModal = false)}>
+      <div class="modal" on:click|stopPropagation>
+        <h3>Добавить столбец</h3>
+
+        {#if addColError}
+          <div class="alert">
+            <div class="alert-title">Ошибка</div>
+            <pre>{addColError}</pre>
+          </div>
+        {/if}
+
+        <div class="form">
+          <label>
+            Имя столбца
+            <input bind:value={addColName} placeholder="например: campaign_id" />
+          </label>
+
+          <label>
+            Тип
+            <select bind:value={addColType}>
+              {#each typeOptions as t}
+                <option value={t}>{t}</option>
+              {/each}
+            </select>
+          </label>
+
+          <label>
+            Описание (опционально)
+            <input bind:value={addColDesc} placeholder="что это за поле" />
+          </label>
+        </div>
+
+        <div class="actions">
+          <button on:click={() => (showAddColumnModal = false)}>Отмена</button>
+          <button class="primary" on:click={addColumnToTable} disabled={!canWrite() || addColLoading}>
+            {addColLoading ? 'Добавляю…' : 'Добавить'}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- МОДАЛКА: подтверждение (удалить столбец/строку/таблицу) -->
+  {#if showConfirm}
+    <div class="modal-backdrop" on:click={() => (showConfirm = false)}>
+      <div class="modal" on:click|stopPropagation>
+        <h3>Подтверждение</h3>
+        <p class="hint">{confirmText}</p>
+
+        {#if confirmError}
+          <div class="alert">
+            <div class="alert-title">Ошибка</div>
+            <pre>{confirmError}</pre>
+          </div>
+        {/if}
+
+        <div class="actions">
+          <button on:click={() => (showConfirm = false)} disabled={confirmLoading}>Отмена</button>
+          <button class="danger" on:click={runConfirm} disabled={confirmLoading}>
+            {confirmLoading ? 'Выполняю…' : 'Да, удалить'}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </main>
 
 <style>
   .root { padding: 18px; }
-
   .header { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }
   h1 { margin:0; font-size: 20px; font-weight: 800; }
   .sub { margin: 6px 0 0; font-size: 12px; color:#64748b; }
@@ -659,7 +834,6 @@
 
   .form { display:grid; gap: 10px; margin-top: 12px; }
   label { display:grid; gap: 6px; font-size: 12px; color:#334155; }
-
   input, select, textarea { padding: 10px 12px; border-radius: 12px; border:1px solid #e2e8f0; outline: none; }
   textarea { min-height: 90px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
 
@@ -669,13 +843,12 @@
   .fields-footer { margin-top: 10px; display:flex; justify-content:flex-end; }
 
   .row { display:flex; gap:8px; align-items:center; font-size: 12px; color:#334155; }
-
-  .actions { display:flex; gap: 8px; margin-top: 12px; align-items:center; flex-wrap: wrap; }
+  .actions { display:flex; gap: 8px; margin-top: 12px; }
 
   button { padding: 10px 12px; border-radius: 12px; border:1px solid #e2e8f0; background:#fff; cursor:pointer; }
   button.primary { background:#0f172a; color:#fff; border-color:#0f172a; }
   button:disabled { opacity:0.5; cursor:not-allowed; }
-  .danger { border:1px solid #fecaca; color:#b91c1c; }
+  button.danger { border:1px solid #fecaca; color:#b91c1c; }
 
   .hint { margin-top: 10px; font-size: 12px; color:#64748b; }
 
@@ -686,19 +859,41 @@
   .tables-list { display:flex; gap:8px; flex-wrap:wrap; margin-top: 12px; }
   .chip { padding: 6px 10px; border-radius: 999px; border:1px solid #e2e8f0; font-size: 12px; color:#334155; background:#fff; cursor:pointer; }
 
-  .preview-head { display:flex; align-items:center; justify-content:space-between; gap: 8px; margin-top: 16px; }
+  .preview-head { display:flex; justify-content:space-between; align-items:center; gap: 10px; margin-top: 16px; }
   .preview-actions { display:flex; gap: 8px; flex-wrap: wrap; }
 
   .preview { margin-top: 10px; overflow:auto; border:1px solid #eef2f7; border-radius: 14px; }
   table { border-collapse: collapse; width: 100%; font-size: 12px; }
   th, td { border-bottom:1px solid #eef2f7; padding: 8px 10px; text-align:left; vertical-align:top; }
-  th { position: sticky; top: 0; background:#fff; }
+  th { position: sticky; top: 0; background:#fff; z-index: 1; }
 
-  .col-add { display:grid; grid-template-columns: 1fr 180px 1.2fr auto; gap: 8px; margin-top: 10px; }
-  @media (max-width: 1100px) { .col-add { grid-template-columns: 1fr; } }
+  .th-wrap { display:flex; align-items:center; justify-content:space-between; gap: 8px; }
+  .icon { padding: 4px 8px; border-radius: 10px; border:1px solid #e2e8f0; background:#fff; cursor:pointer; line-height: 1; }
+  .icon.danger { border-color:#fecaca; color:#b91c1c; }
 
-  .cols-list { display:grid; gap: 8px; margin-top: 10px; }
-  .col-item { display:grid; grid-template-columns: 1fr 200px auto; gap: 8px; align-items:center; padding: 8px; border:1px solid #eef2f7; border-radius: 12px; }
-  .col-name { font-weight: 700; }
-  .col-type { color:#64748b; font-size: 12px; }
+  .th-add { width: 56px; text-align:center; }
+  .th-actions { width: 90px; text-align:center; }
+
+  .td-actions { text-align:center; }
+
+  .cell-input { width: 100%; padding: 8px 10px; border-radius: 10px; border:1px solid #e2e8f0; }
+
+  .add-row td { background: #fbfdff; }
+
+  /* Модалки */
+  .modal-backdrop {
+    position: fixed; inset: 0;
+    background: rgba(15, 23, 42, 0.35);
+    display:flex; align-items:center; justify-content:center;
+    padding: 16px;
+  }
+  .modal {
+    width: min(520px, 100%);
+    background:#fff;
+    border:1px solid #eef2f7;
+    border-radius: 16px;
+    padding: 14px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.12);
+  }
+  .modal h3 { margin: 0 0 8px; }
 </style>
