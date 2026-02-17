@@ -1,368 +1,446 @@
-// core/orchestrator/modules/advertising/interface/server/tableBuilder.mjs
-import express from 'express';
-import { pool } from './db.mjs';
+<script lang="ts">
+  import { onMount } from 'svelte';
 
-const router = express.Router();
-router.use(express.json({ limit: '4mb' }));
+  type ColumnDef = { field_name: string; field_type: string; description?: string };
+  type ExistingTable = { schema_name: string; table_name: string };
+  type Draft = {
+    id: string;
+    schema_name: string;
+    table_name: string;
+    table_class: string;
+    status: string;
+    description?: string;
+    created_at: string;
+    applied_at?: string | null;
+    last_error?: string | null;
+    options?: any;
+    fields?: ColumnDef[];
+  };
 
-function requireDataAdmin(req, res, next) {
-  const role = String(req.header('X-AO-ROLE') || '').toLowerCase();
-  if (role !== 'data_admin') return res.status(403).json({ error: 'forbidden: data_admin only' });
-  return next();
-}
+  let role: 'viewer' | 'operator' | 'data_admin' = 'data_admin';
 
-function isValidIdent(name) {
-  return typeof name === 'string' && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name);
-}
+  let loading = false;
+  let error = '';
 
-function qIdent(name) {
-  if (!isValidIdent(name)) throw new Error(`Invalid identifier: ${name}`);
-  return `"${name}"`;
-}
+  let drafts: Draft[] = [];
+  let existingTables: ExistingTable[] = [];
 
-const ALLOWED_TYPES = new Set([
-  'text',
-  'int',
-  'integer',
-  'bigint',
-  'numeric',
-  'boolean',
-  'date',
-  'timestamptz',
-  'timestamp with time zone',
-  'jsonb',
-  'uuid',
-]);
+  // Конструктор (пустые значения — пользователь вводит сам)
+  let schema_name = '';
+  let table_name = '';
+  let table_class = 'custom';
+  let description = '';
 
-function normalizeType(t) {
-  const v = String(t || '').trim().toLowerCase();
-  if (v === 'integer') return 'int';
-  if (v === 'timestamp with time zone') return 'timestamptz';
-  return v;
-}
+  const typeOptions = ['text','int','bigint','numeric','boolean','date','timestamptz','jsonb','uuid'];
+  let columns: ColumnDef[] = [{ field_name: '', field_type: 'text', description: '' }];
 
-async function listExistingTables() {
-  // pg_catalog точнее, чем information_schema, и не даёт странных "showcase.advertising" в public
-  const sql = `
-    SELECT n.nspname AS schema_name, c.relname AS table_name
-    FROM pg_catalog.pg_class c
-    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-    WHERE c.relkind = 'r'
-      AND n.nspname NOT IN ('pg_catalog','information_schema')
-    ORDER BY n.nspname, c.relname
-  `;
-  const r = await pool.query(sql);
-  return r.rows;
-}
+  // Партиционирование
+  let partition_enabled = false;
+  let partition_column = 'ingested_at';
+  let partition_interval: 'day' | 'month' = 'day';
 
-router.get('/tables', async (_req, res) => {
-  try {
-    const defs = await pool.query(
-      `SELECT id, schema_name, table_name, table_class, status, description, created_by, created_at, applied_at, applied_by, last_error, options
-       FROM ao_table_definitions
-       ORDER BY created_at DESC`
-    );
+  // Тестовая запись
+  let test_row_text = ''; // JSON string
 
-    const ids = defs.rows.map((x) => x.id);
-    let fieldsByDef = {};
-    if (ids.length) {
-      const fields = await pool.query(
-        `SELECT table_definition_id, field_name, field_type, description, created_at
-         FROM ao_table_fields
-         WHERE table_definition_id = ANY($1::uuid[])
-         ORDER BY created_at ASC`,
-        [ids]
-      );
-      fieldsByDef = fields.rows.reduce((acc, row) => {
-        (acc[row.table_definition_id] ||= []).push({
-          field_name: row.field_name,
-          field_type: row.field_type,
-          description: row.description,
-          created_at: row.created_at,
-        });
-        return acc;
-      }, {});
-    }
+  // Предпросмотр
+  let preview_schema = '';
+  let preview_table = '';
+  let preview_rows: any[] = [];
+  let preview_error = '';
+  let preview_loading = false;
 
-    const existingTables = await listExistingTables();
-
-    return res.json({
-      drafts: defs.rows.map((d) => ({ ...d, fields: fieldsByDef[d.id] || [] })),
-      existing_tables: existingTables,
-    });
-  } catch (e) {
-    return res.status(500).json({ error: 'tables_list_failed', details: String(e?.message || e) });
+  function setErr(e: any) {
+    error = String(e?.details || e?.message || e);
   }
-});
 
-router.get('/columns', async (req, res) => {
-  try {
-    const schema = String(req.query.schema || '');
-    const table = String(req.query.table || '');
-    if (!isValidIdent(schema) || !isValidIdent(table)) return res.status(400).json({ error: 'invalid schema/table' });
-
-    const r = await pool.query(
-      `
-      SELECT column_name, data_type, udt_name, is_nullable
-      FROM information_schema.columns
-      WHERE table_schema=$1 AND table_name=$2
-      ORDER BY ordinal_position
-      `,
-      [schema, table]
-    );
-
-    return res.json({ columns: r.rows });
-  } catch (e) {
-    return res.status(500).json({ error: 'columns_failed', details: String(e?.message || e) });
-  }
-});
-
-router.get('/preview', async (req, res) => {
-  try {
-    const schema = String(req.query.schema || '');
-    const table = String(req.query.table || '');
-    const limit = Math.min(Math.max(Number(req.query.limit || 5), 1), 50);
-
-    if (!isValidIdent(schema) || !isValidIdent(table)) return res.status(400).json({ error: 'invalid schema/table' });
-
-    const sql = `SELECT * FROM ${qIdent(schema)}.${qIdent(table)} ORDER BY 1 DESC LIMIT ${limit}`;
-    const r = await pool.query(sql);
-    return res.json({ rows: r.rows, limit });
-  } catch (e) {
-    return res.status(500).json({ error: 'preview_failed', details: String(e?.message || e) });
-  }
-});
-
-router.post('/tables/draft', requireDataAdmin, async (req, res) => {
-  const body = req.body || {};
-  const schema_name = body.schema_name;
-  const table_name = body.table_name;
-  const table_class = body.table_class || 'custom';
-  const description = body.description || '';
-  const created_by = body.created_by || 'ui';
-  const columns = Array.isArray(body.columns) ? body.columns : [];
-
-  // новые опции
-  const partitioning = body.partitioning || { enabled: false };
-  const test_row = body.test_row ?? null;
-
-  try {
-    if (!isValidIdent(schema_name)) return res.status(400).json({ error: 'invalid schema_name' });
-    if (!isValidIdent(table_name)) return res.status(400).json({ error: 'invalid table_name' });
-    if (!columns.length) return res.status(400).json({ error: 'columns required' });
-
-    for (const c of columns) {
-      if (!isValidIdent(c.field_name)) return res.status(400).json({ error: `invalid field_name: ${c.field_name}` });
-      const t = normalizeType(c.field_type);
-      if (!ALLOWED_TYPES.has(t)) return res.status(400).json({ error: `invalid field_type: ${c.field_type}` });
-    }
-
-    if (partitioning?.enabled) {
-      const col = String(partitioning.column || '');
-      const interval = String(partitioning.interval || 'day');
-      if (!isValidIdent(col)) return res.status(400).json({ error: 'invalid partitioning.column' });
-      if (!['day', 'month'].includes(interval)) return res.status(400).json({ error: 'invalid partitioning.interval' });
-    }
-
-    if (test_row !== null && (typeof test_row !== 'object' || Array.isArray(test_row))) {
-      return res.status(400).json({ error: 'test_row must be object or null' });
-    }
-
-    const client = await pool.connect();
+  async function refresh() {
+    loading = true;
+    error = '';
     try {
-      await client.query('BEGIN');
+      const r = await fetch('/ai-orchestrator/api/tables');
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'failed_to_list');
+      drafts = j.drafts || [];
+      existingTables = j.existing_tables || [];
 
-      const def = await client.query(
-        `INSERT INTO ao_table_definitions (schema_name, table_name, table_class, status, description, created_by, options)
-         VALUES ($1,$2,$3,'draft',$4,$5,$6::jsonb)
-         RETURNING id`,
-        [schema_name, table_name, table_class, description, created_by, JSON.stringify({ partitioning, test_row })]
-      );
-
-      const id = def.rows[0].id;
-
-      for (const c of columns) {
-        await client.query(
-          `INSERT INTO ao_table_fields (table_definition_id, field_name, field_type, description)
-           VALUES ($1,$2,$3,$4)`,
-          [id, c.field_name, normalizeType(c.field_type), c.description || '']
-        );
+      // если preview не выбран — выберем первый существующий
+      if (!preview_schema && existingTables.length) {
+        preview_schema = existingTables[0].schema_name;
+        preview_table = existingTables[0].table_name;
       }
-
-      await client.query('COMMIT');
-      return res.json({ ok: true, id });
-    } catch (e) {
-      await client.query('ROLLBACK');
-      throw e;
+    } catch (e: any) {
+      setErr(e);
     } finally {
-      client.release();
+      loading = false;
     }
-  } catch (e) {
-    return res.status(500).json({ error: 'draft_create_failed', details: String(e?.message || e) });
-  }
-});
-
-function buildCreateTableSql({ schema_name, table_name, fields, partitioning }) {
-  const schema = qIdent(schema_name);
-  const table = qIdent(table_name);
-
-  const userCols = fields.map((f) => `${qIdent(f.field_name)} ${normalizeType(f.field_type)}`).join(',\n  ');
-
-  // системные поля всегда добавляем (они нужны всем уровням)
-  const baseCols = `
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  created_at timestamptz NOT NULL DEFAULT now(),
-  ${userCols}
-`.trim();
-
-  if (partitioning?.enabled) {
-    const pcol = qIdent(partitioning.column);
-    return `
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-CREATE SCHEMA IF NOT EXISTS ${schema};
-
-CREATE TABLE IF NOT EXISTS ${schema}.${table} (
-  ${baseCols}
-) PARTITION BY RANGE (${pcol});
-`.trim();
   }
 
-  return `
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-CREATE SCHEMA IF NOT EXISTS ${schema};
-
-CREATE TABLE IF NOT EXISTS ${schema}.${table} (
-  ${baseCols}
-);
-`.trim();
-}
-
-async function ensurePartitions({ schema_name, table_name, partitioning }) {
-  if (!partitioning?.enabled) return;
-
-  const schema = qIdent(schema_name);
-  const table = qIdent(table_name);
-  const pcol = qIdent(partitioning.column);
-  const interval = partitioning.interval || 'day';
-
-  // создаём партиции вперёд на 30 дней (day) или 12 месяцев (month)
-  const count = interval === 'day' ? 30 : 12;
-
-  for (let i = 0; i < count; i++) {
-    const fromExpr = interval === 'day'
-      ? `date_trunc('day', now()) + interval '${i} day'`
-      : `date_trunc('month', now()) + interval '${i} month'`;
-
-    const toExpr = interval === 'day'
-      ? `date_trunc('day', now()) + interval '${i + 1} day'`
-      : `date_trunc('month', now()) + interval '${i + 1} month'`;
-
-    const partName = `${table_name}_${interval}_${String(i).padStart(3, '0')}`;
-    const part = qIdent(partName);
-
-    const sql = `
-CREATE TABLE IF NOT EXISTS ${schema}.${part}
-PARTITION OF ${schema}.${table}
-FOR VALUES FROM (${fromExpr}) TO (${toExpr});
-`.trim();
-
-    // eslint-disable-next-line no-await-in-loop
-    await pool.query(sql);
+  function addColumn() {
+    columns = [...columns, { field_name: '', field_type: 'text', description: '' }];
   }
-}
 
-router.post('/tables/apply/:id', requireDataAdmin, async (req, res) => {
-  const id = req.params.id;
-  const applied_by = (req.body && req.body.applied_by) || 'ui';
+  function removeColumn(ix: number) {
+    columns = columns.filter((_, i) => i !== ix);
+    if (!columns.length) columns = [{ field_name: '', field_type: 'text', description: '' }];
+  }
 
-  try {
-    const def = await pool.query(
-      `SELECT id, schema_name, table_name, table_class, status, options
-       FROM ao_table_definitions
-       WHERE id = $1::uuid`,
-      [id]
-    );
-    if (!def.rows.length) return res.status(404).json({ error: 'draft_not_found' });
-
-    const d = def.rows[0];
-    const options = d.options || {};
-    const partitioning = options.partitioning || { enabled: false };
-    const test_row = options.test_row ?? null;
-
-    const fields = await pool.query(
-      `SELECT field_name, field_type
-       FROM ao_table_fields
-       WHERE table_definition_id = $1::uuid
-       ORDER BY created_at ASC`,
-      [id]
-    );
-    if (!fields.rows.length) return res.status(400).json({ error: 'no_fields' });
-
-    const createSql = buildCreateTableSql({
-      schema_name: d.schema_name,
-      table_name: d.table_name,
-      fields: fields.rows,
-      partitioning,
-    });
-
-    const client = await pool.connect();
+  function parseTestRow(): any | null {
+    const t = test_row_text.trim();
+    if (!t) return null;
     try {
-      await client.query('BEGIN');
-      await client.query(createSql);
+      return JSON.parse(t);
+    } catch {
+      throw new Error('Тестовая запись: это должен быть валидный JSON объект');
+    }
+  }
 
-      // партиции (если включено)
-      await client.query('COMMIT');
-    } catch (e) {
-      await client.query('ROLLBACK');
-      throw e;
+  async function createDraft() {
+    error = '';
+    try {
+      const test_row = parseTestRow();
+
+      const r = await fetch('/ai-orchestrator/api/tables/draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-AO-ROLE': role },
+        body: JSON.stringify({
+          schema_name,
+          table_name,
+          table_class,
+          description,
+          created_by: 'ui',
+          columns,
+          partitioning: partition_enabled
+            ? { enabled: true, column: partition_column, interval: partition_interval }
+            : { enabled: false },
+          test_row
+        })
+      });
+
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.details || j.error || 'draft_create_failed');
+      await refresh();
+      alert(`Черновик создан: ${j.id}`);
+    } catch (e: any) {
+      setErr(e);
+    }
+  }
+
+  async function applyDraft(id: string) {
+    error = '';
+    try {
+      const r = await fetch(`/ai-orchestrator/api/tables/apply/${id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-AO-ROLE': role },
+        body: JSON.stringify({ applied_by: 'ui' })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.details || j.error || 'apply_failed');
+      await refresh();
+      alert('Таблица создана (apply выполнен)');
+    } catch (e: any) {
+      setErr(e);
+    }
+  }
+
+  async function loadPreview() {
+    preview_loading = true;
+    preview_error = '';
+    preview_rows = [];
+    try {
+      const url = `/ai-orchestrator/api/preview?schema=${encodeURIComponent(preview_schema)}&table=${encodeURIComponent(preview_table)}&limit=5`;
+      const r = await fetch(url);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.details || j.error || 'preview_failed');
+      preview_rows = j.rows || [];
+    } catch (e: any) {
+      preview_error = String(e?.message || e);
     } finally {
-      client.release();
+      preview_loading = false;
     }
-
-    // создаём партиции отдельно (простая логика, но рабочая)
-    try {
-      await ensurePartitions({ schema_name: d.schema_name, table_name: d.table_name, partitioning });
-    } catch (e) {
-      // не валим apply, просто пишем ошибку в last_error
-      await pool.query(
-        `UPDATE ao_table_definitions SET last_error=$2 WHERE id=$1::uuid`,
-        [id, `partitioning_failed: ${String(e?.message || e)}`]
-      );
-    }
-
-    // тестовая запись (если задана)
-    if (test_row) {
-      try {
-        const cols = Object.keys(test_row).filter(isValidIdent);
-        const vals = cols.map((k) => test_row[k]);
-        const colSql = cols.map(qIdent).join(', ');
-        const params = cols.map((_, i) => `$${i + 1}`).join(', ');
-
-        const sql = `INSERT INTO ${qIdent(d.schema_name)}.${qIdent(d.table_name)} (${colSql}) VALUES (${params})`;
-        await pool.query(sql, vals);
-      } catch (e) {
-        await pool.query(
-          `UPDATE ao_table_definitions SET last_error=$2 WHERE id=$1::uuid`,
-          [id, `test_row_failed: ${String(e?.message || e)}`]
-        );
-      }
-    }
-
-    await pool.query(
-      `UPDATE ao_table_definitions
-       SET status='applied', applied_at=now(), applied_by=$2
-       WHERE id=$1::uuid`,
-      [id, applied_by]
-    );
-
-    return res.json({ ok: true, applied: true, sql: createSql, partitioning, test_row_inserted: !!test_row });
-  } catch (e) {
-    await pool.query(
-      `UPDATE ao_table_definitions SET last_error=$2 WHERE id=$1::uuid`,
-      [id, String(e?.message || e)]
-    );
-    return res.status(500).json({ error: 'apply_failed', details: String(e?.message || e) });
   }
-});
 
-export { router as tableBuilderRouter };
+  function pickTemplateBronze() {
+    schema_name = 'bronze';
+    table_name = 'wb_ads_raw';
+    table_class = 'bronze_raw';
+    description = 'WB raw ingestion (append-only JSON)';
+    columns = [
+      { field_name: 'dataset', field_type: 'text', description: 'dataset name' },
+      { field_name: 'endpoint', field_type: 'text', description: 'endpoint name' },
+      { field_name: 'ingested_at', field_type: 'timestamptz', description: 'ingest timestamp' },
+      { field_name: 'event_date', field_type: 'date', description: 'event/business date' },
+      { field_name: 'idempotency_key', field_type: 'text', description: 'dedupe key' },
+      { field_name: 'payload', field_type: 'jsonb', description: 'raw json' }
+    ];
+    partition_enabled = true;
+    partition_column = 'event_date';
+    partition_interval = 'day';
+    test_row_text = '';
+  }
+
+  onMount(refresh);
+</script>
+
+<main class="root">
+  <header class="header">
+    <div>
+      <h1>Конструктор таблиц</h1>
+      <p class="sub">Создаёт схему/таблицу/поля по твоему вводу + опции (тестовая запись, партиции).</p>
+    </div>
+
+    <div class="role">
+      <span>Роль:</span>
+      <select bind:value={role}>
+        <option value="viewer">viewer</option>
+        <option value="operator">operator</option>
+        <option value="data_admin">data_admin</option>
+      </select>
+    </div>
+  </header>
+
+  {#if error}
+    <div class="alert">
+      <div class="alert-title">Ошибка</div>
+      <pre>{error}</pre>
+    </div>
+  {/if}
+
+  <section class="grid">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Создать таблицу</h2>
+        <div class="quick">
+          <button on:click={pickTemplateBronze}>Шаблон: Bronze</button>
+          <button on:click={refresh}>Обновить</button>
+        </div>
+      </div>
+
+      <div class="form">
+        <label>
+          Схема
+          <input bind:value={schema_name} placeholder="например: bronze / silver_adv / showcase" />
+        </label>
+
+        <label>
+          Таблица
+          <input bind:value={table_name} placeholder="например: wb_ads_raw" />
+        </label>
+
+        <label>
+          Класс
+          <select bind:value={table_class}>
+            <option value="custom">custom</option>
+            <option value="bronze_raw">bronze_raw</option>
+            <option value="silver_table">silver_table</option>
+            <option value="showcase_table">showcase_table</option>
+          </select>
+        </label>
+
+        <label>
+          Описание
+          <input bind:value={description} placeholder="что это за таблица" />
+        </label>
+      </div>
+
+      <div class="fields">
+        <div class="fields-head">
+          <h3>Поля</h3>
+          <button on:click={addColumn}>+ Добавить поле</button>
+        </div>
+
+        {#each columns as c, ix}
+          <div class="field-row">
+            <input placeholder="показатель (field_name)" bind:value={c.field_name} />
+            <select bind:value={c.field_type}>
+              {#each typeOptions as t}
+                <option value={t}>{t}</option>
+              {/each}
+            </select>
+            <input placeholder="описание" bind:value={c.description} />
+            <button class="danger" on:click={() => removeColumn(ix)}>Удалить</button>
+          </div>
+        {/each}
+      </div>
+
+      <div class="panel2">
+        <h3>Партиционирование</h3>
+        <label class="row">
+          <input type="checkbox" bind:checked={partition_enabled} />
+          <span>Включить партиции</span>
+        </label>
+
+        {#if partition_enabled}
+          <div class="form">
+            <label>
+              Колонка для партиций
+              <input bind:value={partition_column} placeholder="event_date / ingested_at / date ..." />
+            </label>
+            <label>
+              Интервал
+              <select bind:value={partition_interval}>
+                <option value="day">day</option>
+                <option value="month">month</option>
+              </select>
+            </label>
+          </div>
+        {/if}
+      </div>
+
+      <div class="panel2">
+        <h3>Тестовая запись (опционально)</h3>
+        <p class="hint">Если заполнить JSON — одна строка будет вставлена после apply.</p>
+        <textarea bind:value={test_row_text} placeholder='{"dataset":"ads","event_date":"2026-02-17","payload":{"a":1}}'></textarea>
+      </div>
+
+      <div class="actions">
+        <button class="primary" on:click={createDraft} disabled={role !== 'data_admin'}>
+          Сохранить черновик
+        </button>
+      </div>
+
+      <p class="hint">Дальше применяй черновик в списке справа.</p>
+    </div>
+
+    <div class="panel">
+      <h2>Черновики</h2>
+      {#if loading}
+        <p>Загрузка…</p>
+      {:else if drafts.length === 0}
+        <p class="hint">Черновиков пока нет.</p>
+      {:else}
+        <div class="list">
+          {#each drafts as d}
+            <div class="item">
+              <div class="meta">
+                <div class="title">{d.schema_name}.{d.table_name}</div>
+                <div class="sub">{d.table_class} · {d.status}</div>
+                <div class="sub">создано: {new Date(d.created_at).toLocaleString()}</div>
+                {#if d.applied_at}
+                  <div class="sub">применено: {new Date(d.applied_at).toLocaleString()}</div>
+                {/if}
+                {#if d.last_error}
+                  <div class="sub err">ошибка: {d.last_error}</div>
+                {/if}
+              </div>
+              <div class="btns">
+                <button class="primary" on:click={() => applyDraft(d.id)} disabled={role !== 'data_admin'}>
+                  Применить
+                </button>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+
+      <h2 style="margin-top:16px;">Предпросмотр (5 строк)</h2>
+
+      {#if preview_error}
+        <div class="alert">
+          <div class="alert-title">Ошибка предпросмотра</div>
+          <pre>{preview_error}</pre>
+        </div>
+      {/if}
+
+      <div class="form">
+        <label>
+          Таблица
+          <select bind:value={preview_table} on:change={() => (preview_rows = [])}>
+            {#each existingTables.filter(t => t.schema_name === preview_schema) as t}
+              <option value={t.table_name}>{t.schema_name}.{t.table_name}</option>
+            {/each}
+          </select>
+        </label>
+
+        <label>
+          Схема
+          <select bind:value={preview_schema} on:change={() => (preview_rows = [])}>
+            {#each Array.from(new Set(existingTables.map(t => t.schema_name))) as s}
+              <option value={s}>{s}</option>
+            {/each}
+          </select>
+        </label>
+      </div>
+
+      <div class="actions">
+        <button on:click={loadPreview} disabled={preview_loading}>
+          {preview_loading ? 'Загрузка…' : 'Показать 5 строк'}
+        </button>
+      </div>
+
+      {#if preview_rows.length}
+        <div class="preview">
+          <table>
+            <thead>
+              <tr>
+                {#each Object.keys(preview_rows[0]) as k}
+                  <th>{k}</th>
+                {/each}
+              </tr>
+            </thead>
+            <tbody>
+              {#each preview_rows as r}
+                <tr>
+                  {#each Object.keys(preview_rows[0]) as k}
+                    <td>{typeof r[k] === 'object' ? JSON.stringify(r[k]) : String(r[k])}</td>
+                  {/each}
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {:else}
+        <p class="hint">Нет данных для предпросмотра (таблица может быть пустой).</p>
+      {/if}
+    </div>
+  </section>
+</main>
+
+<style>
+  .root { padding: 18px; }
+  .header { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }
+  h1 { margin:0; font-size: 20px; font-weight: 800; }
+  .sub { margin: 6px 0 0; font-size: 12px; color:#64748b; }
+  .role { display:flex; gap:8px; align-items:center; font-size: 12px; color:#334155; }
+
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+  @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
+
+  .panel { background:#fff; border:1px solid #eef2f7; border-radius: 16px; padding: 14px; }
+  .panel2 { margin-top: 12px; border:1px solid #eef2f7; border-radius: 14px; padding: 12px; }
+  .panel-head { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .quick { display:flex; gap: 8px; }
+
+  .form { display:grid; gap: 10px; margin-top: 12px; }
+  label { display:grid; gap: 6px; font-size: 12px; color:#334155; }
+  input, select, textarea { padding: 10px 12px; border-radius: 12px; border:1px solid #e2e8f0; outline: none; }
+  textarea { min-height: 90px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
+  .fields { margin-top: 14px; }
+  .fields-head { display:flex; align-items:center; justify-content:space-between; gap: 8px; }
+  .field-row { display:grid; grid-template-columns: 1.2fr 0.8fr 1.6fr auto; gap: 8px; margin-top: 8px; }
+
+  .row { display:flex; gap:8px; align-items:center; font-size: 12px; color:#334155; }
+
+  .actions { display:flex; gap: 8px; margin-top: 12px; }
+  button { padding: 10px 12px; border-radius: 12px; border:1px solid #e2e8f0; background:#fff; cursor:pointer; }
+  button.primary { background:#0f172a; color:#fff; border-color:#0f172a; }
+  button:disabled { opacity:0.5; cursor:not-allowed; }
+  .danger { border:1px solid #fecaca; color:#b91c1c; }
+
+  .hint { margin-top: 10px; font-size: 12px; color:#64748b; }
+
+  .list { display:grid; gap: 10px; margin-top: 12px; }
+  .item { display:flex; justify-content:space-between; gap: 12px; border:1px solid #eef2f7; border-radius: 14px; padding: 12px; }
+  .title { font-weight: 800; }
+  .sub { font-size: 12px; color:#64748b; margin-top: 2px; }
+  .sub.err { color:#b91c1c; }
+
+  .alert { background:#fff1f2; border:1px solid #fecdd3; border-radius: 14px; padding: 12px; margin: 12px 0; }
+  .alert-title { font-weight: 800; margin-bottom: 6px; }
+  pre { white-space: pre-wrap; margin:0; font-size: 12px; }
+
+  .preview { margin-top: 10px; overflow:auto; border:1px solid #eef2f7; border-radius: 14px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th, td { border-bottom:1px solid #eef2f7; padding: 8px 10px; text-align:left; vertical-align:top; }
+  th { position: sticky; top: 0; background:#fff; }
+</style>
