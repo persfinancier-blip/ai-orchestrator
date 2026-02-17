@@ -25,22 +25,22 @@
   let drafts: Draft[] = [];
   let existingTables: ExistingTable[] = [];
 
-  // Конструктор (пустые значения — пользователь вводит сам)
+  // Конструктор: пользователь вводит сам
   let schema_name = '';
   let table_name = '';
   let table_class = 'custom';
   let description = '';
 
-  const typeOptions = ['text','int','bigint','numeric','boolean','date','timestamptz','jsonb','uuid'];
+  const typeOptions = ['text', 'int', 'bigint', 'numeric', 'boolean', 'date', 'timestamptz', 'jsonb', 'uuid'];
   let columns: ColumnDef[] = [{ field_name: '', field_type: 'text', description: '' }];
 
   // Партиционирование
   let partition_enabled = false;
-  let partition_column = 'ingested_at';
+  let partition_column = 'event_date';
   let partition_interval: 'day' | 'month' = 'day';
 
-  // Тестовая запись
-  let test_row_text = ''; // JSON string
+  // Тестовая запись (JSON)
+  let test_row_text = '';
 
   // Предпросмотр
   let preview_schema = '';
@@ -60,10 +60,10 @@
       const r = await fetch('/ai-orchestrator/api/tables');
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'failed_to_list');
+
       drafts = j.drafts || [];
       existingTables = j.existing_tables || [];
 
-      // если preview не выбран — выберем первый существующий
       if (!preview_schema && existingTables.length) {
         preview_schema = existingTables[0].schema_name;
         preview_table = existingTables[0].table_name;
@@ -87,11 +87,11 @@
   function parseTestRow(): any | null {
     const t = test_row_text.trim();
     if (!t) return null;
-    try {
-      return JSON.parse(t);
-    } catch {
-      throw new Error('Тестовая запись: это должен быть валидный JSON объект');
+    const parsed = JSON.parse(t);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Тестовая запись должна быть JSON объектом (например {"a":1})');
     }
+    return parsed;
   }
 
   async function createDraft() {
@@ -136,7 +136,7 @@
       const j = await r.json();
       if (!r.ok) throw new Error(j.details || j.error || 'apply_failed');
       await refresh();
-      alert('Таблица создана (apply выполнен)');
+      alert('Таблица создана (применение выполнено)');
     } catch (e: any) {
       setErr(e);
     }
@@ -147,7 +147,9 @@
     preview_error = '';
     preview_rows = [];
     try {
-      const url = `/ai-orchestrator/api/preview?schema=${encodeURIComponent(preview_schema)}&table=${encodeURIComponent(preview_table)}&limit=5`;
+      const url =
+        `/ai-orchestrator/api/preview?schema=${encodeURIComponent(preview_schema)}` +
+        `&table=${encodeURIComponent(preview_table)}&limit=5`;
       const r = await fetch(url);
       const j = await r.json();
       if (!r.ok) throw new Error(j.details || j.error || 'preview_failed');
@@ -185,7 +187,10 @@
   <header class="header">
     <div>
       <h1>Конструктор таблиц</h1>
-      <p class="sub">Создаёт схему/таблицу/поля по твоему вводу + опции (тестовая запись, партиции).</p>
+      <p class="sub">
+        Создаёт схему/таблицу/поля по твоему вводу + опции (тестовая запись, партиции). Показывает текущие таблицы и
+        предпросмотр 5 строк.
+      </p>
     </div>
 
     <div class="role">
@@ -211,7 +216,7 @@
         <h2>Создать таблицу</h2>
         <div class="quick">
           <button on:click={pickTemplateBronze}>Шаблон: Bronze</button>
-          <button on:click={refresh}>Обновить</button>
+          <button on:click={refresh}>Обновить список</button>
         </div>
       </div>
 
@@ -288,8 +293,11 @@
 
       <div class="panel2">
         <h3>Тестовая запись (опционально)</h3>
-        <p class="hint">Если заполнить JSON — одна строка будет вставлена после apply.</p>
-        <textarea bind:value={test_row_text} placeholder='{"dataset":"ads","event_date":"2026-02-17","payload":{"a":1}}'></textarea>
+        <p class="hint">Если заполнить JSON — одна строка будет вставлена после “Применить”.</p>
+        <textarea
+          bind:value={test_row_text}
+          placeholder='{"dataset":"ads","event_date":"2026-02-17","payload":{"a":1}}'
+        />
       </div>
 
       <div class="actions">
@@ -298,7 +306,7 @@
         </button>
       </div>
 
-      <p class="hint">Дальше применяй черновик в списке справа.</p>
+      <p class="hint">Дальше применяй черновик справа.</p>
     </div>
 
     <div class="panel">
@@ -343,19 +351,19 @@
 
       <div class="form">
         <label>
-          Таблица
-          <select bind:value={preview_table} on:change={() => (preview_rows = [])}>
-            {#each existingTables.filter(t => t.schema_name === preview_schema) as t}
-              <option value={t.table_name}>{t.schema_name}.{t.table_name}</option>
+          Схема
+          <select bind:value={preview_schema} on:change={() => (preview_rows = [])}>
+            {#each Array.from(new Set(existingTables.map((t) => t.schema_name))) as s}
+              <option value={s}>{s}</option>
             {/each}
           </select>
         </label>
 
         <label>
-          Схема
-          <select bind:value={preview_schema} on:change={() => (preview_rows = [])}>
-            {#each Array.from(new Set(existingTables.map(t => t.schema_name))) as s}
-              <option value={s}>{s}</option>
+          Таблица
+          <select bind:value={preview_table} on:change={() => (preview_rows = [])}>
+            {#each existingTables.filter((t) => t.schema_name === preview_schema) as t}
+              <option value={t.table_name}>{t.schema_name}.{t.table_name}</option>
             {/each}
           </select>
         </label>
