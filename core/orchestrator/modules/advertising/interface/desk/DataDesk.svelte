@@ -1,15 +1,29 @@
-<!-- core/orchestrator/modules/advertising/interface/desk/DataDesk.svelte -->
 <script lang="ts">
   import { onMount } from 'svelte';
 
   type ColumnDef = { field_name: string; field_type: string; description?: string };
   type ExistingTable = { schema_name: string; table_name: string };
+  type Draft = {
+    id: string;
+    schema_name: string;
+    table_name: string;
+    table_class: string;
+    status: string;
+    description?: string;
+    created_at: string;
+    applied_at?: string | null;
+    last_error?: string | null;
+    options?: any;
+    fields?: ColumnDef[];
+  };
 
   let role: 'viewer' | 'operator' | 'data_admin' = 'data_admin';
 
   let loading = false;
+  let creating = false;
   let error = '';
 
+  let drafts: Draft[] = [];
   let existingTables: ExistingTable[] = [];
 
   // Конструктор: пользователь вводит сам
@@ -18,7 +32,7 @@
   let table_class = 'custom';
   let description = '';
 
-  const typeOptions = ['text', 'integer', 'bigint', 'numeric', 'boolean', 'date', 'timestamptz', 'jsonb', 'uuid'];
+  const typeOptions = ['text', 'int', 'bigint', 'numeric', 'boolean', 'date', 'timestamptz', 'jsonb', 'uuid'];
   let columns: ColumnDef[] = [{ field_name: '', field_type: 'text', description: '' }];
 
   // Партиционирование
@@ -28,6 +42,7 @@
 
   // Тестовая запись (JSON)
   let test_row_text = '';
+  const TEST_ROW_PLACEHOLDER = '{"dataset":"ads","event_date":"2026-02-17","payload":{"a":1}}';
 
   // Предпросмотр
   let preview_schema = '';
@@ -36,37 +51,15 @@
   let preview_error = '';
   let preview_loading = false;
 
-  // Меню
-  let showAdvanced = false;
-
   function setErr(e: any) {
     error = String(e?.details || e?.message || e);
   }
 
-  function isValidIdentifier(s: string) {
-    return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s);
-  }
-
-  function canCreateTable() {
-    if (role !== 'data_admin') return false;
-    if (!schema_name.trim() || !table_name.trim()) return false;
-    if (!isValidIdentifier(schema_name.trim())) return false;
-    if (!isValidIdentifier(table_name.trim())) return false;
-
-    const clean = columns.filter((c) => c.field_name.trim());
-    if (clean.length === 0) return false;
-
-    for (const c of clean) {
-      if (!isValidIdentifier(c.field_name.trim())) return false;
-      if (!c.field_type) return false;
-    }
-
-    if (partition_enabled) {
-      if (!partition_column.trim()) return false;
-      if (!clean.some((c) => c.field_name.trim() === partition_column.trim())) return false;
-    }
-
-    return true;
+  function normalizeIdent(s: string) {
+    return (s || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_]/g, '');
   }
 
   async function refresh() {
@@ -77,6 +70,7 @@
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'failed_to_list');
 
+      drafts = j.drafts || [];
       existingTables = j.existing_tables || [];
 
       if (!preview_schema && existingTables.length) {
@@ -111,40 +105,70 @@
 
   async function createTableNow() {
     error = '';
+
+    const schema = normalizeIdent(schema_name);
+    const table = normalizeIdent(table_name);
+
+    // Базовая проверка ввода (кнопка всегда активна — ошибки показываем тут)
+    if (!schema) return setErr('Укажи схему (только латиница/цифры/_)');
+    if (!table) return setErr('Укажи таблицу (только латиница/цифры/_)');
+    if (!columns?.length) return setErr('Добавь хотя бы одно поле');
+
+    for (let i = 0; i < columns.length; i++) {
+      const c = columns[i];
+      const fn = normalizeIdent(c.field_name);
+      if (!fn) return setErr(`Поле #${i + 1}: укажи имя (латиница/цифры/_)`);
+      if (!c.field_type) return setErr(`Поле #${i + 1}: укажи тип данных`);
+    }
+
+    // уникальные имена полей
+    const names = columns.map((c) => normalizeIdent(c.field_name));
+    const uniq = new Set(names);
+    if (uniq.size !== names.length) return setErr('Имена полей должны быть уникальными');
+
+    let test_row: any | null = null;
     try {
-      const test_row = parseTestRow();
+      test_row = parseTestRow();
+    } catch (e: any) {
+      return setErr(e);
+    }
 
-      const cleanCols = columns
-        .map((c) => ({
-          field_name: String(c.field_name || '').trim(),
-          field_type: String(c.field_type || '').trim(),
-          description: c.description ? String(c.description).trim() : ''
-        }))
-        .filter((c) => c.field_name);
-
+    creating = true;
+    try {
       const r = await fetch('/ai-orchestrator/api/tables/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-AO-ROLE': role },
         body: JSON.stringify({
-          schema_name: schema_name.trim(),
-          table_name: table_name.trim(),
+          schema_name: schema,
+          table_name: table,
           table_class,
-          description: description.trim(),
-          columns: cleanCols,
+          description,
+          created_by: 'ui',
+          columns: columns.map((c) => ({
+            field_name: normalizeIdent(c.field_name),
+            field_type: c.field_type,
+            description: c.description || ''
+          })),
           partitioning: partition_enabled
-            ? { enabled: true, column: partition_column.trim(), interval: partition_interval }
+            ? {
+                enabled: true,
+                column: normalizeIdent(partition_column) || partition_column,
+                interval: partition_interval
+              }
             : { enabled: false },
           test_row
         })
       });
 
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.details || j.error || 'create_failed');
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.details || j.error || `create_failed_${r.status}`);
 
       await refresh();
       alert('Таблица создана');
     } catch (e: any) {
       setErr(e);
+    } finally {
+      creating = false;
     }
   }
 
@@ -171,14 +195,14 @@
     schema_name = 'bronze';
     table_name = 'wb_ads_raw';
     table_class = 'bronze_raw';
-    description = 'WB raw ingestion (append-only JSON)';
+    description = 'Сырые ответы API (append-only JSON)';
     columns = [
       { field_name: 'dataset', field_type: 'text', description: 'dataset name' },
       { field_name: 'endpoint', field_type: 'text', description: 'endpoint name' },
-      { field_name: 'ingested_at', field_type: 'timestamptz', description: 'ingest timestamp' },
-      { field_name: 'event_date', field_type: 'date', description: 'event/business date' },
-      { field_name: 'idempotency_key', field_type: 'text', description: 'dedupe key' },
-      { field_name: 'payload', field_type: 'jsonb', description: 'raw json' }
+      { field_name: 'ingested_at', field_type: 'timestamptz', description: 'время ingest' },
+      { field_name: 'event_date', field_type: 'date', description: 'бизнес-дата' },
+      { field_name: 'idempotency_key', field_type: 'text', description: 'ключ дедупликации' },
+      { field_name: 'payload', field_type: 'jsonb', description: 'сырой JSON' }
     ];
     partition_enabled = true;
     partition_column = 'event_date';
@@ -217,43 +241,28 @@
   {/if}
 
   <section class="grid">
-    <!-- LEFT -->
     <div class="panel">
       <div class="panel-head">
         <h2>Создать таблицу</h2>
         <div class="quick">
+          <button on:click={pickTemplateBronze}>Заполнить: шаблон Bronze</button>
           <button on:click={refresh}>Обновить список</button>
-          <button on:click={() => (showAdvanced = !showAdvanced)}>
-            {showAdvanced ? 'Скрыть шаблоны' : 'Шаблоны / подсказки'}
-          </button>
         </div>
       </div>
-
-      {#if showAdvanced}
-        <div class="panel2">
-          <h3>Шаблоны</h3>
-          <p class="hint">Это просто авто-заполнение полей формы, чтобы быстрее стартовать.</p>
-          <div class="actions">
-            <button on:click={pickTemplateBronze}>Заполнить: Bronze WB Raw</button>
-          </div>
-        </div>
-      {/if}
 
       <div class="form">
         <label>
           Схема
           <input bind:value={schema_name} placeholder="например: bronze / silver_adv / showcase" />
-          <span class="hint2">Только латиница/цифры/_, без пробелов (пример: bronze)</span>
         </label>
 
         <label>
           Таблица
           <input bind:value={table_name} placeholder="например: wb_ads_raw" />
-          <span class="hint2">Только латиница/цифры/_, без пробелов (пример: wb_ads_raw)</span>
         </label>
 
         <label>
-          Класс
+          Класс (для себя)
           <select bind:value={table_class}>
             <option value="custom">custom</option>
             <option value="bronze_raw">bronze_raw</option>
@@ -286,8 +295,7 @@
           </div>
         {/each}
 
-        <!-- Кнопка добавления ВНИЗУ, как просил -->
-        <div class="actions" style="margin-top:10px;">
+        <div class="fields-actions">
           <button on:click={addColumn}>+ Добавить поле</button>
         </div>
       </div>
@@ -313,47 +321,33 @@
               </select>
             </label>
           </div>
-          <p class="hint2">Создаст партицию today/month + default (для остальных дат).</p>
         {/if}
       </div>
 
       <div class="panel2">
         <h3>Тестовая запись (опционально)</h3>
-        <p class="hint">Если заполнить JSON — одна строка будет вставлена после создания таблицы.</p>
-        <textarea
-          bind:value={test_row_text}
-          placeholder='{"dataset":"ads","event_date":"2026-02-17","payload":{"a":1}}'
-        />
+        <p class="hint">Если заполнить JSON — одна строка будет вставлена сразу после создания таблицы.</p>
+        <textarea bind:value={test_row_text} placeholder={TEST_ROW_PLACEHOLDER} />
       </div>
 
       <div class="actions">
-        <button class="primary" on:click={createTableNow} disabled={!canCreateTable()}>
-          Создать таблицу
+        <button class="primary" on:click={createTableNow} disabled={creating}>
+          {creating ? 'Создаю…' : 'Создать таблицу'}
         </button>
       </div>
-
-      {#if role !== 'data_admin'}
-        <p class="hint2">Кнопка недоступна: выбери роль <b>data_admin</b>.</p>
-      {/if}
-      {#if role === 'data_admin' && !canCreateTable()}
-        <p class="hint2">
-          Проверь: заполнены схема/таблица, корректные имена (латиница/цифры/_), и хотя бы одно поле.
-        </p>
-      {/if}
     </div>
 
-    <!-- RIGHT -->
     <div class="panel">
-      <h2>Текущие таблицы в базе</h2>
+      <div class="panel-head">
+        <h2>Текущие таблицы</h2>
+      </div>
 
       {#if loading}
         <p>Загрузка…</p>
-      {:else if existingTables.length === 0}
-        <p class="hint">Пока нет таблиц (или нет доступа).</p>
       {:else}
-        <div class="list">
+        <div class="chips">
           {#each existingTables as t}
-            <div class="item2">{t.schema_name}.{t.table_name}</div>
+            <span class="chip">{t.schema_name}.{t.table_name}</span>
           {/each}
         </div>
       {/if}
@@ -444,6 +438,7 @@
   .fields { margin-top: 14px; }
   .fields-head { display:flex; align-items:center; justify-content:space-between; gap: 8px; }
   .field-row { display:grid; grid-template-columns: 1.2fr 0.8fr 1.6fr auto; gap: 8px; margin-top: 8px; }
+  .fields-actions { display:flex; justify-content:flex-end; margin-top: 10px; }
 
   .row { display:flex; gap:8px; align-items:center; font-size: 12px; color:#334155; }
 
@@ -454,7 +449,6 @@
   .danger { border:1px solid #fecaca; color:#b91c1c; }
 
   .hint { margin-top: 10px; font-size: 12px; color:#64748b; }
-  .hint2 { margin-top: 6px; font-size: 12px; color:#64748b; }
 
   .alert { background:#fff1f2; border:1px solid #fecdd3; border-radius: 14px; padding: 12px; margin: 12px 0; }
   .alert-title { font-weight: 800; margin-bottom: 6px; }
@@ -465,6 +459,6 @@
   th, td { border-bottom:1px solid #eef2f7; padding: 8px 10px; text-align:left; vertical-align:top; }
   th { position: sticky; top: 0; background:#fff; }
 
-  .list { margin-top: 10px; display:grid; gap:6px; }
-  .item2 { padding: 8px 10px; border:1px solid #eef2f7; border-radius: 12px; font-size: 12px; color:#0f172a; }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; margin-top: 12px; }
+  .chip { padding: 6px 10px; border-radius: 999px; border:1px solid #e2e8f0; font-size: 12px; color:#334155; background:#fff; }
 </style>
