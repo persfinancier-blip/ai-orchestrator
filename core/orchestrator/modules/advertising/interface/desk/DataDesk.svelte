@@ -30,6 +30,11 @@
 
   const API_BASE = '/ai-orchestrator/api';
 
+  // ✅ ВАЖНО: JSON внутри placeholder надо давать через переменную,
+  // иначе Svelte пытается разобрать { ... } как шаблон.
+  const TEST_ROW_PLACEHOLDER =
+    '{"dataset":"ads","event_date":"2026-02-17","payload":{"a":1}}';
+
   // Роль (пока клиентская, сервер проверяет через X-AO-ROLE)
   let role: Role = 'data_admin';
 
@@ -285,7 +290,6 @@
 
   {#if tab === 'constructor'}
     <section class="grid">
-      <!-- ЛЕВО: СОЗДАНИЕ -->
       <div class="panel">
         <div class="panel-head">
           <h2>Создать таблицу</h2>
@@ -339,7 +343,6 @@
             </div>
           {/each}
 
-          <!-- ВАЖНО: кнопка “Добавить поле” внизу блока (как просил) -->
           <div class="fields-footer">
             <button on:click={addColumn}>+ Добавить поле</button>
           </div>
@@ -372,10 +375,7 @@
         <div class="panel2">
           <h3>Тестовая запись (опционально)</h3>
           <p class="hint">Если заполнить JSON — одна строка будет вставлена после создания таблицы.</p>
-          <textarea
-            bind:value={test_row_text}
-            placeholder='{"dataset":"ads","event_date":"2026-02-17","payload":{"a":1}}'
-          />
+          <textarea bind:value={test_row_text} placeholder={TEST_ROW_PLACEHOLDER} />
         </div>
 
         <div class="actions">
@@ -389,7 +389,6 @@
         {/if}
       </div>
 
-      <!-- ПРАВО: ТЕКУЩИЕ ТАБЛИЦЫ + ПРЕДПРОСМОТР -->
       <div class="panel">
         <div class="panel-head">
           <h2>Текущие таблицы</h2>
@@ -405,7 +404,14 @@
         {:else}
           <div class="tables-list">
             {#each existingTables as t}
-              <div class="chip" on:click={() => { preview_schema = t.schema_name; preview_table = t.table_name; preview_rows = []; }}>
+              <div
+                class="chip"
+                on:click={() => {
+                  preview_schema = t.schema_name;
+                  preview_table = t.table_name;
+                  preview_rows = [];
+                }}
+              >
                 {t.schema_name}.{t.table_name}
               </div>
             {/each}
