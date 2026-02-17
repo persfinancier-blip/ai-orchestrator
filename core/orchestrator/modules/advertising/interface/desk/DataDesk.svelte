@@ -1,4 +1,3 @@
-<!-- core/orchestrator/modules/advertising/interface/desk/DataDesk.svelte -->
 <script lang="ts">
   import { onMount } from 'svelte';
 
@@ -18,8 +17,7 @@
     fields?: ColumnDef[];
   };
 
-  const testRowPlaceholder = '{"dataset":"ads","event_date":"2026-02-17","payload":{"a":1}}';
-
+  // Роль (временно оставляем как раньше)
   let role: 'viewer' | 'operator' | 'data_admin' = 'data_admin';
 
   let loading = false;
@@ -52,48 +50,11 @@
   let preview_error = '';
   let preview_loading = false;
 
+  // UI: меню справа (чтобы “шаблоны/черновики” не мешали)
+  let rightTab: 'preview' | 'menu' = 'preview';
+
   function setErr(e: any) {
     error = String(e?.details || e?.message || e);
-  }
-
-  function trimOrEmpty(v: string) {
-    return (v || '').trim();
-  }
-
-  function validateForm(): string | null {
-    if (!trimOrEmpty(schema_name)) return 'Заполни поле: Схема';
-    if (!trimOrEmpty(table_name)) return 'Заполни поле: Таблица';
-
-    const cleanCols = columns
-      .map((c) => ({
-        field_name: trimOrEmpty(c.field_name),
-        field_type: c.field_type,
-        description: trimOrEmpty(c.description || '')
-      }))
-      .filter((c) => c.field_name);
-
-    if (!cleanCols.length) return 'Добавь хотя бы одно поле (показатель)';
-
-    const seen = new Set<string>();
-    for (const c of cleanCols) {
-      const k = c.field_name.toLowerCase();
-      if (seen.has(k)) return `Дублируется поле: ${c.field_name}`;
-      seen.add(k);
-    }
-
-    if (partition_enabled && !trimOrEmpty(partition_column)) return 'Заполни колонку для партиций';
-
-    return null;
-  }
-
-  function normalizedColumns(): ColumnDef[] {
-    return columns
-      .map((c) => ({
-        field_name: trimOrEmpty(c.field_name),
-        field_type: c.field_type,
-        description: trimOrEmpty(c.description || '')
-      }))
-      .filter((c) => c.field_name);
   }
 
   async function refresh() {
@@ -107,9 +68,19 @@
       drafts = j.drafts || [];
       existingTables = j.existing_tables || [];
 
-      if ((!preview_schema || !preview_table) && existingTables.length) {
+      // Автовыбор для предпросмотра
+      if (!preview_schema && existingTables.length) {
         preview_schema = existingTables[0].schema_name;
         preview_table = existingTables[0].table_name;
+      } else if (preview_schema && existingTables.length) {
+        // если текущая выбранная таблица пропала, выбираем первую доступную
+        const exists = existingTables.some(
+          (t) => t.schema_name === preview_schema && t.table_name === preview_table
+        );
+        if (!exists) {
+          preview_schema = existingTables[0].schema_name;
+          preview_table = existingTables[0].table_name;
+        }
       }
     } catch (e: any) {
       setErr(e);
@@ -128,7 +99,7 @@
   }
 
   function parseTestRow(): any | null {
-    const t = trimOrEmpty(test_row_text);
+    const t = test_row_text.trim();
     if (!t) return null;
     const parsed = JSON.parse(t);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -137,16 +108,8 @@
     return parsed;
   }
 
-  // Возвращает id черновика (или null при ошибке)
-  async function createDraft(): Promise<string | null> {
+  async function createDraft() {
     error = '';
-
-    const validationError = validateForm();
-    if (validationError) {
-      error = validationError;
-      return null;
-    }
-
     try {
       const test_row = parseTestRow();
 
@@ -154,14 +117,14 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-AO-ROLE': role },
         body: JSON.stringify({
-          schema_name: trimOrEmpty(schema_name),
-          table_name: trimOrEmpty(table_name),
+          schema_name,
+          table_name,
           table_class,
-          description: trimOrEmpty(description),
+          description,
           created_by: 'ui',
-          columns: normalizedColumns(),
+          columns,
           partitioning: partition_enabled
-            ? { enabled: true, column: trimOrEmpty(partition_column), interval: partition_interval }
+            ? { enabled: true, column: partition_column, interval: partition_interval }
             : { enabled: false },
           test_row
         })
@@ -171,10 +134,10 @@
       if (!r.ok) throw new Error(j.details || j.error || 'draft_create_failed');
 
       await refresh();
-      return String(j.id);
+      rightTab = 'menu';
+      alert(`Черновик создан: ${j.id}`);
     } catch (e: any) {
       setErr(e);
-      return null;
     }
   }
 
@@ -188,6 +151,7 @@
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.details || j.error || 'apply_failed');
+
       await refresh();
       alert('Таблица создана (применение выполнено)');
     } catch (e: any) {
@@ -195,27 +159,14 @@
     }
   }
 
-  // Один клик: создать черновик + применить
-  async function createAndApply() {
-    if (role !== 'data_admin') return;
-    const id = await createDraft();
-    if (!id) return;
-    await applyDraft(id);
-  }
-
   async function loadPreview() {
     preview_loading = true;
     preview_error = '';
     preview_rows = [];
     try {
-      if (!trimOrEmpty(preview_schema) || !trimOrEmpty(preview_table)) {
-        throw new Error('Выбери схему и таблицу для предпросмотра');
-      }
-
       const url =
         `/ai-orchestrator/api/preview?schema=${encodeURIComponent(preview_schema)}` +
         `&table=${encodeURIComponent(preview_table)}&limit=5`;
-
       const r = await fetch(url);
       const j = await r.json();
       if (!r.ok) throw new Error(j.details || j.error || 'preview_failed');
@@ -227,6 +178,7 @@
     }
   }
 
+  // Шаблон (временно оставляем один пример)
   function pickTemplateBronze() {
     schema_name = 'bronze';
     table_name = 'wb_ads_raw';
@@ -246,9 +198,6 @@
     test_row_text = '';
   }
 
-  $: canCreateDraft = role === 'data_admin' && !validateForm();
-  $: canCreateTable = canCreateDraft;
-
   onMount(refresh);
 </script>
 
@@ -257,8 +206,8 @@
     <div>
       <h1>Конструктор таблиц</h1>
       <p class="sub">
-        Создаёт схему/таблицу/поля по твоему вводу + опции (тестовая запись, партиции). Показывает текущие таблицы и
-        предпросмотр 5 строк.
+        Создаёт схему/таблицу/поля по твоему вводу + опции (тестовая запись, партиции). Справа — предпросмотр и меню
+        шаблонов/черновиков.
       </p>
     </div>
 
@@ -280,12 +229,12 @@
   {/if}
 
   <section class="grid">
+    <!-- ЛЕВО: СОЗДАНИЕ -->
     <div class="panel">
       <div class="panel-head">
         <h2>Создать таблицу</h2>
         <div class="quick">
-          <button on:click={pickTemplateBronze}>Шаблон: Bronze</button>
-          <button on:click={refresh}>Обновить список</button>
+          <button on:click={refresh} disabled={loading}>{loading ? 'Обновляю…' : 'Обновить список'}</button>
         </div>
       </div>
 
@@ -319,7 +268,6 @@
       <div class="fields">
         <div class="fields-head">
           <h3>Поля</h3>
-          <button on:click={addColumn}>+ Добавить поле</button>
         </div>
 
         {#each columns as c, ix}
@@ -334,6 +282,11 @@
             <button class="danger" on:click={() => removeColumn(ix)}>Удалить</button>
           </div>
         {/each}
+
+        <!-- КНОПКА ВНИЗУ СПИСКА (как ты просил) -->
+        <div class="fields-footer">
+          <button on:click={addColumn}>+ Добавить поле</button>
+        </div>
       </div>
 
       <div class="panel2">
@@ -363,110 +316,147 @@
       <div class="panel2">
         <h3>Тестовая запись (опционально)</h3>
         <p class="hint">Если заполнить JSON — одна строка будет вставлена после “Применить”.</p>
-        <textarea bind:value={test_row_text} placeholder={testRowPlaceholder} />
+        <textarea
+          bind:value={test_row_text}
+          placeholder="{&quot;dataset&quot;:&quot;ads&quot;,&quot;event_date&quot;:&quot;2026-02-17&quot;,&quot;payload&quot;:{&quot;a&quot;:1}}"
+        />
       </div>
 
       <div class="actions">
-        <button class="primary" on:click={createDraft} disabled={!canCreateDraft}>
-          Сохранить черновик
+        <!-- Это и есть “создать” в текущей логике: создаём черновик,
+             а “Применить” (создать таблицу) — в меню справа -->
+        <button class="primary" on:click={createDraft} disabled={role !== 'data_admin'}>
+          Создать (сохранить черновик)
         </button>
-        <button class="primary" on:click={createAndApply} disabled={!canCreateTable}>
-          Создать таблицу
-        </button>
+
+        <button on:click={() => (rightTab = 'menu')}>Открыть меню справа</button>
       </div>
 
-      <p class="hint">Можно: сохранить как черновик, либо “Создать таблицу” сразу одним кликом.</p>
+      <p class="hint">
+        Создание таблицы делается в 2 шага: <b>Создать (черновик)</b> → <b>Применить</b> (в меню справа).
+      </p>
     </div>
 
+    <!-- ПРАВО: ТАБЫ -->
     <div class="panel">
-      <h2>Черновики</h2>
-      {#if loading}
-        <p>Загрузка…</p>
-      {:else if drafts.length === 0}
-        <p class="hint">Черновиков пока нет.</p>
-      {:else}
-        <div class="list">
-          {#each drafts as d}
-            <div class="item">
-              <div class="meta">
-                <div class="title">{d.schema_name}.{d.table_name}</div>
-                <div class="sub">{d.table_class} · {d.status}</div>
-                <div class="sub">создано: {new Date(d.created_at).toLocaleString()}</div>
-                {#if d.applied_at}
-                  <div class="sub">применено: {new Date(d.applied_at).toLocaleString()}</div>
-                {/if}
-                {#if d.last_error}
-                  <div class="sub err">ошибка: {d.last_error}</div>
-                {/if}
-              </div>
-              <div class="btns">
-                <button class="primary" on:click={() => applyDraft(d.id)} disabled={role !== 'data_admin'}>
-                  Применить
-                </button>
-              </div>
-            </div>
-          {/each}
+      <div class="right-head">
+        <div class="right-tabs">
+          <button class:active={rightTab === 'preview'} on:click={() => (rightTab = 'preview')}>Предпросмотр</button>
+          <button class:active={rightTab === 'menu'} on:click={() => (rightTab = 'menu')}>
+            Меню (шаблоны/черновики)
+          </button>
         </div>
-      {/if}
-
-      <h2 style="margin-top:16px;">Предпросмотр (5 строк)</h2>
-
-      {#if preview_error}
-        <div class="alert">
-          <div class="alert-title">Ошибка предпросмотра</div>
-          <pre>{preview_error}</pre>
-        </div>
-      {/if}
-
-      <div class="form">
-        <label>
-          Схема
-          <select bind:value={preview_schema} on:change={() => (preview_rows = [])}>
-            {#each Array.from(new Set(existingTables.map((t) => t.schema_name))) as s}
-              <option value={s}>{s}</option>
-            {/each}
-          </select>
-        </label>
-
-        <label>
-          Таблица
-          <select bind:value={preview_table} on:change={() => (preview_rows = [])}>
-            {#each existingTables.filter((t) => t.schema_name === preview_schema) as t}
-              <option value={t.table_name}>{t.schema_name}.{t.table_name}</option>
-            {/each}
-          </select>
-        </label>
       </div>
 
-      <div class="actions">
-        <button on:click={loadPreview} disabled={preview_loading}>
-          {preview_loading ? 'Загрузка…' : 'Показать 5 строк'}
-        </button>
-      </div>
+      {#if rightTab === 'preview'}
+        <h2>Предпросмотр (5 строк)</h2>
 
-      {#if preview_rows.length}
-        <div class="preview">
-          <table>
-            <thead>
-              <tr>
-                {#each Object.keys(preview_rows[0]) as k}
-                  <th>{k}</th>
-                {/each}
-              </tr>
-            </thead>
-            <tbody>
-              {#each preview_rows as r}
+        {#if preview_error}
+          <div class="alert">
+            <div class="alert-title">Ошибка предпросмотра</div>
+            <pre>{preview_error}</pre>
+          </div>
+        {/if}
+
+        <div class="form">
+          <label>
+            Схема
+            <select bind:value={preview_schema} on:change={() => (preview_rows = [])}>
+              {#each Array.from(new Set(existingTables.map((t) => t.schema_name))) as s}
+                <option value={s}>{s}</option>
+              {/each}
+            </select>
+          </label>
+
+          <label>
+            Таблица
+            <select bind:value={preview_table} on:change={() => (preview_rows = [])}>
+              {#each existingTables.filter((t) => t.schema_name === preview_schema) as t}
+                <option value={t.table_name}>{t.schema_name}.{t.table_name}</option>
+              {/each}
+            </select>
+          </label>
+        </div>
+
+        <div class="actions">
+          <button on:click={loadPreview} disabled={preview_loading}>
+            {preview_loading ? 'Загрузка…' : 'Показать 5 строк'}
+          </button>
+        </div>
+
+        {#if preview_rows.length}
+          <div class="preview">
+            <table>
+              <thead>
                 <tr>
                   {#each Object.keys(preview_rows[0]) as k}
-                    <td>{typeof r[k] === 'object' ? JSON.stringify(r[k]) : String(r[k])}</td>
+                    <th>{k}</th>
                   {/each}
                 </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {#each preview_rows as r}
+                  <tr>
+                    {#each Object.keys(preview_rows[0]) as k}
+                      <td>{typeof r[k] === 'object' ? JSON.stringify(r[k]) : String(r[k])}</td>
+                    {/each}
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {:else}
+          <p class="hint">Нет данных для предпросмотра (таблица может быть пустой).</p>
+        {/if}
       {:else}
-        <p class="hint">Нет данных для предпросмотра (таблица может быть пустой).</p>
+        <h2>Меню</h2>
+
+        <div class="menu-card">
+          <div class="menu-title">Шаблоны</div>
+          <div class="menu-sub">
+            Шаблон — это готовый набор полей (чтобы не заполнять руками). Можно использовать или игнорировать.
+          </div>
+          <div class="actions">
+            <button on:click={pickTemplateBronze}>Применить шаблон: Bronze</button>
+          </div>
+        </div>
+
+        <div class="menu-card">
+          <div class="menu-title">Черновики</div>
+          <div class="menu-sub">
+            Черновик — это “план создания таблицы”. После “Создать (черновик)” — жми “Применить”, и таблица реально
+            создастся в базе.
+          </div>
+
+          {#if loading}
+            <p>Загрузка…</p>
+          {:else if drafts.length === 0}
+            <p class="hint">Черновиков пока нет.</p>
+          {:else}
+            <div class="list">
+              {#each drafts as d}
+                <div class="item">
+                  <div class="meta">
+                    <div class="title">{d.schema_name}.{d.table_name}</div>
+                    <div class="sub">{d.table_class} · {d.status}</div>
+                    <div class="sub">создано: {new Date(d.created_at).toLocaleString()}</div>
+                    {#if d.applied_at}
+                      <div class="sub">применено: {new Date(d.applied_at).toLocaleString()}</div>
+                    {/if}
+                    {#if d.last_error}
+                      <div class="sub err">ошибка: {d.last_error}</div>
+                    {/if}
+                  </div>
+                  <div class="btns">
+                    <button class="primary" on:click={() => applyDraft(d.id)} disabled={role !== 'data_admin'}>
+                      Применить (создать таблицу)
+                    </button>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
       {/if}
     </div>
   </section>
@@ -479,11 +469,12 @@
   .sub { margin: 6px 0 0; font-size: 12px; color:#64748b; }
   .role { display:flex; gap:8px; align-items:center; font-size: 12px; color:#334155; }
 
-  .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+  .grid { display:grid; grid-template-columns: 1.2fr 0.8fr; gap: 12px; margin-top: 12px; }
   @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
 
   .panel { background:#fff; border:1px solid #eef2f7; border-radius: 16px; padding: 14px; }
   .panel2 { margin-top: 12px; border:1px solid #eef2f7; border-radius: 14px; padding: 12px; }
+
   .panel-head { display:flex; justify-content:space-between; align-items:center; gap:8px; }
   .quick { display:flex; gap: 8px; }
 
@@ -495,10 +486,11 @@
   .fields { margin-top: 14px; }
   .fields-head { display:flex; align-items:center; justify-content:space-between; gap: 8px; }
   .field-row { display:grid; grid-template-columns: 1.2fr 0.8fr 1.6fr auto; gap: 8px; margin-top: 8px; }
+  .fields-footer { display:flex; justify-content:flex-start; margin-top: 10px; }
 
   .row { display:flex; gap:8px; align-items:center; font-size: 12px; color:#334155; }
 
-  .actions { display:flex; gap: 8px; margin-top: 12px; }
+  .actions { display:flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
   button { padding: 10px 12px; border-radius: 12px; border:1px solid #e2e8f0; background:#fff; cursor:pointer; }
   button.primary { background:#0f172a; color:#fff; border-color:#0f172a; }
   button:disabled { opacity:0.5; cursor:not-allowed; }
@@ -520,4 +512,12 @@
   table { border-collapse: collapse; width: 100%; font-size: 12px; }
   th, td { border-bottom:1px solid #eef2f7; padding: 8px 10px; text-align:left; vertical-align:top; }
   th { position: sticky; top: 0; background:#fff; }
+
+  .right-head { display:flex; justify-content:space-between; align-items:center; gap:10px; }
+  .right-tabs { display:flex; gap:8px; flex-wrap: wrap; }
+  .right-tabs button.active { background:#0f172a; color:#fff; border-color:#0f172a; }
+
+  .menu-card { border:1px solid #eef2f7; border-radius: 14px; padding: 12px; margin-top: 12px; }
+  .menu-title { font-weight: 900; margin-bottom: 6px; }
+  .menu-sub { font-size: 12px; color:#64748b; }
 </style>
