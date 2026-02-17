@@ -2,367 +2,262 @@
 import express from 'express';
 import { pool } from './db.mjs';
 
-const router = express.Router();
-router.use(express.json({ limit: '4mb' }));
+export const tableBuilderRouter = express.Router();
+
+tableBuilderRouter.use(express.json({ limit: '4mb' }));
 
 function requireDataAdmin(req, res, next) {
   const role = String(req.header('X-AO-ROLE') || '').toLowerCase();
-  if (role !== 'data_admin') return res.status(403).json({ error: 'forbidden: data_admin only' });
-  return next();
+  if (role !== 'data_admin') {
+    return res.status(403).json({ error: 'forbidden', details: 'Нужна роль data_admin (X-AO-ROLE: data_admin)' });
+  }
+  next();
 }
 
-function isValidIdent(name) {
-  return typeof name === 'string' && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name);
+function isSafeIdent(s) {
+  return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s);
 }
 
-function qIdent(name) {
-  if (!isValidIdent(name)) throw new Error(`Invalid identifier: ${name}`);
-  return `"${name}"`;
+function qIdent(s) {
+  // двойные кавычки для безопасной работы с регистром/ключевыми словами
+  return `"${String(s).replace(/"/g, '""')}"`;
 }
 
-const ALLOWED_TYPES = new Set([
-  'text',
-  'int',
-  'integer',
-  'bigint',
-  'numeric',
-  'boolean',
-  'date',
-  'timestamptz',
-  'timestamp with time zone',
-  'jsonb',
-  'uuid',
-]);
-
-function normalizeType(t) {
-  const v = String(t || '').trim().toLowerCase();
-  if (v === 'integer') return 'int';
-  if (v === 'timestamp with time zone') return 'timestamptz';
+function mapType(t) {
+  const v = String(t || '').toLowerCase();
+  const allowed = new Set(['text', 'int', 'bigint', 'numeric', 'boolean', 'date', 'timestamptz', 'jsonb', 'uuid']);
+  if (!allowed.has(v)) throw new Error(`unsupported_type: ${t}`);
+  if (v === 'int') return 'integer';
+  if (v === 'timestamptz') return 'timestamptz';
   return v;
 }
 
 async function listExistingTables() {
-  // pg_catalog точнее, чем information_schema, и не даёт странных "showcase.advertising" в public
-  const sql = `
-    SELECT n.nspname AS schema_name, c.relname AS table_name
-    FROM pg_catalog.pg_class c
-    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-    WHERE c.relkind = 'r'
-      AND n.nspname NOT IN ('pg_catalog','information_schema')
-    ORDER BY n.nspname, c.relname
-  `;
-  const r = await pool.query(sql);
-  return r.rows;
+  // Берём реальные таблицы из information_schema (кроме системных)
+  const r = await pool.query(
+    `
+    SELECT table_schema AS schema_name, table_name
+    FROM information_schema.tables
+    WHERE table_type='BASE TABLE'
+      AND table_schema NOT IN ('pg_catalog','information_schema')
+    ORDER BY table_schema, table_name
+  `
+  );
+  return r.rows || [];
 }
 
-router.get('/tables', async (_req, res) => {
+/**
+ * GET /ai-orchestrator/api/tables
+ * Возвращает:
+ * - drafts (если используются)
+ * - existing_tables (реальные таблицы, которые есть в базе)
+ */
+tableBuilderRouter.get('/tables', async (_req, res) => {
   try {
-    const defs = await pool.query(
-      `SELECT id, schema_name, table_name, table_class, status, description, created_by, created_at, applied_at, applied_by, last_error, options
-       FROM ao_table_definitions
-       ORDER BY created_at DESC`
-    );
+    const existing_tables = await listExistingTables();
 
-    const ids = defs.rows.map((x) => x.id);
-    let fieldsByDef = {};
-    if (ids.length) {
-      const fields = await pool.query(
-        `SELECT table_definition_id, field_name, field_type, description, created_at
-         FROM ao_table_fields
-         WHERE table_definition_id = ANY($1::uuid[])
-         ORDER BY created_at ASC`,
-        [ids]
+    // drafts — не обязательны, но пусть история остаётся, если таблицы meta существуют
+    let drafts = [];
+    try {
+      const d = await pool.query(
+        `
+        SELECT
+          d.id::text,
+          d.schema_name,
+          d.table_name,
+          d.table_class,
+          d.status,
+          d.description,
+          d.created_at,
+          d.applied_at,
+          d.last_error,
+          d.options
+        FROM public.ao_table_definitions d
+        WHERE d.status IN ('draft','error')
+        ORDER BY d.created_at DESC
+        LIMIT 50
+      `
       );
-      fieldsByDef = fields.rows.reduce((acc, row) => {
-        (acc[row.table_definition_id] ||= []).push({
-          field_name: row.field_name,
-          field_type: row.field_type,
-          description: row.description,
-          created_at: row.created_at,
-        });
-        return acc;
-      }, {});
+
+      const ids = d.rows.map((x) => x.id);
+      const fieldsBy = new Map();
+
+      if (ids.length) {
+        const f = await pool.query(
+          `
+          SELECT
+            table_definition_id::text AS id,
+            field_name,
+            field_type,
+            description
+          FROM public.ao_table_fields
+          WHERE table_definition_id = ANY($1::uuid[])
+          ORDER BY created_at ASC
+        `,
+          [ids]
+        );
+
+        for (const row of f.rows) {
+          if (!fieldsBy.has(row.id)) fieldsBy.set(row.id, []);
+          fieldsBy.get(row.id).push({
+            field_name: row.field_name,
+            field_type: row.field_type,
+            description: row.description
+          });
+        }
+      }
+
+      drafts = d.rows.map((x) => ({ ...x, fields: fieldsBy.get(x.id) || [] }));
+    } catch {
+      drafts = [];
     }
 
-    const existingTables = await listExistingTables();
-
-    return res.json({
-      drafts: defs.rows.map((d) => ({ ...d, fields: fieldsByDef[d.id] || [] })),
-      existing_tables: existingTables,
-    });
+    return res.json({ drafts, existing_tables });
   } catch (e) {
     return res.status(500).json({ error: 'tables_list_failed', details: String(e?.message || e) });
   }
 });
 
-router.get('/columns', async (req, res) => {
+/**
+ * GET /ai-orchestrator/api/preview?schema=...&table=...&limit=5
+ * Предпросмотр 5 строк
+ */
+tableBuilderRouter.get('/preview', async (req, res) => {
   try {
     const schema = String(req.query.schema || '');
     const table = String(req.query.table || '');
-    if (!isValidIdent(schema) || !isValidIdent(table)) return res.status(400).json({ error: 'invalid schema/table' });
+    const limit = Math.max(1, Math.min(50, Number(req.query.limit || 5)));
 
-    const r = await pool.query(
-      `
-      SELECT column_name, data_type, udt_name, is_nullable
-      FROM information_schema.columns
-      WHERE table_schema=$1 AND table_name=$2
-      ORDER BY ordinal_position
-      `,
-      [schema, table]
-    );
+    if (!isSafeIdent(schema) || !isSafeIdent(table)) {
+      return res.status(400).json({ error: 'invalid_ident', details: 'Некорректное имя схемы/таблицы' });
+    }
 
-    return res.json({ columns: r.rows });
-  } catch (e) {
-    return res.status(500).json({ error: 'columns_failed', details: String(e?.message || e) });
-  }
-});
-
-router.get('/preview', async (req, res) => {
-  try {
-    const schema = String(req.query.schema || '');
-    const table = String(req.query.table || '');
-    const limit = Math.min(Math.max(Number(req.query.limit || 5), 1), 50);
-
-    if (!isValidIdent(schema) || !isValidIdent(table)) return res.status(400).json({ error: 'invalid schema/table' });
-
-    const sql = `SELECT * FROM ${qIdent(schema)}.${qIdent(table)} ORDER BY 1 DESC LIMIT ${limit}`;
+    const sql = `SELECT * FROM ${qIdent(schema)}.${qIdent(table)} LIMIT ${limit}`;
     const r = await pool.query(sql);
-    return res.json({ rows: r.rows, limit });
+    return res.json({ rows: r.rows || [] });
   } catch (e) {
     return res.status(500).json({ error: 'preview_failed', details: String(e?.message || e) });
   }
 });
 
-router.post('/tables/draft', requireDataAdmin, async (req, res) => {
+/**
+ * POST /ai-orchestrator/api/tables/create
+ * Создаёт схему → таблицу → колонки (сразу, без черновиков).
+ * body:
+ * {
+ *   schema_name, table_name, columns:[{field_name, field_type, description?}],
+ *   partitioning:{enabled:boolean, column?, interval?},
+ *   test_row?: object
+ * }
+ */
+tableBuilderRouter.post('/tables/create', requireDataAdmin, async (req, res) => {
   const body = req.body || {};
-  const schema_name = body.schema_name;
-  const table_name = body.table_name;
-  const table_class = body.table_class || 'custom';
-  const description = body.description || '';
-  const created_by = body.created_by || 'ui';
+  const schema_name = String(body.schema_name || '').trim();
+  const table_name = String(body.table_name || '').trim();
   const columns = Array.isArray(body.columns) ? body.columns : [];
-
-  // новые опции
   const partitioning = body.partitioning || { enabled: false };
-  const test_row = body.test_row ?? null;
+  const test_row = body.test_row || null;
 
   try {
-    if (!isValidIdent(schema_name)) return res.status(400).json({ error: 'invalid schema_name' });
-    if (!isValidIdent(table_name)) return res.status(400).json({ error: 'invalid table_name' });
-    if (!columns.length) return res.status(400).json({ error: 'columns required' });
+    if (!isSafeIdent(schema_name)) throw new Error('invalid_schema_name');
+    if (!isSafeIdent(table_name)) throw new Error('invalid_table_name');
 
-    for (const c of columns) {
-      if (!isValidIdent(c.field_name)) return res.status(400).json({ error: `invalid field_name: ${c.field_name}` });
-      const t = normalizeType(c.field_type);
-      if (!ALLOWED_TYPES.has(t)) return res.status(400).json({ error: `invalid field_type: ${c.field_type}` });
+    const cleanCols = columns
+      .map((c) => ({
+        field_name: String(c.field_name || '').trim(),
+        field_type: mapType(c.field_type),
+        description: String(c.description || '')
+      }))
+      .filter((c) => c.field_name);
+
+    if (!cleanCols.length) throw new Error('no_columns');
+
+    for (const c of cleanCols) {
+      if (!isSafeIdent(c.field_name)) throw new Error(`invalid_column_name: ${c.field_name}`);
     }
 
-    if (partitioning?.enabled) {
-      const col = String(partitioning.column || '');
-      const interval = String(partitioning.interval || 'day');
-      if (!isValidIdent(col)) return res.status(400).json({ error: 'invalid partitioning.column' });
-      if (!['day', 'month'].includes(interval)) return res.status(400).json({ error: 'invalid partitioning.interval' });
+    const partEnabled = !!partitioning?.enabled;
+    const partColumn = String(partitioning?.column || '').trim();
+    const partInterval = String(partitioning?.interval || 'day').toLowerCase();
+
+    if (partEnabled) {
+      if (!partColumn || !isSafeIdent(partColumn)) throw new Error('invalid_partition_column');
+      if (!['day', 'month'].includes(partInterval)) throw new Error('invalid_partition_interval');
+      const exists = cleanCols.some((c) => c.field_name === partColumn);
+      if (!exists) throw new Error('partition_column_not_in_columns');
     }
 
-    if (test_row !== null && (typeof test_row !== 'object' || Array.isArray(test_row))) {
-      return res.status(400).json({ error: 'test_row must be object or null' });
-    }
+    // 1) schema
+    await pool.query(`CREATE SCHEMA IF NOT EXISTS ${qIdent(schema_name)}`);
 
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
+    // 2) table DDL
+    const colSql = cleanCols.map((c) => `${qIdent(c.field_name)} ${c.field_type}`).join(',\n  ');
 
-      const def = await client.query(
-        `INSERT INTO ao_table_definitions (schema_name, table_name, table_class, status, description, created_by, options)
-         VALUES ($1,$2,$3,'draft',$4,$5,$6::jsonb)
-         RETURNING id`,
-        [schema_name, table_name, table_class, description, created_by, JSON.stringify({ partitioning, test_row })]
-      );
+    const fullName = `${qIdent(schema_name)}.${qIdent(table_name)}`;
 
-      const id = def.rows[0].id;
-
-      for (const c of columns) {
-        await client.query(
-          `INSERT INTO ao_table_fields (table_definition_id, field_name, field_type, description)
-           VALUES ($1,$2,$3,$4)`,
-          [id, c.field_name, normalizeType(c.field_type), c.description || '']
-        );
-      }
-
-      await client.query('COMMIT');
-      return res.json({ ok: true, id });
-    } catch (e) {
-      await client.query('ROLLBACK');
-      throw e;
-    } finally {
-      client.release();
-    }
-  } catch (e) {
-    return res.status(500).json({ error: 'draft_create_failed', details: String(e?.message || e) });
-  }
-});
-
-function buildCreateTableSql({ schema_name, table_name, fields, partitioning }) {
-  const schema = qIdent(schema_name);
-  const table = qIdent(table_name);
-
-  const userCols = fields.map((f) => `${qIdent(f.field_name)} ${normalizeType(f.field_type)}`).join(',\n  ');
-
-  // системные поля всегда добавляем (они нужны всем уровням)
-  const baseCols = `
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  created_at timestamptz NOT NULL DEFAULT now(),
-  ${userCols}
-`.trim();
-
-  if (partitioning?.enabled) {
-    const pcol = qIdent(partitioning.column);
-    return `
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-CREATE SCHEMA IF NOT EXISTS ${schema};
-
-CREATE TABLE IF NOT EXISTS ${schema}.${table} (
-  ${baseCols}
-) PARTITION BY RANGE (${pcol});
-`.trim();
-  }
-
-  return `
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-CREATE SCHEMA IF NOT EXISTS ${schema};
-
-CREATE TABLE IF NOT EXISTS ${schema}.${table} (
-  ${baseCols}
-);
-`.trim();
-}
-
-async function ensurePartitions({ schema_name, table_name, partitioning }) {
-  if (!partitioning?.enabled) return;
-
-  const schema = qIdent(schema_name);
-  const table = qIdent(table_name);
-  const pcol = qIdent(partitioning.column);
-  const interval = partitioning.interval || 'day';
-
-  // создаём партиции вперёд на 30 дней (day) или 12 месяцев (month)
-  const count = interval === 'day' ? 30 : 12;
-
-  for (let i = 0; i < count; i++) {
-    const fromExpr = interval === 'day'
-      ? `date_trunc('day', now()) + interval '${i} day'`
-      : `date_trunc('month', now()) + interval '${i} month'`;
-
-    const toExpr = interval === 'day'
-      ? `date_trunc('day', now()) + interval '${i + 1} day'`
-      : `date_trunc('month', now()) + interval '${i + 1} month'`;
-
-    const partName = `${table_name}_${interval}_${String(i).padStart(3, '0')}`;
-    const part = qIdent(partName);
-
-    const sql = `
-CREATE TABLE IF NOT EXISTS ${schema}.${part}
-PARTITION OF ${schema}.${table}
-FOR VALUES FROM (${fromExpr}) TO (${toExpr});
-`.trim();
-
-    // eslint-disable-next-line no-await-in-loop
-    await pool.query(sql);
-  }
-}
-
-router.post('/tables/apply/:id', requireDataAdmin, async (req, res) => {
-  const id = req.params.id;
-  const applied_by = (req.body && req.body.applied_by) || 'ui';
-
-  try {
-    const def = await pool.query(
-      `SELECT id, schema_name, table_name, table_class, status, options
-       FROM ao_table_definitions
-       WHERE id = $1::uuid`,
-      [id]
-    );
-    if (!def.rows.length) return res.status(404).json({ error: 'draft_not_found' });
-
-    const d = def.rows[0];
-    const options = d.options || {};
-    const partitioning = options.partitioning || { enabled: false };
-    const test_row = options.test_row ?? null;
-
-    const fields = await pool.query(
-      `SELECT field_name, field_type
-       FROM ao_table_fields
-       WHERE table_definition_id = $1::uuid
-       ORDER BY created_at ASC`,
-      [id]
-    );
-    if (!fields.rows.length) return res.status(400).json({ error: 'no_fields' });
-
-    const createSql = buildCreateTableSql({
-      schema_name: d.schema_name,
-      table_name: d.table_name,
-      fields: fields.rows,
-      partitioning,
-    });
-
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query(createSql);
-
-      // партиции (если включено)
-      await client.query('COMMIT');
-    } catch (e) {
-      await client.query('ROLLBACK');
-      throw e;
-    } finally {
-      client.release();
-    }
-
-    // создаём партиции отдельно (простая логика, но рабочая)
-    try {
-      await ensurePartitions({ schema_name: d.schema_name, table_name: d.table_name, partitioning });
-    } catch (e) {
-      // не валим apply, просто пишем ошибку в last_error
+    if (!partEnabled) {
+      await pool.query(`CREATE TABLE IF NOT EXISTS ${fullName} (\n  ${colSql}\n)`);
+    } else {
+      // partitioned table
       await pool.query(
-        `UPDATE ao_table_definitions SET last_error=$2 WHERE id=$1::uuid`,
-        [id, `partitioning_failed: ${String(e?.message || e)}`]
+        `CREATE TABLE IF NOT EXISTS ${fullName} (\n  ${colSql}\n) PARTITION BY RANGE (${qIdent(partColumn)})`
       );
+
+      // минимальная авто-настройка: создаём "текущую" партицию + default
+      // day: [today, tomorrow)
+      // month: [monthStart, nextMonthStart)
+      if (partInterval === 'day') {
+        await pool.query(
+          `CREATE TABLE IF NOT EXISTS ${fullName}__p_today PARTITION OF ${fullName}
+           FOR VALUES FROM (CURRENT_DATE) TO (CURRENT_DATE + INTERVAL '1 day')`
+        );
+      } else {
+        await pool.query(
+          `CREATE TABLE IF NOT EXISTS ${fullName}__p_month PARTITION OF ${fullName}
+           FOR VALUES FROM (date_trunc('month', CURRENT_DATE)::date)
+           TO (date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month')`
+        );
+      }
+
+      await pool.query(`CREATE TABLE IF NOT EXISTS ${fullName}__p_default PARTITION OF ${fullName} DEFAULT`);
     }
 
-    // тестовая запись (если задана)
-    if (test_row) {
-      try {
-        const cols = Object.keys(test_row).filter(isValidIdent);
-        const vals = cols.map((k) => test_row[k]);
-        const colSql = cols.map(qIdent).join(', ');
-        const params = cols.map((_, i) => `$${i + 1}`).join(', ');
-
-        const sql = `INSERT INTO ${qIdent(d.schema_name)}.${qIdent(d.table_name)} (${colSql}) VALUES (${params})`;
-        await pool.query(sql, vals);
-      } catch (e) {
+    // 3) comments (опционально)
+    for (const c of cleanCols) {
+      if (c.description) {
         await pool.query(
-          `UPDATE ao_table_definitions SET last_error=$2 WHERE id=$1::uuid`,
-          [id, `test_row_failed: ${String(e?.message || e)}`]
+          `COMMENT ON COLUMN ${fullName}.${qIdent(c.field_name)} IS $1`,
+          [c.description]
         );
       }
     }
 
-    await pool.query(
-      `UPDATE ao_table_definitions
-       SET status='applied', applied_at=now(), applied_by=$2
-       WHERE id=$1::uuid`,
-      [id, applied_by]
-    );
+    // 4) test row (опционально)
+    if (test_row) {
+      if (typeof test_row !== 'object' || Array.isArray(test_row)) throw new Error('test_row_invalid');
 
-    return res.json({ ok: true, applied: true, sql: createSql, partitioning, test_row_inserted: !!test_row });
+      const keys = Object.keys(test_row);
+      if (!keys.length) throw new Error('test_row_empty');
+
+      // берём только те ключи, которые реально есть в колонках
+      const allowed = new Set(cleanCols.map((c) => c.field_name));
+      const useKeys = keys.filter((k) => allowed.has(k));
+
+      if (!useKeys.length) throw new Error('test_row_no_matching_columns');
+
+      const colsList = useKeys.map((k) => qIdent(k)).join(',');
+      const params = useKeys.map((_, i) => `$${i + 1}`).join(',');
+      const values = useKeys.map((k) => test_row[k]);
+
+      await pool.query(`INSERT INTO ${fullName} (${colsList}) VALUES (${params})`, values);
+    }
+
+    return res.json({
+      ok: true,
+      created: `${schema_name}.${table_name}`,
+      partitioning: partEnabled ? { enabled: true, column: partColumn, interval: partInterval } : { enabled: false }
+    });
   } catch (e) {
-    await pool.query(
-      `UPDATE ao_table_definitions SET last_error=$2 WHERE id=$1::uuid`,
-      [id, String(e?.message || e)]
-    );
-    return res.status(500).json({ error: 'apply_failed', details: String(e?.message || e) });
+    return res.status(500).json({ error: 'create_failed', details: String(e?.message || e) });
   }
 });
-
-export { router as tableBuilderRouter };
