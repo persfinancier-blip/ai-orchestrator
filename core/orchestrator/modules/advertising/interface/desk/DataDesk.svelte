@@ -17,7 +17,6 @@
     fields?: ColumnDef[];
   };
 
-  // Роль (временно оставляем как раньше)
   let role: 'viewer' | 'operator' | 'data_admin' = 'data_admin';
 
   let loading = false;
@@ -50,11 +49,19 @@
   let preview_error = '';
   let preview_loading = false;
 
-  // UI: меню справа (чтобы “шаблоны/черновики” не мешали)
-  let rightTab: 'preview' | 'menu' = 'preview';
-
   function setErr(e: any) {
     error = String(e?.details || e?.message || e);
+  }
+
+  function normalizeIdent(s: string) {
+    return (s || '').trim();
+  }
+
+  function canCreate() {
+    const s = normalizeIdent(schema_name);
+    const t = normalizeIdent(table_name);
+    const okCols = columns.filter((c) => normalizeIdent(c.field_name)).length > 0;
+    return !!(s && t && okCols);
   }
 
   async function refresh() {
@@ -63,24 +70,15 @@
     try {
       const r = await fetch('/ai-orchestrator/api/tables');
       const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'failed_to_list');
+      if (!r.ok) throw new Error(j.details || j.error || 'failed_to_list');
 
       drafts = j.drafts || [];
       existingTables = j.existing_tables || [];
 
-      // Автовыбор для предпросмотра
+      // дефолт для предпросмотра
       if (!preview_schema && existingTables.length) {
         preview_schema = existingTables[0].schema_name;
         preview_table = existingTables[0].table_name;
-      } else if (preview_schema && existingTables.length) {
-        // если текущая выбранная таблица пропала, выбираем первую доступную
-        const exists = existingTables.some(
-          (t) => t.schema_name === preview_schema && t.table_name === preview_table
-        );
-        if (!exists) {
-          preview_schema = existingTables[0].schema_name;
-          preview_table = existingTables[0].table_name;
-        }
       }
     } catch (e: any) {
       setErr(e);
@@ -99,7 +97,7 @@
   }
 
   function parseTestRow(): any | null {
-    const t = test_row_text.trim();
+    const t = (test_row_text || '').trim();
     if (!t) return null;
     const parsed = JSON.parse(t);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -108,52 +106,47 @@
     return parsed;
   }
 
-  async function createDraft() {
+  // ✅ Главное: “Создать таблицу” (без черновиков)
+  async function createTableNow() {
     error = '';
     try {
       const test_row = parseTestRow();
 
-      const r = await fetch('/ai-orchestrator/api/tables/draft', {
+      const payload = {
+        schema_name: normalizeIdent(schema_name),
+        table_name: normalizeIdent(table_name),
+        table_class,
+        description,
+        columns: columns
+          .map((c) => ({
+            field_name: normalizeIdent(c.field_name),
+            field_type: c.field_type,
+            description: c.description || ''
+          }))
+          .filter((c) => c.field_name),
+        partitioning: partition_enabled
+          ? { enabled: true, column: normalizeIdent(partition_column), interval: partition_interval }
+          : { enabled: false },
+        test_row
+      };
+
+      const r = await fetch('/ai-orchestrator/api/tables/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-AO-ROLE': role },
-        body: JSON.stringify({
-          schema_name,
-          table_name,
-          table_class,
-          description,
-          created_by: 'ui',
-          columns,
-          partitioning: partition_enabled
-            ? { enabled: true, column: partition_column, interval: partition_interval }
-            : { enabled: false },
-          test_row
-        })
+        body: JSON.stringify(payload)
       });
 
       const j = await r.json();
-      if (!r.ok) throw new Error(j.details || j.error || 'draft_create_failed');
+      if (!r.ok) throw new Error(j.details || j.error || 'create_failed');
 
       await refresh();
-      rightTab = 'menu';
-      alert(`Черновик создан: ${j.id}`);
-    } catch (e: any) {
-      setErr(e);
-    }
-  }
 
-  async function applyDraft(id: string) {
-    error = '';
-    try {
-      const r = await fetch(`/ai-orchestrator/api/tables/apply/${id}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-AO-ROLE': role },
-        body: JSON.stringify({ applied_by: 'ui' })
-      });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.details || j.error || 'apply_failed');
+      // сразу переключим предпросмотр на созданную таблицу
+      preview_schema = payload.schema_name;
+      preview_table = payload.table_name;
+      preview_rows = [];
 
-      await refresh();
-      alert('Таблица создана (применение выполнено)');
+      alert(`Готово: создано ${payload.schema_name}.${payload.table_name}`);
     } catch (e: any) {
       setErr(e);
     }
@@ -178,19 +171,19 @@
     }
   }
 
-  // Шаблон (временно оставляем один пример)
+  // Шаблон оставляем, но прячем в “меню” (не мешает работе)
   function pickTemplateBronze() {
     schema_name = 'bronze';
     table_name = 'wb_ads_raw';
     table_class = 'bronze_raw';
-    description = 'WB raw ingestion (append-only JSON)';
+    description = 'Сырые ответы API (append-only JSON)';
     columns = [
       { field_name: 'dataset', field_type: 'text', description: 'dataset name' },
       { field_name: 'endpoint', field_type: 'text', description: 'endpoint name' },
-      { field_name: 'ingested_at', field_type: 'timestamptz', description: 'ingest timestamp' },
-      { field_name: 'event_date', field_type: 'date', description: 'event/business date' },
-      { field_name: 'idempotency_key', field_type: 'text', description: 'dedupe key' },
-      { field_name: 'payload', field_type: 'jsonb', description: 'raw json' }
+      { field_name: 'ingested_at', field_type: 'timestamptz', description: 'время ingest' },
+      { field_name: 'event_date', field_type: 'date', description: 'бизнес-дата' },
+      { field_name: 'idempotency_key', field_type: 'text', description: 'ключ дедупликации' },
+      { field_name: 'payload', field_type: 'jsonb', description: 'сырой JSON' }
     ];
     partition_enabled = true;
     partition_column = 'event_date';
@@ -206,8 +199,8 @@
     <div>
       <h1>Конструктор таблиц</h1>
       <p class="sub">
-        Создаёт схему/таблицу/поля по твоему вводу + опции (тестовая запись, партиции). Справа — предпросмотр и меню
-        шаблонов/черновиков.
+        Создаёт схему → таблицу → поля по твоему вводу. Плюс: партиции (опционально), тестовая запись (опционально),
+        список существующих таблиц и предпросмотр 5 строк.
       </p>
     </div>
 
@@ -229,28 +222,66 @@
   {/if}
 
   <section class="grid">
-    <!-- ЛЕВО: СОЗДАНИЕ -->
+    <!-- ЛЕВАЯ КОЛОНКА: СОЗДАНИЕ -->
     <div class="panel">
       <div class="panel-head">
         <h2>Создать таблицу</h2>
         <div class="quick">
-          <button on:click={refresh} disabled={loading}>{loading ? 'Обновляю…' : 'Обновить список'}</button>
+          <button on:click={refresh} disabled={loading}>{loading ? 'Загрузка…' : 'Обновить список'}</button>
         </div>
       </div>
+
+      <!-- Меню: шаблоны/черновики вынесено отдельно -->
+      <details class="menu">
+        <summary>Меню: шаблоны и черновики (служебное)</summary>
+        <div class="menu-body">
+          <div class="menu-hint">
+            <b>Шаблон</b> — это готовый пример заполнения формы (чтобы быстрее стартовать).<br />
+            <b>Черновик</b> — это сохранённое описание будущей таблицы (можно хранить историю).<br />
+            Сейчас для тебя главное — кнопка <b>“Создать таблицу”</b> ниже (без черновиков).
+          </div>
+
+          <div class="menu-actions">
+            <button on:click={pickTemplateBronze}>Заполнить: шаблон Bronze</button>
+          </div>
+
+          <div class="menu-body2">
+            <div class="menu-title">Черновики (история)</div>
+            {#if drafts.length === 0}
+              <div class="hint">Черновиков пока нет.</div>
+            {:else}
+              <div class="list">
+                {#each drafts as d}
+                  <div class="item">
+                    <div class="meta">
+                      <div class="title">{d.schema_name}.{d.table_name}</div>
+                      <div class="sub">{d.table_class} · {d.status}</div>
+                      <div class="sub">создано: {new Date(d.created_at).toLocaleString()}</div>
+                      {#if d.last_error}
+                        <div class="sub err">ошибка: {d.last_error}</div>
+                      {/if}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        </div>
+      </details>
 
       <div class="form">
         <label>
           Схема
-          <input bind:value={schema_name} placeholder="например: bronze / silver_adv / showcase" />
+          <input bind:value={schema_name} placeholder="например: showcase" />
         </label>
 
         <label>
           Таблица
-          <input bind:value={table_name} placeholder="например: wb_ads_raw" />
+          <input bind:value={table_name} placeholder="например: advertising" />
         </label>
 
         <label>
-          Класс
+          Класс (для себя)
           <select bind:value={table_class}>
             <option value="custom">custom</option>
             <option value="bronze_raw">bronze_raw</option>
@@ -272,7 +303,7 @@
 
         {#each columns as c, ix}
           <div class="field-row">
-            <input placeholder="показатель (field_name)" bind:value={c.field_name} />
+            <input placeholder="имя поля" bind:value={c.field_name} />
             <select bind:value={c.field_type}>
               {#each typeOptions as t}
                 <option value={t}>{t}</option>
@@ -283,7 +314,7 @@
           </div>
         {/each}
 
-        <!-- КНОПКА ВНИЗУ СПИСКА (как ты просил) -->
+        <!-- ✅ КНОПКА ДОБАВИТЬ ПОЛЕ ВНИЗУ -->
         <div class="fields-footer">
           <button on:click={addColumn}>+ Добавить поле</button>
         </div>
@@ -300,7 +331,7 @@
           <div class="form">
             <label>
               Колонка для партиций
-              <input bind:value={partition_column} placeholder="event_date / ingested_at / date ..." />
+              <input bind:value={partition_column} placeholder="например: event_date" />
             </label>
             <label>
               Интервал
@@ -315,148 +346,105 @@
 
       <div class="panel2">
         <h3>Тестовая запись (опционально)</h3>
-        <p class="hint">Если заполнить JSON — одна строка будет вставлена после “Применить”.</p>
+        <p class="hint">Если заполнить JSON — одна строка будет вставлена сразу после создания таблицы.</p>
+
         <textarea
           bind:value={test_row_text}
-          placeholder="{&quot;dataset&quot;:&quot;ads&quot;,&quot;event_date&quot;:&quot;2026-02-17&quot;,&quot;payload&quot;:{&quot;a&quot;:1}}"
+          placeholder={`{"dataset":"ads","event_date":"2026-02-17","payload":{"a":1}}`}
         />
       </div>
 
       <div class="actions">
-        <!-- Это и есть “создать” в текущей логике: создаём черновик,
-             а “Применить” (создать таблицу) — в меню справа -->
-        <button class="primary" on:click={createDraft} disabled={role !== 'data_admin'}>
-          Создать (сохранить черновик)
+        <button class="primary" on:click={createTableNow} disabled={!canCreate()}>
+          Создать таблицу
         </button>
-
-        <button on:click={() => (rightTab = 'menu')}>Открыть меню справа</button>
       </div>
-
-      <p class="hint">
-        Создание таблицы делается в 2 шага: <b>Создать (черновик)</b> → <b>Применить</b> (в меню справа).
-      </p>
     </div>
 
-    <!-- ПРАВО: ТАБЫ -->
+    <!-- ПРАВАЯ КОЛОНКА: ПРЕДПРОСМОТР И ТАБЛИЦЫ -->
     <div class="panel">
-      <div class="right-head">
-        <div class="right-tabs">
-          <button class:active={rightTab === 'preview'} on:click={() => (rightTab = 'preview')}>Предпросмотр</button>
-          <button class:active={rightTab === 'menu'} on:click={() => (rightTab = 'menu')}>
-            Меню (шаблоны/черновики)
-          </button>
+      <h2>Текущие таблицы</h2>
+
+      {#if loading}
+        <p>Загрузка…</p>
+      {:else if existingTables.length === 0}
+        <p class="hint">Таблиц пока нет (или нет доступа).</p>
+      {:else}
+        <div class="existing">
+          {#each existingTables as t}
+            <button
+              class="chip"
+              on:click={() => {
+                preview_schema = t.schema_name;
+                preview_table = t.table_name;
+                preview_rows = [];
+                preview_error = '';
+              }}
+            >
+              {t.schema_name}.{t.table_name}
+            </button>
+          {/each}
         </div>
+      {/if}
+
+      <h2 style="margin-top:16px;">Предпросмотр (5 строк)</h2>
+
+      {#if preview_error}
+        <div class="alert">
+          <div class="alert-title">Ошибка предпросмотра</div>
+          <pre>{preview_error}</pre>
+        </div>
+      {/if}
+
+      <div class="form">
+        <label>
+          Схема
+          <select bind:value={preview_schema} on:change={() => (preview_rows = [])}>
+            {#each Array.from(new Set(existingTables.map((t) => t.schema_name))) as s}
+              <option value={s}>{s}</option>
+            {/each}
+          </select>
+        </label>
+
+        <label>
+          Таблица
+          <select bind:value={preview_table} on:change={() => (preview_rows = [])}>
+            {#each existingTables.filter((t) => t.schema_name === preview_schema) as t}
+              <option value={t.table_name}>{t.schema_name}.{t.table_name}</option>
+            {/each}
+          </select>
+        </label>
       </div>
 
-      {#if rightTab === 'preview'}
-        <h2>Предпросмотр (5 строк)</h2>
+      <div class="actions">
+        <button on:click={loadPreview} disabled={preview_loading || !preview_schema || !preview_table}>
+          {preview_loading ? 'Загрузка…' : 'Показать 5 строк'}
+        </button>
+      </div>
 
-        {#if preview_error}
-          <div class="alert">
-            <div class="alert-title">Ошибка предпросмотра</div>
-            <pre>{preview_error}</pre>
-          </div>
-        {/if}
-
-        <div class="form">
-          <label>
-            Схема
-            <select bind:value={preview_schema} on:change={() => (preview_rows = [])}>
-              {#each Array.from(new Set(existingTables.map((t) => t.schema_name))) as s}
-                <option value={s}>{s}</option>
-              {/each}
-            </select>
-          </label>
-
-          <label>
-            Таблица
-            <select bind:value={preview_table} on:change={() => (preview_rows = [])}>
-              {#each existingTables.filter((t) => t.schema_name === preview_schema) as t}
-                <option value={t.table_name}>{t.schema_name}.{t.table_name}</option>
-              {/each}
-            </select>
-          </label>
-        </div>
-
-        <div class="actions">
-          <button on:click={loadPreview} disabled={preview_loading}>
-            {preview_loading ? 'Загрузка…' : 'Показать 5 строк'}
-          </button>
-        </div>
-
-        {#if preview_rows.length}
-          <div class="preview">
-            <table>
-              <thead>
+      {#if preview_rows.length}
+        <div class="preview">
+          <table>
+            <thead>
+              <tr>
+                {#each Object.keys(preview_rows[0]) as k}
+                  <th>{k}</th>
+                {/each}
+              </tr>
+            </thead>
+            <tbody>
+              {#each preview_rows as r}
                 <tr>
                   {#each Object.keys(preview_rows[0]) as k}
-                    <th>{k}</th>
+                    <td>{typeof r[k] === 'object' ? JSON.stringify(r[k]) : String(r[k])}</td>
                   {/each}
                 </tr>
-              </thead>
-              <tbody>
-                {#each preview_rows as r}
-                  <tr>
-                    {#each Object.keys(preview_rows[0]) as k}
-                      <td>{typeof r[k] === 'object' ? JSON.stringify(r[k]) : String(r[k])}</td>
-                    {/each}
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
-        {:else}
-          <p class="hint">Нет данных для предпросмотра (таблица может быть пустой).</p>
-        {/if}
-      {:else}
-        <h2>Меню</h2>
-
-        <div class="menu-card">
-          <div class="menu-title">Шаблоны</div>
-          <div class="menu-sub">
-            Шаблон — это готовый набор полей (чтобы не заполнять руками). Можно использовать или игнорировать.
-          </div>
-          <div class="actions">
-            <button on:click={pickTemplateBronze}>Применить шаблон: Bronze</button>
-          </div>
-        </div>
-
-        <div class="menu-card">
-          <div class="menu-title">Черновики</div>
-          <div class="menu-sub">
-            Черновик — это “план создания таблицы”. После “Создать (черновик)” — жми “Применить”, и таблица реально
-            создастся в базе.
-          </div>
-
-          {#if loading}
-            <p>Загрузка…</p>
-          {:else if drafts.length === 0}
-            <p class="hint">Черновиков пока нет.</p>
-          {:else}
-            <div class="list">
-              {#each drafts as d}
-                <div class="item">
-                  <div class="meta">
-                    <div class="title">{d.schema_name}.{d.table_name}</div>
-                    <div class="sub">{d.table_class} · {d.status}</div>
-                    <div class="sub">создано: {new Date(d.created_at).toLocaleString()}</div>
-                    {#if d.applied_at}
-                      <div class="sub">применено: {new Date(d.applied_at).toLocaleString()}</div>
-                    {/if}
-                    {#if d.last_error}
-                      <div class="sub err">ошибка: {d.last_error}</div>
-                    {/if}
-                  </div>
-                  <div class="btns">
-                    <button class="primary" on:click={() => applyDraft(d.id)} disabled={role !== 'data_admin'}>
-                      Применить (создать таблицу)
-                    </button>
-                  </div>
-                </div>
               {/each}
-            </div>
-          {/if}
+            </tbody>
+          </table>
         </div>
+      {:else}
+        <p class="hint">Нет данных для предпросмотра (таблица может быть пустой).</p>
       {/if}
     </div>
   </section>
@@ -469,12 +457,11 @@
   .sub { margin: 6px 0 0; font-size: 12px; color:#64748b; }
   .role { display:flex; gap:8px; align-items:center; font-size: 12px; color:#334155; }
 
-  .grid { display:grid; grid-template-columns: 1.2fr 0.8fr; gap: 12px; margin-top: 12px; }
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
   @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
 
   .panel { background:#fff; border:1px solid #eef2f7; border-radius: 16px; padding: 14px; }
   .panel2 { margin-top: 12px; border:1px solid #eef2f7; border-radius: 14px; padding: 12px; }
-
   .panel-head { display:flex; justify-content:space-between; align-items:center; gap:8px; }
   .quick { display:flex; gap: 8px; }
 
@@ -486,23 +473,17 @@
   .fields { margin-top: 14px; }
   .fields-head { display:flex; align-items:center; justify-content:space-between; gap: 8px; }
   .field-row { display:grid; grid-template-columns: 1.2fr 0.8fr 1.6fr auto; gap: 8px; margin-top: 8px; }
-  .fields-footer { display:flex; justify-content:flex-start; margin-top: 10px; }
+  .fields-footer { margin-top: 10px; display:flex; justify-content:flex-end; }
 
   .row { display:flex; gap:8px; align-items:center; font-size: 12px; color:#334155; }
 
-  .actions { display:flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .actions { display:flex; gap: 8px; margin-top: 12px; }
   button { padding: 10px 12px; border-radius: 12px; border:1px solid #e2e8f0; background:#fff; cursor:pointer; }
   button.primary { background:#0f172a; color:#fff; border-color:#0f172a; }
   button:disabled { opacity:0.5; cursor:not-allowed; }
   .danger { border:1px solid #fecaca; color:#b91c1c; }
 
   .hint { margin-top: 10px; font-size: 12px; color:#64748b; }
-
-  .list { display:grid; gap: 10px; margin-top: 12px; }
-  .item { display:flex; justify-content:space-between; gap: 12px; border:1px solid #eef2f7; border-radius: 14px; padding: 12px; }
-  .title { font-weight: 800; }
-  .sub { font-size: 12px; color:#64748b; margin-top: 2px; }
-  .sub.err { color:#b91c1c; }
 
   .alert { background:#fff1f2; border:1px solid #fecdd3; border-radius: 14px; padding: 12px; margin: 12px 0; }
   .alert-title { font-weight: 800; margin-bottom: 6px; }
@@ -513,11 +494,18 @@
   th, td { border-bottom:1px solid #eef2f7; padding: 8px 10px; text-align:left; vertical-align:top; }
   th { position: sticky; top: 0; background:#fff; }
 
-  .right-head { display:flex; justify-content:space-between; align-items:center; gap:10px; }
-  .right-tabs { display:flex; gap:8px; flex-wrap: wrap; }
-  .right-tabs button.active { background:#0f172a; color:#fff; border-color:#0f172a; }
+  .existing { margin-top: 10px; display:flex; flex-wrap:wrap; gap:8px; }
+  .chip { font-size:12px; padding: 8px 10px; border-radius:999px; }
 
-  .menu-card { border:1px solid #eef2f7; border-radius: 14px; padding: 12px; margin-top: 12px; }
-  .menu-title { font-weight: 900; margin-bottom: 6px; }
-  .menu-sub { font-size: 12px; color:#64748b; }
+  .menu { margin-top: 12px; border:1px dashed #e2e8f0; border-radius: 14px; padding: 10px 12px; }
+  .menu summary { cursor:pointer; font-weight: 700; color:#0f172a; }
+  .menu-body { margin-top: 10px; display:grid; gap: 10px; }
+  .menu-hint { font-size: 12px; color:#334155; background:#f8fafc; border:1px solid #eef2f7; border-radius: 12px; padding: 10px; }
+  .menu-actions { display:flex; gap: 8px; flex-wrap:wrap; }
+  .menu-title { font-weight: 800; margin-top: 6px; }
+  .list { display:grid; gap: 10px; margin-top: 8px; }
+  .item { display:flex; justify-content:space-between; gap: 12px; border:1px solid #eef2f7; border-radius: 14px; padding: 12px; }
+  .title { font-weight: 800; }
+  .sub { font-size: 12px; color:#64748b; margin-top: 2px; }
+  .sub.err { color:#b91c1c; }
 </style>
