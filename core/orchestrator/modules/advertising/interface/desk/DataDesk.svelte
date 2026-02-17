@@ -17,6 +17,9 @@
     fields?: ColumnDef[];
   };
 
+  const testRowPlaceholder =
+    '{"dataset":"ads","event_date":"2026-02-17","payload":{"a":1}}';
+
   let role: 'viewer' | 'operator' | 'data_admin' = 'data_admin';
 
   let loading = false;
@@ -31,7 +34,18 @@
   let table_class = 'custom';
   let description = '';
 
-  const typeOptions = ['text', 'int', 'bigint', 'numeric', 'boolean', 'date', 'timestamptz', 'jsonb', 'uuid'];
+  const typeOptions = [
+    'text',
+    'int',
+    'bigint',
+    'numeric',
+    'boolean',
+    'date',
+    'timestamptz',
+    'jsonb',
+    'uuid'
+  ];
+
   let columns: ColumnDef[] = [{ field_name: '', field_type: 'text', description: '' }];
 
   // Партиционирование
@@ -53,6 +67,44 @@
     error = String(e?.details || e?.message || e);
   }
 
+  function trimOrEmpty(v: string) {
+    return (v || '').trim();
+  }
+
+  function validateForm(): string | null {
+    if (!trimOrEmpty(schema_name)) return 'Заполни поле: Схема';
+    if (!trimOrEmpty(table_name)) return 'Заполни поле: Таблица';
+
+    const cleanCols = columns
+      .map((c) => ({
+        field_name: trimOrEmpty(c.field_name),
+        field_type: c.field_type,
+        description: trimOrEmpty(c.description || '')
+      }))
+      .filter((c) => c.field_name);
+
+    if (!cleanCols.length) return 'Добавь хотя бы одно поле (показатель)';
+
+    const duplicates = new Set<string>();
+    for (const c of cleanCols) {
+      const key = c.field_name.toLowerCase();
+      if (duplicates.has(key)) return `Дублируется поле: ${c.field_name}`;
+      duplicates.add(key);
+    }
+
+    return null;
+  }
+
+  function normalizedColumns(): ColumnDef[] {
+    return columns
+      .map((c) => ({
+        field_name: trimOrEmpty(c.field_name),
+        field_type: c.field_type,
+        description: trimOrEmpty(c.description || '')
+      }))
+      .filter((c) => c.field_name);
+  }
+
   async function refresh() {
     loading = true;
     error = '';
@@ -64,7 +116,7 @@
       drafts = j.drafts || [];
       existingTables = j.existing_tables || [];
 
-      if (!preview_schema && existingTables.length) {
+      if ((!preview_schema || !preview_table) && existingTables.length) {
         preview_schema = existingTables[0].schema_name;
         preview_table = existingTables[0].table_name;
       }
@@ -85,7 +137,7 @@
   }
 
   function parseTestRow(): any | null {
-    const t = test_row_text.trim();
+    const t = trimOrEmpty(test_row_text);
     if (!t) return null;
     const parsed = JSON.parse(t);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -96,6 +148,13 @@
 
   async function createDraft() {
     error = '';
+
+    const validationError = validateForm();
+    if (validationError) {
+      error = validationError;
+      return;
+    }
+
     try {
       const test_row = parseTestRow();
 
@@ -103,14 +162,14 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-AO-ROLE': role },
         body: JSON.stringify({
-          schema_name,
-          table_name,
+          schema_name: trimOrEmpty(schema_name),
+          table_name: trimOrEmpty(table_name),
           table_class,
-          description,
+          description: trimOrEmpty(description),
           created_by: 'ui',
-          columns,
+          columns: normalizedColumns(),
           partitioning: partition_enabled
-            ? { enabled: true, column: partition_column, interval: partition_interval }
+            ? { enabled: true, column: trimOrEmpty(partition_column), interval: partition_interval }
             : { enabled: false },
           test_row
         })
@@ -147,9 +206,14 @@
     preview_error = '';
     preview_rows = [];
     try {
+      if (!trimOrEmpty(preview_schema) || !trimOrEmpty(preview_table)) {
+        throw new Error('Выбери схему и таблицу для предпросмотра');
+      }
+
       const url =
         `/ai-orchestrator/api/preview?schema=${encodeURIComponent(preview_schema)}` +
         `&table=${encodeURIComponent(preview_table)}&limit=5`;
+
       const r = await fetch(url);
       const j = await r.json();
       if (!r.ok) throw new Error(j.details || j.error || 'preview_failed');
@@ -179,6 +243,8 @@
     partition_interval = 'day';
     test_row_text = '';
   }
+
+  $: canCreateDraft = role === 'data_admin' && !validateForm();
 
   onMount(refresh);
 </script>
@@ -294,14 +360,11 @@
       <div class="panel2">
         <h3>Тестовая запись (опционально)</h3>
         <p class="hint">Если заполнить JSON — одна строка будет вставлена после “Применить”.</p>
-        <textarea
-          bind:value={test_row_text}
-          placeholder='{"dataset":"ads","event_date":"2026-02-17","payload":{"a":1}}'
-        />
+        <textarea bind:value={test_row_text} placeholder={testRowPlaceholder} />
       </div>
 
       <div class="actions">
-        <button class="primary" on:click={createDraft} disabled={role !== 'data_admin'}>
+        <button class="primary" on:click={createDraft} disabled={!canCreateDraft}>
           Сохранить черновик
         </button>
       </div>
