@@ -1,3 +1,4 @@
+<!-- core/orchestrator/modules/advertising/interface/desk/DataDesk.svelte -->
 <script lang="ts">
   import { onMount } from 'svelte';
 
@@ -17,8 +18,7 @@
     fields?: ColumnDef[];
   };
 
-  const testRowPlaceholder =
-    '{"dataset":"ads","event_date":"2026-02-17","payload":{"a":1}}';
+  const testRowPlaceholder = '{"dataset":"ads","event_date":"2026-02-17","payload":{"a":1}}';
 
   let role: 'viewer' | 'operator' | 'data_admin' = 'data_admin';
 
@@ -34,18 +34,7 @@
   let table_class = 'custom';
   let description = '';
 
-  const typeOptions = [
-    'text',
-    'int',
-    'bigint',
-    'numeric',
-    'boolean',
-    'date',
-    'timestamptz',
-    'jsonb',
-    'uuid'
-  ];
-
+  const typeOptions = ['text', 'int', 'bigint', 'numeric', 'boolean', 'date', 'timestamptz', 'jsonb', 'uuid'];
   let columns: ColumnDef[] = [{ field_name: '', field_type: 'text', description: '' }];
 
   // Партиционирование
@@ -85,12 +74,14 @@
 
     if (!cleanCols.length) return 'Добавь хотя бы одно поле (показатель)';
 
-    const duplicates = new Set<string>();
+    const seen = new Set<string>();
     for (const c of cleanCols) {
-      const key = c.field_name.toLowerCase();
-      if (duplicates.has(key)) return `Дублируется поле: ${c.field_name}`;
-      duplicates.add(key);
+      const k = c.field_name.toLowerCase();
+      if (seen.has(k)) return `Дублируется поле: ${c.field_name}`;
+      seen.add(k);
     }
+
+    if (partition_enabled && !trimOrEmpty(partition_column)) return 'Заполни колонку для партиций';
 
     return null;
   }
@@ -146,13 +137,14 @@
     return parsed;
   }
 
-  async function createDraft() {
+  // Возвращает id черновика (или null при ошибке)
+  async function createDraft(): Promise<string | null> {
     error = '';
 
     const validationError = validateForm();
     if (validationError) {
       error = validationError;
-      return;
+      return null;
     }
 
     try {
@@ -177,10 +169,12 @@
 
       const j = await r.json();
       if (!r.ok) throw new Error(j.details || j.error || 'draft_create_failed');
+
       await refresh();
-      alert(`Черновик создан: ${j.id}`);
+      return String(j.id);
     } catch (e: any) {
       setErr(e);
+      return null;
     }
   }
 
@@ -199,6 +193,14 @@
     } catch (e: any) {
       setErr(e);
     }
+  }
+
+  // Один клик: создать черновик + применить
+  async function createAndApply() {
+    if (role !== 'data_admin') return;
+    const id = await createDraft();
+    if (!id) return;
+    await applyDraft(id);
   }
 
   async function loadPreview() {
@@ -245,6 +247,7 @@
   }
 
   $: canCreateDraft = role === 'data_admin' && !validateForm();
+  $: canCreateTable = canCreateDraft;
 
   onMount(refresh);
 </script>
@@ -367,9 +370,12 @@
         <button class="primary" on:click={createDraft} disabled={!canCreateDraft}>
           Сохранить черновик
         </button>
+        <button class="primary" on:click={createAndApply} disabled={!canCreateTable}>
+          Создать таблицу
+        </button>
       </div>
 
-      <p class="hint">Дальше применяй черновик справа.</p>
+      <p class="hint">Можно: сохранить как черновик, либо “Создать таблицу” сразу одним кликом.</p>
     </div>
 
     <div class="panel">
