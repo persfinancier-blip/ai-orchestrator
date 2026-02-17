@@ -20,6 +20,7 @@
   let role: 'viewer' | 'operator' | 'data_admin' = 'data_admin';
 
   let loading = false;
+  let creating = false;
   let error = '';
 
   let drafts: Draft[] = [];
@@ -41,6 +42,7 @@
 
   // Тестовая запись (JSON)
   let test_row_text = '';
+  const TEST_ROW_PLACEHOLDER = '{"dataset":"ads","event_date":"2026-02-17","payload":{"a":1}}';
 
   // Предпросмотр
   let preview_schema = '';
@@ -54,14 +56,10 @@
   }
 
   function normalizeIdent(s: string) {
-    return (s || '').trim();
-  }
-
-  function canCreate() {
-    const s = normalizeIdent(schema_name);
-    const t = normalizeIdent(table_name);
-    const okCols = columns.filter((c) => normalizeIdent(c.field_name)).length > 0;
-    return !!(s && t && okCols);
+    return (s || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_]/g, '');
   }
 
   async function refresh() {
@@ -70,12 +68,11 @@
     try {
       const r = await fetch('/ai-orchestrator/api/tables');
       const j = await r.json();
-      if (!r.ok) throw new Error(j.details || j.error || 'failed_to_list');
+      if (!r.ok) throw new Error(j.error || 'failed_to_list');
 
       drafts = j.drafts || [];
       existingTables = j.existing_tables || [];
 
-      // дефолт для предпросмотра
       if (!preview_schema && existingTables.length) {
         preview_schema = existingTables[0].schema_name;
         preview_table = existingTables[0].table_name;
@@ -97,7 +94,7 @@
   }
 
   function parseTestRow(): any | null {
-    const t = (test_row_text || '').trim();
+    const t = test_row_text.trim();
     if (!t) return null;
     const parsed = JSON.parse(t);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -106,49 +103,72 @@
     return parsed;
   }
 
-  // ✅ Главное: “Создать таблицу” (без черновиков)
   async function createTableNow() {
     error = '';
+
+    const schema = normalizeIdent(schema_name);
+    const table = normalizeIdent(table_name);
+
+    // Базовая проверка ввода (кнопка всегда активна — ошибки показываем тут)
+    if (!schema) return setErr('Укажи схему (только латиница/цифры/_)');
+    if (!table) return setErr('Укажи таблицу (только латиница/цифры/_)');
+    if (!columns?.length) return setErr('Добавь хотя бы одно поле');
+
+    for (let i = 0; i < columns.length; i++) {
+      const c = columns[i];
+      const fn = normalizeIdent(c.field_name);
+      if (!fn) return setErr(`Поле #${i + 1}: укажи имя (латиница/цифры/_)`);
+      if (!c.field_type) return setErr(`Поле #${i + 1}: укажи тип данных`);
+    }
+
+    // уникальные имена полей
+    const names = columns.map((c) => normalizeIdent(c.field_name));
+    const uniq = new Set(names);
+    if (uniq.size !== names.length) return setErr('Имена полей должны быть уникальными');
+
+    let test_row: any | null = null;
     try {
-      const test_row = parseTestRow();
+      test_row = parseTestRow();
+    } catch (e: any) {
+      return setErr(e);
+    }
 
-      const payload = {
-        schema_name: normalizeIdent(schema_name),
-        table_name: normalizeIdent(table_name),
-        table_class,
-        description,
-        columns: columns
-          .map((c) => ({
-            field_name: normalizeIdent(c.field_name),
-            field_type: c.field_type,
-            description: c.description || ''
-          }))
-          .filter((c) => c.field_name),
-        partitioning: partition_enabled
-          ? { enabled: true, column: normalizeIdent(partition_column), interval: partition_interval }
-          : { enabled: false },
-        test_row
-      };
-
+    creating = true;
+    try {
       const r = await fetch('/ai-orchestrator/api/tables/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-AO-ROLE': role },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({
+          schema_name: schema,
+          table_name: table,
+          table_class,
+          description,
+          created_by: 'ui',
+          columns: columns.map((c) => ({
+            field_name: normalizeIdent(c.field_name),
+            field_type: c.field_type,
+            description: c.description || ''
+          })),
+          partitioning: partition_enabled
+            ? {
+                enabled: true,
+                column: normalizeIdent(partition_column) || partition_column,
+                interval: partition_interval
+              }
+            : { enabled: false },
+          test_row
+        })
       });
 
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.details || j.error || 'create_failed');
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.details || j.error || `create_failed_${r.status}`);
 
       await refresh();
-
-      // сразу переключим предпросмотр на созданную таблицу
-      preview_schema = payload.schema_name;
-      preview_table = payload.table_name;
-      preview_rows = [];
-
-      alert(`Готово: создано ${payload.schema_name}.${payload.table_name}`);
+      alert('Таблица создана');
     } catch (e: any) {
       setErr(e);
+    } finally {
+      creating = false;
     }
   }
 
@@ -171,7 +191,6 @@
     }
   }
 
-  // Шаблон оставляем, но прячем в “меню” (не мешает работе)
   function pickTemplateBronze() {
     schema_name = 'bronze';
     table_name = 'wb_ads_raw';
@@ -199,8 +218,8 @@
     <div>
       <h1>Конструктор таблиц</h1>
       <p class="sub">
-        Создаёт схему → таблицу → поля по твоему вводу. Плюс: партиции (опционально), тестовая запись (опционально),
-        список существующих таблиц и предпросмотр 5 строк.
+        Создаёт схему/таблицу/поля по твоему вводу + опции (тестовая запись, партиции). Показывает текущие таблицы и
+        предпросмотр 5 строк.
       </p>
     </div>
 
@@ -222,62 +241,24 @@
   {/if}
 
   <section class="grid">
-    <!-- ЛЕВАЯ КОЛОНКА: СОЗДАНИЕ -->
     <div class="panel">
       <div class="panel-head">
         <h2>Создать таблицу</h2>
         <div class="quick">
-          <button on:click={refresh} disabled={loading}>{loading ? 'Загрузка…' : 'Обновить список'}</button>
+          <button on:click={pickTemplateBronze}>Заполнить: шаблон Bronze</button>
+          <button on:click={refresh}>Обновить список</button>
         </div>
       </div>
-
-      <!-- Меню: шаблоны/черновики вынесено отдельно -->
-      <details class="menu">
-        <summary>Меню: шаблоны и черновики (служебное)</summary>
-        <div class="menu-body">
-          <div class="menu-hint">
-            <b>Шаблон</b> — это готовый пример заполнения формы (чтобы быстрее стартовать).<br />
-            <b>Черновик</b> — это сохранённое описание будущей таблицы (можно хранить историю).<br />
-            Сейчас для тебя главное — кнопка <b>“Создать таблицу”</b> ниже (без черновиков).
-          </div>
-
-          <div class="menu-actions">
-            <button on:click={pickTemplateBronze}>Заполнить: шаблон Bronze</button>
-          </div>
-
-          <div class="menu-body2">
-            <div class="menu-title">Черновики (история)</div>
-            {#if drafts.length === 0}
-              <div class="hint">Черновиков пока нет.</div>
-            {:else}
-              <div class="list">
-                {#each drafts as d}
-                  <div class="item">
-                    <div class="meta">
-                      <div class="title">{d.schema_name}.{d.table_name}</div>
-                      <div class="sub">{d.table_class} · {d.status}</div>
-                      <div class="sub">создано: {new Date(d.created_at).toLocaleString()}</div>
-                      {#if d.last_error}
-                        <div class="sub err">ошибка: {d.last_error}</div>
-                      {/if}
-                    </div>
-                  </div>
-                {/each}
-              </div>
-            {/if}
-          </div>
-        </div>
-      </details>
 
       <div class="form">
         <label>
           Схема
-          <input bind:value={schema_name} placeholder="например: showcase" />
+          <input bind:value={schema_name} placeholder="например: bronze / silver_adv / showcase" />
         </label>
 
         <label>
           Таблица
-          <input bind:value={table_name} placeholder="например: advertising" />
+          <input bind:value={table_name} placeholder="например: wb_ads_raw" />
         </label>
 
         <label>
@@ -303,7 +284,7 @@
 
         {#each columns as c, ix}
           <div class="field-row">
-            <input placeholder="имя поля" bind:value={c.field_name} />
+            <input placeholder="показатель (field_name)" bind:value={c.field_name} />
             <select bind:value={c.field_type}>
               {#each typeOptions as t}
                 <option value={t}>{t}</option>
@@ -314,8 +295,7 @@
           </div>
         {/each}
 
-        <!-- ✅ КНОПКА ДОБАВИТЬ ПОЛЕ ВНИЗУ -->
-        <div class="fields-footer">
+        <div class="fields-actions">
           <button on:click={addColumn}>+ Добавить поле</button>
         </div>
       </div>
@@ -331,7 +311,7 @@
           <div class="form">
             <label>
               Колонка для партиций
-              <input bind:value={partition_column} placeholder="например: event_date" />
+              <input bind:value={partition_column} placeholder="event_date / ingested_at / date ..." />
             </label>
             <label>
               Интервал
@@ -347,42 +327,27 @@
       <div class="panel2">
         <h3>Тестовая запись (опционально)</h3>
         <p class="hint">Если заполнить JSON — одна строка будет вставлена сразу после создания таблицы.</p>
-
-        <textarea
-          bind:value={test_row_text}
-          placeholder={`{"dataset":"ads","event_date":"2026-02-17","payload":{"a":1}}`}
-        />
+        <textarea bind:value={test_row_text} placeholder={TEST_ROW_PLACEHOLDER} />
       </div>
 
       <div class="actions">
-        <button class="primary" on:click={createTableNow} disabled={!canCreate()}>
-          Создать таблицу
+        <button class="primary" on:click={createTableNow} disabled={creating}>
+          {creating ? 'Создаю…' : 'Создать таблицу'}
         </button>
       </div>
     </div>
 
-    <!-- ПРАВАЯ КОЛОНКА: ПРЕДПРОСМОТР И ТАБЛИЦЫ -->
     <div class="panel">
-      <h2>Текущие таблицы</h2>
+      <div class="panel-head">
+        <h2>Текущие таблицы</h2>
+      </div>
 
       {#if loading}
         <p>Загрузка…</p>
-      {:else if existingTables.length === 0}
-        <p class="hint">Таблиц пока нет (или нет доступа).</p>
       {:else}
-        <div class="existing">
+        <div class="chips">
           {#each existingTables as t}
-            <button
-              class="chip"
-              on:click={() => {
-                preview_schema = t.schema_name;
-                preview_table = t.table_name;
-                preview_rows = [];
-                preview_error = '';
-              }}
-            >
-              {t.schema_name}.{t.table_name}
-            </button>
+            <span class="chip">{t.schema_name}.{t.table_name}</span>
           {/each}
         </div>
       {/if}
@@ -417,7 +382,7 @@
       </div>
 
       <div class="actions">
-        <button on:click={loadPreview} disabled={preview_loading || !preview_schema || !preview_table}>
+        <button on:click={loadPreview} disabled={preview_loading}>
           {preview_loading ? 'Загрузка…' : 'Показать 5 строк'}
         </button>
       </div>
@@ -473,7 +438,7 @@
   .fields { margin-top: 14px; }
   .fields-head { display:flex; align-items:center; justify-content:space-between; gap: 8px; }
   .field-row { display:grid; grid-template-columns: 1.2fr 0.8fr 1.6fr auto; gap: 8px; margin-top: 8px; }
-  .fields-footer { margin-top: 10px; display:flex; justify-content:flex-end; }
+  .fields-actions { display:flex; justify-content:flex-end; margin-top: 10px; }
 
   .row { display:flex; gap:8px; align-items:center; font-size: 12px; color:#334155; }
 
@@ -494,18 +459,6 @@
   th, td { border-bottom:1px solid #eef2f7; padding: 8px 10px; text-align:left; vertical-align:top; }
   th { position: sticky; top: 0; background:#fff; }
 
-  .existing { margin-top: 10px; display:flex; flex-wrap:wrap; gap:8px; }
-  .chip { font-size:12px; padding: 8px 10px; border-radius:999px; }
-
-  .menu { margin-top: 12px; border:1px dashed #e2e8f0; border-radius: 14px; padding: 10px 12px; }
-  .menu summary { cursor:pointer; font-weight: 700; color:#0f172a; }
-  .menu-body { margin-top: 10px; display:grid; gap: 10px; }
-  .menu-hint { font-size: 12px; color:#334155; background:#f8fafc; border:1px solid #eef2f7; border-radius: 12px; padding: 10px; }
-  .menu-actions { display:flex; gap: 8px; flex-wrap:wrap; }
-  .menu-title { font-weight: 800; margin-top: 6px; }
-  .list { display:grid; gap: 10px; margin-top: 8px; }
-  .item { display:flex; justify-content:space-between; gap: 12px; border:1px solid #eef2f7; border-radius: 14px; padding: 12px; }
-  .title { font-weight: 800; }
-  .sub { font-size: 12px; color:#64748b; margin-top: 2px; }
-  .sub.err { color:#b91c1c; }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; margin-top: 12px; }
+  .chip { padding: 6px 10px; border-radius: 999px; border:1px solid #e2e8f0; font-size: 12px; color:#334155; background:#fff; }
 </style>
