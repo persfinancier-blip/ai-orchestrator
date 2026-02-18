@@ -1,4 +1,3 @@
-cat > core/orchestrator/modules/advertising/interface/desk/tabs/ApiBuilderTab.svelte <<'EOF'
 <!-- File: core/orchestrator/modules/advertising/interface/desk/tabs/ApiBuilderTab.svelte -->
 <script lang="ts">
   type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -481,4 +480,3 @@ cat > core/orchestrator/modules/advertising/interface/desk/tabs/ApiBuilderTab.sv
   .alert { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #f3c0c0; background: #fff5f5; }
   .alert-title { font-weight: 700; margin-bottom: 6px; }
 </style>
-EOF
