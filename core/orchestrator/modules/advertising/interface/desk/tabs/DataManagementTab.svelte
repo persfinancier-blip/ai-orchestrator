@@ -41,6 +41,9 @@
     return sources.find((s) => s.id === selectedId) || null;
   }
 
+  // ✅ Svelte way вместо {#let ...}
+  $: selected = getSelected();
+
   function parseJsonOrEmpty(s: string): any {
     if (!s.trim()) return {};
     return JSON.parse(s);
@@ -59,12 +62,11 @@
     previewText = '';
     previewStatus = 0;
 
-    const s = getSelected();
-    if (!s) return;
+    if (!selected) return;
 
     let headersObj: any = {};
     try {
-      headersObj = parseJsonOrEmpty(s.headersJson);
+      headersObj = parseJsonOrEmpty(selected.headersJson);
     } catch {
       err = 'Headers JSON: неверный JSON';
       return;
@@ -72,17 +74,17 @@
 
     let url = '';
     try {
-      url = normalizeUrl(s.baseUrl, s.path, s.queryJson);
+      url = normalizeUrl(selected.baseUrl, selected.path, selected.queryJson);
     } catch {
       err = 'Query JSON: неверный JSON';
       return;
     }
 
     let body: any = undefined;
-    if (s.method !== 'GET' && s.method !== 'DELETE') {
-      if (s.bodyJson.trim()) {
+    if (selected.method !== 'GET' && selected.method !== 'DELETE') {
+      if (selected.bodyJson.trim()) {
         try {
-          body = JSON.stringify(JSON.parse(s.bodyJson));
+          body = JSON.stringify(JSON.parse(selected.bodyJson));
         } catch {
           err = 'Body JSON: неверный JSON';
           return;
@@ -95,7 +97,7 @@
     running = true;
     try {
       const res = await fetch(url, {
-        method: s.method,
+        method: selected.method,
         headers: { 'Content-Type': 'application/json', ...headersObj },
         body
       });
@@ -135,11 +137,12 @@
   <div class="layout">
     <aside class="aside">
       <div class="aside-title">Источники</div>
+
       {#if sources.length === 0}
         <div class="hint">Нет сохранённых API. Создай их во вкладке “API”.</div>
       {:else}
         <div class="list">
-          {#each sources as s}
+          {#each sources as s (s.id)}
             <button class="item" class:activeitem={s.id === selectedId} on:click={() => (selectedId = s.id)}>
               <div class="name">{s.name}</div>
               <div class="meta">{s.method} {s.baseUrl}{s.path}</div>
@@ -153,35 +156,33 @@
     </aside>
 
     <div class="main">
-      {#if !getSelected()}
+      {#if !selected}
         <div class="hint">Выбери источник слева.</div>
       {:else}
-        {#let s = getSelected()}
-          <div class="card">
-            <div class="row">
-              <div>
-                <div class="title">{s.name}</div>
-                <div class="muted">{s.method} {s.baseUrl}{s.path}</div>
-              </div>
-
-              <button class="primary" on:click={runPreview} disabled={running}>
-                {running ? 'Запуск…' : 'Preview run'}
-              </button>
+        <div class="card">
+          <div class="row">
+            <div>
+              <div class="title">{selected.name}</div>
+              <div class="muted">{selected.method} {selected.baseUrl}{selected.path}</div>
             </div>
 
-            <div class="muted" style="margin-top:8px;">
-              status: {previewStatus || '-'}
-            </div>
-
-            <div class="box">
-              <pre>{previewText || ''}</pre>
-            </div>
-
-            <div class="hint" style="margin-top:10px;">
-              Дальше здесь появится: маппинг полей → вставка в таблицы → расписания → логирование.
-            </div>
+            <button class="primary" on:click={runPreview} disabled={running}>
+              {running ? 'Запуск…' : 'Preview run'}
+            </button>
           </div>
-        {/let}
+
+          <div class="muted" style="margin-top:8px;">
+            status: {previewStatus || '-'}
+          </div>
+
+          <div class="box">
+            <pre>{previewText || ''}</pre>
+          </div>
+
+          <div class="hint" style="margin-top:10px;">
+            Дальше здесь появится: маппинг полей → вставка в таблицы → расписания → логирование.
+          </div>
+        </div>
       {/if}
     </div>
   </div>
