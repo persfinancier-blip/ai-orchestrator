@@ -4,512 +4,382 @@ import { pool } from './db.mjs';
 
 export const tableBuilderRouter = express.Router();
 
-tableBuilderRouter.use(express.json({ limit: '8mb' }));
+// JSON body (UI sends JSON)
+tableBuilderRouter.use(express.json({ limit: '4mb' }));
 
-/**
- * Примитивная роль: UI кладёт X-AO-ROLE.
- * Сейчас это больше "переключатель", чем настоящая безопасность.
- */
-function requireDataAdmin(req, res, next) {
-  const role = (req.header('X-AO-ROLE') || '').toLowerCase();
+/** -------- helpers -------- */
+
+function requireDataAdmin(req) {
+  const role = String(req.header('X-AO-ROLE') || '').trim();
   if (role !== 'data_admin') {
-    return res.status(403).json({ error: 'forbidden', details: 'Требуется роль data_admin' });
+    const e = new Error('forbidden');
+    e.statusCode = 403;
+    throw e;
   }
-  return next();
 }
 
-function qIdent(name) {
-  if (!name || typeof name !== 'string') throw new Error('invalid_identifier');
-  const s = name.trim();
-  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s)) throw new Error(`invalid_identifier:${s}`);
-  return `"${s.replace(/"/g, '""')}"`;
+function isIdent(s) {
+  return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(String(s || ''));
 }
 
-function qLiteral(v) {
-  if (v === null || v === undefined) return 'NULL';
-  const s = String(v);
-  return `'${s.replace(/'/g, "''")}'`;
+function qi(s) {
+  return `"${String(s).replace(/"/g, '""')}"`;
 }
 
-function normalizeColumns(columns) {
-  if (!Array.isArray(columns) || columns.length === 0) throw new Error('columns_required');
-
-  const allowed = new Set([
-    'text',
-    'int',
-    'integer',
-    'bigint',
-    'numeric',
-    'boolean',
-    'date',
-    'timestamptz',
-    'timestamp with time zone',
-    'jsonb',
-    'uuid'
-  ]);
-
-  const out = [];
-  for (const c of columns) {
-    const field_name = String(c?.field_name || '').trim();
-    const field_type_raw = String(c?.field_type || '').trim().toLowerCase();
-    const description = c?.description ? String(c.description).trim() : '';
-
-    if (!field_name) throw new Error('field_name_required');
-    if (!field_type_raw) throw new Error('field_type_required');
-
-    if (!allowed.has(field_type_raw)) throw new Error(`unsupported_type:${field_type_raw}`);
-
-    const field_type =
-      field_type_raw === 'int'
-        ? 'integer'
-        : field_type_raw === 'timestamp with time zone'
-          ? 'timestamptz'
-          : field_type_raw;
-
-    out.push({ field_name, field_type, description });
-  }
-
-  // уникальность имен
-  const seen = new Set();
-  for (const c of out) {
-    const k = c.field_name.toLowerCase();
-    if (seen.has(k)) throw new Error(`duplicate_field:${c.field_name}`);
-    seen.add(k);
-  }
-
-  return out;
+function qname(schema, table) {
+  return `${qi(schema)}.${qi(table)}`;
 }
 
-async function listExistingTables() {
-  const q = `
-    SELECT table_schema AS schema_name, table_name
-    FROM information_schema.tables
-    WHERE table_type='BASE TABLE'
-      AND table_schema NOT IN ('pg_catalog','information_schema')
-    ORDER BY table_schema, table_name;
-  `;
-  const r = await pool.query(q);
-  return r.rows || [];
+function asInt(v, def) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : def;
 }
 
-async function listColumns(schema, table) {
-  const q = `
-    SELECT
-      column_name,
-      data_type,
-      udt_name,
-      is_nullable,
-      column_default
-    FROM information_schema.columns
-    WHERE table_schema=$1 AND table_name=$2
-    ORDER BY ordinal_position;
-  `;
-  const r = await pool.query(q, [schema, table]);
-  return r.rows || [];
+function normalizeType(t) {
+  const tt = String(t || '').trim().toLowerCase();
+  const allowed = new Set(['text', 'int', 'bigint', 'numeric', 'boolean', 'date', 'timestamptz', 'jsonb', 'uuid']);
+  if (!allowed.has(tt)) throw new Error(`invalid_field_type:${tt}`);
+  if (tt === 'int') return 'integer';
+  return tt;
 }
 
-function mapTypeForUI(col) {
-  // информационная выдача для UI
-  const dt = (col.data_type || '').toLowerCase();
-  const udt = (col.udt_name || '').toLowerCase();
-
-  if (dt === 'timestamp with time zone') return 'timestamptz';
-  if (dt === 'jsonb') return 'jsonb';
-  if (dt === 'uuid') return 'uuid';
-  if (dt === 'date') return 'date';
-  if (dt === 'boolean') return 'boolean';
-  if (dt === 'integer') return 'int';
-  if (dt === 'bigint') return 'bigint';
-  if (dt === 'numeric') return 'numeric';
-  if (dt === 'text' || udt === 'text') return 'text';
-
-  // fallback
-  return dt || udt || 'text';
+function safeError(err) {
+  return String(err?.message || err);
 }
 
 /**
- * GET /tables
- * возвращает таблицы, которые реально есть в БД
+ * Extract PG column comments.
  */
+async function getTableColumns(schema, table) {
+  const sql = `
+    SELECT
+      c.column_name,
+      c.data_type,
+      c.is_nullable,
+      pgd.description
+    FROM information_schema.columns c
+    JOIN pg_catalog.pg_class cls ON cls.relname = c.table_name
+    JOIN pg_catalog.pg_namespace nsp ON nsp.oid = cls.relnamespace AND nsp.nspname = c.table_schema
+    LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid = cls.oid AND a.attname = c.column_name
+    LEFT JOIN pg_catalog.pg_description pgd ON pgd.objoid = cls.oid AND pgd.objsubid = a.attnum
+    WHERE c.table_schema = $1 AND c.table_name = $2
+    ORDER BY c.ordinal_position;
+  `;
+  const r = await pool.query(sql, [schema, table]);
+
+  return r.rows.map((x) => ({
+    name: x.column_name,
+    type:
+      x.data_type === 'integer'
+        ? 'int'
+        : x.data_type === 'timestamp with time zone'
+          ? 'timestamptz'
+          : x.data_type === 'uuid'
+            ? 'uuid'
+            : x.data_type === 'jsonb'
+              ? 'jsonb'
+              : x.data_type === 'numeric'
+                ? 'numeric'
+                : x.data_type === 'boolean'
+                  ? 'boolean'
+                  : x.data_type === 'date'
+                    ? 'date'
+                    : 'text',
+    description: x.description || '',
+    is_nullable: x.is_nullable === 'YES'
+  }));
+}
+
+/** -------- routes -------- */
+
+// List existing tables
 tableBuilderRouter.get('/tables', async (_req, res) => {
   try {
-    const existing_tables = await listExistingTables();
-    return res.json({ drafts: [], existing_tables });
+    const sql = `
+      SELECT n.nspname AS schema_name, c.relname AS table_name
+      FROM pg_catalog.pg_class c
+      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+      WHERE c.relkind IN ('r','p')
+        AND n.nspname NOT IN ('pg_catalog','information_schema')
+      ORDER BY n.nspname, c.relname;
+    `;
+    const r = await pool.query(sql);
+    res.json({ drafts: [], existing_tables: r.rows });
   } catch (e) {
-    return res.status(500).json({ error: 'tables_list_failed', details: String(e?.message || e) });
+    res.status(500).json({ error: 'tables_list_failed', details: safeError(e) });
   }
 });
 
-/**
- * GET /meta?schema=...&table=...
- * отдает колонки для UI (для построения таблицы ввода строки/кнопок)
- */
-tableBuilderRouter.get('/meta', async (req, res) => {
+// Columns metadata for a table
+tableBuilderRouter.get('/columns', async (req, res) => {
+  const schema = String(req.query.schema || '').trim();
+  const table = String(req.query.table || '').trim();
+  if (!schema || !table) return res.status(400).json({ error: 'missing_schema_or_table' });
+
   try {
-    const schema = String(req.query.schema || '').trim();
-    const table = String(req.query.table || '').trim();
-    if (!schema || !table) return res.status(400).json({ error: 'bad_request' });
-
-    // validate identifiers
-    qIdent(schema);
-    qIdent(table);
-
-    const cols = await listColumns(schema, table);
-    const columns = cols.map((c) => ({
-      name: c.column_name,
-      type: mapTypeForUI(c),
-      nullable: String(c.is_nullable || '') === 'YES',
-      default: c.column_default || null
-    }));
-
-    return res.json({ columns });
+    const cols = await getTableColumns(schema, table);
+    res.json({ schema, table, columns: cols });
   } catch (e) {
-    return res.status(500).json({ error: 'meta_failed', details: String(e?.message || e) });
+    res.status(500).json({ error: 'columns_failed', details: safeError(e) });
   }
 });
 
-/**
- * Preview: 5 строк из указанной таблицы
- * GET /preview?schema=...&table=...&limit=5
- * ВАЖНО: добавляем __ctid чтобы можно было удалять строки
- */
+// Preview rows (returns __ctid)
 tableBuilderRouter.get('/preview', async (req, res) => {
+  const schema = String(req.query.schema || '').trim();
+  const table = String(req.query.table || '').trim();
+  const limit = Math.min(100, Math.max(1, asInt(req.query.limit, 5)));
+
+  if (!schema || !table) return res.status(400).json({ error: 'missing_schema_or_table' });
+  if (!isIdent(schema) || !isIdent(table)) return res.status(400).json({ error: 'invalid_schema_or_table' });
+
   try {
-    const schema = String(req.query.schema || '').trim();
-    const table = String(req.query.table || '').trim();
-    const limit = Math.min(Math.max(Number(req.query.limit || 5), 1), 50);
-
-    if (!schema || !table) return res.status(400).json({ error: 'bad_request' });
-
-    qIdent(schema);
-    qIdent(table);
-
-    const fullName = `${qIdent(schema)}.${qIdent(table)}`;
-    const r = await pool.query(`SELECT ctid::text AS "__ctid", * FROM ${fullName} LIMIT $1`, [limit]);
-
-    return res.json({ rows: r.rows || [] });
+    const sql = `SELECT ctid::text AS "__ctid", * FROM ${qname(schema, table)} LIMIT $1`;
+    const r = await pool.query(sql, [limit]);
+    res.json({ rows: r.rows });
   } catch (e) {
-    return res.status(500).json({ error: 'preview_failed', details: String(e?.message || e) });
+    res.status(500).json({ error: 'preview_failed', details: safeError(e) });
   }
 });
 
-/**
- * POST /tables/create
- * Создаёт схему/таблицу/поля/партиции (если включены) + вставляет тестовую строку (если задана).
- */
-tableBuilderRouter.post('/tables/create', requireDataAdmin, async (req, res) => {
-  const client = await pool.connect();
+// Create table NOW (no drafts)
+tableBuilderRouter.post('/tables/create', async (req, res) => {
   try {
-    const schema_name = String(req.body?.schema_name || '').trim();
-    const table_name = String(req.body?.table_name || '').trim();
-    const table_class = String(req.body?.table_class || 'custom').trim();
-    const description = req.body?.description ? String(req.body.description).trim() : '';
+    requireDataAdmin(req);
 
-    qIdent(schema_name);
-    qIdent(table_name);
-
-    const columns = normalizeColumns(req.body?.columns || []);
-
+    const schema = String(req.body?.schema_name || '').trim();
+    const table = String(req.body?.table_name || '').trim();
+    const description = String(req.body?.description || '').trim();
+    const columns = Array.isArray(req.body?.columns) ? req.body.columns : [];
     const partitioning = req.body?.partitioning || { enabled: false };
-    const partition_enabled = Boolean(partitioning?.enabled);
-    const partition_column = String(partitioning?.column || '').trim();
-    const partition_interval = String(partitioning?.interval || 'day').trim(); // day|month
+    const testRow = req.body?.test_row || null;
 
-    const test_row = req.body?.test_row || null; // object or null
+    if (!schema || !table) return res.status(400).json({ error: 'missing_schema_or_table' });
+    if (!isIdent(schema) || !isIdent(table)) return res.status(400).json({ error: 'invalid_schema_or_table' });
 
-    await client.query('BEGIN');
+    const cols = columns
+      .map((c) => ({
+        name: String(c?.field_name || '').trim(),
+        type: normalizeType(c?.field_type || 'text'),
+        description: String(c?.description || '').trim()
+      }))
+      .filter((c) => c.name);
 
-    // 1) schema
-    await client.query(`CREATE SCHEMA IF NOT EXISTS ${qIdent(schema_name)}`);
+    if (!cols.length) return res.status(400).json({ error: 'no_columns' });
+    for (const c of cols) {
+      if (!isIdent(c.name)) return res.status(400).json({ error: 'invalid_column_name', details: c.name });
+    }
 
-    // 2) create table ddl
-    const fullName = `${qIdent(schema_name)}.${qIdent(table_name)}`;
+    const partitionEnabled = !!partitioning?.enabled;
+    const partitionColumn = String(partitioning?.column || '').trim();
+    const partitionInterval = String(partitioning?.interval || 'day').trim();
 
-    const colsSql = columns.map((c) => `${qIdent(c.field_name)} ${c.field_type}`).join(',\n      ');
+    if (partitionEnabled && (!partitionColumn || !isIdent(partitionColumn))) {
+      return res.status(400).json({ error: 'invalid_partition_column' });
+    }
 
-    if (partition_enabled) {
-      if (!partition_column) throw new Error('partition_column_required');
-      qIdent(partition_column);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
 
-      const has = columns.some((c) => c.field_name === partition_column);
-      if (!has) throw new Error(`partition_column_not_found:${partition_column}`);
+      await client.query(`CREATE SCHEMA IF NOT EXISTS ${qi(schema)}`);
 
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS ${fullName} (
-          ${colsSql}
-        ) PARTITION BY RANGE (${qIdent(partition_column)});
-      `);
+      const colDDL = cols.map((c) => `${qi(c.name)} ${c.type}`).join(',\n  ');
 
-      // авто-партиции: today/month + default
-      const partToday = `${qIdent(schema_name)}.${qIdent(`${table_name}__p_today`)}`;
-      const partMonth = `${qIdent(schema_name)}.${qIdent(`${table_name}__p_month`)}`;
-      const partDefault = `${qIdent(schema_name)}.${qIdent(`${table_name}__p_default`)}`;
+      if (partitionEnabled) {
+        // IMPORTANT: create DEFAULT partition so inserts work immediately
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS ${qname(schema, table)} (
+            ${colDDL}
+          ) PARTITION BY RANGE (${qi(partitionColumn)});
+        `);
 
-      if (partition_interval === 'day') {
+        let pName = `${table}__p_default`;
+        if (pName.length > 60) pName = pName.slice(0, 60);
+
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS ${qname(schema, pName)}
+          PARTITION OF ${qname(schema, table)}
+          DEFAULT;
+        `);
+
         await client.query(
-          `CREATE TABLE IF NOT EXISTS ${partToday} PARTITION OF ${fullName}
-           FOR VALUES FROM (CURRENT_DATE) TO (CURRENT_DATE + INTERVAL '1 day')`
-        );
-      } else if (partition_interval === 'month') {
-        await client.query(
-          `CREATE TABLE IF NOT EXISTS ${partMonth} PARTITION OF ${fullName}
-           FOR VALUES FROM (date_trunc('month', CURRENT_DATE)::date)
-           TO (date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month')`
+          `COMMENT ON TABLE ${qname(schema, table)} IS $1`,
+          [description ? `${description} | partition:${partitionColumn}:${partitionInterval}` : `partition:${partitionColumn}:${partitionInterval}`]
         );
       } else {
-        throw new Error('partition_interval_invalid');
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS ${qname(schema, table)} (
+            ${colDDL}
+          );
+        `);
+
+        if (description) {
+          await client.query(`COMMENT ON TABLE ${qname(schema, table)} IS $1`, [description]);
+        }
       }
 
-      await client.query(`CREATE TABLE IF NOT EXISTS ${partDefault} PARTITION OF ${fullName} DEFAULT`);
-    } else {
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS ${fullName} (
-          ${colsSql}
-        );
-      `);
-    }
-
-    // 3) comments (COMMENT ON нельзя параметризовать $1)
-    if (description) {
-      await client.query(`COMMENT ON TABLE ${fullName} IS ${qLiteral(description)}`);
-    }
-    for (const c of columns) {
-      if (c.description) {
-        await client.query(
-          `COMMENT ON COLUMN ${fullName}.${qIdent(c.field_name)} IS ${qLiteral(c.description)}`
-        );
+      for (const c of cols) {
+        if (c.description) {
+          await client.query(`COMMENT ON COLUMN ${qname(schema, table)}.${qi(c.name)} IS $1`, [c.description]);
+        }
       }
-    }
 
-    // 4) тестовая запись
-    if (test_row) {
-      if (typeof test_row !== 'object' || Array.isArray(test_row)) throw new Error('test_row_must_be_object');
-
-      const keys = Object.keys(test_row);
-      if (keys.length) {
-        const allowed = new Set(columns.map((c) => c.field_name));
-        const insertKeys = keys.filter((k) => allowed.has(k));
-        if (!insertKeys.length) throw new Error('test_row_has_no_known_fields');
-
-        const insertCols = insertKeys.map((k) => qIdent(k)).join(', ');
-        const values = insertKeys.map((k) => test_row[k]);
-        const params = values.map((_, i) => `$${i + 1}`).join(', ');
-
-        await client.query(`INSERT INTO ${fullName} (${insertCols}) VALUES (${params})`, values);
+      if (testRow && typeof testRow === 'object' && !Array.isArray(testRow)) {
+        const keys = Object.keys(testRow);
+        if (keys.length) {
+          const known = new Map(cols.map((c) => [c.name, c.type]));
+          const useKeys = keys.filter((k) => known.has(k));
+          if (useKeys.length) {
+            const colList = useKeys.map((k) => qi(k)).join(', ');
+            const vals = useKeys.map((k) => testRow[k]);
+            const ph = useKeys.map((k, i) => `$${i + 1}::${known.get(k)}`).join(', ');
+            await client.query(`INSERT INTO ${qname(schema, table)} (${colList}) VALUES (${ph})`, vals);
+          }
+        }
       }
-    }
 
-    await client.query('COMMIT');
-
-    return res.json({
-      ok: true,
-      created: { schema_name, table_name, table_class, partition_enabled },
-      message: 'Таблица создана'
-    });
-  } catch (e) {
-    try {
+      await client.query('COMMIT');
+      res.json({ ok: true, schema_name: schema, table_name: table });
+    } catch (e) {
       await client.query('ROLLBACK');
-    } catch {
-      // ignore
+      res.status(500).json({ error: 'tables_create_failed', details: safeError(e) });
+    } finally {
+      client.release();
     }
-    return res.status(500).json({ error: 'create_failed', details: String(e?.message || e) });
-  } finally {
-    client.release();
+  } catch (e) {
+    res.status(e?.statusCode || 500).json({ error: 'tables_create_failed', details: safeError(e) });
   }
 });
 
-/**
- * POST /tables/column/add
- * body: { schema, table, column_name, column_type, description? }
- */
-tableBuilderRouter.post('/tables/column/add', requireDataAdmin, async (req, res) => {
-  const client = await pool.connect();
+// Add column
+tableBuilderRouter.post('/columns/add', async (req, res) => {
   try {
+    requireDataAdmin(req);
+
     const schema = String(req.body?.schema || '').trim();
     const table = String(req.body?.table || '').trim();
-    const column_name = String(req.body?.column_name || '').trim();
-    const column_type_raw = String(req.body?.column_type || '').trim().toLowerCase();
-    const description = req.body?.description ? String(req.body.description).trim() : '';
+    const name = String(req.body?.column?.name || '').trim();
+    const type = normalizeType(req.body?.column?.type || 'text');
+    const description = String(req.body?.column?.description || '').trim();
 
-    qIdent(schema);
-    qIdent(table);
-    qIdent(column_name);
+    if (!schema || !table || !name) return res.status(400).json({ error: 'missing_fields' });
+    if (!isIdent(schema) || !isIdent(table) || !isIdent(name)) return res.status(400).json({ error: 'invalid_identifier' });
 
-    const allowed = new Set(['text', 'int', 'integer', 'bigint', 'numeric', 'boolean', 'date', 'timestamptz', 'jsonb', 'uuid']);
-    if (!allowed.has(column_type_raw)) throw new Error(`unsupported_type:${column_type_raw}`);
-
-    const column_type = column_type_raw === 'int' ? 'integer' : column_type_raw;
-
-    const fullName = `${qIdent(schema)}.${qIdent(table)}`;
-
-    await client.query('BEGIN');
-    await client.query(`ALTER TABLE ${fullName} ADD COLUMN ${qIdent(column_name)} ${column_type}`);
-
-    if (description) {
-      await client.query(`COMMENT ON COLUMN ${fullName}.${qIdent(column_name)} IS ${qLiteral(description)}`);
-    }
-
-    await client.query('COMMIT');
-    return res.json({ ok: true });
-  } catch (e) {
+    const client = await pool.connect();
     try {
+      await client.query('BEGIN');
+      await client.query(`ALTER TABLE ${qname(schema, table)} ADD COLUMN IF NOT EXISTS ${qi(name)} ${type}`);
+      if (description) {
+        await client.query(`COMMENT ON COLUMN ${qname(schema, table)}.${qi(name)} IS $1`, [description]);
+      }
+      await client.query('COMMIT');
+      res.json({ ok: true });
+    } catch (e) {
       await client.query('ROLLBACK');
-    } catch {
-      // ignore
+      res.status(500).json({ error: 'add_column_failed', details: safeError(e) });
+    } finally {
+      client.release();
     }
-    return res.status(500).json({ error: 'add_column_failed', details: String(e?.message || e) });
-  } finally {
-    client.release();
+  } catch (e) {
+    res.status(e?.statusCode || 500).json({ error: 'add_column_failed', details: safeError(e) });
   }
 });
 
-/**
- * POST /tables/column/drop
- * body: { schema, table, column_name }
- */
-tableBuilderRouter.post('/tables/column/drop', requireDataAdmin, async (req, res) => {
-  const client = await pool.connect();
+// Drop column
+tableBuilderRouter.post('/columns/drop', async (req, res) => {
   try {
+    requireDataAdmin(req);
+
     const schema = String(req.body?.schema || '').trim();
     const table = String(req.body?.table || '').trim();
-    const column_name = String(req.body?.column_name || '').trim();
+    const name = String(req.body?.column_name || '').trim();
 
-    qIdent(schema);
-    qIdent(table);
-    qIdent(column_name);
+    if (!schema || !table || !name) return res.status(400).json({ error: 'missing_fields' });
+    if (!isIdent(schema) || !isIdent(table) || !isIdent(name)) return res.status(400).json({ error: 'invalid_identifier' });
 
-    const fullName = `${qIdent(schema)}.${qIdent(table)}`;
-
-    await client.query('BEGIN');
-    await client.query(`ALTER TABLE ${fullName} DROP COLUMN ${qIdent(column_name)} CASCADE`);
-    await client.query('COMMIT');
-
-    return res.json({ ok: true });
-  } catch (e) {
+    const client = await pool.connect();
     try {
+      await client.query('BEGIN');
+      await client.query(`ALTER TABLE ${qname(schema, table)} DROP COLUMN IF EXISTS ${qi(name)} CASCADE`);
+      await client.query('COMMIT');
+      res.json({ ok: true });
+    } catch (e) {
       await client.query('ROLLBACK');
-    } catch {
-      // ignore
+      res.status(500).json({ error: 'drop_column_failed', details: safeError(e) });
+    } finally {
+      client.release();
     }
-    return res.status(500).json({ error: 'drop_column_failed', details: String(e?.message || e) });
-  } finally {
-    client.release();
+  } catch (e) {
+    res.status(e?.statusCode || 500).json({ error: 'drop_column_failed', details: safeError(e) });
   }
 });
 
-/**
- * POST /tables/row/add
- * body: { schema, table, row: {col:val,...} }
- */
-tableBuilderRouter.post('/tables/row/add', requireDataAdmin, async (req, res) => {
-  const client = await pool.connect();
+// Insert row
+tableBuilderRouter.post('/rows/add', async (req, res) => {
   try {
+    requireDataAdmin(req);
+
     const schema = String(req.body?.schema || '').trim();
     const table = String(req.body?.table || '').trim();
-    const row = req.body?.row;
+    const row = req.body?.row || {};
 
-    qIdent(schema);
-    qIdent(table);
+    if (!schema || !table) return res.status(400).json({ error: 'missing_schema_or_table' });
+    if (!isIdent(schema) || !isIdent(table)) return res.status(400).json({ error: 'invalid_identifier' });
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return res.status(400).json({ error: 'row_must_be_object' });
 
-    if (!row || typeof row !== 'object' || Array.isArray(row)) {
-      throw new Error('row_must_be_object');
-    }
+    const cols = await getTableColumns(schema, table);
+    const typeByName = new Map(cols.map((c) => [c.name, normalizeType(c.type)]));
 
-    const cols = await listColumns(schema, table);
-    const allowed = new Set(cols.map((c) => c.column_name));
+    const keys = Object.keys(row).filter((k) => typeByName.has(k));
+    if (!keys.length) return res.status(400).json({ error: 'no_known_columns' });
 
-    const keys = Object.keys(row).filter((k) => allowed.has(k));
-    if (!keys.length) throw new Error('row_has_no_known_fields');
+    const colList = keys.map((k) => qi(k)).join(', ');
+    const vals = keys.map((k) => row[k]);
+    const ph = keys.map((k, i) => `$${i + 1}::${typeByName.get(k)}`).join(', ');
 
-    const fullName = `${qIdent(schema)}.${qIdent(table)}`;
-
-    const insertCols = keys.map((k) => qIdent(k)).join(', ');
-    const values = keys.map((k) => row[k]);
-    const params = values.map((_, i) => `$${i + 1}`).join(', ');
-
-    await client.query('BEGIN');
-    const r = await client.query(
-      `INSERT INTO ${fullName} (${insertCols}) VALUES (${params}) RETURNING ctid::text AS "__ctid", *`,
-      values
-    );
-    await client.query('COMMIT');
-
-    return res.json({ ok: true, row: (r.rows || [])[0] || null });
+    const sql = `INSERT INTO ${qname(schema, table)} (${colList}) VALUES (${ph}) RETURNING ctid::text AS "__ctid", *`;
+    const r = await pool.query(sql, vals);
+    res.json({ ok: true, row: r.rows[0] });
   } catch (e) {
-    try {
-      await client.query('ROLLBACK');
-    } catch {
-      // ignore
-    }
-    return res.status(500).json({ error: 'row_add_failed', details: String(e?.message || e) });
-  } finally {
-    client.release();
+    res.status(e?.statusCode || 500).json({ error: 'add_row_failed', details: safeError(e) });
   }
 });
 
-/**
- * POST /tables/row/delete
- * body: { schema, table, ctid }
- */
-tableBuilderRouter.post('/tables/row/delete', requireDataAdmin, async (req, res) => {
-  const client = await pool.connect();
+// Delete row (by __ctid)
+tableBuilderRouter.post('/rows/delete', async (req, res) => {
   try {
+    requireDataAdmin(req);
+
     const schema = String(req.body?.schema || '').trim();
     const table = String(req.body?.table || '').trim();
-    const ctid = String(req.body?.ctid || '').trim();
+    const ctid = String(req.body?.__ctid || '').trim();
 
-    qIdent(schema);
-    qIdent(table);
+    if (!schema || !table || !ctid) return res.status(400).json({ error: 'missing_fields' });
+    if (!isIdent(schema) || !isIdent(table)) return res.status(400).json({ error: 'invalid_identifier' });
 
-    if (!ctid) throw new Error('ctid_required');
-
-    const fullName = `${qIdent(schema)}.${qIdent(table)}`;
-
-    await client.query('BEGIN');
-    const r = await client.query(`DELETE FROM ${fullName} WHERE ctid::text = $1`, [ctid]);
-    await client.query('COMMIT');
-
-    return res.json({ ok: true, deleted: r.rowCount || 0 });
+    const sql = `DELETE FROM ${qname(schema, table)} WHERE ctid::text = $1`;
+    const r = await pool.query(sql, [ctid]);
+    res.json({ ok: true, deleted: r.rowCount });
   } catch (e) {
-    try {
-      await client.query('ROLLBACK');
-    } catch {
-      // ignore
-    }
-    return res.status(500).json({ error: 'row_delete_failed', details: String(e?.message || e) });
-  } finally {
-    client.release();
+    res.status(e?.statusCode || 500).json({ error: 'delete_row_failed', details: safeError(e) });
   }
 });
 
-/**
- * POST /tables/drop
- * body: { schema, table }
- */
-tableBuilderRouter.post('/tables/drop', requireDataAdmin, async (req, res) => {
-  const client = await pool.connect();
+// Drop table
+tableBuilderRouter.post('/tables/drop', async (req, res) => {
   try {
+    requireDataAdmin(req);
+
     const schema = String(req.body?.schema || '').trim();
     const table = String(req.body?.table || '').trim();
 
-    qIdent(schema);
-    qIdent(table);
+    if (!schema || !table) return res.status(400).json({ error: 'missing_schema_or_table' });
+    if (!isIdent(schema) || !isIdent(table)) return res.status(400).json({ error: 'invalid_identifier' });
 
-    const fullName = `${qIdent(schema)}.${qIdent(table)}`;
-
-    await client.query('BEGIN');
-    await client.query(`DROP TABLE IF EXISTS ${fullName} CASCADE`);
-    await client.query('COMMIT');
-
-    return res.json({ ok: true });
+    await pool.query(`DROP TABLE IF EXISTS ${qname(schema, table)} CASCADE`);
+    res.json({ ok: true });
   } catch (e) {
-    try {
-      await client.query('ROLLBACK');
-    } catch {
-      // ignore
-    }
-    return res.status(500).json({ error: 'drop_table_failed', details: String(e?.message || e) });
-  } finally {
-    client.release();
+    res.status(e?.statusCode || 500).json({ error: 'drop_table_failed', details: safeError(e) });
   }
 });
