@@ -60,6 +60,10 @@
   let respHeaders: Record<string, string> = {};
   let respText = '';
 
+  const PLACEHOLDER_HEADERS = 'например: {"Authorization":"***"}';
+  const PLACEHOLDER_QUERY = 'например: {"date_from":"2026-01-01","page":1}';
+  const PLACEHOLDER_BODY = 'например: {"a":1}';
+
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
   }
@@ -166,7 +170,6 @@
     saveSources();
   }
 
-  // ✅ handlers без TS "as" в шаблоне
   function onNameInput(e: Event) {
     updateSelected({ name: (e.currentTarget as HTMLInputElement).value });
   }
@@ -352,7 +355,7 @@
                 <textarea
                   value={selected.headersJson}
                   on:input={onHeadersInput}
-                  placeholder='например: {"Authorization":"Bearer ..."}'
+                  placeholder={PLACEHOLDER_HEADERS}
                 ></textarea>
               </label>
 
@@ -361,7 +364,7 @@
                 <textarea
                   value={selected.queryJson}
                   on:input={onQueryInput}
-                  placeholder='например: {"date_from":"2026-01-01","page":1}'
+                  placeholder={PLACEHOLDER_QUERY}
                 ></textarea>
               </label>
 
@@ -370,7 +373,7 @@
                 <textarea
                   value={selected.bodyJson}
                   on:input={onBodyInput}
-                  placeholder='например: {"a":1}'
+                  placeholder={PLACEHOLDER_BODY}
                 ></textarea>
               </label>
             </div>
