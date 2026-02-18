@@ -1,3 +1,4 @@
+cat > core/orchestrator/modules/advertising/interface/desk/tabs/ApiBuilderTab.svelte <<'EOF'
 <!-- File: core/orchestrator/modules/advertising/interface/desk/tabs/ApiBuilderTab.svelte -->
 <script lang="ts">
   type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -350,29 +351,17 @@
 
               <label class="wide">
                 Headers JSON
-                <textarea
-                  value={selected.headersJson}
-                  on:input={onHeadersInput}
-                  placeholder={PLACEHOLDER_HEADERS}
-                ></textarea>
+                <textarea value={selected.headersJson} on:input={onHeadersInput} placeholder={PLACEHOLDER_HEADERS}></textarea>
               </label>
 
               <label class="wide">
                 Query JSON
-                <textarea
-                  value={selected.queryJson}
-                  on:input={onQueryInput}
-                  placeholder={PLACEHOLDER_QUERY}
-                ></textarea>
+                <textarea value={selected.queryJson} on:input={onQueryInput} placeholder={PLACEHOLDER_QUERY}></textarea>
               </label>
 
               <label class="wide">
                 Body JSON
-                <textarea
-                  value={selected.bodyJson}
-                  on:input={onBodyInput}
-                  placeholder={PLACEHOLDER_BODY}
-                ></textarea>
+                <textarea value={selected.bodyJson} on:input={onBodyInput} placeholder={PLACEHOLDER_BODY}></textarea>
               </label>
             </div>
 
@@ -492,3 +481,4 @@
   .alert { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #f3c0c0; background: #fff5f5; }
   .alert-title { font-weight: 700; margin-bottom: 6px; }
 </style>
+EOF
