@@ -224,10 +224,6 @@
     }
   }
 
-  function gotoTablesTab(): void {
-    tab = 'tables';
-  }
-
   async function pickExisting(t: ExistingTable): Promise<void> {
     selectedTable = t;
     tab = 'tables';
@@ -494,6 +490,29 @@
     resetMessages();
   }
 
+  // ---------- helpers for template (NO TS in markup) ----------
+  function keysOfFirstRow(): string[] {
+    return Object.keys(tableData[0] ?? {});
+  }
+
+  function getRowCellValue(row: Record<string, unknown>, key: string): string {
+    return String(row?.[key] ?? '');
+  }
+
+  function getEditedCellValue(key: string): string {
+    return String(editedRow?.[key] ?? '');
+  }
+
+  function setEditedCellValue(key: string, value: string): void {
+    editedRow = { ...editedRow, [key]: value };
+  }
+
+  function onEditedCellInput(key: string, e: Event): void {
+    const target = e.target as HTMLInputElement | null;
+    setEditedCellValue(key, target?.value ?? '');
+  }
+  // -----------------------------------------------------------
+
   onMount(async () => {
     await refreshTables();
   });
@@ -681,7 +700,6 @@
             </label>
             <label class="wide">
               where_json (JSON фильтр)
-              <!-- IMPORTANT: escape { } for Svelte in attribute text -->
               <textarea bind:value={where_json} placeholder='например: &#123;"dataset":"ads"&#125;'></textarea>
             </label>
           </div>
@@ -771,7 +789,7 @@
                   <table>
                     <thead>
                       <tr>
-                        {#each Object.keys(tableData[0] ?? {}) as k}
+                        {#each keysOfFirstRow() as k}
                           <th>{k}</th>
                         {/each}
                         <th class="actions-col">Действия</th>
@@ -781,15 +799,15 @@
                     <tbody>
                       {#each tableData as row, ri}
                         <tr class:editing={editMode && editedRowIndex === ri}>
-                          {#each Object.keys(tableData[0] ?? {}) as k}
+                          {#each keysOfFirstRow() as k}
                             <td>
                               {#if editMode && editedRowIndex === ri}
                                 <input
-                                  value={String((editedRow as any)[k] ?? '')}
-                                  on:input={(e) => ((editedRow as any)[k] = (e.target as HTMLInputElement).value)}
+                                  value={getEditedCellValue(k)}
+                                  on:input={(e) => onEditedCellInput(k, e)}
                                 />
                               {:else}
-                                <span class="cell">{String((row as any)[k] ?? '')}</span>
+                                <span class="cell">{getRowCellValue(row, k)}</span>
                               {/if}
                             </td>
                           {/each}
