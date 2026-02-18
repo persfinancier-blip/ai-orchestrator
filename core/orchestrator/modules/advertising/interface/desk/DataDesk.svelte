@@ -681,7 +681,8 @@
             </label>
             <label class="wide">
               where_json (JSON фильтр)
-              <textarea bind:value={where_json} placeholder='например: {"dataset":"ads"}'></textarea>
+              <!-- IMPORTANT: escape { } for Svelte in attribute text -->
+              <textarea bind:value={where_json} placeholder='например: &#123;"dataset":"ads"&#125;'></textarea>
             </label>
           </div>
 
@@ -689,7 +690,10 @@
             <button class="primary" on:click={loadData} disabled={!selectedTable || dataLoading}>
               {dataLoading ? 'Загрузка…' : 'Загрузить'}
             </button>
-            <button on:click={() => ((offset = Math.max(0, offset - limit)), loadData())} disabled={!selectedTable || dataLoading || offset === 0}>
+            <button
+              on:click={() => ((offset = Math.max(0, offset - limit)), loadData())}
+              disabled={!selectedTable || dataLoading || offset === 0}
+            >
               ← Назад
             </button>
             <button on:click={() => ((offset = offset + limit), loadData())} disabled={!selectedTable || dataLoading}>
