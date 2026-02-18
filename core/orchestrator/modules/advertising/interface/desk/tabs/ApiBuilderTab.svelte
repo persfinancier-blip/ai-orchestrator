@@ -46,6 +46,10 @@
   const SOURCES_KEY = 'ao_api_builder_sources_v1';
   const HISTORY_KEY = 'ao_api_builder_history_v1';
 
+  const PLACEHOLDER_HEADERS = 'например: {"Authorization":"***"}';
+  const PLACEHOLDER_QUERY = 'например: {"date_from":"2026-01-01","page":1}';
+  const PLACEHOLDER_BODY = 'например: {"a":1}';
+
   let sources: ApiSource[] = [];
   let selectedId: string | null = null;
 
@@ -59,10 +63,6 @@
   let respStatus = 0;
   let respHeaders: Record<string, string> = {};
   let respText = '';
-
-  const PLACEHOLDER_HEADERS = 'например: {"Authorization":"***"}';
-  const PLACEHOLDER_QUERY = 'например: {"date_from":"2026-01-01","page":1}';
-  const PLACEHOLDER_BODY = 'например: {"a":1}';
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -96,6 +96,7 @@
     return sources.find((s) => s.id === selectedId) || null;
   }
 
+  // ✅ вместо {#let ...}
   $: selected = getSelected();
 
   function totalPages() {
@@ -143,11 +144,7 @@
         offsetStart: 0,
         defaultLimit: 50
       },
-      target: {
-        schema: '',
-        table: '',
-        mappingJson: ''
-      },
+      target: { schema: '', table: '', mappingJson: '' },
       createdAt: now,
       updatedAt: now
     };
@@ -170,6 +167,7 @@
     saveSources();
   }
 
+  // ✅ handlers без TS "as" в шаблоне
   function onNameInput(e: Event) {
     updateSelected({ name: (e.currentTarget as HTMLInputElement).value });
   }
