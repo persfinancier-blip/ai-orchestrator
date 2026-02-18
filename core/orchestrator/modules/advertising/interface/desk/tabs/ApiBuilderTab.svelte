@@ -92,7 +92,6 @@
     return sources.find((s) => s.id === selectedId) || null;
   }
 
-  // ✅ Svelte way вместо {#let ...}
   $: selected = getSelected();
 
   function totalPages() {
@@ -165,6 +164,29 @@
     if (!selectedId) return;
     sources = sources.map((s) => (s.id === selectedId ? { ...s, ...patch, updatedAt: Date.now() } : s));
     saveSources();
+  }
+
+  // ✅ handlers без TS "as" в шаблоне
+  function onNameInput(e: Event) {
+    updateSelected({ name: (e.currentTarget as HTMLInputElement).value });
+  }
+  function onBaseUrlInput(e: Event) {
+    updateSelected({ baseUrl: (e.currentTarget as HTMLInputElement).value });
+  }
+  function onMethodChange(e: Event) {
+    updateSelected({ method: (e.currentTarget as HTMLSelectElement).value as HttpMethod });
+  }
+  function onPathInput(e: Event) {
+    updateSelected({ path: (e.currentTarget as HTMLInputElement).value });
+  }
+  function onHeadersInput(e: Event) {
+    updateSelected({ headersJson: (e.currentTarget as HTMLTextAreaElement).value });
+  }
+  function onQueryInput(e: Event) {
+    updateSelected({ queryJson: (e.currentTarget as HTMLTextAreaElement).value });
+  }
+  function onBodyInput(e: Event) {
+    updateSelected({ bodyJson: (e.currentTarget as HTMLTextAreaElement).value });
   }
 
   async function sendTest() {
@@ -305,43 +327,31 @@
             <div class="grid">
               <label>
                 Название
-                <input
-                  value={selected.name}
-                  on:input={(e) => updateSelected({ name: (e.target as HTMLInputElement).value })}
-                />
+                <input value={selected.name} on:input={onNameInput} />
               </label>
 
               <label>
                 Base URL
-                <input
-                  value={selected.baseUrl}
-                  on:input={(e) => updateSelected({ baseUrl: (e.target as HTMLInputElement).value })}
-                />
+                <input value={selected.baseUrl} on:input={onBaseUrlInput} />
               </label>
 
               <label>
                 Method
-                <select
-                  value={selected.method}
-                  on:change={(e) => updateSelected({ method: (e.target as HTMLSelectElement).value as HttpMethod })}
-                >
+                <select value={selected.method} on:change={onMethodChange}>
                   <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
                 </select>
               </label>
 
               <label>
                 Path
-                <input
-                  value={selected.path}
-                  on:input={(e) => updateSelected({ path: (e.target as HTMLInputElement).value })}
-                />
+                <input value={selected.path} on:input={onPathInput} />
               </label>
 
               <label class="wide">
                 Headers JSON
                 <textarea
                   value={selected.headersJson}
-                  on:input={(e) => updateSelected({ headersJson: (e.target as HTMLTextAreaElement).value })}
+                  on:input={onHeadersInput}
                   placeholder='например: {"Authorization":"Bearer ..."}'
                 ></textarea>
               </label>
@@ -350,7 +360,7 @@
                 Query JSON
                 <textarea
                   value={selected.queryJson}
-                  on:input={(e) => updateSelected({ queryJson: (e.target as HTMLTextAreaElement).value })}
+                  on:input={onQueryInput}
                   placeholder='например: {"date_from":"2026-01-01","page":1}'
                 ></textarea>
               </label>
@@ -359,7 +369,7 @@
                 Body JSON
                 <textarea
                   value={selected.bodyJson}
-                  on:input={(e) => updateSelected({ bodyJson: (e.target as HTMLTextAreaElement).value })}
+                  on:input={onBodyInput}
                   placeholder='например: {"a":1}'
                 ></textarea>
               </label>
