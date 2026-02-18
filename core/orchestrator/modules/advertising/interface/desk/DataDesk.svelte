@@ -14,7 +14,7 @@
 
   let role: Role = 'data_admin';
 
-  type Tab = 'constructor' | 'preview' | 'api_builder' | 'data_management';
+  type Tab = 'constructor' | 'tables' | 'api_builder' | 'data_management';
   let tab: Tab = 'constructor';
 
   let loading = false;
@@ -23,20 +23,20 @@
 
   async function apiJson<T = any>(url: string, init?: RequestInit): Promise<T> {
     const res = await fetch(url, init);
-    let j: any = null;
 
+    let payload: any = null;
     try {
-      j = await res.json();
+      payload = await res.json();
     } catch {
       // ignore
     }
 
     if (!res.ok) {
-      const msg = j?.details || j?.error || `${res.status} ${res.statusText}`;
+      const msg = payload?.details || payload?.error || `${res.status} ${res.statusText}`;
       throw new Error(msg);
     }
 
-    return j as T;
+    return payload as T;
   }
 
   function headers(): Record<string, string> {
@@ -60,24 +60,19 @@
   }
 
   function onCreated(schema: string, table: string) {
-    tab = 'preview';
-    // после создания обновим список и выберем созданную таблицу
-    refreshTables().then(() => {
-      // ничего, выбор таблицы происходит уже внутри preview-вкладки
-    });
+    tab = 'tables';
+    refreshTables();
   }
 
-  onMount(async () => {
-    await refreshTables();
-  });
+  onMount(refreshTables);
 </script>
 
 <div class="page">
   <header class="top">
-    <div class="head">
+    <div>
       <h1>Конструктор таблиц</h1>
       <p class="sub">
-        Создание таблиц, редактирование структуры и данных. Плюс будущие вкладки: API-конструктор и workflow “Управление данными”.
+        Создание/редактирование таблиц. Отдельно: будущий конструктор API и будущий workflow “Управление данными”.
       </p>
     </div>
 
@@ -93,7 +88,7 @@
 
   <nav class="tabs">
     <button class:active={tab === 'constructor'} on:click={() => (tab = 'constructor')}>Создание</button>
-    <button class:active={tab === 'preview'} on:click={() => (tab = 'preview')}>Таблицы и данные</button>
+    <button class:active={tab === 'tables'} on:click={() => (tab = 'tables')}>Таблицы и данные</button>
     <button class:active={tab === 'api_builder'} on:click={() => (tab = 'api_builder')}>API</button>
     <button class:active={tab === 'data_management'} on:click={() => (tab = 'data_management')}>Управление данными</button>
   </nav>
@@ -110,20 +105,20 @@
       apiBase={API_BASE}
       {role}
       {loading}
+      {headers}
+      {apiJson}
+      {refreshTables}
       onCreated={onCreated}
-      refreshTables={refreshTables}
-      headers={headers}
-      apiJson={apiJson}
     />
-  {:else if tab === 'preview'}
+  {:else if tab === 'tables'}
     <TablesAndDataTab
       apiBase={API_BASE}
       {role}
       {loading}
-      existingTables={existingTables}
-      refreshTables={refreshTables}
-      headers={headers}
-      apiJson={apiJson}
+      {headers}
+      {apiJson}
+      {refreshTables}
+      {existingTables}
     />
   {:else if tab === 'api_builder'}
     <ApiBuilderTab />
@@ -134,18 +129,15 @@
 
 <style>
   .page { padding: 14px; }
-
   .top { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
-  .head h1 { margin:0; font-size:22px; }
+  h1 { margin:0; font-size:22px; }
   .sub { margin:6px 0 0; color:#64748b; font-size:13px; max-width: 820px; }
 
   .role { display:flex; align-items:center; gap:8px; }
   .role select { border-radius:12px; border:1px solid #e6eaf2; padding:8px 10px; background:#fff; }
 
-  .tabs { display:flex; gap:8px; margin-top:12px; flex-wrap: wrap; }
-  .tabs button {
-    padding: 8px 12px; border-radius: 12px; border: 1px solid #e6eaf2; background: #fff; cursor: pointer;
-  }
+  .tabs { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
+  .tabs button { padding:8px 12px; border-radius:12px; border:1px solid #e6eaf2; background:#fff; cursor:pointer; }
   .tabs button.active { background:#0f172a; color:#fff; border-color:#0f172a; }
 
   .alert { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #f3c0c0; background: #fff5f5; }
