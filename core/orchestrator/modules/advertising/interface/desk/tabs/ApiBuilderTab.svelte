@@ -92,6 +92,9 @@
     return sources.find((s) => s.id === selectedId) || null;
   }
 
+  // ✅ Svelte way вместо {#let ...}
+  $: selected = getSelected();
+
   function totalPages() {
     return Math.max(1, Math.ceil(history.length / pageSize));
   }
@@ -160,9 +163,7 @@
 
   function updateSelected(patch: Partial<ApiSource>) {
     if (!selectedId) return;
-    sources = sources.map((s) =>
-      s.id === selectedId ? { ...s, ...patch, updatedAt: Date.now() } : s
-    );
+    sources = sources.map((s) => (s.id === selectedId ? { ...s, ...patch, updatedAt: Date.now() } : s));
     saveSources();
   }
 
@@ -172,22 +173,29 @@
     respHeaders = {};
     respText = '';
 
-    const s = getSelected();
-    if (!s) return;
+    if (!selected) return;
 
-    let headersObj: any = {};
+    let headersObj: Record<string, string> = {};
     try {
-      headersObj = parseJsonOrEmpty(s.headersJson);
+      headersObj = parseJsonOrEmpty(selected.headersJson);
     } catch {
       err = 'Headers JSON: неверный JSON';
       return;
     }
 
+    let url = '';
+    try {
+      url = normalizeUrl(selected.baseUrl, selected.path, selected.queryJson);
+    } catch {
+      err = 'Query JSON: неверный JSON';
+      return;
+    }
+
     let body: any = undefined;
-    if (s.method !== 'GET' && s.method !== 'DELETE') {
-      if (s.bodyJson.trim()) {
+    if (selected.method !== 'GET' && selected.method !== 'DELETE') {
+      if (selected.bodyJson.trim()) {
         try {
-          body = JSON.stringify(JSON.parse(s.bodyJson));
+          body = JSON.stringify(JSON.parse(selected.bodyJson));
         } catch {
           err = 'Body JSON: неверный JSON';
           return;
@@ -197,28 +205,20 @@
       }
     }
 
-    let url = '';
-    try {
-      url = normalizeUrl(s.baseUrl, s.path, s.queryJson);
-    } catch {
-      err = 'Query JSON: неверный JSON';
-      return;
-    }
-
     const item: HistoryItem = {
       ts: Date.now(),
-      sourceId: s.id,
-      method: s.method,
+      sourceId: selected.id,
+      method: selected.method,
       url,
-      requestHeadersJson: s.headersJson,
-      requestBodyJson: s.bodyJson
+      requestHeadersJson: selected.headersJson,
+      requestBodyJson: selected.bodyJson
     };
 
     sending = true;
     const t0 = performance.now();
     try {
       const res = await fetch(url, {
-        method: s.method,
+        method: selected.method,
         headers: { 'Content-Type': 'application/json', ...headersObj },
         body
       });
@@ -229,8 +229,8 @@
       const h: Record<string, string> = {};
       res.headers.forEach((v, k) => (h[k] = v));
       respHeaders = h;
-      respStatus = res.status;
 
+      respStatus = res.status;
       const text = await res.text();
       respText = text;
       item.responseText = text;
@@ -268,7 +268,7 @@
 
   <p class="hint">
     Это будущий “Postman-конструктор”: настраиваешь внешние API-эндпоинты для наполнения таблиц.
-    Он <b>не использует</b> текущие серверные эндпоинты модуля, и не ломает работу “Создание/Таблицы и данные”.
+    Он <b>не использует</b> текущие серверные эндпоинты модуля и не ломает “Создание/Таблицы и данные”.
   </p>
 
   {#if err}
@@ -281,11 +281,12 @@
   <div class="layout">
     <aside class="aside">
       <div class="aside-title">Сохранённые API</div>
+
       {#if sources.length === 0}
         <div class="hint">Пока нет ни одного.</div>
       {:else}
         <div class="list">
-          {#each sources as s}
+          {#each sources as s (s.id)}
             <button class="item" class:activeitem={s.id === selectedId} on:click={() => (selectedId = s.id)}>
               <div class="name">{s.name}</div>
               <div class="meta">{s.method} {s.baseUrl}{s.path}</div>
@@ -296,106 +297,131 @@
     </aside>
 
     <div class="main">
-      {#if !getSelected()}
+      {#if !selected}
         <div class="hint">Создай или выбери конфиг слева.</div>
       {:else}
         {#key selectedId}
-          {#let s = getSelected()}
-            <div class="card">
-              <div class="grid">
-                <label>
-                  Название
-                  <input value={s.name} on:input={(e) => updateSelected({ name: (e.target as HTMLInputElement).value })} />
-                </label>
+          <div class="card">
+            <div class="grid">
+              <label>
+                Название
+                <input
+                  value={selected.name}
+                  on:input={(e) => updateSelected({ name: (e.target as HTMLInputElement).value })}
+                />
+              </label>
 
-                <label>
-                  Base URL
-                  <input value={s.baseUrl} on:input={(e) => updateSelected({ baseUrl: (e.target as HTMLInputElement).value })} />
-                </label>
+              <label>
+                Base URL
+                <input
+                  value={selected.baseUrl}
+                  on:input={(e) => updateSelected({ baseUrl: (e.target as HTMLInputElement).value })}
+                />
+              </label>
 
+              <label>
+                Method
+                <select
+                  value={selected.method}
+                  on:change={(e) => updateSelected({ method: (e.target as HTMLSelectElement).value as HttpMethod })}
+                >
+                  <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
+                </select>
+              </label>
+
+              <label>
+                Path
+                <input
+                  value={selected.path}
+                  on:input={(e) => updateSelected({ path: (e.target as HTMLInputElement).value })}
+                />
+              </label>
+
+              <label class="wide">
+                Headers JSON
+                <textarea
+                  value={selected.headersJson}
+                  on:input={(e) => updateSelected({ headersJson: (e.target as HTMLTextAreaElement).value })}
+                  placeholder='например: {"Authorization":"Bearer ..."}'
+                ></textarea>
+              </label>
+
+              <label class="wide">
+                Query JSON
+                <textarea
+                  value={selected.queryJson}
+                  on:input={(e) => updateSelected({ queryJson: (e.target as HTMLTextAreaElement).value })}
+                  placeholder='например: {"date_from":"2026-01-01","page":1}'
+                ></textarea>
+              </label>
+
+              <label class="wide">
+                Body JSON
+                <textarea
+                  value={selected.bodyJson}
+                  on:input={(e) => updateSelected({ bodyJson: (e.target as HTMLTextAreaElement).value })}
+                  placeholder='например: {"a":1}'
+                ></textarea>
+              </label>
+            </div>
+
+            <div class="actions">
+              <button class="primary" on:click={sendTest} disabled={sending}>
+                {sending ? 'Отправляю…' : 'Тест-запрос'}
+              </button>
+              <div class="muted">Ответ: status {respStatus || '-'}</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Ответ</h3>
+            <details open>
+              <summary>Headers</summary>
+              <pre>{JSON.stringify(respHeaders, null, 2)}</pre>
+            </details>
+            <details open>
+              <summary>Body</summary>
+              <pre>{respText || ''}</pre>
+            </details>
+          </div>
+
+          <div class="card">
+            <div class="hist-head">
+              <h3>История запросов</h3>
+              <div class="pager">
                 <label>
-                  Method
-                  <select value={s.method} on:change={(e) => updateSelected({ method: (e.target as HTMLSelectElement).value as any })}>
-                    <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
+                  page size
+                  <select bind:value={pageSize}>
+                    <option value="5">5</option>
+                    <option value="10">10</option>
+                    <option value="20">20</option>
                   </select>
                 </label>
 
-                <label>
-                  Path
-                  <input value={s.path} on:input={(e) => updateSelected({ path: (e.target as HTMLInputElement).value })} />
-                </label>
-
-                <label class="wide">
-                  Headers JSON
-                  <textarea value={s.headersJson} on:input={(e) => updateSelected({ headersJson: (e.target as HTMLTextAreaElement).value })} placeholder='например: {"Authorization":"Bearer ..."}'></textarea>
-                </label>
-
-                <label class="wide">
-                  Query JSON
-                  <textarea value={s.queryJson} on:input={(e) => updateSelected({ queryJson: (e.target as HTMLTextAreaElement).value })} placeholder='например: {"date_from":"2026-01-01","page":1}'></textarea>
-                </label>
-
-                <label class="wide">
-                  Body JSON
-                  <textarea value={s.bodyJson} on:input={(e) => updateSelected({ bodyJson: (e.target as HTMLTextAreaElement).value })} placeholder='например: {"a":1}'></textarea>
-                </label>
-              </div>
-
-              <div class="actions">
-                <button class="primary" on:click={sendTest} disabled={sending}>{sending ? 'Отправляю…' : 'Тест-запрос'}</button>
-                <div class="muted">Ответ: status {respStatus || '-'} </div>
+                <button on:click={() => (page = Math.max(1, page - 1))} disabled={page <= 1}>←</button>
+                <span class="muted">{page} / {totalPages()}</span>
+                <button on:click={() => (page = Math.min(totalPages(), page + 1))} disabled={page >= totalPages()}>→</button>
               </div>
             </div>
 
-            <div class="card">
-              <h3>Ответ</h3>
-              <details open>
-                <summary>Headers</summary>
-                <pre>{JSON.stringify(respHeaders, null, 2)}</pre>
-              </details>
-              <details open>
-                <summary>Body</summary>
-                <pre>{respText || ''}</pre>
-              </details>
-            </div>
-
-            <div class="card">
-              <div class="hist-head">
-                <h3>История запросов</h3>
-                <div class="pager">
-                  <label>
-                    page size
-                    <select bind:value={pageSize}>
-                      <option value="5">5</option>
-                      <option value="10">10</option>
-                      <option value="20">20</option>
-                    </select>
-                  </label>
-                  <button on:click={() => (page = Math.max(1, page - 1))} disabled={page <= 1}>←</button>
-                  <span class="muted">{page} / {totalPages()}</span>
-                  <button on:click={() => (page = Math.min(totalPages(), page + 1))} disabled={page >= totalPages()}>→</button>
-                </div>
-              </div>
-
-              {#if history.length === 0}
-                <div class="hint">Пока пусто.</div>
-              {:else}
-                <div class="hist-list">
-                  {#each pagedHistory() as h}
-                    <div class="hist-item">
-                      <div class="topline">
-                        <span class="pill">{h.method}</span>
-                        <span class="muted">{new Date(h.ts).toLocaleString()}</span>
-                        <span class="pill2">{h.status ?? '-'}</span>
-                        <span class="pill2">{h.ms ?? '-'} ms</span>
-                      </div>
-                      <div class="url">{h.url}</div>
+            {#if history.length === 0}
+              <div class="hint">Пока пусто.</div>
+            {:else}
+              <div class="hist-list">
+                {#each pagedHistory() as h (h.ts)}
+                  <div class="hist-item">
+                    <div class="topline">
+                      <span class="pill">{h.method}</span>
+                      <span class="muted">{new Date(h.ts).toLocaleString()}</span>
+                      <span class="pill2">{h.status ?? '-'}</span>
+                      <span class="pill2">{h.ms ?? '-'} ms</span>
                     </div>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-          {/let}
+                    <div class="url">{h.url}</div>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
         {/key}
       {/if}
     </div>
@@ -425,12 +451,13 @@
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; margin-bottom:12px; }
   .grid { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
   @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
+
   label { display:flex; flex-direction:column; gap:6px; font-size:13px; }
   input, select, textarea { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; outline:none; background:#fff; }
   textarea { min-height: 90px; resize: vertical; }
   .wide { grid-column: 1 / -1; }
 
-  .actions { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:10px; }
+  .actions { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:10px; flex-wrap:wrap; }
   button { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; background:#fff; cursor:pointer; }
   button:disabled { opacity:.6; cursor:not-allowed; }
   .primary { background:#0f172a; color:#fff; border-color:#0f172a; }
@@ -441,7 +468,7 @@
   summary { cursor:pointer; font-weight:700; }
   pre { margin:10px 0 0 0; white-space:pre-wrap; word-break:break-word; }
 
-  .hist-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .hist-head { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
   .pager { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .hist-list { display:flex; flex-direction:column; gap:10px; margin-top:10px; }
   .hist-item { border:1px solid #e6eaf2; border-radius:14px; padding:10px 12px; background:#f8fafc; }
