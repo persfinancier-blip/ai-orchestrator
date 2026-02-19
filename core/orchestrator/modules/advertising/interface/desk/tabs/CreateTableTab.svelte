@@ -248,8 +248,8 @@
   .form { display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:12px; }
   @media (max-width: 1100px) { .form { grid-template-columns: 1fr; } }
   .form label { display:flex; flex-direction:column; gap:6px; font-size:13px; }
-  .form input, .form select, .form textarea { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; outline:none; background:#fff; }
-  .form textarea { min-height: 90px; resize: vertical; }
+  .form input, .form select, textarea { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; outline:none; background:#fff; }
+  textarea { min-height: 90px; resize: vertical; }
 
   .fields { margin-top:14px; border-top:1px dashed #e6eaf2; padding-top:14px; }
   .fields-head h3 { margin:0; font-size:16px; }

@@ -347,8 +347,15 @@
 </section>
 
 {#if modal !== ''}
-  <div class="modal-bg" on:click={() => (modal = '')}>
-    <div class="modal" on:click|stopPropagation>
+  <div
+    class="modal-bg"
+    role="button"
+    tabindex="0"
+    aria-label="Закрыть модальное окно"
+    on:click={() => (modal = '')}
+    on:keydown={(e) => (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') && (modal = '')}
+  >
+    <div class="modal" on:click|stopPropagation on:keydown|stopPropagation>
       {#if modal === 'addColumn'}
         <h3 style="margin-top:0;">Добавить столбец</h3>
 
