@@ -94,7 +94,6 @@
       validate();
 
       const cols = normalizeColumns(columns);
-      const test_row = parseTestRow();
 
       const response = await apiJson(`${apiBase}/tables/create`, {
         method: 'POST',
