@@ -22,6 +22,10 @@
   let table_class = 'custom';
 
   const typeOptions = ['text', 'int', 'bigint', 'numeric', 'boolean', 'date', 'timestamptz', 'jsonb', 'uuid'];
+  const CREATE_TIMEOUT_MS = 30000;
+  const CREATE_BUTTON_LABEL = '\u0421\u043e\u0437\u0434\u0430\u0442\u044c \u0442\u0430\u0431\u043b\u0438\u0446\u0443';
+  const CREATE_WAIT_LABEL = '\u0417\u0430\u043f\u0440\u043e\u0441 \u0441\u043e\u0437\u0434\u0430\u043d\u0438\u044f \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d. \u041e\u0436\u0438\u0434\u0430\u0435\u043c \u043e\u0442\u0432\u0435\u0442 \u0441\u0435\u0440\u0432\u0435\u0440\u0430...';
+  const DEFAULT_DB_STATUS_LABEL = '\u0421\u0442\u0430\u0442\u0443\u0441 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u044f \u043a \u0431\u0430\u0437\u0435: \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445.';
 
   type ColumnDef = { field_name: string; field_type: string; description?: string };
   let columns: ColumnDef[] = [{ field_name: '', field_type: 'text', description: '' }];
@@ -95,16 +99,18 @@
   async function createTableNow() {
     error = '';
     creating = true;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CREATE_TIMEOUT_MS);
     try {
       if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
 
       validate();
-
       const cols = normalizeColumns(columns);
 
       const response = await apiJson(`${apiBase}/tables/create`, {
         method: 'POST',
         headers: headers(),
+        signal: controller.signal,
         body: JSON.stringify({
           schema_name: schema_name.trim(),
           table_name: table_name.trim(),
@@ -117,20 +123,26 @@
         })
       });
 
-      await refreshTables();
       result_created_schema = schema_name.trim();
       result_created_table = table_name.trim();
       result_is_success = true;
       result_modal_title = 'Таблица создана';
       result_modal_text = response ? JSON.stringify(response, null, 2) : 'Операция выполнена успешно.';
       result_modal_open = true;
+
+      refreshTables().catch(() => {
+        // Ошибка обновления списка не должна блокировать результат создания
+      });
     } catch (e: any) {
-      error = e?.message ?? String(e);
+      error = e?.name === 'AbortError'
+        ? 'Сервер не ответил вовремя. Проверьте статус базы и повторите попытку.'
+        : (e?.message ?? String(e));
       result_is_success = false;
       result_modal_title = 'Ошибка создания';
       result_modal_text = error;
       result_modal_open = true;
     } finally {
+      clearTimeout(timeoutId);
       creating = false;
     }
   }
@@ -236,15 +248,15 @@
 
     <div class="actions">
       <button class="primary" on:click={createTableNow} disabled={loading || creating || !canWrite()}>
-        РЎРѕР·РґР°С‚СЊ С‚Р°Р±Р»РёС†Сѓ
+        {CREATE_BUTTON_LABEL}
       </button>
       {#if creating}
-        <span class="hint">Запрос создания отправлен. Ожидаем ответ сервера...</span>
+        <span class="hint">{CREATE_WAIT_LABEL}</span>
       {/if}
     </div>
 
     <div class="statusline" class:ok={dbStatus === 'ok'} class:error={dbStatus === 'error'}>
-      {dbStatusMessage || 'Статус подключения к базе: нет данных.'}
+      {dbStatusMessage || DEFAULT_DB_STATUS_LABEL}
     </div>
 
     {#if !canWrite()}
