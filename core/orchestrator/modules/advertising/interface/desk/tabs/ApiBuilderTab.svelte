@@ -96,7 +96,7 @@
     return sources.find((s) => s.id === selectedId) || null;
   }
 
-  // ✅ вместо {#let ...}
+  // ✅ вместо {#let ...} в шаблоне
   $: selected = getSelected();
 
   function totalPages() {
@@ -167,7 +167,7 @@
     saveSources();
   }
 
-  // ✅ handlers без TS "as" в шаблоне
+  // ✅ handlers (чтобы не писать "as ..." в шаблоне)
   function onNameInput(e: Event) {
     updateSelected({ name: (e.currentTarget as HTMLInputElement).value });
   }
