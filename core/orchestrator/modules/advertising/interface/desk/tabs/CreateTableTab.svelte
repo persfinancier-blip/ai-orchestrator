@@ -5,6 +5,8 @@
   export let apiBase: string;
   export let role: Role;
   export let loading: boolean;
+  export let dbStatus: 'checking' | 'ok' | 'error' = 'checking';
+  export let dbStatusMessage = '';
 
   export let refreshTables: () => Promise<void>;
   export let onCreated: (schema: string, table: string) => void;
@@ -34,6 +36,7 @@
   let result_created_schema = '';
   let result_created_table = '';
   let result_is_success = false;
+  let creating = false;
 
   function canWrite(): boolean {
     return role === 'data_admin';
@@ -91,6 +94,7 @@
 
   async function createTableNow() {
     error = '';
+    creating = true;
     try {
       if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
 
@@ -126,6 +130,8 @@
       result_modal_title = 'Ошибка создания';
       result_modal_text = error;
       result_modal_open = true;
+    } finally {
+      creating = false;
     }
   }
 
@@ -229,9 +235,16 @@
     </div>
 
     <div class="actions">
-      <button class="primary" on:click={createTableNow} disabled={loading || !canWrite()}>
-        Создать таблицу
+      <button class="primary" on:click={createTableNow} disabled={loading || creating || !canWrite()}>
+        РЎРѕР·РґР°С‚СЊ С‚Р°Р±Р»РёС†Сѓ
       </button>
+      {#if creating}
+        <span class="hint">Запрос создания отправлен. Ожидаем ответ сервера...</span>
+      {/if}
+    </div>
+
+    <div class="statusline" class:ok={dbStatus === 'ok'} class:error={dbStatus === 'error'}>
+      {dbStatusMessage || 'Статус подключения к базе: нет данных.'}
     </div>
 
     {#if !canWrite()}
@@ -292,6 +305,9 @@
   .danger { border-color:#f3c0c0; color:#b91c1c; }
 
   .hint { margin:10px 0 0; color:#64748b; font-size:13px; }
+  .statusline { margin-top:12px; border:1px solid #e6eaf2; border-radius:12px; padding:10px 12px; background:#f8fafc; color:#334155; font-size:13px; }
+  .statusline.ok { border-color:#bbf7d0; background:#f0fdf4; color:#166534; }
+  .statusline.error { border-color:#fecaca; background:#fef2f2; color:#991b1b; }
 
   .alert { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #f3c0c0; background: #fff5f5; }
   .alert-title { font-weight: 700; margin-bottom: 6px; }
