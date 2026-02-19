@@ -28,8 +28,9 @@
   let partition_column = 'event_date';
   let partition_interval: 'day' | 'month' = 'day';
 
-  const TEST_ROW_PLACEHOLDER = `{"dataset":"ads","event_date":"2026-02-17","payload":{"a":1}}`;
-  let test_row_text = '';
+  let result_modal_open = false;
+  let result_modal_title = '';
+  let result_modal_text = '';
 
   function canWrite(): boolean {
     return role === 'data_admin';
@@ -50,7 +51,6 @@
     partition_enabled = true;
     partition_column = 'ingested_at';
     partition_interval = 'day';
-    test_row_text = '';
   }
 
   function addField() {
@@ -60,11 +60,6 @@
   function removeField(ix: number) {
     columns = columns.filter((_, i) => i !== ix);
     if (columns.length === 0) columns = [{ field_name: '', field_type: 'text', description: '' }];
-  }
-
-  function parseTestRow(): any | null {
-    if (!test_row_text.trim()) return null;
-    return JSON.parse(test_row_text);
   }
 
   function normalizeColumns(cols: ColumnDef[]) {
@@ -101,7 +96,7 @@
       const cols = normalizeColumns(columns);
       const test_row = parseTestRow();
 
-      await apiJson(`${apiBase}/tables/create`, {
+      const response = await apiJson(`${apiBase}/tables/create`, {
         method: 'POST',
         headers: headers(),
         body: JSON.stringify({
@@ -112,15 +107,20 @@
           columns: cols,
           partitioning: partition_enabled
             ? { enabled: true, column: partition_column.trim(), interval: partition_interval }
-            : { enabled: false },
-          test_row
+            : { enabled: false }
         })
       });
 
       await refreshTables();
       onCreated?.(schema_name.trim(), table_name.trim());
+      result_modal_title = 'Таблица создана';
+      result_modal_text = response ? JSON.stringify(response, null, 2) : 'Операция выполнена успешно.';
+      result_modal_open = true;
     } catch (e: any) {
       error = e?.message ?? String(e);
+      result_modal_title = 'Ошибка создания';
+      result_modal_text = error;
+      result_modal_open = true;
     }
   }
 </script>
@@ -216,14 +216,6 @@
       {/if}
     </div>
 
-    <div class="panel2">
-      <h3>test_row (опционально)</h3>
-      <label>
-        JSON пример строки для проверки
-        <textarea bind:value={test_row_text} placeholder={TEST_ROW_PLACEHOLDER}></textarea>
-      </label>
-    </div>
-
     <div class="actions">
       <button class="primary" on:click={createTableNow} disabled={loading || !canWrite()}>
         Создать таблицу
@@ -235,6 +227,25 @@
     {/if}
   </div>
 </section>
+
+{#if result_modal_open}
+  <div
+    class="modal-bg"
+    role="button"
+    tabindex="0"
+    aria-label="Закрыть окно результата"
+    on:click={() => (result_modal_open = false)}
+    on:keydown={(e) => (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') && (result_modal_open = false)}
+  >
+    <div class="modal" on:click|stopPropagation on:keydown|stopPropagation>
+      <h3>{result_modal_title}</h3>
+      <pre>{result_modal_text}</pre>
+      <div class="modal-actions">
+        <button class="primary" on:click={() => (result_modal_open = false)}>OK</button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   .grid { display:grid; gap: 12px; margin-top: 12px; }
@@ -248,8 +259,7 @@
   .form { display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:12px; }
   @media (max-width: 1100px) { .form { grid-template-columns: 1fr; } }
   .form label { display:flex; flex-direction:column; gap:6px; font-size:13px; }
-  .form input, .form select, textarea { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; outline:none; background:#fff; }
-  textarea { min-height: 90px; resize: vertical; }
+  .form input, .form select { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; outline:none; background:#fff; }
 
   .fields { margin-top:14px; border-top:1px dashed #e6eaf2; padding-top:14px; }
   .fields-head h3 { margin:0; font-size:16px; }
@@ -274,4 +284,8 @@
   .alert { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #f3c0c0; background: #fff5f5; }
   .alert-title { font-weight: 700; margin-bottom: 6px; }
   pre { margin:0; white-space: pre-wrap; word-break: break-word; }
+  .modal-bg { position: fixed; inset: 0; background: rgba(15,23,42,.35); display:flex; align-items:center; justify-content:center; padding: 18px; z-index: 1000; }
+  .modal { width: min(560px, 100%); background:#fff; border-radius:18px; border:1px solid #e6eaf2; padding:14px; box-shadow:0 20px 60px rgba(15,23,42,.25); }
+  .modal h3 { margin: 0 0 10px 0; }
+  .modal-actions { display:flex; justify-content:flex-end; margin-top:12px; }
 </style>
