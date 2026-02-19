@@ -63,6 +63,23 @@
     partition_interval = 'day';
   }
 
+
+  function pickTemplateSilver() {
+    schema_name = 'silver_adv';
+    table_name = 'wb_ads_daily';
+    table_class = 'silver_table';
+    description = 'Дневная агрегированная таблица рекламы';
+    columns = [
+      { field_name: 'event_date', field_type: 'date', description: 'дата метрики' },
+      { field_name: 'campaign_id', field_type: 'text', description: 'идентификатор кампании' },
+      { field_name: 'impressions', field_type: 'bigint', description: 'показы' },
+      { field_name: 'clicks', field_type: 'bigint', description: 'клики' },
+      { field_name: 'spend', field_type: 'numeric', description: 'расход' }
+    ];
+    partition_enabled = true;
+    partition_column = 'event_date';
+    partition_interval = 'day';
+  }
   function addField() {
     columns = [...columns, { field_name: '', field_type: 'text', description: '' }];
   }
@@ -168,6 +185,7 @@
       <h2>Создать таблицу</h2>
       <div class="quick">
         <button on:click={pickTemplateBronze}>Заполнить: Bronze</button>
+        <button on:click={pickTemplateSilver}>Заполнить: Silver</button>
         <button on:click={refreshTables} disabled={loading}>{loading ? 'Загрузка…' : 'Обновить список'}</button>
       </div>
     </div>
