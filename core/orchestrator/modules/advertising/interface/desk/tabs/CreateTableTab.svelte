@@ -31,6 +31,9 @@
   let result_modal_open = false;
   let result_modal_title = '';
   let result_modal_text = '';
+  let result_created_schema = '';
+  let result_created_table = '';
+  let result_is_success = false;
 
   function canWrite(): boolean {
     return role === 'data_admin';
@@ -111,15 +114,25 @@
       });
 
       await refreshTables();
-      onCreated?.(schema_name.trim(), table_name.trim());
+      result_created_schema = schema_name.trim();
+      result_created_table = table_name.trim();
+      result_is_success = true;
       result_modal_title = 'Таблица создана';
       result_modal_text = response ? JSON.stringify(response, null, 2) : 'Операция выполнена успешно.';
       result_modal_open = true;
     } catch (e: any) {
       error = e?.message ?? String(e);
+      result_is_success = false;
       result_modal_title = 'Ошибка создания';
       result_modal_text = error;
       result_modal_open = true;
+    }
+  }
+
+  function closeResultModal() {
+    result_modal_open = false;
+    if (result_is_success && result_created_schema && result_created_table) {
+      onCreated?.(result_created_schema, result_created_table);
     }
   }
 </script>
@@ -233,14 +246,14 @@
     role="button"
     tabindex="0"
     aria-label="Закрыть окно результата"
-    on:click={() => (result_modal_open = false)}
-    on:keydown={(e) => (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') && (result_modal_open = false)}
+    on:click={closeResultModal}
+    on:keydown={(e) => (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') && closeResultModal()}
   >
     <div class="modal" on:click|stopPropagation on:keydown|stopPropagation>
       <h3>{result_modal_title}</h3>
       <pre>{result_modal_text}</pre>
       <div class="modal-actions">
-        <button class="primary" on:click={() => (result_modal_open = false)}>OK</button>
+        <button class="primary" on:click={closeResultModal}>OK</button>
       </div>
     </div>
   </div>
