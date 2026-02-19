@@ -75,11 +75,11 @@
   function normalizeColumns(cols: ColumnDef[]) {
     return cols
       .map((c) => ({
-        name: (c.field_name || '').trim(),
-        type: (c.field_type || '').trim(),
+        field_name: (c.field_name || '').trim(),
+        field_type: (c.field_type || '').trim(),
         description: (c.description || '').trim()
       }))
-      .filter((c) => c.name.length > 0);
+      .filter((c) => c.field_name.length > 0);
   }
 
   function validate() {
@@ -88,7 +88,7 @@
     if (!table_class.trim()) throw new Error('Укажи класс');
     const cols = normalizeColumns(columns);
     if (cols.length === 0) throw new Error('Добавь хотя бы одно поле');
-    for (const c of cols) if (!c.type) throw new Error(`Для поля "${c.name}" не указан тип`);
+    for (const c of cols) if (!c.field_type) throw new Error("Укажи тип для каждого поля");
 
     if (partition_enabled) {
       if (!partition_column.trim()) throw new Error('Партиционирование включено: укажи колонку');
