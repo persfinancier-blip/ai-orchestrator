@@ -238,6 +238,7 @@
       return next;
     });
     saveSources();
+    generatedApiPreview = buildGeneratedPreview(getSelected());
   }
 
   function totalPages() {
@@ -279,6 +280,7 @@
       const first = dbPreviewRows[0] || {};
       dbPreviewColumns = Object.keys(first).filter((k) => k !== '__ctid');
       dbLoadedKey = key;
+      generatedApiPreview = buildGeneratedPreview(getSelected());
     } catch (e: any) {
       dbPreviewError = e?.message ?? String(e);
     } finally {
@@ -896,7 +898,7 @@
 
           <label>
             Предпросмотр моего API (авто)
-            <textarea bind:this={generatedPreviewEl} class="preview-readonly" value={generatedApiPreview} readonly></textarea>
+            <textarea bind:this={generatedPreviewEl} class="preview-readonly" bind:value={generatedApiPreview} readonly></textarea>
           </label>
         </div>
       {/if}
