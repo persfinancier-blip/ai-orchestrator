@@ -702,25 +702,6 @@
             </div>
 
             <div class="subcard">
-              <h3>Сравнение API</h3>
-              <div class="grid">
-                <label class="wide">
-                  Пример API (вставьте вручную)
-                  <textarea
-                    value={selected.exampleRequest}
-                    on:input={(e) => mutateSelected((s) => (s.exampleRequest = e.currentTarget.value))}
-                    placeholder="Вставьте пример запроса от документации или коллег"
-                  ></textarea>
-                </label>
-
-                <label class="wide">
-                  Предпросмотр моего API (авто)
-                  <textarea class="preview-readonly" value={generatedApiPreview} readonly></textarea>
-                </label>
-              </div>
-            </div>
-
-            <div class="subcard">
               <h3>Параметры из БД</h3>
               <div class="grid">
                 <label>
@@ -875,6 +856,29 @@
         {/key}
       {/if}
     </div>
+
+    <aside class="aside compare-aside">
+      <div class="aside-title">Сравнение API</div>
+      {#if !selected}
+        <div class="hint">Выберите API слева.</div>
+      {:else}
+        <div class="compare-fields">
+          <label>
+            Пример API (вставьте вручную)
+            <textarea
+              value={selected.exampleRequest}
+              on:input={(e) => mutateSelected((s) => (s.exampleRequest = e.currentTarget.value))}
+              placeholder="Вставьте пример запроса от документации или коллег"
+            ></textarea>
+          </label>
+
+          <label>
+            Предпросмотр моего API (авто)
+            <textarea class="preview-readonly" value={generatedApiPreview} readonly></textarea>
+          </label>
+        </div>
+      {/if}
+    </aside>
   </div>
 </section>
 
@@ -887,11 +891,14 @@
   .hint { margin:10px 0 0; color:#64748b; font-size:13px; }
   .error { margin:8px 0; color:#b91c1c; font-size:13px; }
 
-  .layout { display:grid; grid-template-columns: 320px 1fr; gap:12px; margin-top:12px; }
+  .layout { display:grid; grid-template-columns: 320px 1fr 360px; gap:12px; margin-top:12px; align-items:start; }
+  @media (max-width: 1300px) { .layout { grid-template-columns: 320px 1fr; } }
   @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
 
   .aside { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#f8fafc; }
   .aside-title { font-weight:700; margin-bottom:8px; }
+  .compare-aside { position: sticky; top: 12px; }
+  .compare-fields { display:flex; flex-direction:column; gap:10px; }
   .list { display:flex; flex-direction:column; gap:8px; }
   .item { text-align:left; padding:10px 12px; border-radius:14px; border:1px solid #e6eaf2; background:#fff; cursor:pointer; }
   .activeitem { background:#0f172a; color:#fff; border-color:#0f172a; }
