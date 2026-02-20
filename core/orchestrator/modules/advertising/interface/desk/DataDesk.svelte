@@ -135,7 +135,13 @@
       {existingTables}
     />
   {:else if tab === 'api_builder'}
-    <ApiBuilderTab />
+    <ApiBuilderTab
+      apiBase={API_BASE}
+      {apiJson}
+      {headers}
+      {existingTables}
+      {refreshTables}
+    />
   {:else}
     <DataManagementTab />
   {/if}

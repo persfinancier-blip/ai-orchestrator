@@ -1,6 +1,51 @@
-<!-- File: core/orchestrator/modules/advertising/interface/desk/tabs/ApiBuilderTab.svelte -->
 <script lang="ts">
+  export type ExistingTable = { schema_name: string; table_name: string };
   type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  type AuthMode = 'none' | 'bearer' | 'basic' | 'apiKey';
+  type PaginationMode = 'none' | 'page' | 'offset';
+  type BindingTarget = 'query' | 'header' | 'body';
+
+  export let apiBase: string;
+  export let apiJson: <T = any>(url: string, init?: RequestInit) => Promise<T>;
+  export let headers: () => Record<string, string>;
+  export let existingTables: ExistingTable[] = [];
+  export let refreshTables: () => Promise<void>;
+
+  type AuthConfig = {
+    mode: AuthMode;
+    bearerToken: string;
+    basicUsername: string;
+    basicPassword: string;
+    apiKeyName: string;
+    apiKeyValue: string;
+    apiKeyIn: 'header' | 'query';
+  };
+
+  type PaginationConfig = {
+    mode: PaginationMode;
+    pageParam: string;
+    pageSizeParam: string;
+    pageStart: number;
+    defaultPageSize: number;
+    offsetParam: string;
+    limitParam: string;
+    offsetStart: number;
+    defaultLimit: number;
+  };
+
+  type DbBinding = {
+    id: string;
+    target: BindingTarget;
+    targetKey: string;
+    sourceColumn: string;
+  };
+
+  type DbConfig = {
+    schema: string;
+    table: string;
+    rowIndex: number;
+    bindings: DbBinding[];
+  };
 
   type ApiSource = {
     id: string;
@@ -11,22 +56,9 @@
     headersJson: string;
     queryJson: string;
     bodyJson: string;
-    pagination: {
-      mode: 'none' | 'page' | 'offset';
-      pageParam: string;
-      pageSizeParam: string;
-      pageStart: number;
-      defaultPageSize: number;
-      offsetParam: string;
-      limitParam: string;
-      offsetStart: number;
-      defaultLimit: number;
-    };
-    target: {
-      schema: string;
-      table: string;
-      mappingJson: string;
-    };
+    auth: AuthConfig;
+    pagination: PaginationConfig;
+    db: DbConfig;
     createdAt: number;
     updatedAt: number;
   };
@@ -43,12 +75,12 @@
     responseText?: string;
   };
 
-  const SOURCES_KEY = 'ao_api_builder_sources_v1';
+  const SOURCES_KEY = 'ao_api_builder_sources_v2';
   const HISTORY_KEY = 'ao_api_builder_history_v1';
 
-  const PLACEHOLDER_HEADERS = 'например: {"Authorization":"***"}';
-  const PLACEHOLDER_QUERY = 'например: {"date_from":"2026-01-01","page":1}';
-  const PLACEHOLDER_BODY = 'например: {"a":1}';
+  const PLACEHOLDER_HEADERS = '{"Authorization":"Bearer ..."}';
+  const PLACEHOLDER_QUERY = '{"date_from":"2026-01-01"}';
+  const PLACEHOLDER_BODY = '{"limit":100}';
 
   let sources: ApiSource[] = [];
   let selectedId: string | null = null;
@@ -64,13 +96,99 @@
   let respHeaders: Record<string, string> = {};
   let respText = '';
 
+  let dbPreviewRows: any[] = [];
+  let dbPreviewColumns: string[] = [];
+  let dbPreviewLoading = false;
+  let dbPreviewError = '';
+  let dbLoadedKey = '';
+
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
   }
 
+  function defaultSource(): ApiSource {
+    const now = Date.now();
+    return {
+      id: uid(),
+      name: 'New API',
+      baseUrl: 'https://example.com',
+      method: 'GET',
+      path: '/endpoint',
+      headersJson: '',
+      queryJson: '',
+      bodyJson: '',
+      auth: {
+        mode: 'none',
+        bearerToken: '',
+        basicUsername: '',
+        basicPassword: '',
+        apiKeyName: 'X-API-KEY',
+        apiKeyValue: '',
+        apiKeyIn: 'header'
+      },
+      pagination: {
+        mode: 'none',
+        pageParam: 'page',
+        pageSizeParam: 'page_size',
+        pageStart: 1,
+        defaultPageSize: 50,
+        offsetParam: 'offset',
+        limitParam: 'limit',
+        offsetStart: 0,
+        defaultLimit: 50
+      },
+      db: {
+        schema: '',
+        table: '',
+        rowIndex: 0,
+        bindings: []
+      },
+      createdAt: now,
+      updatedAt: now
+    };
+  }
+
+  function normalizeSource(s: any): ApiSource {
+    const d = defaultSource();
+    const src = { ...d, ...(s || {}) };
+    src.auth = { ...d.auth, ...(s?.auth || {}) };
+    src.pagination = { ...d.pagination, ...(s?.pagination || {}) };
+    src.db = { ...d.db, ...(s?.db || {}) };
+    src.db.bindings = Array.isArray(s?.db?.bindings)
+      ? s.db.bindings.map((b: any) => ({
+          id: String(b?.id || uid()),
+          target: (b?.target || 'query') as BindingTarget,
+          targetKey: String(b?.targetKey || ''),
+          sourceColumn: String(b?.sourceColumn || '')
+        }))
+      : [];
+    return src;
+  }
+
+  function toHttpMethod(v: string): HttpMethod {
+    return v === 'GET' || v === 'POST' || v === 'PUT' || v === 'PATCH' || v === 'DELETE' ? v : 'GET';
+  }
+
+  function toAuthMode(v: string): AuthMode {
+    return v === 'none' || v === 'bearer' || v === 'basic' || v === 'apiKey' ? v : 'none';
+  }
+
+  function toPaginationMode(v: string): PaginationMode {
+    return v === 'none' || v === 'page' || v === 'offset' ? v : 'none';
+  }
+
+  function toBindingTarget(v: string): BindingTarget {
+    return v === 'query' || v === 'header' || v === 'body' ? v : 'query';
+  }
+
+  function toApiKeyIn(v: string): 'header' | 'query' {
+    return v === 'query' ? 'query' : 'header';
+  }
+
   function loadAll() {
     try {
-      sources = JSON.parse(localStorage.getItem(SOURCES_KEY) || '[]') || [];
+      const raw = JSON.parse(localStorage.getItem(SOURCES_KEY) || '[]') || [];
+      sources = raw.map(normalizeSource);
     } catch {
       sources = [];
     }
@@ -96,8 +214,24 @@
     return sources.find((s) => s.id === selectedId) || null;
   }
 
-  // ✅ вместо {#let ...} в шаблоне
   $: selected = getSelected();
+
+  function mutateSelected(mutator: (next: ApiSource) => void) {
+    if (!selectedId) return;
+    sources = sources.map((s) => {
+      if (s.id !== selectedId) return s;
+      const next: ApiSource = {
+        ...s,
+        auth: { ...s.auth },
+        pagination: { ...s.pagination },
+        db: { ...s.db, bindings: [...s.db.bindings] },
+        updatedAt: Date.now()
+      };
+      mutator(next);
+      return next;
+    });
+    saveSources();
+  }
 
   function totalPages() {
     return Math.max(1, Math.ceil(history.length / pageSize));
@@ -114,41 +248,51 @@
     return JSON.parse(s);
   }
 
-  function normalizeUrl(baseUrl: string, path: string, queryJson: string) {
+  function normalizeUrl(baseUrl: string, path: string, queryObj: Record<string, any>) {
     const p = path.startsWith('/') ? path : `/${path}`;
     const url = new URL(`${baseUrl.replace(/\/$/, '')}${p}`);
-    const q = parseJsonOrEmpty(queryJson);
-    for (const [k, v] of Object.entries(q)) url.searchParams.set(k, String(v));
+    for (const [k, v] of Object.entries(queryObj || {})) url.searchParams.set(k, String(v));
     return url.toString();
   }
 
-  function newSource() {
-    const now = Date.now();
-    const s: ApiSource = {
-      id: uid(),
-      name: 'New API',
-      baseUrl: 'https://example.com',
-      method: 'GET',
-      path: '/endpoint',
-      headersJson: '',
-      queryJson: '',
-      bodyJson: '',
-      pagination: {
-        mode: 'none',
-        pageParam: 'page',
-        pageSizeParam: 'page_size',
-        pageStart: 1,
-        defaultPageSize: 50,
-        offsetParam: 'offset',
-        limitParam: 'limit',
-        offsetStart: 0,
-        defaultLimit: 50
-      },
-      target: { schema: '', table: '', mappingJson: '' },
-      createdAt: now,
-      updatedAt: now
-    };
+  async function loadDbPreview() {
+    dbPreviewError = '';
+    dbPreviewRows = [];
+    dbPreviewColumns = [];
 
+    if (!selected?.db?.schema || !selected?.db?.table) return;
+
+    dbPreviewLoading = true;
+    try {
+      const key = `${selected.db.schema}.${selected.db.table}`;
+      const j = await apiJson<{ rows: any[] }>(
+        `${apiBase}/preview?schema=${encodeURIComponent(selected.db.schema)}&table=${encodeURIComponent(selected.db.table)}&limit=5`
+      );
+      dbPreviewRows = j.rows || [];
+      const first = dbPreviewRows[0] || {};
+      dbPreviewColumns = Object.keys(first).filter((k) => k !== '__ctid');
+      dbLoadedKey = key;
+    } catch (e: any) {
+      dbPreviewError = e?.message ?? String(e);
+    } finally {
+      dbPreviewLoading = false;
+    }
+  }
+
+  function ensureTableSelection() {
+    if (!selected) return;
+    if (selected.db.schema && selected.db.table) return;
+    if (!existingTables.length) return;
+    const first = existingTables[0];
+    mutateSelected((s) => {
+      s.db.schema = first.schema_name;
+      s.db.table = first.table_name;
+      s.db.rowIndex = 0;
+    });
+  }
+
+  function newSource() {
+    const s = defaultSource();
     sources = [s, ...sources];
     selectedId = s.id;
     saveSources();
@@ -161,33 +305,43 @@
     saveSources();
   }
 
-  function updateSelected(patch: Partial<ApiSource>) {
-    if (!selectedId) return;
-    sources = sources.map((s) => (s.id === selectedId ? { ...s, ...patch, updatedAt: Date.now() } : s));
-    saveSources();
+  function addBinding() {
+    mutateSelected((s) => {
+      s.db.bindings = [
+        ...s.db.bindings,
+        { id: uid(), target: 'query', targetKey: '', sourceColumn: dbPreviewColumns[0] || '' }
+      ];
+    });
   }
 
-  // ✅ handlers (чтобы не писать "as ..." в шаблоне)
-  function onNameInput(e: Event) {
-    updateSelected({ name: (e.currentTarget as HTMLInputElement).value });
+  function removeBinding(id: string) {
+    mutateSelected((s) => {
+      s.db.bindings = s.db.bindings.filter((b) => b.id !== id);
+    });
   }
-  function onBaseUrlInput(e: Event) {
-    updateSelected({ baseUrl: (e.currentTarget as HTMLInputElement).value });
+
+  function basicAuthHeader(username: string, password: string): string {
+    return `Basic ${btoa(`${username}:${password}`)}`;
   }
-  function onMethodChange(e: Event) {
-    updateSelected({ method: (e.currentTarget as HTMLSelectElement).value as HttpMethod });
-  }
-  function onPathInput(e: Event) {
-    updateSelected({ path: (e.currentTarget as HTMLInputElement).value });
-  }
-  function onHeadersInput(e: Event) {
-    updateSelected({ headersJson: (e.currentTarget as HTMLTextAreaElement).value });
-  }
-  function onQueryInput(e: Event) {
-    updateSelected({ queryJson: (e.currentTarget as HTMLTextAreaElement).value });
-  }
-  function onBodyInput(e: Event) {
-    updateSelected({ bodyJson: (e.currentTarget as HTMLTextAreaElement).value });
+
+  function applyDbBindings(
+    headersObj: Record<string, any>,
+    queryObj: Record<string, any>,
+    bodyObj: any,
+    source: ApiSource,
+    row: Record<string, any>
+  ) {
+    for (const b of source.db.bindings) {
+      if (!b.targetKey || !b.sourceColumn) continue;
+      const value = row[b.sourceColumn];
+      if (b.target === 'header') headersObj[b.targetKey] = value;
+      if (b.target === 'query') queryObj[b.targetKey] = value;
+      if (b.target === 'body') {
+        if (!bodyObj || typeof bodyObj !== 'object' || Array.isArray(bodyObj)) bodyObj = {};
+        bodyObj[b.targetKey] = value;
+      }
+    }
+    return bodyObj;
   }
 
   async function sendTest() {
@@ -195,46 +349,74 @@
     respStatus = 0;
     respHeaders = {};
     respText = '';
-
     if (!selected) return;
 
-    let headersObj: Record<string, string> = {};
+    let headersObj: Record<string, any> = {};
+    let queryObj: Record<string, any> = {};
+    let bodyObj: any = undefined;
+
     try {
       headersObj = parseJsonOrEmpty(selected.headersJson);
+      queryObj = parseJsonOrEmpty(selected.queryJson);
+      bodyObj = selected.bodyJson.trim() ? JSON.parse(selected.bodyJson) : {};
     } catch {
-      err = 'Headers JSON: неверный JSON';
+      err = 'Некорректный JSON в headers/query/body';
       return;
+    }
+
+    if (selected.auth.mode === 'bearer' && selected.auth.bearerToken.trim()) {
+      headersObj.Authorization = `Bearer ${selected.auth.bearerToken.trim()}`;
+    }
+    if (selected.auth.mode === 'basic') {
+      headersObj.Authorization = basicAuthHeader(selected.auth.basicUsername, selected.auth.basicPassword);
+    }
+    if (selected.auth.mode === 'apiKey' && selected.auth.apiKeyName.trim()) {
+      if (selected.auth.apiKeyIn === 'header') headersObj[selected.auth.apiKeyName.trim()] = selected.auth.apiKeyValue;
+      if (selected.auth.apiKeyIn === 'query') queryObj[selected.auth.apiKeyName.trim()] = selected.auth.apiKeyValue;
+    }
+
+    if (selected.pagination.mode === 'page') {
+      queryObj[selected.pagination.pageParam] = selected.pagination.pageStart;
+      queryObj[selected.pagination.pageSizeParam] = selected.pagination.defaultPageSize;
+    }
+    if (selected.pagination.mode === 'offset') {
+      queryObj[selected.pagination.offsetParam] = selected.pagination.offsetStart;
+      queryObj[selected.pagination.limitParam] = selected.pagination.defaultLimit;
+    }
+
+    const needsDb = !!(selected.db.schema && selected.db.table && selected.db.bindings.length);
+    if (needsDb) {
+      const key = `${selected.db.schema}.${selected.db.table}`;
+      if (dbLoadedKey !== key || dbPreviewRows.length === 0) {
+        await loadDbPreview();
+      }
+      if (!dbPreviewRows.length) {
+        err = dbPreviewError || 'Нет данных предпросмотра выбранной таблицы для параметров из БД';
+        return;
+      }
+      const index = Math.max(0, Math.min(selected.db.rowIndex, dbPreviewRows.length - 1));
+      bodyObj = applyDbBindings(headersObj, queryObj, bodyObj, selected, dbPreviewRows[index]);
     }
 
     let url = '';
     try {
-      url = normalizeUrl(selected.baseUrl, selected.path, selected.queryJson);
+      url = normalizeUrl(selected.baseUrl, selected.path, queryObj);
     } catch {
-      err = 'Query JSON: неверный JSON';
+      err = 'Некорректный URL или Query параметры';
       return;
     }
 
-    let body: any = undefined;
-    if (selected.method !== 'GET' && selected.method !== 'DELETE') {
-      if (selected.bodyJson.trim()) {
-        try {
-          body = JSON.stringify(JSON.parse(selected.bodyJson));
-        } catch {
-          err = 'Body JSON: неверный JSON';
-          return;
-        }
-      } else {
-        body = '';
-      }
-    }
+    const sendBody = selected.method === 'GET' || selected.method === 'DELETE'
+      ? undefined
+      : JSON.stringify(bodyObj ?? {});
 
     const item: HistoryItem = {
       ts: Date.now(),
       sourceId: selected.id,
       method: selected.method,
       url,
-      requestHeadersJson: selected.headersJson,
-      requestBodyJson: selected.bodyJson
+      requestHeadersJson: JSON.stringify(headersObj, null, 2),
+      requestBodyJson: sendBody || ''
     };
 
     sending = true;
@@ -243,7 +425,7 @@
       const res = await fetch(url, {
         method: selected.method,
         headers: { 'Content-Type': 'application/json', ...headersObj },
-        body
+        body: sendBody
       });
 
       item.status = res.status;
@@ -277,6 +459,7 @@
   }
 
   loadAll();
+  $: if (selected) ensureTableSelection();
 </script>
 
 <section class="panel">
@@ -289,11 +472,6 @@
     </div>
   </div>
 
-  <p class="hint">
-    Это будущий “Postman-конструктор”: настраиваешь внешние API-эндпоинты для наполнения таблиц.
-    Он <b>не использует</b> текущие серверные эндпоинты модуля и не ломает “Создание/Таблицы и данные”.
-  </p>
-
   {#if err}
     <div class="alert">
       <div class="alert-title">Ошибка</div>
@@ -303,8 +481,7 @@
 
   <div class="layout">
     <aside class="aside">
-      <div class="aside-title">Сохранённые API</div>
-
+      <div class="aside-title">Сохраненные API</div>
       {#if sources.length === 0}
         <div class="hint">Пока нет ни одного.</div>
       {:else}
@@ -321,52 +498,252 @@
 
     <div class="main">
       {#if !selected}
-        <div class="hint">Создай или выбери конфиг слева.</div>
+        <div class="hint">Создай или выбери API слева.</div>
       {:else}
         {#key selectedId}
           <div class="card">
             <div class="grid">
               <label>
                 Название
-                <input value={selected.name} on:input={onNameInput} />
+                <input value={selected.name} on:input={(e) => mutateSelected((s) => (s.name = e.currentTarget.value))} />
               </label>
 
               <label>
                 Base URL
-                <input value={selected.baseUrl} on:input={onBaseUrlInput} />
+                <input value={selected.baseUrl} on:input={(e) => mutateSelected((s) => (s.baseUrl = e.currentTarget.value))} />
               </label>
 
               <label>
                 Method
-                <select value={selected.method} on:change={onMethodChange}>
+                <select value={selected.method} on:change={(e) => mutateSelected((s) => (s.method = toHttpMethod(e.currentTarget.value)))}>
                   <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
                 </select>
               </label>
 
               <label>
                 Path
-                <input value={selected.path} on:input={onPathInput} />
+                <input value={selected.path} on:input={(e) => mutateSelected((s) => (s.path = e.currentTarget.value))} />
               </label>
+            </div>
 
+            <div class="subcard">
+              <h3>Авторизация</h3>
+              <div class="grid">
+                <label>
+                  Тип
+                  <select value={selected.auth.mode} on:change={(e) => mutateSelected((s) => (s.auth.mode = toAuthMode(e.currentTarget.value)))}>
+                    <option value="none">none</option>
+                    <option value="bearer">bearer</option>
+                    <option value="basic">basic</option>
+                    <option value="apiKey">apiKey</option>
+                  </select>
+                </label>
+
+                {#if selected.auth.mode === 'bearer'}
+                  <label>
+                    Bearer token
+                    <input value={selected.auth.bearerToken} on:input={(e) => mutateSelected((s) => (s.auth.bearerToken = e.currentTarget.value))} />
+                  </label>
+                {/if}
+
+                {#if selected.auth.mode === 'basic'}
+                  <label>
+                    Username
+                    <input value={selected.auth.basicUsername} on:input={(e) => mutateSelected((s) => (s.auth.basicUsername = e.currentTarget.value))} />
+                  </label>
+                  <label>
+                    Password
+                    <input value={selected.auth.basicPassword} on:input={(e) => mutateSelected((s) => (s.auth.basicPassword = e.currentTarget.value))} />
+                  </label>
+                {/if}
+
+                {#if selected.auth.mode === 'apiKey'}
+                  <label>
+                    Key name
+                    <input value={selected.auth.apiKeyName} on:input={(e) => mutateSelected((s) => (s.auth.apiKeyName = e.currentTarget.value))} />
+                  </label>
+                  <label>
+                    Key value
+                    <input value={selected.auth.apiKeyValue} on:input={(e) => mutateSelected((s) => (s.auth.apiKeyValue = e.currentTarget.value))} />
+                  </label>
+                  <label>
+                    Передавать в
+                    <select value={selected.auth.apiKeyIn} on:change={(e) => mutateSelected((s) => (s.auth.apiKeyIn = toApiKeyIn(e.currentTarget.value)))}>
+                      <option value="header">header</option>
+                      <option value="query">query</option>
+                    </select>
+                  </label>
+                {/if}
+              </div>
+            </div>
+
+            <div class="subcard">
+              <h3>Пагинация</h3>
+              <div class="grid">
+                <label>
+                  Тип
+                  <select value={selected.pagination.mode} on:change={(e) => mutateSelected((s) => (s.pagination.mode = toPaginationMode(e.currentTarget.value)))}>
+                    <option value="none">none</option>
+                    <option value="page">page</option>
+                    <option value="offset">offset</option>
+                  </select>
+                </label>
+
+                {#if selected.pagination.mode === 'page'}
+                  <label>
+                    page param
+                    <input value={selected.pagination.pageParam} on:input={(e) => mutateSelected((s) => (s.pagination.pageParam = e.currentTarget.value))} />
+                  </label>
+                  <label>
+                    page size param
+                    <input value={selected.pagination.pageSizeParam} on:input={(e) => mutateSelected((s) => (s.pagination.pageSizeParam = e.currentTarget.value))} />
+                  </label>
+                  <label>
+                    start page
+                    <input type="number" value={selected.pagination.pageStart} on:input={(e) => mutateSelected((s) => (s.pagination.pageStart = Number(e.currentTarget.value || 1)))} />
+                  </label>
+                  <label>
+                    page size
+                    <input type="number" value={selected.pagination.defaultPageSize} on:input={(e) => mutateSelected((s) => (s.pagination.defaultPageSize = Number(e.currentTarget.value || 50)))} />
+                  </label>
+                {/if}
+
+                {#if selected.pagination.mode === 'offset'}
+                  <label>
+                    offset param
+                    <input value={selected.pagination.offsetParam} on:input={(e) => mutateSelected((s) => (s.pagination.offsetParam = e.currentTarget.value))} />
+                  </label>
+                  <label>
+                    limit param
+                    <input value={selected.pagination.limitParam} on:input={(e) => mutateSelected((s) => (s.pagination.limitParam = e.currentTarget.value))} />
+                  </label>
+                  <label>
+                    offset start
+                    <input type="number" value={selected.pagination.offsetStart} on:input={(e) => mutateSelected((s) => (s.pagination.offsetStart = Number(e.currentTarget.value || 0)))} />
+                  </label>
+                  <label>
+                    default limit
+                    <input type="number" value={selected.pagination.defaultLimit} on:input={(e) => mutateSelected((s) => (s.pagination.defaultLimit = Number(e.currentTarget.value || 50)))} />
+                  </label>
+                {/if}
+              </div>
+            </div>
+
+            <div class="grid">
               <label class="wide">
                 Headers JSON
-                <textarea value={selected.headersJson} on:input={onHeadersInput} placeholder={PLACEHOLDER_HEADERS}></textarea>
+                <textarea value={selected.headersJson} on:input={(e) => mutateSelected((s) => (s.headersJson = e.currentTarget.value))} placeholder={PLACEHOLDER_HEADERS}></textarea>
               </label>
 
               <label class="wide">
                 Query JSON
-                <textarea value={selected.queryJson} on:input={onQueryInput} placeholder={PLACEHOLDER_QUERY}></textarea>
+                <textarea value={selected.queryJson} on:input={(e) => mutateSelected((s) => (s.queryJson = e.currentTarget.value))} placeholder={PLACEHOLDER_QUERY}></textarea>
               </label>
 
               <label class="wide">
                 Body JSON
-                <textarea value={selected.bodyJson} on:input={onBodyInput} placeholder={PLACEHOLDER_BODY}></textarea>
+                <textarea value={selected.bodyJson} on:input={(e) => mutateSelected((s) => (s.bodyJson = e.currentTarget.value))} placeholder={PLACEHOLDER_BODY}></textarea>
               </label>
+            </div>
+
+            <div class="subcard">
+              <h3>Параметры из БД</h3>
+              <div class="grid">
+                <label>
+                  Таблица
+                  <select value={`${selected.db.schema}.${selected.db.table}`} on:change={(e) => {
+                    const v = e.currentTarget.value;
+                    const [schema, table] = v.split('.');
+                    mutateSelected((s) => {
+                      s.db.schema = schema || '';
+                      s.db.table = table || '';
+                      s.db.rowIndex = 0;
+                    });
+                    loadDbPreview();
+                  }}>
+                    {#each existingTables as t}
+                      <option value={`${t.schema_name}.${t.table_name}`}>{t.schema_name}.{t.table_name}</option>
+                    {/each}
+                  </select>
+                </label>
+
+                <label>
+                  Строка preview (индекс)
+                  <input type="number" min="0" value={selected.db.rowIndex} on:input={(e) => mutateSelected((s) => (s.db.rowIndex = Number(e.currentTarget.value || 0)))} />
+                </label>
+
+                <div class="inline-actions">
+                  <button on:click={refreshTables}>Обновить список таблиц</button>
+                  <button on:click={loadDbPreview}>Загрузить preview</button>
+                </div>
+              </div>
+
+              {#if dbPreviewError}
+                <p class="error">{dbPreviewError}</p>
+              {/if}
+
+              <div class="bindings-head">
+                <b>Привязки параметров</b>
+                <button on:click={addBinding} disabled={dbPreviewColumns.length === 0}>+ Добавить привязку</button>
+              </div>
+
+              {#if selected.db.bindings.length === 0}
+                <p class="hint">Нет привязок. Добавь хотя бы одну, чтобы подставлять значения из таблицы в query/header/body.</p>
+              {:else}
+                <div class="bindings">
+                  {#each selected.db.bindings as b}
+                    <div class="binding-row">
+                      <select value={b.target} on:change={(e) => mutateSelected((s) => {
+                        const x = s.db.bindings.find((z) => z.id === b.id);
+                        if (x) x.target = toBindingTarget(e.currentTarget.value);
+                      })}>
+                        <option value="query">query</option>
+                        <option value="header">header</option>
+                        <option value="body">body</option>
+                      </select>
+
+                      <input placeholder="target key" value={b.targetKey} on:input={(e) => mutateSelected((s) => {
+                        const x = s.db.bindings.find((z) => z.id === b.id);
+                        if (x) x.targetKey = e.currentTarget.value;
+                      })} />
+
+                      <select value={b.sourceColumn} on:change={(e) => mutateSelected((s) => {
+                        const x = s.db.bindings.find((z) => z.id === b.id);
+                        if (x) x.sourceColumn = e.currentTarget.value;
+                      })}>
+                        <option value="">source column</option>
+                        {#each dbPreviewColumns as c}
+                          <option value={c}>{c}</option>
+                        {/each}
+                      </select>
+
+                      <button class="danger" on:click={() => removeBinding(b.id)}>Удалить</button>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+
+              {#if dbPreviewLoading}
+                <p class="hint">Загрузка preview...</p>
+              {:else if dbPreviewRows.length > 0}
+                <div class="preview-wrap">
+                  <table>
+                    <thead>
+                      <tr>{#each dbPreviewColumns as c}<th>{c}</th>{/each}</tr>
+                    </thead>
+                    <tbody>
+                      {#each dbPreviewRows as r}
+                        <tr>{#each dbPreviewColumns as c}<td>{String(r[c] ?? '')}</td>{/each}</tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              {/if}
             </div>
 
             <div class="actions">
               <button class="primary" on:click={sendTest} disabled={sending}>
-                {sending ? 'Отправляю…' : 'Тест-запрос'}
+                {sending ? 'Отправляю...' : 'Тест-запрос'}
               </button>
               <div class="muted">Ответ: status {respStatus || '-'}</div>
             </div>
@@ -434,6 +811,7 @@
   .quick { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
 
   .hint { margin:10px 0 0; color:#64748b; font-size:13px; }
+  .error { margin:8px 0; color:#b91c1c; font-size:13px; }
 
   .layout { display:grid; grid-template-columns: 320px 1fr; gap:12px; margin-top:12px; }
   @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
@@ -448,6 +826,9 @@
   .activeitem .meta { color:#cbd5e1; }
 
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; margin-bottom:12px; }
+  .subcard { margin-top:10px; border:1px dashed #e6eaf2; border-radius:14px; padding:10px; }
+  .subcard h3 { margin:0 0 8px 0; font-size:14px; }
+
   .grid { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
   @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
 
@@ -455,6 +836,16 @@
   input, select, textarea { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; outline:none; background:#fff; }
   textarea { min-height: 90px; resize: vertical; }
   .wide { grid-column: 1 / -1; }
+
+  .inline-actions { display:flex; gap:8px; align-items:end; flex-wrap:wrap; }
+  .bindings-head { margin-top:10px; display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .bindings { margin-top:8px; display:flex; flex-direction:column; gap:8px; }
+  .binding-row { display:grid; grid-template-columns: 140px 1fr 1fr auto; gap:8px; }
+  @media (max-width: 1100px) { .binding-row { grid-template-columns: 1fr; } }
+
+  .preview-wrap { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; overflow:auto; }
+  table { width:100%; border-collapse:collapse; min-width: 560px; }
+  th, td { border-bottom:1px solid #eef2f7; padding:8px; text-align:left; vertical-align:top; }
 
   .actions { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:10px; flex-wrap:wrap; }
   button { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; background:#fff; cursor:pointer; }
