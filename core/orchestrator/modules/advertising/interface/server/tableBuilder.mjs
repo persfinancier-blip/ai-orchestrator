@@ -325,6 +325,38 @@ tableBuilderRouter.post('/columns/drop', requireDataAdmin, async (req, res) => {
   }
 });
 
+tableBuilderRouter.post('/columns/add', requireDataAdmin, async (req, res) => {
+  const schema = String(req.body?.schema || '').trim();
+  const table = String(req.body?.table || '').trim();
+  const colName = String(req.body?.column?.name || '').trim();
+  const colType = String(req.body?.column?.type || '').trim();
+  const colDescription = String(req.body?.column?.description || '').trim();
+
+  if (!isIdent(schema) || !isIdent(table) || !isIdent(colName)) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid schema/table/column' });
+  }
+  if (!KNOWN_TYPES.has(colType)) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid column type' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query(
+      `ALTER TABLE ${qname(schema, table)} ADD COLUMN IF NOT EXISTS ${qi(colName)} ${colType}`
+    );
+    if (colDescription) {
+      await client.query(
+        `COMMENT ON COLUMN ${qname(schema, table)}.${qi(colName)} IS ${qlit(colDescription)}`
+      );
+    }
+    return res.json({ ok: true, schema, table, column: { name: colName, type: colType, description: colDescription } });
+  } catch (e) {
+    return res.status(500).json({ error: 'add_column_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
 tableBuilderRouter.post('/rows/delete', requireDataAdmin, async (req, res) => {
   const schema = String(req.body?.schema || '').trim();
   const table = String(req.body?.table || '').trim();
