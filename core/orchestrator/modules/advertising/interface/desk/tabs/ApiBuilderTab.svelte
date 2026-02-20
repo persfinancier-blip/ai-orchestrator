@@ -1073,59 +1073,62 @@
 
             <div class="subcard">
               <h3>Авторизация</h3>
-              <div class="grid">
-                <label>
-                  Тип
-                  <select value={selected.auth.mode} on:change={(e) => mutateSelected((s) => (s.auth.mode = toAuthMode(e.currentTarget.value)))}>
-                    <option value="none">none</option>
-                    <option value="bearer">bearer</option>
-                    <option value="basic">basic</option>
-                    <option value="apiKey">apiKey</option>
-                  </select>
-                </label>
+              <div class="split-block">
+                <div class="split-left">
+                  <div class="grid">
+                    <label>
+                      Тип
+                      <select value={selected.auth.mode} on:change={(e) => mutateSelected((s) => (s.auth.mode = toAuthMode(e.currentTarget.value)))}>
+                        <option value="none">none</option>
+                        <option value="bearer">bearer</option>
+                        <option value="basic">basic</option>
+                        <option value="apiKey">apiKey</option>
+                      </select>
+                    </label>
 
-                {#if selected.auth.mode === 'bearer'}
-                  <label>
-                    Bearer token
-                    <input value={selected.auth.bearerToken} on:input={(e) => mutateSelected((s) => (s.auth.bearerToken = e.currentTarget.value))} />
-                  </label>
-                {/if}
+                    {#if selected.auth.mode === 'bearer'}
+                      <label>
+                        Key value
+                        <input value={selected.auth.bearerToken} on:input={(e) => mutateSelected((s) => (s.auth.bearerToken = e.currentTarget.value))} />
+                      </label>
+                    {/if}
 
-                {#if selected.auth.mode === 'basic'}
-                  <label>
-                    Username
-                    <input value={selected.auth.basicUsername} on:input={(e) => mutateSelected((s) => (s.auth.basicUsername = e.currentTarget.value))} />
-                  </label>
-                  <label>
-                    Password
-                    <input value={selected.auth.basicPassword} on:input={(e) => mutateSelected((s) => (s.auth.basicPassword = e.currentTarget.value))} />
-                  </label>
-                {/if}
+                    {#if selected.auth.mode === 'basic'}
+                      <label>
+                        Key name
+                        <input value={selected.auth.basicUsername} on:input={(e) => mutateSelected((s) => (s.auth.basicUsername = e.currentTarget.value))} />
+                      </label>
+                      <label>
+                        Key value
+                        <input value={selected.auth.basicPassword} on:input={(e) => mutateSelected((s) => (s.auth.basicPassword = e.currentTarget.value))} />
+                      </label>
+                    {/if}
 
-                {#if selected.auth.mode === 'apiKey'}
-                  <label>
-                    Key name
-                    <input value={selected.auth.apiKeyName} on:input={(e) => mutateSelected((s) => (s.auth.apiKeyName = e.currentTarget.value))} />
-                  </label>
-                  <label>
-                    Key value
-                    <input value={selected.auth.apiKeyValue} on:input={(e) => mutateSelected((s) => (s.auth.apiKeyValue = e.currentTarget.value))} />
-                  </label>
-                  <label>
-                    Передавать в
-                    <select value={selected.auth.apiKeyIn} on:change={(e) => mutateSelected((s) => (s.auth.apiKeyIn = toApiKeyIn(e.currentTarget.value)))}>
-                      <option value="header">header</option>
-                      <option value="query">query</option>
-                    </select>
-                  </label>
-                {/if}
-              </div>
-              <label class="wide">
-                RAW (Auth)
-                <textarea bind:value={authRawDraft} placeholder="mode: apiKey"></textarea>
-              </label>
-              <div class="inline-actions">
-                <button on:click={parseAuthRaw}>Разобрать</button>
+                    {#if selected.auth.mode === 'apiKey'}
+                      <label>
+                        Key name
+                        <input value={selected.auth.apiKeyName} on:input={(e) => mutateSelected((s) => (s.auth.apiKeyName = e.currentTarget.value))} />
+                      </label>
+                      <label>
+                        Key value
+                        <input value={selected.auth.apiKeyValue} on:input={(e) => mutateSelected((s) => (s.auth.apiKeyValue = e.currentTarget.value))} />
+                      </label>
+                      <label>
+                        Add to
+                        <select value={selected.auth.apiKeyIn} on:change={(e) => mutateSelected((s) => (s.auth.apiKeyIn = toApiKeyIn(e.currentTarget.value)))}>
+                          <option value="header">header</option>
+                          <option value="query">query</option>
+                        </select>
+                      </label>
+                    {/if}
+                  </div>
+                </div>
+                <div class="split-right">
+                  <div class="inline-actions">
+                    <button on:click={parseAuthRaw}>RAW</button>
+                  </div>
+                  <textarea bind:value={authRawDraft} placeholder="mode: apiKey"></textarea>
+                </div>
               </div>
             </div>
 
@@ -1508,6 +1511,9 @@
   @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
   .method-url { display:grid; grid-template-columns: 140px 1fr auto; gap:10px; align-items:end; }
   @media (max-width: 1100px) { .method-url { grid-template-columns: 1fr; } }
+  .split-block { display:grid; grid-template-columns: 1fr 360px; gap:12px; align-items:start; }
+  .split-right textarea { min-height: 180px; }
+  @media (max-width: 1100px) { .split-block { grid-template-columns: 1fr; } }
 
   label { display:flex; flex-direction:column; gap:6px; font-size:13px; }
   input, select, textarea { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; outline:none; background:#fff; }
