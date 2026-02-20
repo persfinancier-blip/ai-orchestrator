@@ -285,3 +285,22 @@ tableBuilderRouter.post('/tables/create', requireDataAdmin, async (req, res) => 
     client.release();
   }
 });
+
+tableBuilderRouter.post('/tables/drop', requireDataAdmin, async (req, res) => {
+  const schema = String(req.body?.schema || '').trim();
+  const table = String(req.body?.table || '').trim();
+
+  if (!isIdent(schema) || !isIdent(table)) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid schema/table' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query(`DROP TABLE IF EXISTS ${qname(schema, table)} CASCADE`);
+    return res.json({ ok: true, schema, table });
+  } catch (e) {
+    return res.status(500).json({ error: 'drop_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
