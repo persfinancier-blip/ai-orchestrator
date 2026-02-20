@@ -126,7 +126,7 @@ tableBuilderRouter.get('/preview', async (req, res) => {
 
   const client = await pool.connect();
   try {
-    const q = `SELECT * FROM ${qname(schema, table)} LIMIT ${limit}`;
+    const q = `SELECT ctid::text AS __ctid, * FROM ${qname(schema, table)} LIMIT ${limit}`;
     const r = await client.query(q);
     return res.json({ rows: r.rows || [] });
   } catch (e) {
