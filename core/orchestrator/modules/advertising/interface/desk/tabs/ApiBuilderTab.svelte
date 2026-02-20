@@ -1503,16 +1503,17 @@
   @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
   .method-url { display:grid; grid-template-columns: 140px 1fr auto; gap:10px; align-items:end; }
   @media (max-width: 1100px) { .method-url { grid-template-columns: 1fr; } }
-  .auth-split { display:grid; grid-template-columns: 1fr 1fr; gap:12px; align-items:start; }
+  .auth-split { display:grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap:12px; align-items:start; }
+  .auth-left, .auth-right { min-width: 0; }
   .auth-top { height: 42px; display:flex; align-items:stretch; justify-content:flex-start; }
-  .auth-top .quarter { width:26%; min-width:140px; max-width:220px; }
+  .auth-top .quarter { width:50%; min-width:0; max-width:none; }
   .auth-fields { display:flex; flex-direction:column; gap:10px; margin-top:10px; }
   .auth-fields input, .auth-fields select, .auth-right textarea { width:100%; }
-  .auth-right textarea { margin-top:10px; resize:none; overflow:hidden; }
+  .auth-right textarea { margin-top:10px; resize:none; overflow:hidden; max-width:100%; }
   @media (max-width: 1100px) { .auth-split { grid-template-columns: 1fr; } }
 
   label { display:flex; flex-direction:column; gap:6px; font-size:13px; }
-  input, select, textarea { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; outline:none; background:#fff; }
+  input, select, textarea { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; outline:none; background:#fff; box-sizing:border-box; }
   textarea { min-height: 90px; resize: vertical; }
   .preview-readonly { background:#f8fafc; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   .wide { grid-column: 1 / -1; }
