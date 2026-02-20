@@ -108,6 +108,7 @@
   let previewDraft = '';
   let editingPreview = false;
   let previewSyncError = '';
+  let previewApplyMessage = '';
   let exampleRequestEl: HTMLTextAreaElement | null = null;
   let generatedPreviewEl: HTMLTextAreaElement | null = null;
 
@@ -706,6 +707,14 @@
     });
   }
 
+  function applyPreviewNow() {
+    previewApplyMessage = '';
+    applyGeneratedPreviewEdit(previewDraft);
+    if (!previewSyncError) {
+      previewApplyMessage = 'Применено в параметры.';
+    }
+  }
+
   async function sendTest() {
     err = '';
     respStatus = 0;
@@ -1184,6 +1193,12 @@
               placeholder="Можно вставить METHOD URL + Headers/Body, body-only JSON или curl ..."
             ></textarea>
           </label>
+          <div class="inline-actions">
+            <button on:click={applyPreviewNow}>Разобрать в поля</button>
+            {#if previewApplyMessage}
+              <span class="muted">{previewApplyMessage}</span>
+            {/if}
+          </div>
           {#if previewSyncError}
             <p class="error">{previewSyncError}</p>
           {/if}
