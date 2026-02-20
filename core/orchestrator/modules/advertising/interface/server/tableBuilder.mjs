@@ -74,6 +74,47 @@ tableBuilderRouter.get('/tables', async (_req, res) => {
   }
 });
 
+tableBuilderRouter.get('/columns', async (req, res) => {
+  const schema = String(req.query.schema || '').trim();
+  const table = String(req.query.table || '').trim();
+
+  if (!isIdent(schema) || !isIdent(table)) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid schema/table' });
+  }
+
+  const client = await pool.connect();
+  try {
+    const q = `
+      SELECT
+        c.column_name AS name,
+        c.data_type AS type,
+        d.description AS description,
+        (c.is_nullable = 'YES') AS is_nullable
+      FROM information_schema.columns c
+      LEFT JOIN pg_catalog.pg_namespace n
+        ON n.nspname = c.table_schema
+      LEFT JOIN pg_catalog.pg_class cls
+        ON cls.relnamespace = n.oid
+       AND cls.relname = c.table_name
+      LEFT JOIN pg_catalog.pg_attribute a
+        ON a.attrelid = cls.oid
+       AND a.attname = c.column_name
+      LEFT JOIN pg_catalog.pg_description d
+        ON d.objoid = cls.oid
+       AND d.objsubid = a.attnum
+      WHERE c.table_schema = $1
+        AND c.table_name = $2
+      ORDER BY c.ordinal_position
+    `;
+    const r = await client.query(q, [schema, table]);
+    return res.json({ columns: r.rows || [] });
+  } catch (e) {
+    return res.status(500).json({ error: 'columns_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
 tableBuilderRouter.get('/preview', async (req, res) => {
   const schema = String(req.query.schema || '').trim();
   const table = String(req.query.table || '').trim();
