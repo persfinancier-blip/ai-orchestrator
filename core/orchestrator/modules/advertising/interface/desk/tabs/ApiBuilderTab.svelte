@@ -1,4 +1,6 @@
 ﻿<script lang="ts">
+  import { tick } from 'svelte';
+
   export type ExistingTable = { schema_name: string; table_name: string };
   type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   type AuthMode = 'none' | 'bearer' | 'basic' | 'apiKey';
@@ -103,6 +105,8 @@
   let dbPreviewError = '';
   let dbLoadedKey = '';
   let generatedApiPreview = '';
+  let exampleRequestEl: HTMLTextAreaElement | null = null;
+  let generatedPreviewEl: HTMLTextAreaElement | null = null;
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -512,9 +516,22 @@
     page = 1;
   }
 
+  function autosizeTextarea(el: HTMLTextAreaElement | null) {
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }
+
+  function autosizeCompareTextareas() {
+    autosizeTextarea(exampleRequestEl);
+    autosizeTextarea(generatedPreviewEl);
+  }
+
   loadAll();
   $: if (selected) ensureTableSelection();
   $: generatedApiPreview = buildGeneratedPreview(selected);
+  $: selectedId, tick().then(autosizeCompareTextareas);
+  $: generatedApiPreview, tick().then(autosizeCompareTextareas);
 </script>
 
 <section class="panel">
@@ -866,15 +883,20 @@
           <label>
             Пример API (вставьте вручную)
             <textarea
+              bind:this={exampleRequestEl}
               value={selected.exampleRequest}
-              on:input={(e) => mutateSelected((s) => (s.exampleRequest = e.currentTarget.value))}
+              on:input={async (e) => {
+                mutateSelected((s) => (s.exampleRequest = e.currentTarget.value));
+                await tick();
+                autosizeCompareTextareas();
+              }}
               placeholder="Вставьте пример запроса от документации или коллег"
             ></textarea>
           </label>
 
           <label>
             Предпросмотр моего API (авто)
-            <textarea class="preview-readonly" value={generatedApiPreview} readonly></textarea>
+            <textarea bind:this={generatedPreviewEl} class="preview-readonly" value={generatedApiPreview} readonly></textarea>
           </label>
         </div>
       {/if}
@@ -899,6 +921,7 @@
   .aside-title { font-weight:700; margin-bottom:8px; }
   .compare-aside { position: sticky; top: 12px; }
   .compare-fields { display:flex; flex-direction:column; gap:10px; }
+  .compare-fields textarea { overflow:hidden; resize:none; }
   .list { display:flex; flex-direction:column; gap:8px; }
   .item { text-align:left; padding:10px 12px; border-radius:14px; border:1px solid #e6eaf2; background:#fff; cursor:pointer; }
   .activeitem { background:#0f172a; color:#fff; border-color:#0f172a; }
