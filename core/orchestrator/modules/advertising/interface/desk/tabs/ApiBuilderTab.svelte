@@ -111,9 +111,197 @@
   let previewApplyMessage = '';
   let exampleRequestEl: HTMLTextAreaElement | null = null;
   let generatedPreviewEl: HTMLTextAreaElement | null = null;
+  let urlInput = '';
+
+  type KvRow = { id: string; key: string; value: string };
+  type BodyRow = { id: string; path: string; value: string };
+  let paramsRawDraft = '';
+  let headersRawDraft = '';
+  let bodyRawDraft = '';
+  let authRawDraft = '';
+  let settingsRawDraft = '';
+  let scriptRawDraft = '';
+  let paramRows: KvRow[] = [];
+  let headerRows: KvRow[] = [];
+  let bodyRows: BodyRow[] = [];
+  let lastEditorSourceId = '';
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  }
+
+  function safeJsonParse(text: string): any {
+    return text.trim() ? JSON.parse(text) : {};
+  }
+
+  function objectToKvRows(obj: any): KvRow[] {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return [];
+    return Object.entries(obj).map(([k, v]) => ({ id: uid(), key: k, value: String(v ?? '') }));
+  }
+
+  function kvRowsToObject(rows: KvRow[]): Record<string, any> {
+    const o: Record<string, any> = {};
+    for (const r of rows) {
+      const k = (r.key || '').trim();
+      if (!k) continue;
+      o[k] = r.value;
+    }
+    return o;
+  }
+
+  function flattenBodyObject(obj: any, prefix = '', out: BodyRow[] = []): BodyRow[] {
+    if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+      for (const [k, v] of Object.entries(obj)) {
+        const p = prefix ? `${prefix}.${k}` : k;
+        if (v && typeof v === 'object' && !Array.isArray(v)) flattenBodyObject(v, p, out);
+        else out.push({ id: uid(), path: p, value: typeof v === 'string' ? v : JSON.stringify(v) });
+      }
+      return out;
+    }
+    return out;
+  }
+
+  function bodyRowsToObject(rows: BodyRow[]): any {
+    const root: any = {};
+    for (const r of rows) {
+      const path = (r.path || '').trim();
+      if (!path) continue;
+      const parts = path.split('.').filter(Boolean);
+      if (!parts.length) continue;
+      let cur = root;
+      for (let i = 0; i < parts.length - 1; i += 1) {
+        const p = parts[i];
+        if (!cur[p] || typeof cur[p] !== 'object' || Array.isArray(cur[p])) cur[p] = {};
+        cur = cur[p];
+      }
+      const leaf = parts[parts.length - 1];
+      let val: any = r.value;
+      try { val = JSON.parse(r.value); } catch {}
+      cur[leaf] = val;
+    }
+    return root;
+  }
+
+  function syncEditorsFromSelected(force = false) {
+    if (!selected) return;
+    if (!force && lastEditorSourceId === selected.id) return;
+    lastEditorSourceId = selected.id;
+    urlInput = `${selected.baseUrl.replace(/\/$/, '')}${selected.path.startsWith('/') ? selected.path : `/${selected.path}`}`;
+    paramsRawDraft = selected.queryJson || '';
+    headersRawDraft = selected.headersJson || '';
+    bodyRawDraft = selected.bodyJson || '';
+    authRawDraft = JSON.stringify(selected.auth || {}, null, 2);
+    settingsRawDraft = JSON.stringify({ pagination: selected.pagination || {} }, null, 2);
+    scriptRawDraft = scriptRawDraft || '';
+    try { paramRows = objectToKvRows(safeJsonParse(paramsRawDraft)); } catch { paramRows = []; }
+    try { headerRows = objectToKvRows(safeJsonParse(headersRawDraft)); } catch { headerRows = []; }
+    try { bodyRows = flattenBodyObject(safeJsonParse(bodyRawDraft)); } catch { bodyRows = []; }
+  }
+
+  function applyUrlInputRaw(raw: string) {
+    const t = (raw || '').trim();
+    if (!t) return;
+    if (tryApplyCurlPreview(t)) return;
+    try {
+      const u = new URL(t);
+      const queryObj: Record<string, string> = {};
+      u.searchParams.forEach((v, k) => (queryObj[k] = v));
+      mutateSelected((s) => {
+        s.baseUrl = u.origin;
+        s.path = u.pathname || '/';
+        s.queryJson = Object.keys(queryObj).length ? JSON.stringify(queryObj, null, 2) : '';
+      });
+      syncEditorsFromSelected(true);
+    } catch {
+      err = 'Некорректный URL';
+    }
+  }
+
+  function syncParamsRowsToRaw() {
+    const raw = JSON.stringify(kvRowsToObject(paramRows), null, 2);
+    paramsRawDraft = raw;
+    mutateSelected((s) => (s.queryJson = raw === '{}' ? '' : raw));
+  }
+
+  function syncHeadersRowsToRaw() {
+    const raw = JSON.stringify(kvRowsToObject(headerRows), null, 2);
+    headersRawDraft = raw;
+    mutateSelected((s) => (s.headersJson = raw === '{}' ? '' : raw));
+  }
+
+  function syncBodyRowsToRaw() {
+    const raw = JSON.stringify(bodyRowsToObject(bodyRows), null, 2);
+    bodyRawDraft = raw;
+    mutateSelected((s) => (s.bodyJson = raw === '{}' ? '' : raw));
+  }
+
+  function parseParamsRaw() {
+    try {
+      paramRows = objectToKvRows(safeJsonParse(paramsRawDraft));
+      mutateSelected((s) => (s.queryJson = paramsRawDraft.trim()));
+      err = '';
+    } catch {
+      err = 'Параметры RAW: некорректный JSON';
+    }
+  }
+
+  function parseHeadersRaw() {
+    try {
+      headerRows = objectToKvRows(safeJsonParse(headersRawDraft));
+      mutateSelected((s) => (s.headersJson = headersRawDraft.trim()));
+      err = '';
+    } catch {
+      err = 'Заголовки RAW: некорректный JSON';
+    }
+  }
+
+  function parseBodyRaw() {
+    try {
+      bodyRows = flattenBodyObject(safeJsonParse(bodyRawDraft));
+      mutateSelected((s) => (s.bodyJson = bodyRawDraft.trim()));
+      err = '';
+    } catch {
+      err = 'Body RAW: некорректный JSON';
+    }
+  }
+
+  function parseAuthRaw() {
+    try {
+      const a = safeJsonParse(authRawDraft);
+      mutateSelected((s) => {
+        s.auth.mode = toAuthMode(String(a.mode ?? s.auth.mode));
+        s.auth.bearerToken = String(a.bearerToken ?? s.auth.bearerToken ?? '');
+        s.auth.basicUsername = String(a.basicUsername ?? s.auth.basicUsername ?? '');
+        s.auth.basicPassword = String(a.basicPassword ?? s.auth.basicPassword ?? '');
+        s.auth.apiKeyName = String(a.apiKeyName ?? s.auth.apiKeyName ?? '');
+        s.auth.apiKeyValue = String(a.apiKeyValue ?? s.auth.apiKeyValue ?? '');
+        s.auth.apiKeyIn = toApiKeyIn(String(a.apiKeyIn ?? s.auth.apiKeyIn ?? 'header'));
+      });
+      err = '';
+    } catch {
+      err = 'Авторизация RAW: некорректный JSON';
+    }
+  }
+
+  function parseSettingsRaw() {
+    try {
+      const st = safeJsonParse(settingsRawDraft);
+      const p = st.pagination || st;
+      mutateSelected((s) => {
+        s.pagination.mode = toPaginationMode(String(p.mode ?? s.pagination.mode));
+        s.pagination.pageParam = String(p.pageParam ?? s.pagination.pageParam);
+        s.pagination.pageSizeParam = String(p.pageSizeParam ?? s.pagination.pageSizeParam);
+        s.pagination.pageStart = Number(p.pageStart ?? s.pagination.pageStart);
+        s.pagination.defaultPageSize = Number(p.defaultPageSize ?? s.pagination.defaultPageSize);
+        s.pagination.offsetParam = String(p.offsetParam ?? s.pagination.offsetParam);
+        s.pagination.limitParam = String(p.limitParam ?? s.pagination.limitParam);
+        s.pagination.offsetStart = Number(p.offsetStart ?? s.pagination.offsetStart);
+        s.pagination.defaultLimit = Number(p.defaultLimit ?? s.pagination.defaultLimit);
+      });
+      err = '';
+    } catch {
+      err = 'Настройки RAW: некорректный JSON';
+    }
   }
 
   function defaultSource(): ApiSource {
@@ -805,8 +993,11 @@
   }
 
   loadAll();
+  $: syncEditorsFromSelected();
   $: if (selected) ensureTableSelection();
   $: if (selectedId) generatedApiPreview = buildGeneratedPreview(selected);
+  $: if (selected) authRawDraft = JSON.stringify(selected.auth || {}, null, 2);
+  $: if (selected) settingsRawDraft = JSON.stringify({ pagination: selected.pagination || {} }, null, 2);
   $: if (!editingPreview) previewDraft = generatedApiPreview;
   $: selectedId, tick().then(autosizeCompareTextareas);
   $: previewDraft, tick().then(autosizeCompareTextareas);
@@ -858,22 +1049,26 @@
                 <input value={selected.name} on:input={(e) => mutateSelected((s) => (s.name = e.currentTarget.value))} />
               </label>
 
-              <label>
-                Base URL
-                <input value={selected.baseUrl} on:input={(e) => mutateSelected((s) => (s.baseUrl = e.currentTarget.value))} />
-              </label>
-
-              <label>
-                Method
-                <select value={selected.method} on:change={(e) => mutateSelected((s) => (s.method = toHttpMethod(e.currentTarget.value)))}>
-                  <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
-                </select>
-              </label>
-
-              <label>
-                Path
-                <input value={selected.path} on:input={(e) => mutateSelected((s) => (s.path = e.currentTarget.value))} />
-              </label>
+              <div class="wide">
+                <div class="method-url">
+                  <label>
+                    Метод
+                    <select value={selected.method} on:change={(e) => mutateSelected((s) => (s.method = toHttpMethod(e.currentTarget.value)))}>
+                      <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
+                    </select>
+                  </label>
+                  <label class="wide">
+                    URL / curl
+                    <input
+                      value={urlInput}
+                      on:input={(e) => (urlInput = e.currentTarget.value)}
+                      on:blur={() => applyUrlInputRaw(urlInput)}
+                      placeholder="https://api.example.com/path?x=1 или curl ..."
+                    />
+                  </label>
+                  <button on:click={() => applyUrlInputRaw(urlInput)}>Разобрать URL/curl</button>
+                </div>
+              </div>
             </div>
 
             <div class="subcard">
@@ -925,10 +1120,17 @@
                   </label>
                 {/if}
               </div>
+              <label class="wide">
+                RAW (Auth)
+                <textarea bind:value={authRawDraft} placeholder="mode: apiKey"></textarea>
+              </label>
+              <div class="inline-actions">
+                <button on:click={parseAuthRaw}>Разобрать</button>
+              </div>
             </div>
 
             <div class="subcard">
-              <h3>Пагинация</h3>
+              <h3>Настройки</h3>
               <div class="grid">
                 <label>
                   Тип
@@ -977,22 +1179,87 @@
                   </label>
                 {/if}
               </div>
+              <label class="wide">
+                RAW (Settings)
+                <textarea bind:value={settingsRawDraft} placeholder="pagination mode: none"></textarea>
+              </label>
+              <div class="inline-actions">
+                <button on:click={parseSettingsRaw}>Разобрать</button>
+              </div>
             </div>
 
-            <div class="grid">
+            <div class="subcard">
+              <h3>Параметры</h3>
+              <div class="inline-actions">
+                <button on:click={() => { paramRows = [...paramRows, { id: uid(), key: '', value: '' }]; }}>+ Параметр</button>
+                <button on:click={syncParamsRowsToRaw}>Собрать RAW</button>
+                <button on:click={parseParamsRaw}>Разобрать RAW</button>
+              </div>
+              <div class="bindings">
+                {#each paramRows as r (r.id)}
+                  <div class="binding-row">
+                    <input placeholder="key" value={r.key} on:input={(e) => { r.key = e.currentTarget.value; paramRows = [...paramRows]; syncParamsRowsToRaw(); }} />
+                    <input placeholder="value" value={r.value} on:input={(e) => { r.value = e.currentTarget.value; paramRows = [...paramRows]; syncParamsRowsToRaw(); }} />
+                    <button class="danger" on:click={() => { paramRows = paramRows.filter((x) => x.id !== r.id); syncParamsRowsToRaw(); }}>Удалить</button>
+                  </div>
+                {/each}
+              </div>
               <label class="wide">
-                Headers JSON
-                <textarea value={selected.headersJson} on:input={(e) => mutateSelected((s) => (s.headersJson = e.currentTarget.value))} placeholder={PLACEHOLDER_HEADERS}></textarea>
+                RAW (Parameters)
+                <textarea bind:value={paramsRawDraft} placeholder={PLACEHOLDER_QUERY}></textarea>
               </label>
+            </div>
 
+            <div class="subcard">
+              <h3>Заголовок</h3>
+              <div class="inline-actions">
+                <button on:click={() => { headerRows = [...headerRows, { id: uid(), key: '', value: '' }]; }}>+ Параметр</button>
+                <button on:click={syncHeadersRowsToRaw}>Собрать RAW</button>
+                <button on:click={parseHeadersRaw}>Разобрать RAW</button>
+              </div>
+              <div class="bindings">
+                {#each headerRows as r (r.id)}
+                  <div class="binding-row">
+                    <input placeholder="header" value={r.key} on:input={(e) => { r.key = e.currentTarget.value; headerRows = [...headerRows]; syncHeadersRowsToRaw(); }} />
+                    <input placeholder="value" value={r.value} on:input={(e) => { r.value = e.currentTarget.value; headerRows = [...headerRows]; syncHeadersRowsToRaw(); }} />
+                    <button class="danger" on:click={() => { headerRows = headerRows.filter((x) => x.id !== r.id); syncHeadersRowsToRaw(); }}>Удалить</button>
+                  </div>
+                {/each}
+              </div>
               <label class="wide">
-                Query JSON
-                <textarea value={selected.queryJson} on:input={(e) => mutateSelected((s) => (s.queryJson = e.currentTarget.value))} placeholder={PLACEHOLDER_QUERY}></textarea>
+                RAW (Headers)
+                <textarea bind:value={headersRawDraft} placeholder={PLACEHOLDER_HEADERS}></textarea>
               </label>
+            </div>
 
+            <div class="subcard">
+              <h3>Боди</h3>
+              <div class="inline-actions">
+                <button on:click={() => { bodyRows = [...bodyRows, { id: uid(), path: '', value: '' }]; }}>+ Параметр</button>
+                <button on:click={() => { bodyRows = [...bodyRows, { id: uid(), path: 'parent.child', value: '' }]; }}>+ Субпараметр</button>
+                <button on:click={syncBodyRowsToRaw}>Собрать RAW</button>
+                <button on:click={parseBodyRaw}>Разобрать RAW</button>
+              </div>
+              <div class="bindings">
+                {#each bodyRows as r (r.id)}
+                  <div class="binding-row">
+                    <input placeholder="path (a.b.c)" value={r.path} on:input={(e) => { r.path = e.currentTarget.value; bodyRows = [...bodyRows]; syncBodyRowsToRaw(); }} />
+                    <input placeholder="value" value={r.value} on:input={(e) => { r.value = e.currentTarget.value; bodyRows = [...bodyRows]; syncBodyRowsToRaw(); }} />
+                    <button class="danger" on:click={() => { bodyRows = bodyRows.filter((x) => x.id !== r.id); syncBodyRowsToRaw(); }}>Удалить</button>
+                  </div>
+                {/each}
+              </div>
               <label class="wide">
-                Body JSON
-                <textarea value={selected.bodyJson} on:input={(e) => mutateSelected((s) => (s.bodyJson = e.currentTarget.value))} placeholder={PLACEHOLDER_BODY}></textarea>
+                RAW (Body)
+                <textarea bind:value={bodyRawDraft} placeholder={PLACEHOLDER_BODY}></textarea>
+              </label>
+            </div>
+
+            <div class="subcard">
+              <h3>Скрипт</h3>
+              <label class="wide">
+                RAW (Script)
+                <textarea bind:value={scriptRawDraft} placeholder="// script"></textarea>
               </label>
             </div>
 
@@ -1153,7 +1420,7 @@
     </div>
 
     <aside class="aside compare-aside">
-      <div class="aside-title">Сравнение API</div>
+      <div class="aside-title">Настройка API</div>
       {#if !selected}
         <div class="hint">Выберите API слева.</div>
       {:else}
@@ -1239,6 +1506,8 @@
 
   .grid { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
   @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
+  .method-url { display:grid; grid-template-columns: 140px 1fr auto; gap:10px; align-items:end; }
+  @media (max-width: 1100px) { .method-url { grid-template-columns: 1fr; } }
 
   label { display:flex; flex-direction:column; gap:6px; font-size:13px; }
   input, select, textarea { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; outline:none; background:#fff; }
