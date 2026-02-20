@@ -1056,29 +1056,23 @@
         {#key selectedId}
           <div class="card">
             <div class="grid">
-              <label>
-                Название
-                <input value={selected.name} on:input={(e) => mutateSelected((s) => (s.name = e.currentTarget.value))} />
-              </label>
-
-              <div class="wide">
+              <div class="request-top">
+                <input placeholder="Название" value={selected.name} on:input={(e) => mutateSelected((s) => (s.name = e.currentTarget.value))} />
                 <div class="method-url">
-                  <label>
-                    Метод
-                    <select value={selected.method} on:change={(e) => mutateSelected((s) => (s.method = toHttpMethod(e.currentTarget.value)))}>
-                      <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
-                    </select>
-                  </label>
-                  <label>
-                    URL / curl
-                    <input
-                      value={urlInput}
-                      on:input={(e) => (urlInput = e.currentTarget.value)}
-                      on:blur={() => applyUrlInputRaw(urlInput)}
-                      placeholder="https://api.example.com/path?x=1 или curl ..."
-                    />
-                  </label>
-                  <button on:click={() => applyUrlInputRaw(urlInput)}>Разобрать URL/curl</button>
+                  <select value={selected.method} on:change={(e) => mutateSelected((s) => (s.method = toHttpMethod(e.currentTarget.value)))}>
+                    <option value="GET">Метод: GET</option>
+                    <option value="POST">Метод: POST</option>
+                    <option value="PUT">Метод: PUT</option>
+                    <option value="PATCH">Метод: PATCH</option>
+                    <option value="DELETE">Метод: DELETE</option>
+                  </select>
+                  <input
+                    value={urlInput}
+                    on:input={(e) => (urlInput = e.currentTarget.value)}
+                    on:blur={() => applyUrlInputRaw(urlInput)}
+                    placeholder="URL / curl ..."
+                  />
+                  <button on:click={() => applyUrlInputRaw(urlInput)}>Разобрать cURL</button>
                 </div>
               </div>
             </div>
@@ -1501,7 +1495,9 @@
 
   .grid { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
   @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
-  .method-url { display:grid; grid-template-columns: 140px 1fr auto; gap:10px; align-items:end; }
+  .request-top { display:flex; flex-direction:column; gap:10px; }
+  .method-url { display:grid; grid-template-columns: 180px 1fr 180px; gap:10px; align-items:center; }
+  .method-url select, .method-url input, .method-url button { height:42px; }
   @media (max-width: 1100px) { .method-url { grid-template-columns: 1fr; } }
   .auth-split { display:grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap:12px; align-items:start; }
   .auth-left, .auth-right { min-width: 0; }
