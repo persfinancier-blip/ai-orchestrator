@@ -111,6 +111,8 @@
   let previewApplyMessage = '';
   let exampleRequestEl: HTMLTextAreaElement | null = null;
   let generatedPreviewEl: HTMLTextAreaElement | null = null;
+  let authFieldsEl: HTMLDivElement | null = null;
+  let authRawEl: HTMLTextAreaElement | null = null;
   let urlInput = '';
 
   type KvRow = { id: string; key: string; value: string };
@@ -992,6 +994,14 @@
     autosizeTextarea(generatedPreviewEl);
   }
 
+  function syncAuthRawHeight() {
+    if (!authFieldsEl || !authRawEl) return;
+    const min = Math.max(authFieldsEl.offsetHeight, 120);
+    authRawEl.style.minHeight = `${min}px`;
+    autosizeTextarea(authRawEl);
+    if (authRawEl.offsetHeight < min) authRawEl.style.height = `${min}px`;
+  }
+
   loadAll();
   $: syncEditorsFromSelected();
   $: if (selected) ensureTableSelection();
@@ -1001,6 +1011,8 @@
   $: if (!editingPreview) previewDraft = generatedApiPreview;
   $: selectedId, tick().then(autosizeCompareTextareas);
   $: previewDraft, tick().then(autosizeCompareTextareas);
+  $: selected?.auth?.mode, tick().then(syncAuthRawHeight);
+  $: authRawDraft, tick().then(syncAuthRawHeight);
 </script>
 
 <section class="panel">
@@ -1073,61 +1085,41 @@
 
             <div class="subcard">
               <h3>Авторизация</h3>
-              <div class="split-block">
-                <div class="split-left">
-                  <div class="grid">
-                    <label>
-                      Тип
-                      <select value={selected.auth.mode} on:change={(e) => mutateSelected((s) => (s.auth.mode = toAuthMode(e.currentTarget.value)))}>
-                        <option value="none">none</option>
-                        <option value="bearer">bearer</option>
-                        <option value="basic">basic</option>
-                        <option value="apiKey">apiKey</option>
-                      </select>
-                    </label>
-
+              <div class="auth-split">
+                <div class="auth-left" bind:this={authFieldsEl}>
+                  <div class="auth-top">
+                    <select class="quarter" value={selected.auth.mode} on:change={(e) => mutateSelected((s) => (s.auth.mode = toAuthMode(e.currentTarget.value)))}>
+                      <option value="none">Тип: none</option>
+                      <option value="bearer">Тип: bearer</option>
+                      <option value="basic">Тип: basic</option>
+                      <option value="apiKey">Тип: apiKey</option>
+                    </select>
+                  </div>
+                  <div class="auth-fields">
                     {#if selected.auth.mode === 'bearer'}
-                      <label>
-                        Key value
-                        <input value={selected.auth.bearerToken} on:input={(e) => mutateSelected((s) => (s.auth.bearerToken = e.currentTarget.value))} />
-                      </label>
+                      <input placeholder="Key value" value={selected.auth.bearerToken} on:input={(e) => mutateSelected((s) => (s.auth.bearerToken = e.currentTarget.value))} />
                     {/if}
 
                     {#if selected.auth.mode === 'basic'}
-                      <label>
-                        Key name
-                        <input value={selected.auth.basicUsername} on:input={(e) => mutateSelected((s) => (s.auth.basicUsername = e.currentTarget.value))} />
-                      </label>
-                      <label>
-                        Key value
-                        <input value={selected.auth.basicPassword} on:input={(e) => mutateSelected((s) => (s.auth.basicPassword = e.currentTarget.value))} />
-                      </label>
+                      <input placeholder="Key name" value={selected.auth.basicUsername} on:input={(e) => mutateSelected((s) => (s.auth.basicUsername = e.currentTarget.value))} />
+                      <input placeholder="Key value" value={selected.auth.basicPassword} on:input={(e) => mutateSelected((s) => (s.auth.basicPassword = e.currentTarget.value))} />
                     {/if}
 
                     {#if selected.auth.mode === 'apiKey'}
-                      <label>
-                        Key name
-                        <input value={selected.auth.apiKeyName} on:input={(e) => mutateSelected((s) => (s.auth.apiKeyName = e.currentTarget.value))} />
-                      </label>
-                      <label>
-                        Key value
-                        <input value={selected.auth.apiKeyValue} on:input={(e) => mutateSelected((s) => (s.auth.apiKeyValue = e.currentTarget.value))} />
-                      </label>
-                      <label>
-                        Add to
-                        <select value={selected.auth.apiKeyIn} on:change={(e) => mutateSelected((s) => (s.auth.apiKeyIn = toApiKeyIn(e.currentTarget.value)))}>
-                          <option value="header">header</option>
-                          <option value="query">query</option>
-                        </select>
-                      </label>
+                      <input placeholder="Key name" value={selected.auth.apiKeyName} on:input={(e) => mutateSelected((s) => (s.auth.apiKeyName = e.currentTarget.value))} />
+                      <input placeholder="Key value" value={selected.auth.apiKeyValue} on:input={(e) => mutateSelected((s) => (s.auth.apiKeyValue = e.currentTarget.value))} />
+                      <select value={selected.auth.apiKeyIn} on:change={(e) => mutateSelected((s) => (s.auth.apiKeyIn = toApiKeyIn(e.currentTarget.value)))}>
+                        <option value="header">Add to: header</option>
+                        <option value="query">Add to: query</option>
+                      </select>
                     {/if}
                   </div>
                 </div>
-                <div class="split-right">
-                  <div class="inline-actions">
-                    <button on:click={parseAuthRaw}>RAW</button>
+                <div class="auth-right">
+                  <div class="auth-top">
+                    <button class="quarter" on:click={parseAuthRaw}>RAW</button>
                   </div>
-                  <textarea bind:value={authRawDraft} placeholder="mode: apiKey"></textarea>
+                  <textarea bind:this={authRawEl} bind:value={authRawDraft} placeholder="mode: apiKey"></textarea>
                 </div>
               </div>
             </div>
@@ -1511,9 +1503,13 @@
   @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
   .method-url { display:grid; grid-template-columns: 140px 1fr auto; gap:10px; align-items:end; }
   @media (max-width: 1100px) { .method-url { grid-template-columns: 1fr; } }
-  .split-block { display:grid; grid-template-columns: 1fr 360px; gap:12px; align-items:start; }
-  .split-right textarea { min-height: 180px; }
-  @media (max-width: 1100px) { .split-block { grid-template-columns: 1fr; } }
+  .auth-split { display:grid; grid-template-columns: 1fr 1fr; gap:12px; align-items:start; }
+  .auth-top { height: 42px; display:flex; align-items:stretch; justify-content:flex-start; }
+  .auth-top .quarter { width:26%; min-width:140px; max-width:220px; }
+  .auth-fields { display:flex; flex-direction:column; gap:10px; margin-top:10px; }
+  .auth-fields input, .auth-fields select, .auth-right textarea { width:100%; }
+  .auth-right textarea { margin-top:10px; resize:none; overflow:hidden; }
+  @media (max-width: 1100px) { .auth-split { grid-template-columns: 1fr; } }
 
   label { display:flex; flex-direction:column; gap:6px; font-size:13px; }
   input, select, textarea { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; outline:none; background:#fff; }
