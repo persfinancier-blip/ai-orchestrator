@@ -1057,7 +1057,7 @@
                       <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
                     </select>
                   </label>
-                  <label class="wide">
+                  <label>
                     URL / curl
                     <input
                       value={urlInput}
