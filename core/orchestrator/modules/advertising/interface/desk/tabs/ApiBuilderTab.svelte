@@ -105,6 +105,7 @@
   let dbPreviewError = '';
   let dbLoadedKey = '';
   let generatedApiPreview = '';
+  let previewSyncError = '';
   let exampleRequestEl: HTMLTextAreaElement | null = null;
   let generatedPreviewEl: HTMLTextAreaElement | null = null;
 
@@ -440,6 +441,74 @@
       return `Ошибка предпросмотра: ${e?.message ?? String(e)}`;
     }
   }
+
+  function applyGeneratedPreviewEdit(input: string) {
+    const text = input || '';
+    const lines = text.split(/\r?\n/);
+    const first = (lines[0] || '').trim();
+    const m = first.match(/^(GET|POST|PUT|PATCH|DELETE)\s+(\S+)$/i);
+    if (!m) {
+      previewSyncError = 'Первая строка должна быть в формате: METHOD URL';
+      return;
+    }
+
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(m[2]);
+    } catch {
+      previewSyncError = 'Некорректный URL в первой строке';
+      return;
+    }
+
+    const headersIdx = lines.findIndex((x) => x.trim() === 'Headers:');
+    const bodyIdx = lines.findIndex((x) => x.trim() === 'Body:');
+    if (headersIdx < 0 || bodyIdx < 0 || bodyIdx <= headersIdx) {
+      previewSyncError = 'Ожидаю блоки Headers: и Body:';
+      return;
+    }
+
+    const headersText = lines.slice(headersIdx + 1, bodyIdx).join('\n').trim();
+    const bodyTextRaw = lines.slice(bodyIdx + 1).join('\n').trim();
+    const bodyText = bodyTextRaw === '(empty)' ? '' : bodyTextRaw;
+
+    let headersObj: Record<string, any> = {};
+    try {
+      headersObj = headersText ? JSON.parse(headersText) : {};
+    } catch {
+      previewSyncError = 'Headers должен быть корректным JSON-объектом';
+      return;
+    }
+    if (!headersObj || typeof headersObj !== 'object' || Array.isArray(headersObj)) {
+      previewSyncError = 'Headers должен быть JSON-объектом';
+      return;
+    }
+
+    let bodyObj: any = undefined;
+    if (bodyText) {
+      try {
+        bodyObj = JSON.parse(bodyText);
+      } catch {
+        previewSyncError = 'Body должен быть корректным JSON';
+        return;
+      }
+    }
+
+    const queryObj: Record<string, string> = {};
+    parsedUrl.searchParams.forEach((v, k) => {
+      queryObj[k] = v;
+    });
+
+    previewSyncError = '';
+    mutateSelected((s) => {
+      s.method = toHttpMethod(m[1].toUpperCase());
+      s.baseUrl = parsedUrl.origin;
+      s.path = parsedUrl.pathname || '/';
+      s.queryJson = Object.keys(queryObj).length ? JSON.stringify(queryObj, null, 2) : '';
+      s.headersJson = Object.keys(headersObj).length ? JSON.stringify(headersObj, null, 2) : '';
+      s.bodyJson = bodyText ? JSON.stringify(bodyObj, null, 2) : '';
+    });
+  }
+
   async function sendTest() {
     err = '';
     respStatus = 0;
@@ -531,7 +600,7 @@
 
   loadAll();
   $: if (selected) ensureTableSelection();
-  $: generatedApiPreview = buildGeneratedPreview(selected);
+  $: if (selectedId) generatedApiPreview = buildGeneratedPreview(selected);
   $: selectedId, tick().then(autosizeCompareTextareas);
   $: generatedApiPreview, tick().then(autosizeCompareTextareas);
 </script>
@@ -898,8 +967,20 @@
 
           <label>
             Предпросмотр моего API (авто)
-            <textarea bind:this={generatedPreviewEl} class="preview-readonly" bind:value={generatedApiPreview} readonly></textarea>
+            <textarea
+              bind:this={generatedPreviewEl}
+              class="preview-readonly"
+              bind:value={generatedApiPreview}
+              on:input={async (e) => {
+                applyGeneratedPreviewEdit(e.currentTarget.value);
+                await tick();
+                autosizeCompareTextareas();
+              }}
+            ></textarea>
           </label>
+          {#if previewSyncError}
+            <p class="error">{previewSyncError}</p>
+          {/if}
         </div>
       {/if}
     </aside>
