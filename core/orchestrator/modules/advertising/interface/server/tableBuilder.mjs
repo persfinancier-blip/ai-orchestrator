@@ -324,3 +324,29 @@ tableBuilderRouter.post('/columns/drop', requireDataAdmin, async (req, res) => {
     client.release();
   }
 });
+
+tableBuilderRouter.post('/rows/delete', requireDataAdmin, async (req, res) => {
+  const schema = String(req.body?.schema || '').trim();
+  const table = String(req.body?.table || '').trim();
+  const ctid = String(req.body?.ctid || '').trim();
+
+  if (!isIdent(schema) || !isIdent(table)) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid schema/table' });
+  }
+  if (!ctid || !/^\(\d+,\d+\)$/.test(ctid)) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid ctid' });
+  }
+
+  const client = await pool.connect();
+  try {
+    const r = await client.query(
+      `DELETE FROM ${qname(schema, table)} WHERE ctid = $1::tid`,
+      [ctid]
+    );
+    return res.json({ ok: true, schema, table, ctid, deleted: r.rowCount || 0 });
+  } catch (e) {
+    return res.status(500).json({ error: 'delete_row_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
