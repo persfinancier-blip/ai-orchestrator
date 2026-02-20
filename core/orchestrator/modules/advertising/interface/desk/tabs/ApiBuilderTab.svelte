@@ -538,6 +538,31 @@
     return true;
   }
 
+  function extractBodyCandidate(text: string): { found: boolean; body: string } {
+    const t = text || '';
+    const lines = t.split(/\r?\n/);
+    const bodyIdx = lines.findIndex((x) => x.trim() === 'Body:');
+    if (bodyIdx >= 0) {
+      const raw = lines.slice(bodyIdx + 1).join('\n').trim();
+      return { found: true, body: raw === '(empty)' ? '' : raw };
+    }
+    const trimmed = t.trim();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      return { found: true, body: trimmed };
+    }
+    return { found: false, body: '' };
+  }
+
+  function syncBodyFromPreviewText(text: string) {
+    const c = extractBodyCandidate(text);
+    if (!c.found) return;
+    if (!selectedId) return;
+    if ((selected?.bodyJson || '') === c.body) return;
+    mutateSelected((s) => {
+      s.bodyJson = c.body;
+    });
+  }
+
   function applyGeneratedPreviewEdit(input: string) {
     const text = input || '';
     const trimmed = text.trim();
@@ -545,6 +570,9 @@
       previewSyncError = '';
       return;
     }
+
+    // Always keep Body JSON in sync, even if full preview parse is incomplete.
+    syncBodyFromPreviewText(text);
 
     if (tryApplyCurlPreview(text)) return;
 
