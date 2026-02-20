@@ -357,6 +357,41 @@ tableBuilderRouter.post('/columns/add', requireDataAdmin, async (req, res) => {
   }
 });
 
+tableBuilderRouter.post('/rows/add', requireDataAdmin, async (req, res) => {
+  const schema = String(req.body?.schema || '').trim();
+  const table = String(req.body?.table || '').trim();
+  const row = req.body?.row;
+
+  if (!isIdent(schema) || !isIdent(table)) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid schema/table' });
+  }
+  if (!row || typeof row !== 'object' || Array.isArray(row)) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid row payload' });
+  }
+
+  const keys = Object.keys(row).filter((k) => isIdent(k));
+  if (!keys.length) {
+    return res.status(400).json({ error: 'bad_request', details: 'no valid row fields' });
+  }
+
+  const cols = keys.map((k) => qi(k)).join(', ');
+  const vals = keys.map((_, i) => `$${i + 1}`).join(', ');
+  const params = keys.map((k) => row[k]);
+
+  const client = await pool.connect();
+  try {
+    await client.query(
+      `INSERT INTO ${qname(schema, table)} (${cols}) VALUES (${vals})`,
+      params
+    );
+    return res.json({ ok: true, schema, table, inserted: 1 });
+  } catch (e) {
+    return res.status(500).json({ error: 'add_row_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
 tableBuilderRouter.post('/rows/delete', requireDataAdmin, async (req, res) => {
   const schema = String(req.body?.schema || '').trim();
   const table = String(req.body?.table || '').trim();
