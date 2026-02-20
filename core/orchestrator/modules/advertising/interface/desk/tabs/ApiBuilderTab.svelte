@@ -364,7 +364,7 @@
       queryObj = parseJsonOrEmpty(source.queryJson);
       bodyObj = source.bodyJson.trim() ? JSON.parse(source.bodyJson) : {};
     } catch {
-      throw new Error('РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON РІ headers/query/body');
+      throw new Error('Некорректный JSON в headers/query/body');
     }
 
     if (source.auth.mode === 'bearer' && source.auth.bearerToken.trim()) {
@@ -395,7 +395,7 @@
     try {
       url = normalizeUrl(source.baseUrl, source.path, queryObj);
     } catch {
-      throw new Error('РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ URL РёР»Рё query-РїР°СЂР°РјРµС‚СЂС‹');
+      throw new Error('Некорректный URL или query-параметры');
     }
 
     const sendBody = source.method === 'GET' || source.method === 'DELETE'
@@ -431,7 +431,7 @@
         req.sendBody ?? '(empty)'
       ].join('\n');
     } catch (e: any) {
-      return `РћС€РёР±РєР° РїСЂРµРґРїСЂРѕСЃРјРѕС‚СЂР°: ${e?.message ?? String(e)}`;
+      return `Ошибка предпросмотра: ${e?.message ?? String(e)}`;
     }
   }
   async function sendTest() {
@@ -519,26 +519,26 @@
 
 <section class="panel">
   <div class="panel-head">
-    <h2>API (РєРѕРЅСЃС‚СЂСѓРєС‚РѕСЂ)</h2>
+    <h2>API (конструктор)</h2>
     <div class="quick">
-      <button on:click={newSource}>+ РќРѕРІС‹Р№</button>
-      <button class="danger" on:click={deleteSelected} disabled={!selectedId}>РЈРґР°Р»РёС‚СЊ</button>
-      <button class="danger" on:click={clearHistory} disabled={history.length === 0}>РћС‡РёСЃС‚РёС‚СЊ РёСЃС‚РѕСЂРёСЋ</button>
+      <button on:click={newSource}>+ Новый</button>
+      <button class="danger" on:click={deleteSelected} disabled={!selectedId}>Удалить</button>
+      <button class="danger" on:click={clearHistory} disabled={history.length === 0}>Очистить историю</button>
     </div>
   </div>
 
   {#if err}
     <div class="alert">
-      <div class="alert-title">РћС€РёР±РєР°</div>
+      <div class="alert-title">Ошибка</div>
       <pre>{err}</pre>
     </div>
   {/if}
 
   <div class="layout">
     <aside class="aside">
-      <div class="aside-title">РЎРѕС…СЂР°РЅРµРЅРЅС‹Рµ API</div>
+      <div class="aside-title">Сохраненные API</div>
       {#if sources.length === 0}
-        <div class="hint">РџРѕРєР° РЅРµС‚ РЅРё РѕРґРЅРѕРіРѕ.</div>
+        <div class="hint">Пока нет ни одного.</div>
       {:else}
         <div class="list">
           {#each sources as s (s.id)}
@@ -553,13 +553,13 @@
 
     <div class="main">
       {#if !selected}
-        <div class="hint">РЎРѕР·РґР°Р№ РёР»Рё РІС‹Р±РµСЂРё API СЃР»РµРІР°.</div>
+        <div class="hint">Создай или выбери API слева.</div>
       {:else}
         {#key selectedId}
           <div class="card">
             <div class="grid">
               <label>
-                РќР°Р·РІР°РЅРёРµ
+                Название
                 <input value={selected.name} on:input={(e) => mutateSelected((s) => (s.name = e.currentTarget.value))} />
               </label>
 
@@ -582,10 +582,10 @@
             </div>
 
             <div class="subcard">
-              <h3>РђРІС‚РѕСЂРёР·Р°С†РёСЏ</h3>
+              <h3>Авторизация</h3>
               <div class="grid">
                 <label>
-                  РўРёРї
+                  Тип
                   <select value={selected.auth.mode} on:change={(e) => mutateSelected((s) => (s.auth.mode = toAuthMode(e.currentTarget.value)))}>
                     <option value="none">none</option>
                     <option value="bearer">bearer</option>
@@ -622,7 +622,7 @@
                     <input value={selected.auth.apiKeyValue} on:input={(e) => mutateSelected((s) => (s.auth.apiKeyValue = e.currentTarget.value))} />
                   </label>
                   <label>
-                    РџРµСЂРµРґР°РІР°С‚СЊ РІ
+                    Передавать в
                     <select value={selected.auth.apiKeyIn} on:change={(e) => mutateSelected((s) => (s.auth.apiKeyIn = toApiKeyIn(e.currentTarget.value)))}>
                       <option value="header">header</option>
                       <option value="query">query</option>
@@ -633,10 +633,10 @@
             </div>
 
             <div class="subcard">
-              <h3>РџР°РіРёРЅР°С†РёСЏ</h3>
+              <h3>Пагинация</h3>
               <div class="grid">
                 <label>
-                  РўРёРї
+                  Тип
                   <select value={selected.pagination.mode} on:change={(e) => mutateSelected((s) => (s.pagination.mode = toPaginationMode(e.currentTarget.value)))}>
                     <option value="none">none</option>
                     <option value="page">page</option>
@@ -721,10 +721,10 @@
             </div>
 
             <div class="subcard">
-              <h3>РџР°СЂР°РјРµС‚СЂС‹ РёР· Р‘Р”</h3>
+              <h3>Параметры из БД</h3>
               <div class="grid">
                 <label>
-                  РўР°Р±Р»РёС†Р°
+                  Таблица
                   <select value={`${selected.db.schema}.${selected.db.table}`} on:change={(e) => {
                     const v = e.currentTarget.value;
                     const [schema, table] = v.split('.');
@@ -742,13 +742,13 @@
                 </label>
 
                 <label>
-                  РЎС‚СЂРѕРєР° preview (РёРЅРґРµРєСЃ)
+                  Строка preview (индекс)
                   <input type="number" min="0" value={selected.db.rowIndex} on:input={(e) => mutateSelected((s) => (s.db.rowIndex = Number(e.currentTarget.value || 0)))} />
                 </label>
 
                 <div class="inline-actions">
-                  <button on:click={refreshTables}>РћР±РЅРѕРІРёС‚СЊ СЃРїРёСЃРѕРє С‚Р°Р±Р»РёС†</button>
-                  <button on:click={loadDbPreview}>Р—Р°РіСЂСѓР·РёС‚СЊ preview</button>
+                  <button on:click={refreshTables}>Обновить список таблиц</button>
+                  <button on:click={loadDbPreview}>Загрузить preview</button>
                 </div>
               </div>
 
@@ -757,12 +757,12 @@
               {/if}
 
               <div class="bindings-head">
-                <b>РџСЂРёРІСЏР·РєРё РїР°СЂР°РјРµС‚СЂРѕРІ</b>
-                <button on:click={addBinding} disabled={dbPreviewColumns.length === 0}>+ Р”РѕР±Р°РІРёС‚СЊ РїСЂРёРІСЏР·РєСѓ</button>
+                <b>Привязки параметров</b>
+                <button on:click={addBinding} disabled={dbPreviewColumns.length === 0}>+ Добавить привязку</button>
               </div>
 
               {#if selected.db.bindings.length === 0}
-                <p class="hint">РќРµС‚ РїСЂРёРІСЏР·РѕРє. Р”РѕР±Р°РІСЊ С…РѕС‚СЏ Р±С‹ РѕРґРЅСѓ, С‡С‚РѕР±С‹ РїРѕРґСЃС‚Р°РІР»СЏС‚СЊ Р·РЅР°С‡РµРЅРёСЏ РёР· С‚Р°Р±Р»РёС†С‹ РІ query/header/body.</p>
+                <p class="hint">Нет привязок. Добавь хотя бы одну, чтобы подставлять значения из таблицы в query/header/body.</p>
               {:else}
                 <div class="bindings">
                   {#each selected.db.bindings as b}
@@ -791,14 +791,14 @@
                         {/each}
                       </select>
 
-                      <button class="danger" on:click={() => removeBinding(b.id)}>РЈРґР°Р»РёС‚СЊ</button>
+                      <button class="danger" on:click={() => removeBinding(b.id)}>Удалить</button>
                     </div>
                   {/each}
                 </div>
               {/if}
 
               {#if dbPreviewLoading}
-                <p class="hint">Р—Р°РіСЂСѓР·РєР° preview...</p>
+                <p class="hint">Загрузка preview...</p>
               {:else if dbPreviewRows.length > 0}
                 <div class="preview-wrap">
                   <table>
@@ -817,14 +817,14 @@
 
             <div class="actions">
               <button class="primary" on:click={sendTest} disabled={sending}>
-                {sending ? 'РћС‚РїСЂР°РІР»СЏСЋ...' : 'РўРµСЃС‚-Р·Р°РїСЂРѕСЃ'}
+                {sending ? 'Отправляю...' : 'Тест-запрос'}
               </button>
-              <div class="muted">РћС‚РІРµС‚: status {respStatus || '-'}</div>
+              <div class="muted">Ответ: status {respStatus || '-'}</div>
             </div>
           </div>
 
           <div class="card">
-            <h3>РћС‚РІРµС‚</h3>
+            <h3>Ответ</h3>
             <details open>
               <summary>Headers</summary>
               <pre>{JSON.stringify(respHeaders, null, 2)}</pre>
@@ -837,7 +837,7 @@
 
           <div class="card">
             <div class="hist-head">
-              <h3>РСЃС‚РѕСЂРёСЏ Р·Р°РїСЂРѕСЃРѕРІ</h3>
+              <h3>История запросов</h3>
               <div class="pager">
                 <label>
                   page size
@@ -848,14 +848,14 @@
                   </select>
                 </label>
 
-                <button on:click={() => (page = Math.max(1, page - 1))} disabled={page <= 1}>в†ђ</button>
+                <button on:click={() => (page = Math.max(1, page - 1))} disabled={page <= 1}>←</button>
                 <span class="muted">{page} / {totalPages()}</span>
-                <button on:click={() => (page = Math.min(totalPages(), page + 1))} disabled={page >= totalPages()}>в†’</button>
+                <button on:click={() => (page = Math.min(totalPages(), page + 1))} disabled={page >= totalPages()}>→</button>
               </div>
             </div>
 
             {#if history.length === 0}
-              <div class="hint">РџРѕРєР° РїСѓСЃС‚Рѕ.</div>
+              <div class="hint">Пока пусто.</div>
             {:else}
               <div class="hist-list">
                 {#each pagedHistory() as h (h.ts)}
