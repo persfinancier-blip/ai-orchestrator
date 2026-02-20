@@ -304,3 +304,23 @@ tableBuilderRouter.post('/tables/drop', requireDataAdmin, async (req, res) => {
     client.release();
   }
 });
+
+tableBuilderRouter.post('/columns/drop', requireDataAdmin, async (req, res) => {
+  const schema = String(req.body?.schema || '').trim();
+  const table = String(req.body?.table || '').trim();
+  const column = String(req.body?.column || '').trim();
+
+  if (!isIdent(schema) || !isIdent(table) || !isIdent(column)) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid schema/table/column' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query(`ALTER TABLE ${qname(schema, table)} DROP COLUMN IF EXISTS ${qi(column)}`);
+    return res.json({ ok: true, schema, table, column });
+  } catch (e) {
+    return res.status(500).json({ error: 'drop_column_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
