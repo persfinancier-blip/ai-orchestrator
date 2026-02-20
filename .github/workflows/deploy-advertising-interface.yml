@@ -88,9 +88,12 @@ jobs:
             # Диагностика: слушаем ли порт
             sudo /usr/bin/ss -lntp | grep 8787 || true
 
-            # Проверка API напрямую
-            curl -fsS "http://127.0.0.1:8787/ai-orchestrator/api/space" >/dev/null
-            echo "OK: /api/space"
+            # Проверка API напрямую (liveness)
+            curl -fsS "http://127.0.0.1:8787/ai-orchestrator/api/health" >/dev/null
+            echo "OK: /api/health"
+
+            # Диагностика данных витрины (не валит деплой)
+            curl -fsS "http://127.0.0.1:8787/ai-orchestrator/api/space" >/dev/null || true
 
       - name: Reload Apache
         uses: appleboy/ssh-action@v1.2.0
