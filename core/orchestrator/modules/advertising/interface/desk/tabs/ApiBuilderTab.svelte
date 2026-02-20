@@ -446,8 +446,123 @@
     }
   }
 
+  function unquoteToken(v: string): string {
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+      return v.slice(1, -1);
+    }
+    return v;
+  }
+
+  function tryApplyCurlPreview(text: string): boolean {
+    const t = text.trim();
+    if (!t.toLowerCase().startsWith('curl ')) return false;
+
+    const tokens = t.match(/"[^"]*"|'[^']*'|\S+/g) || [];
+    if (!tokens.length) return false;
+
+    let method: HttpMethod = 'GET';
+    let rawUrl = '';
+    let body = '';
+    const headersObj: Record<string, string> = {};
+
+    for (let i = 1; i < tokens.length; i += 1) {
+      const token = tokens[i];
+      if (token === '-X' || token === '--request') {
+        const next = unquoteToken(tokens[i + 1] || '');
+        method = toHttpMethod(next.toUpperCase());
+        i += 1;
+        continue;
+      }
+      if (token === '--url') {
+        rawUrl = unquoteToken(tokens[i + 1] || '');
+        i += 1;
+        continue;
+      }
+      if (token === '-H' || token === '--header') {
+        const line = unquoteToken(tokens[i + 1] || '');
+        const idx = line.indexOf(':');
+        if (idx > 0) {
+          const k = line.slice(0, idx).trim();
+          const v = line.slice(idx + 1).trim();
+          if (k) headersObj[k] = v;
+        }
+        i += 1;
+        continue;
+      }
+      if (token === '-d' || token === '--data' || token === '--data-raw' || token === '--data-binary') {
+        body = unquoteToken(tokens[i + 1] || '');
+        i += 1;
+        continue;
+      }
+      if (!rawUrl && /^https?:\/\//i.test(token)) {
+        rawUrl = unquoteToken(token);
+      }
+    }
+
+    if (!rawUrl) {
+      previewSyncError = 'В curl не найден URL';
+      return true;
+    }
+
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(rawUrl);
+    } catch {
+      previewSyncError = 'Некорректный URL в curl';
+      return true;
+    }
+
+    const queryObj: Record<string, string> = {};
+    parsedUrl.searchParams.forEach((v, k) => {
+      queryObj[k] = v;
+    });
+
+    let bodyJsonText = '';
+    if (body) {
+      try {
+        bodyJsonText = JSON.stringify(JSON.parse(body), null, 2);
+      } catch {
+        bodyJsonText = body;
+      }
+    }
+
+    previewSyncError = '';
+    mutateSelected((s) => {
+      s.method = method;
+      s.baseUrl = parsedUrl.origin;
+      s.path = parsedUrl.pathname || '/';
+      s.queryJson = Object.keys(queryObj).length ? JSON.stringify(queryObj, null, 2) : '';
+      s.headersJson = Object.keys(headersObj).length ? JSON.stringify(headersObj, null, 2) : '';
+      s.bodyJson = bodyJsonText;
+    });
+    return true;
+  }
+
   function applyGeneratedPreviewEdit(input: string) {
     const text = input || '';
+    const trimmed = text.trim();
+    if (!trimmed) {
+      previewSyncError = '';
+      return;
+    }
+
+    if (tryApplyCurlPreview(text)) return;
+
+    // Body-only mode for fast editing: user can paste/edit only JSON body.
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      let bodyJsonText = '';
+      try {
+        bodyJsonText = JSON.stringify(JSON.parse(trimmed), null, 2);
+      } catch {
+        bodyJsonText = trimmed;
+      }
+      previewSyncError = '';
+      mutateSelected((s) => {
+        s.bodyJson = bodyJsonText;
+      });
+      return;
+    }
+
     const lines = text.split(/\r?\n/);
     const first = (lines[0] || '').trim();
     const m = first.match(/^(GET|POST|PUT|PATCH|DELETE)\s+(\S+)$/i);
@@ -1027,6 +1142,7 @@
                 await tick();
                 autosizeCompareTextareas();
               }}
+              placeholder="Можно вставить METHOD URL + Headers/Body, body-only JSON или curl ..."
             ></textarea>
           </label>
           {#if previewSyncError}
