@@ -466,34 +466,73 @@
 
     const headersIdx = lines.findIndex((x) => x.trim() === 'Headers:');
     const bodyIdx = lines.findIndex((x) => x.trim() === 'Body:');
-    if (headersIdx < 0 || bodyIdx < 0 || bodyIdx <= headersIdx) {
-      previewSyncError = 'Ожидаю блоки Headers: и Body:';
-      return;
-    }
-
-    const headersText = lines.slice(headersIdx + 1, bodyIdx).join('\n').trim();
-    const bodyTextRaw = lines.slice(bodyIdx + 1).join('\n').trim();
-    const bodyText = bodyTextRaw === '(empty)' ? '' : bodyTextRaw;
 
     let headersObj: Record<string, any> = {};
-    try {
-      headersObj = headersText ? JSON.parse(headersText) : {};
-    } catch {
-      previewSyncError = 'Headers должен быть корректным JSON-объектом';
-      return;
-    }
-    if (!headersObj || typeof headersObj !== 'object' || Array.isArray(headersObj)) {
-      previewSyncError = 'Headers должен быть JSON-объектом';
-      return;
+    let bodyText = '';
+    let bodyJsonText = '';
+
+    if (headersIdx >= 0 && bodyIdx > headersIdx) {
+      const headersText = lines.slice(headersIdx + 1, bodyIdx).join('\n').trim();
+      const bodyTextRaw = lines.slice(bodyIdx + 1).join('\n').trim();
+      bodyText = bodyTextRaw === '(empty)' ? '' : bodyTextRaw;
+
+      try {
+        headersObj = headersText ? JSON.parse(headersText) : {};
+      } catch {
+        previewSyncError = 'Headers должен быть корректным JSON-объектом';
+        return;
+      }
+      if (!headersObj || typeof headersObj !== 'object' || Array.isArray(headersObj)) {
+        previewSyncError = 'Headers должен быть JSON-объектом';
+        return;
+      }
+    } else {
+      // Fallback: HTTP-style format after first line:
+      // Header-Name: value
+      //
+      // { ...json body... }
+      const rest = lines.slice(1);
+      const headerLines: string[] = [];
+      const bodyLines: string[] = [];
+      let inBody = false;
+      for (const line of rest) {
+        const trimmed = line.trim();
+        if (!inBody) {
+          if (!trimmed && headerLines.length > 0) {
+            inBody = true;
+            continue;
+          }
+          const colon = line.indexOf(':');
+          const looksLikeHeader = colon > 0 && !trimmed.startsWith('{') && !trimmed.startsWith('[');
+          if (looksLikeHeader) {
+            headerLines.push(line);
+            continue;
+          }
+          if (trimmed) {
+            inBody = true;
+            bodyLines.push(line);
+          }
+          continue;
+        }
+        bodyLines.push(line);
+      }
+
+      for (const h of headerLines) {
+        const idx = h.indexOf(':');
+        if (idx <= 0) continue;
+        const k = h.slice(0, idx).trim();
+        const v = h.slice(idx + 1).trim();
+        if (k) headersObj[k] = v;
+      }
+      bodyText = bodyLines.join('\n').trim();
     }
 
-    let bodyObj: any = undefined;
     if (bodyText) {
       try {
-        bodyObj = JSON.parse(bodyText);
+        bodyJsonText = JSON.stringify(JSON.parse(bodyText), null, 2);
       } catch {
-        previewSyncError = 'Body должен быть корректным JSON';
-        return;
+        // Keep raw text so user can continue editing and still sync other fields.
+        bodyJsonText = bodyText;
       }
     }
 
@@ -509,7 +548,7 @@
       s.path = parsedUrl.pathname || '/';
       s.queryJson = Object.keys(queryObj).length ? JSON.stringify(queryObj, null, 2) : '';
       s.headersJson = Object.keys(headersObj).length ? JSON.stringify(headersObj, null, 2) : '';
-      s.bodyJson = bodyText ? JSON.stringify(bodyObj, null, 2) : '';
+      s.bodyJson = bodyJsonText;
     });
   }
 
