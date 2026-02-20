@@ -105,6 +105,8 @@
   let dbPreviewError = '';
   let dbLoadedKey = '';
   let generatedApiPreview = '';
+  let previewDraft = '';
+  let editingPreview = false;
   let previewSyncError = '';
   let exampleRequestEl: HTMLTextAreaElement | null = null;
   let generatedPreviewEl: HTMLTextAreaElement | null = null;
@@ -240,6 +242,7 @@
     });
     saveSources();
     generatedApiPreview = buildGeneratedPreview(getSelected());
+    if (!editingPreview) previewDraft = generatedApiPreview;
   }
 
   function totalPages() {
@@ -282,6 +285,7 @@
       dbPreviewColumns = Object.keys(first).filter((k) => k !== '__ctid');
       dbLoadedKey = key;
       generatedApiPreview = buildGeneratedPreview(getSelected());
+      if (!editingPreview) previewDraft = generatedApiPreview;
     } catch (e: any) {
       dbPreviewError = e?.message ?? String(e);
     } finally {
@@ -601,8 +605,9 @@
   loadAll();
   $: if (selected) ensureTableSelection();
   $: if (selectedId) generatedApiPreview = buildGeneratedPreview(selected);
+  $: if (!editingPreview) previewDraft = generatedApiPreview;
   $: selectedId, tick().then(autosizeCompareTextareas);
-  $: generatedApiPreview, tick().then(autosizeCompareTextareas);
+  $: previewDraft, tick().then(autosizeCompareTextareas);
 </script>
 
 <section class="panel">
@@ -970,9 +975,16 @@
             <textarea
               bind:this={generatedPreviewEl}
               class="preview-readonly"
-              bind:value={generatedApiPreview}
+              bind:value={previewDraft}
+              on:focus={() => (editingPreview = true)}
+              on:blur={() => {
+                editingPreview = false;
+                generatedApiPreview = buildGeneratedPreview(getSelected());
+                previewDraft = generatedApiPreview;
+              }}
               on:input={async (e) => {
-                applyGeneratedPreviewEdit(e.currentTarget.value);
+                previewDraft = e.currentTarget.value;
+                applyGeneratedPreviewEdit(previewDraft);
                 await tick();
                 autosizeCompareTextareas();
               }}
