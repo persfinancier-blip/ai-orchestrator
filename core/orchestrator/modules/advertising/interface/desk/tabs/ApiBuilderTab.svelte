@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
   export type ExistingTable = { schema_name: string; table_name: string };
   type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   type AuthMode = 'none' | 'bearer' | 'basic' | 'apiKey';
@@ -56,6 +56,7 @@
     headersJson: string;
     queryJson: string;
     bodyJson: string;
+    exampleRequest: string;
     auth: AuthConfig;
     pagination: PaginationConfig;
     db: DbConfig;
@@ -101,6 +102,7 @@
   let dbPreviewLoading = false;
   let dbPreviewError = '';
   let dbLoadedKey = '';
+  let generatedApiPreview = '';
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -117,6 +119,7 @@
       headersJson: '',
       queryJson: '',
       bodyJson: '',
+      exampleRequest: '',
       auth: {
         mode: 'none',
         bearerToken: '',
@@ -344,6 +347,93 @@
     return bodyObj;
   }
 
+  type PreparedRequest = {
+    method: HttpMethod;
+    url: string;
+    headersObj: Record<string, any>;
+    sendBody: string | undefined;
+  };
+
+  function prepareRequest(source: ApiSource, rowForBindings?: Record<string, any>): PreparedRequest {
+    let headersObj: Record<string, any> = {};
+    let queryObj: Record<string, any> = {};
+    let bodyObj: any = undefined;
+
+    try {
+      headersObj = parseJsonOrEmpty(source.headersJson);
+      queryObj = parseJsonOrEmpty(source.queryJson);
+      bodyObj = source.bodyJson.trim() ? JSON.parse(source.bodyJson) : {};
+    } catch {
+      throw new Error('РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON РІ headers/query/body');
+    }
+
+    if (source.auth.mode === 'bearer' && source.auth.bearerToken.trim()) {
+      headersObj.Authorization = `Bearer ${source.auth.bearerToken.trim()}`;
+    }
+    if (source.auth.mode === 'basic') {
+      headersObj.Authorization = basicAuthHeader(source.auth.basicUsername, source.auth.basicPassword);
+    }
+    if (source.auth.mode === 'apiKey' && source.auth.apiKeyName.trim()) {
+      if (source.auth.apiKeyIn === 'header') headersObj[source.auth.apiKeyName.trim()] = source.auth.apiKeyValue;
+      if (source.auth.apiKeyIn === 'query') queryObj[source.auth.apiKeyName.trim()] = source.auth.apiKeyValue;
+    }
+
+    if (source.pagination.mode === 'page') {
+      queryObj[source.pagination.pageParam] = source.pagination.pageStart;
+      queryObj[source.pagination.pageSizeParam] = source.pagination.defaultPageSize;
+    }
+    if (source.pagination.mode === 'offset') {
+      queryObj[source.pagination.offsetParam] = source.pagination.offsetStart;
+      queryObj[source.pagination.limitParam] = source.pagination.defaultLimit;
+    }
+
+    if (rowForBindings && source.db.bindings.length) {
+      bodyObj = applyDbBindings(headersObj, queryObj, bodyObj, source, rowForBindings);
+    }
+
+    let url = '';
+    try {
+      url = normalizeUrl(source.baseUrl, source.path, queryObj);
+    } catch {
+      throw new Error('РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ URL РёР»Рё query-РїР°СЂР°РјРµС‚СЂС‹');
+    }
+
+    const sendBody = source.method === 'GET' || source.method === 'DELETE'
+      ? undefined
+      : JSON.stringify(bodyObj ?? {});
+
+    return {
+      method: source.method,
+      url,
+      headersObj,
+      sendBody
+    };
+  }
+
+  function buildGeneratedPreview(source: ApiSource | null): string {
+    if (!source) return '';
+
+    let row: Record<string, any> | undefined = undefined;
+    if (source.db.bindings.length > 0 && dbPreviewRows.length > 0) {
+      const index = Math.max(0, Math.min(source.db.rowIndex, dbPreviewRows.length - 1));
+      row = dbPreviewRows[index];
+    }
+
+    try {
+      const req = prepareRequest(source, row);
+      return [
+        `${req.method} ${req.url}`,
+        '',
+        'Headers:',
+        JSON.stringify(req.headersObj, null, 2),
+        '',
+        'Body:',
+        req.sendBody ?? '(empty)'
+      ].join('\n');
+    } catch (e: any) {
+      return `РћС€РёР±РєР° РїСЂРµРґРїСЂРѕСЃРјРѕС‚СЂР°: ${e?.message ?? String(e)}`;
+    }
+  }
   async function sendTest() {
     err = '';
     respStatus = 0;
@@ -351,38 +441,7 @@
     respText = '';
     if (!selected) return;
 
-    let headersObj: Record<string, any> = {};
-    let queryObj: Record<string, any> = {};
-    let bodyObj: any = undefined;
-
-    try {
-      headersObj = parseJsonOrEmpty(selected.headersJson);
-      queryObj = parseJsonOrEmpty(selected.queryJson);
-      bodyObj = selected.bodyJson.trim() ? JSON.parse(selected.bodyJson) : {};
-    } catch {
-      err = 'Некорректный JSON в headers/query/body';
-      return;
-    }
-
-    if (selected.auth.mode === 'bearer' && selected.auth.bearerToken.trim()) {
-      headersObj.Authorization = `Bearer ${selected.auth.bearerToken.trim()}`;
-    }
-    if (selected.auth.mode === 'basic') {
-      headersObj.Authorization = basicAuthHeader(selected.auth.basicUsername, selected.auth.basicPassword);
-    }
-    if (selected.auth.mode === 'apiKey' && selected.auth.apiKeyName.trim()) {
-      if (selected.auth.apiKeyIn === 'header') headersObj[selected.auth.apiKeyName.trim()] = selected.auth.apiKeyValue;
-      if (selected.auth.apiKeyIn === 'query') queryObj[selected.auth.apiKeyName.trim()] = selected.auth.apiKeyValue;
-    }
-
-    if (selected.pagination.mode === 'page') {
-      queryObj[selected.pagination.pageParam] = selected.pagination.pageStart;
-      queryObj[selected.pagination.pageSizeParam] = selected.pagination.defaultPageSize;
-    }
-    if (selected.pagination.mode === 'offset') {
-      queryObj[selected.pagination.offsetParam] = selected.pagination.offsetStart;
-      queryObj[selected.pagination.limitParam] = selected.pagination.defaultLimit;
-    }
+    let rowForBindings: Record<string, any> | undefined = undefined;
 
     const needsDb = !!(selected.db.schema && selected.db.table && selected.db.bindings.length);
     if (needsDb) {
@@ -395,37 +454,33 @@
         return;
       }
       const index = Math.max(0, Math.min(selected.db.rowIndex, dbPreviewRows.length - 1));
-      bodyObj = applyDbBindings(headersObj, queryObj, bodyObj, selected, dbPreviewRows[index]);
+      rowForBindings = dbPreviewRows[index];
     }
 
-    let url = '';
+    let prepared: PreparedRequest;
     try {
-      url = normalizeUrl(selected.baseUrl, selected.path, queryObj);
-    } catch {
-      err = 'Некорректный URL или Query параметры';
+      prepared = prepareRequest(selected, rowForBindings);
+    } catch (e: any) {
+      err = e?.message ?? String(e);
       return;
     }
-
-    const sendBody = selected.method === 'GET' || selected.method === 'DELETE'
-      ? undefined
-      : JSON.stringify(bodyObj ?? {});
 
     const item: HistoryItem = {
       ts: Date.now(),
       sourceId: selected.id,
-      method: selected.method,
-      url,
-      requestHeadersJson: JSON.stringify(headersObj, null, 2),
-      requestBodyJson: sendBody || ''
+      method: prepared.method,
+      url: prepared.url,
+      requestHeadersJson: JSON.stringify(prepared.headersObj, null, 2),
+      requestBodyJson: prepared.sendBody || ''
     };
 
     sending = true;
     const t0 = performance.now();
     try {
-      const res = await fetch(url, {
-        method: selected.method,
-        headers: { 'Content-Type': 'application/json', ...headersObj },
-        body: sendBody
+      const res = await fetch(prepared.url, {
+        method: prepared.method,
+        headers: { 'Content-Type': 'application/json', ...prepared.headersObj },
+        body: prepared.sendBody
       });
 
       item.status = res.status;
@@ -451,7 +506,6 @@
       sending = false;
     }
   }
-
   function clearHistory() {
     history = [];
     saveHistory();
@@ -460,30 +514,31 @@
 
   loadAll();
   $: if (selected) ensureTableSelection();
+  $: generatedApiPreview = buildGeneratedPreview(selected);
 </script>
 
 <section class="panel">
   <div class="panel-head">
-    <h2>API (конструктор)</h2>
+    <h2>API (РєРѕРЅСЃС‚СЂСѓРєС‚РѕСЂ)</h2>
     <div class="quick">
-      <button on:click={newSource}>+ Новый</button>
-      <button class="danger" on:click={deleteSelected} disabled={!selectedId}>Удалить</button>
-      <button class="danger" on:click={clearHistory} disabled={history.length === 0}>Очистить историю</button>
+      <button on:click={newSource}>+ РќРѕРІС‹Р№</button>
+      <button class="danger" on:click={deleteSelected} disabled={!selectedId}>РЈРґР°Р»РёС‚СЊ</button>
+      <button class="danger" on:click={clearHistory} disabled={history.length === 0}>РћС‡РёСЃС‚РёС‚СЊ РёСЃС‚РѕСЂРёСЋ</button>
     </div>
   </div>
 
   {#if err}
     <div class="alert">
-      <div class="alert-title">Ошибка</div>
+      <div class="alert-title">РћС€РёР±РєР°</div>
       <pre>{err}</pre>
     </div>
   {/if}
 
   <div class="layout">
     <aside class="aside">
-      <div class="aside-title">Сохраненные API</div>
+      <div class="aside-title">РЎРѕС…СЂР°РЅРµРЅРЅС‹Рµ API</div>
       {#if sources.length === 0}
-        <div class="hint">Пока нет ни одного.</div>
+        <div class="hint">РџРѕРєР° РЅРµС‚ РЅРё РѕРґРЅРѕРіРѕ.</div>
       {:else}
         <div class="list">
           {#each sources as s (s.id)}
@@ -498,13 +553,13 @@
 
     <div class="main">
       {#if !selected}
-        <div class="hint">Создай или выбери API слева.</div>
+        <div class="hint">РЎРѕР·РґР°Р№ РёР»Рё РІС‹Р±РµСЂРё API СЃР»РµРІР°.</div>
       {:else}
         {#key selectedId}
           <div class="card">
             <div class="grid">
               <label>
-                Название
+                РќР°Р·РІР°РЅРёРµ
                 <input value={selected.name} on:input={(e) => mutateSelected((s) => (s.name = e.currentTarget.value))} />
               </label>
 
@@ -527,10 +582,10 @@
             </div>
 
             <div class="subcard">
-              <h3>Авторизация</h3>
+              <h3>РђРІС‚РѕСЂРёР·Р°С†РёСЏ</h3>
               <div class="grid">
                 <label>
-                  Тип
+                  РўРёРї
                   <select value={selected.auth.mode} on:change={(e) => mutateSelected((s) => (s.auth.mode = toAuthMode(e.currentTarget.value)))}>
                     <option value="none">none</option>
                     <option value="bearer">bearer</option>
@@ -567,7 +622,7 @@
                     <input value={selected.auth.apiKeyValue} on:input={(e) => mutateSelected((s) => (s.auth.apiKeyValue = e.currentTarget.value))} />
                   </label>
                   <label>
-                    Передавать в
+                    РџРµСЂРµРґР°РІР°С‚СЊ РІ
                     <select value={selected.auth.apiKeyIn} on:change={(e) => mutateSelected((s) => (s.auth.apiKeyIn = toApiKeyIn(e.currentTarget.value)))}>
                       <option value="header">header</option>
                       <option value="query">query</option>
@@ -578,10 +633,10 @@
             </div>
 
             <div class="subcard">
-              <h3>Пагинация</h3>
+              <h3>РџР°РіРёРЅР°С†РёСЏ</h3>
               <div class="grid">
                 <label>
-                  Тип
+                  РўРёРї
                   <select value={selected.pagination.mode} on:change={(e) => mutateSelected((s) => (s.pagination.mode = toPaginationMode(e.currentTarget.value)))}>
                     <option value="none">none</option>
                     <option value="page">page</option>
@@ -647,10 +702,29 @@
             </div>
 
             <div class="subcard">
-              <h3>Параметры из БД</h3>
+              <h3>Сравнение API</h3>
+              <div class="grid">
+                <label class="wide">
+                  Пример API (вставьте вручную)
+                  <textarea
+                    value={selected.exampleRequest}
+                    on:input={(e) => mutateSelected((s) => (s.exampleRequest = e.currentTarget.value))}
+                    placeholder="Вставьте пример запроса от документации или коллег"
+                  ></textarea>
+                </label>
+
+                <label class="wide">
+                  Предпросмотр моего API (авто)
+                  <textarea class="preview-readonly" value={generatedApiPreview} readonly></textarea>
+                </label>
+              </div>
+            </div>
+
+            <div class="subcard">
+              <h3>РџР°СЂР°РјРµС‚СЂС‹ РёР· Р‘Р”</h3>
               <div class="grid">
                 <label>
-                  Таблица
+                  РўР°Р±Р»РёС†Р°
                   <select value={`${selected.db.schema}.${selected.db.table}`} on:change={(e) => {
                     const v = e.currentTarget.value;
                     const [schema, table] = v.split('.');
@@ -668,13 +742,13 @@
                 </label>
 
                 <label>
-                  Строка preview (индекс)
+                  РЎС‚СЂРѕРєР° preview (РёРЅРґРµРєСЃ)
                   <input type="number" min="0" value={selected.db.rowIndex} on:input={(e) => mutateSelected((s) => (s.db.rowIndex = Number(e.currentTarget.value || 0)))} />
                 </label>
 
                 <div class="inline-actions">
-                  <button on:click={refreshTables}>Обновить список таблиц</button>
-                  <button on:click={loadDbPreview}>Загрузить preview</button>
+                  <button on:click={refreshTables}>РћР±РЅРѕРІРёС‚СЊ СЃРїРёСЃРѕРє С‚Р°Р±Р»РёС†</button>
+                  <button on:click={loadDbPreview}>Р—Р°РіСЂСѓР·РёС‚СЊ preview</button>
                 </div>
               </div>
 
@@ -683,12 +757,12 @@
               {/if}
 
               <div class="bindings-head">
-                <b>Привязки параметров</b>
-                <button on:click={addBinding} disabled={dbPreviewColumns.length === 0}>+ Добавить привязку</button>
+                <b>РџСЂРёРІСЏР·РєРё РїР°СЂР°РјРµС‚СЂРѕРІ</b>
+                <button on:click={addBinding} disabled={dbPreviewColumns.length === 0}>+ Р”РѕР±Р°РІРёС‚СЊ РїСЂРёРІСЏР·РєСѓ</button>
               </div>
 
               {#if selected.db.bindings.length === 0}
-                <p class="hint">Нет привязок. Добавь хотя бы одну, чтобы подставлять значения из таблицы в query/header/body.</p>
+                <p class="hint">РќРµС‚ РїСЂРёРІСЏР·РѕРє. Р”РѕР±Р°РІСЊ С…РѕС‚СЏ Р±С‹ РѕРґРЅСѓ, С‡С‚РѕР±С‹ РїРѕРґСЃС‚Р°РІР»СЏС‚СЊ Р·РЅР°С‡РµРЅРёСЏ РёР· С‚Р°Р±Р»РёС†С‹ РІ query/header/body.</p>
               {:else}
                 <div class="bindings">
                   {#each selected.db.bindings as b}
@@ -717,14 +791,14 @@
                         {/each}
                       </select>
 
-                      <button class="danger" on:click={() => removeBinding(b.id)}>Удалить</button>
+                      <button class="danger" on:click={() => removeBinding(b.id)}>РЈРґР°Р»РёС‚СЊ</button>
                     </div>
                   {/each}
                 </div>
               {/if}
 
               {#if dbPreviewLoading}
-                <p class="hint">Загрузка preview...</p>
+                <p class="hint">Р—Р°РіСЂСѓР·РєР° preview...</p>
               {:else if dbPreviewRows.length > 0}
                 <div class="preview-wrap">
                   <table>
@@ -743,14 +817,14 @@
 
             <div class="actions">
               <button class="primary" on:click={sendTest} disabled={sending}>
-                {sending ? 'Отправляю...' : 'Тест-запрос'}
+                {sending ? 'РћС‚РїСЂР°РІР»СЏСЋ...' : 'РўРµСЃС‚-Р·Р°РїСЂРѕСЃ'}
               </button>
-              <div class="muted">Ответ: status {respStatus || '-'}</div>
+              <div class="muted">РћС‚РІРµС‚: status {respStatus || '-'}</div>
             </div>
           </div>
 
           <div class="card">
-            <h3>Ответ</h3>
+            <h3>РћС‚РІРµС‚</h3>
             <details open>
               <summary>Headers</summary>
               <pre>{JSON.stringify(respHeaders, null, 2)}</pre>
@@ -763,7 +837,7 @@
 
           <div class="card">
             <div class="hist-head">
-              <h3>История запросов</h3>
+              <h3>РСЃС‚РѕСЂРёСЏ Р·Р°РїСЂРѕСЃРѕРІ</h3>
               <div class="pager">
                 <label>
                   page size
@@ -774,14 +848,14 @@
                   </select>
                 </label>
 
-                <button on:click={() => (page = Math.max(1, page - 1))} disabled={page <= 1}>←</button>
+                <button on:click={() => (page = Math.max(1, page - 1))} disabled={page <= 1}>в†ђ</button>
                 <span class="muted">{page} / {totalPages()}</span>
-                <button on:click={() => (page = Math.min(totalPages(), page + 1))} disabled={page >= totalPages()}>→</button>
+                <button on:click={() => (page = Math.min(totalPages(), page + 1))} disabled={page >= totalPages()}>в†’</button>
               </div>
             </div>
 
             {#if history.length === 0}
-              <div class="hint">Пока пусто.</div>
+              <div class="hint">РџРѕРєР° РїСѓСЃС‚Рѕ.</div>
             {:else}
               <div class="hist-list">
                 {#each pagedHistory() as h (h.ts)}
@@ -835,6 +909,7 @@
   label { display:flex; flex-direction:column; gap:6px; font-size:13px; }
   input, select, textarea { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; outline:none; background:#fff; }
   textarea { min-height: 90px; resize: vertical; }
+  .preview-readonly { background:#f8fafc; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   .wide { grid-column: 1 / -1; }
 
   .inline-actions { display:flex; gap:8px; align-items:end; flex-wrap:wrap; }
