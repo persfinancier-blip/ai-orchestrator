@@ -541,11 +541,22 @@
   function extractBodyCandidate(text: string): { found: boolean; body: string } {
     const t = text || '';
     const lines = t.split(/\r?\n/);
-    const bodyIdx = lines.findIndex((x) => x.trim() === 'Body:');
+    const bodyIdx = lines.findIndex((x) => /^body\s*:\s*$/i.test(x.trim()));
     if (bodyIdx >= 0) {
       const raw = lines.slice(bodyIdx + 1).join('\n').trim();
       return { found: true, body: raw === '(empty)' ? '' : raw };
     }
+
+    // Generic fallback: if there is a JSON-looking block anywhere, treat it as body.
+    const jsonStartIdx = lines.findIndex((x) => {
+      const s = x.trim();
+      return s.startsWith('{') || s.startsWith('[');
+    });
+    if (jsonStartIdx >= 0) {
+      const raw = lines.slice(jsonStartIdx).join('\n').trim();
+      return { found: true, body: raw };
+    }
+
     const trimmed = t.trim();
     if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
       return { found: true, body: trimmed };
