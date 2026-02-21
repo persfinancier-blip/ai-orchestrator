@@ -357,7 +357,7 @@
                         <td>{typeof r[c.name] === 'object' ? JSON.stringify(r[c.name]) : String(r[c.name] ?? '')}</td>
                       {/each}
                       <td class="rowactions">
-                        <button class="trash" on:click={() => confirmDeleteRow(r.__ctid)} disabled={!canWrite()} title="Удалить строку">🗑</button>
+                        <button class="trash" on:click={() => confirmDeleteRow(r.__ctid)} disabled={!canWrite()} title="Удалить строку">x</button>
                       </td>
                     </tr>
                   {/each}
