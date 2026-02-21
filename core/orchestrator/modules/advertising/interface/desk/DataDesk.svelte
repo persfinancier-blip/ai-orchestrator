@@ -113,8 +113,10 @@
   }
 
   function onCreated(schema: string, table: string) {
-    tab = 'tables';
     refreshTables();
+    if (tab === 'constructor') {
+      constructorRenderKey += 1;
+    }
   }
 
   async function hardReloadConstructor(): Promise<void> {
