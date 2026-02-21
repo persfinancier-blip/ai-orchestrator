@@ -185,23 +185,13 @@
   }
 
   function startNewTemplate() {
-    selectedTemplateId = '';
-    templateNameDraft = '';
-    error = '';
-  }
-
-  function saveCurrentTemplate() {
     const name = String(templateNameDraft || '').trim();
     const cols = normalizeColumns(columns);
     if (!name) throw new Error('Укажи название шаблона');
     if (!cols.length) throw new Error('Добавь хотя бы одно поле');
 
-    const idxById = selectedTemplateId ? tableTemplates.findIndex((x) => x.id === selectedTemplateId) : -1;
-    const idxByName = idxById < 0 ? tableTemplates.findIndex((x) => x.name === name) : -1;
-    const idx = idxById >= 0 ? idxById : idxByName;
-
-    const next: TableTemplate = {
-      id: idx >= 0 ? tableTemplates[idx].id : uid(),
+    const newTemplate: TableTemplate = {
+      id: uid(),
       name,
       schema_name: schema_name.trim(),
       table_name: table_name.trim(),
@@ -213,11 +203,40 @@
       partition_interval
     };
 
-    if (idx >= 0) tableTemplates[idx] = next;
-    else tableTemplates = [next, ...tableTemplates];
+    tableTemplates = [newTemplate, ...tableTemplates];
+    selectedTemplateId = newTemplate.id;
+    templateNameDraft = newTemplate.name;
+    saveTableTemplates();
+    error = '';
+  }
 
-    selectedTemplateId = next.id;
-    templateNameDraft = next.name;
+  function saveCurrentTemplate() {
+    if (!selectedTemplateId) throw new Error('Сначала добавь или выбери шаблон');
+    if (selectedTemplateId.startsWith('builtin_')) {
+      throw new Error('Встроенный шаблон нельзя сохранить. Нажми «Добавить шаблон»');
+    }
+
+    const idx = tableTemplates.findIndex((x) => x.id === selectedTemplateId);
+    if (idx < 0) throw new Error('Активный шаблон не найден');
+
+    const name = String(templateNameDraft || '').trim();
+    const cols = normalizeColumns(columns);
+    if (!name) throw new Error('Укажи название шаблона');
+    if (!cols.length) throw new Error('Добавь хотя бы одно поле');
+
+    tableTemplates[idx] = {
+      ...tableTemplates[idx],
+      name,
+      schema_name: schema_name.trim(),
+      table_name: table_name.trim(),
+      table_class: table_class.trim() || 'custom',
+      description: description.trim(),
+      columns: cols,
+      partition_enabled,
+      partition_column: partition_column.trim(),
+      partition_interval
+    };
+
     saveTableTemplates();
     error = '';
   }
