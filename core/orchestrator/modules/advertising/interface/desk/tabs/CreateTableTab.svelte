@@ -36,6 +36,7 @@
 
   const typeOptions = ['text', 'int', 'bigint', 'numeric', 'boolean', 'date', 'timestamptz', 'jsonb', 'uuid'];
   const CREATE_TIMEOUT_MS = 30000;
+  const IDENT_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
   const CREATE_BUTTON_LABEL = 'Создать таблицу';
   const CREATE_WAIT_LABEL = 'Запрос создания отправлен. Ожидаем ответ сервера...';
   const DATA_CONTRACTS_KEY = 'ao_data_contracts_v1';
@@ -703,16 +704,21 @@
     if (!schema_name.trim()) throw new Error('Укажи схему');
     if (!table_name.trim()) throw new Error('Укажи имя таблицы');
     if (!table_class.trim()) throw new Error('Укажи класс');
-    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(schema_name.trim())) {
+    if (!IDENT_RE.test(schema_name.trim())) {
       throw new Error('Схема: только латиница, цифры и _, первый символ — буква или _');
     }
-    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(table_name.trim())) {
+    if (!IDENT_RE.test(table_name.trim())) {
       throw new Error('Имя таблицы: только латиница, цифры и _, первый символ — буква или _');
     }
 
     const cols = normalizeColumns(columns);
     if (cols.length === 0) throw new Error('Добавь хотя бы одно поле');
-    for (const c of cols) if (!c.field_type) throw new Error('Укажи тип для каждого поля');
+    for (const c of cols) {
+      if (!c.field_type) throw new Error('Укажи тип для каждого поля');
+      if (!IDENT_RE.test(c.field_name)) {
+        throw new Error(`Поле «${c.field_name}»: только латиница, цифры и _, первый символ — буква или _`);
+      }
+    }
 
     if (partition_enabled) {
       if (!partition_column.trim()) throw new Error('Партиционирование включено: укажи колонку');
