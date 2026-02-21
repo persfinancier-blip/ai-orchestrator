@@ -81,8 +81,9 @@
   }
 
   function dbConnectionLabel() {
-    const dbPart = dbStatus === 'ok' ? 'OK' : dbStatus === 'checking' ? 'Проверка...' : 'Ошибка';
-    const extra = dbStatusMessage && dbStatus !== 'ok' ? ` ${dbStatusMessage}` : '';
+    const hasTables = existingTables.length > 0;
+    const dbPart = hasTables ? 'OK' : dbStatus === 'error' ? 'Ошибка' : loading ? 'Проверка...' : dbStatus === 'ok' ? 'OK' : 'Проверка...';
+    const extra = dbStatus === 'error' && dbStatusMessage ? ` ${dbStatusMessage}` : '';
     return `Подключение к базе: ${dbPart}. Таблиц доступно: ${existingTables.length}.${extra}`;
   }
 

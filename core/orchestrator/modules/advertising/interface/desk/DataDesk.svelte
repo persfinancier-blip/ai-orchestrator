@@ -101,10 +101,6 @@
     <button class:active={tab === 'data_management'} on:click={() => (tab = 'data_management')}>Управление данными</button>
   </nav>
 
-  <div class="db-status" class:ok={dbStatus === 'ok'} class:error={dbStatus === 'error'}>
-    {dbStatusMessage}
-  </div>
-
   {#if error}
     <div class="alert">
       <div class="alert-title">Ошибка</div>
@@ -160,10 +156,6 @@
   .tabs { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
   .tabs button { padding:8px 12px; border-radius:12px; border:1px solid #e6eaf2; background:#fff; cursor:pointer; }
   .tabs button.active { background:#0f172a; color:#fff; border-color:#0f172a; }
-  .db-status { margin-top:12px; border:1px solid #e6eaf2; border-radius:12px; padding:10px 12px; background:#f8fafc; color:#334155; font-size:13px; }
-  .db-status.ok { border-color:#bbf7d0; background:#f0fdf4; color:#166534; }
-  .db-status.error { border-color:#fecaca; background:#fef2f2; color:#991b1b; }
-
   .alert { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #f3c0c0; background: #fff5f5; }
   .alert-title { font-weight: 700; margin-bottom: 6px; }
   pre { margin:0; white-space: pre-wrap; word-break: break-word; }
