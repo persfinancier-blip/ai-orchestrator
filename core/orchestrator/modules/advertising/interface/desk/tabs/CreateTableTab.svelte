@@ -225,6 +225,10 @@
       columns: [
         { field_name: 'contract_name', field_type: 'text', description: 'имя шаблона (новое поле)' },
         { field_name: 'template_name', field_type: 'text', description: 'legacy: имя шаблона' },
+        { field_name: 'data_contract_schema', field_type: 'text', description: 'схема таблицы контрактов данных' },
+        { field_name: 'data_contract_table', field_type: 'text', description: 'таблица контрактов данных' },
+        { field_name: 'data_contract_version', field_type: 'int', description: 'версия связанного контракта данных' },
+        { field_name: 'data_contract_state', field_type: 'text', description: 'состояние связанного контракта данных' },
         { field_name: 'schema_name', field_type: 'text', description: 'схема таблицы' },
         { field_name: 'table_name', field_type: 'text', description: 'имя таблицы' },
         { field_name: 'table_class', field_type: 'text', description: 'класс таблицы' },
@@ -1074,6 +1078,7 @@
   .actions { margin-top:14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
   .template-controls { display:flex; flex-direction:column; gap:8px; margin-bottom:8px; }
   .inline-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .inline-actions button { flex:1 1 0; width:50%; }
   .storage-meta { margin-top:0; margin-bottom:8px; display:flex; align-items:center; gap:6px; font-size:12px; color:#64748b; }
   .templates-meta { margin-top:0; }
   .link-btn { border:0; background:transparent; color:#0f172a; padding:0; text-decoration:underline; font-size:12px; font-weight:500; }
