@@ -309,11 +309,12 @@
       }
 
       const map = new Map(cols.map((c) => [String(c.name || '').toLowerCase(), normalizeTypeName(c.type)]));
-      storage_has_contract_name = map.has('contract_name');
       storage_has_template_name = map.has('template_name');
-      if (!storage_has_contract_name && !storage_has_template_name) {
+      if (!storage_has_template_name) {
         storage_status = 'invalid';
-        storage_status_message = storageInstruction('Структура таблицы не подходит: нет колонки contract_name или template_name.');
+        storage_status_message = storageInstruction(
+          `Структура ${schema}.${table} не подходит: колонка template_name отсутствует или имеет неверный тип.`
+        );
         return false;
       }
       for (const need of STORAGE_REQUIRED_COLUMNS) {
