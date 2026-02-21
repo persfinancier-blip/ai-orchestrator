@@ -134,6 +134,9 @@
   let authTemplateRows: KvRow[] = [];
   let authTemplates: Array<{ id: string; name: string; type: string; fields: AuthTemplateField[] }> = [];
   let selectedAuthTemplateId = '';
+  let headersRawError = '';
+  let headersSyncLock: 'left' | 'right' | null = null;
+  let headersRawDebounce: any = null;
   let settingsRawDraft = '';
   let scriptRawDraft = '';
   let paramRows: KvRow[] = [];
@@ -214,6 +217,7 @@
     urlInput = `${selected.baseUrl.replace(/\/$/, '')}${selected.path.startsWith('/') ? selected.path : `/${selected.path}`}`;
     paramsRawDraft = selected.queryJson || '';
     headersRawDraft = selected.headersJson || '';
+    headersRawError = '';
     bodyRawDraft = selected.bodyJson || '';
     const t = selected.authTemplate || { name: '', type: 'custom', fields: [] };
     authTemplateNameDraft = String(t.name || '');
@@ -255,9 +259,13 @@
   }
 
   function syncHeadersRowsToRaw() {
+    if (headersSyncLock === 'right') return;
+    headersSyncLock = 'left';
     const raw = JSON.stringify(kvRowsToObject(headerRows), null, 2);
     headersRawDraft = raw;
     mutateSelected((s) => (s.headersJson = raw === '{}' ? '' : raw));
+    headersRawError = '';
+    headersSyncLock = null;
   }
 
   function syncBodyRowsToRaw() {
@@ -278,12 +286,26 @@
 
   function parseHeadersRaw() {
     try {
-      headerRows = objectToKvRows(safeJsonParse(headersRawDraft));
-      mutateSelected((s) => (s.headersJson = headersRawDraft.trim()));
+      const parsed = safeJsonParse(headersRawDraft);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('bad_raw');
+      headersSyncLock = 'right';
+      headerRows = objectToKvRows(parsed);
+      mutateSelected((s) => (s.headersJson = headersRawDraft.trim() || ''));
+      headersRawError = '';
       err = '';
     } catch {
-      err = 'Заголовки RAW: некорректный JSON';
+      headersRawError = 'Некорректный JSON. Проверь скобки и кавычки.';
+    } finally {
+      headersSyncLock = null;
     }
+  }
+
+  function scheduleParseHeadersRaw() {
+    if (headersSyncLock === 'left') return;
+    if (headersRawDebounce) clearTimeout(headersRawDebounce);
+    headersRawDebounce = setTimeout(() => {
+      parseHeadersRaw();
+    }, 400);
   }
 
   function parseBodyRaw() {
@@ -1472,25 +1494,45 @@
             </div>
 
             <div class="subcard">
-              <h3>Заголовок</h3>
-              <div class="inline-actions">
-                <button on:click={() => { headerRows = [...headerRows, { id: uid(), key: '', value: '' }]; }}>+ Параметр</button>
-                <button on:click={syncHeadersRowsToRaw}>Собрать RAW</button>
-                <button on:click={parseHeadersRaw}>Разобрать RAW</button>
-              </div>
-              <div class="bindings">
-                {#each headerRows as r (r.id)}
-                  <div class="binding-row">
-                    <input placeholder="header" value={r.key} on:input={(e) => { r.key = e.currentTarget.value; headerRows = [...headerRows]; syncHeadersRowsToRaw(); }} />
-                    <input placeholder="value" value={r.value} on:input={(e) => { r.value = e.currentTarget.value; headerRows = [...headerRows]; syncHeadersRowsToRaw(); }} />
-                    <button class="danger" on:click={() => { headerRows = headerRows.filter((x) => x.id !== r.id); syncHeadersRowsToRaw(); }}>Удалить</button>
+              <h3>Headers</h3>
+              <div class="auth-split">
+                <div class="auth-left">
+                  <div class="auth-fields">
+                    <div class="auth-rows">
+                      {#each headerRows as r (r.id)}
+                        <div class="auth-row">
+                          <input
+                            class="key-col"
+                            placeholder="Название"
+                            value={r.key}
+                            on:input={(e) => { r.key = e.currentTarget.value; headerRows = [...headerRows]; syncHeadersRowsToRaw(); }}
+                          />
+                          <input
+                            class="val-col"
+                            placeholder="Значение"
+                            value={r.value}
+                            on:input={(e) => { r.value = e.currentTarget.value; headerRows = [...headerRows]; syncHeadersRowsToRaw(); }}
+                          />
+                          <button class="danger" on:click={() => { headerRows = headerRows.filter((x) => x.id !== r.id); syncHeadersRowsToRaw(); }}>x</button>
+                        </div>
+                      {/each}
+                    </div>
+                    <button on:click={() => { headerRows = [...headerRows, { id: uid(), key: '', value: '' }]; syncHeadersRowsToRaw(); }}>+ Добавить поле</button>
                   </div>
-                {/each}
+                </div>
+                <div class="auth-right">
+                  <textarea
+                    class:invalid={!!headersRawError}
+                    bind:value={headersRawDraft}
+                    placeholder={PLACEHOLDER_HEADERS}
+                    on:input={scheduleParseHeadersRaw}
+                    on:blur={parseHeadersRaw}
+                  ></textarea>
+                  {#if headersRawError}
+                    <p class="error">{headersRawError}</p>
+                  {/if}
+                </div>
               </div>
-              <label class="wide">
-                RAW (Headers)
-                <textarea bind:value={headersRawDraft} placeholder={PLACEHOLDER_HEADERS}></textarea>
-              </label>
             </div>
 
             <div class="subcard">
