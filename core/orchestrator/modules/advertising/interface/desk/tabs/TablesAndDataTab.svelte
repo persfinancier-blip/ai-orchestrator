@@ -372,7 +372,7 @@
                     </td>
                   {/each}
                   <td class="rowactions">
-                    <button class="addrow" on:click={addRowNow} disabled={!canWrite()} title="Добавить строку">Добавить</button>
+                    <button class="addrow-icon" on:click={addRowNow} disabled={!canWrite()} title="Добавить строку">+</button>
                   </td>
                 </tr>
               </tfoot>
@@ -543,13 +543,13 @@
 
   .thwrap { display:flex; align-items:center; justify-content:space-between; gap:10px; }
   .thname { font-weight:700; }
-  .xbtn { border-color:transparent; background:transparent; color:#b91c1c; border-radius:10px; padding:2px 8px; cursor:pointer; text-transform:lowercase; }
+  .xbtn { border-color:transparent; background:transparent; color:#b91c1c; border-radius:10px; width:34px; min-width:34px; padding:6px 0; cursor:pointer; text-transform:lowercase; font-size:14px; font-weight:400; line-height:1; }
   .thadd { width: 1%; white-space: nowrap; }
-  .plusbtn { border-radius:12px; border:1px solid #e6eaf2; padding:6px 10px; background:#fff; cursor:pointer; }
+  .plusbtn { border-radius:12px; border-color:transparent; background:transparent; width:34px; min-width:34px; padding:6px 0; font-size:20px; line-height:1; cursor:pointer; }
 
   .rowactions { width: 1%; white-space: nowrap; }
   .trash { border-color:transparent; background:transparent; color:#b91c1c; border-radius:12px; padding:6px 10px; cursor:pointer; }
-  .addrow { border-radius:12px; border:1px solid #0f172a; padding:8px 10px; background:#0f172a; color:#fff; cursor:pointer; }
+  .addrow-icon { border-radius:12px; border-color:transparent; background:transparent; width:34px; min-width:34px; padding:6px 0; font-size:20px; line-height:1; cursor:pointer; }
 
   .cellinput { width: 100%; border-radius: 12px; border:1px solid #e6eaf2; padding:8px 10px; }
 
