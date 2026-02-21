@@ -45,12 +45,14 @@
   const STORAGE_DEFAULT_SCHEMA = 'ao_system';
   const STORAGE_DEFAULT_TABLE = 'table_templates_store';
   const STORAGE_CONTRACT_NAME = 'System: Хранилище шаблонов таблиц';
-  const DEFAULT_CONTRACT_ID = 'builtin_default_contract';
-  const SYSTEM_CONTRACT_FIELDS: ColumnDef[] = [
+  const REQUIRED_TABLE_FIELDS: ColumnDef[] = [
     { field_name: 'ao_source', field_type: 'text', description: 'источник данных (техническое поле)' },
     { field_name: 'ao_run_id', field_type: 'text', description: 'идентификатор запуска (техническое поле)' },
     { field_name: 'ao_created_at', field_type: 'timestamptz', description: 'время создания записи (техническое поле)' },
-    { field_name: 'ao_updated_at', field_type: 'timestamptz', description: 'время обновления записи (техническое поле)' }
+    { field_name: 'ao_updated_at', field_type: 'timestamptz', description: 'время обновления записи (техническое поле)' },
+    { field_name: 'ao_contract_schema', field_type: 'text', description: 'схема таблицы контракта данных' },
+    { field_name: 'ao_contract_name', field_type: 'text', description: 'имя контракта данных' },
+    { field_name: 'ao_contract_version', field_type: 'int', description: 'версия контракта данных' }
   ];
 
   let error = '';
@@ -59,7 +61,7 @@
   let description = '';
   let descriptionEl: HTMLTextAreaElement | null = null;
   let table_class = 'custom';
-  let columns: ColumnDef[] = [{ field_name: '', field_type: 'text', description: '' }];
+  let columns: ColumnDef[] = REQUIRED_TABLE_FIELDS.map((c) => ({ ...c }));
   let partition_enabled = false;
   let partition_column = 'event_date';
   let partition_interval: 'day' | 'month' = 'day';
@@ -75,8 +77,6 @@
   let storage_status_message = '';
   let storage_has_contract_name = false;
   let storage_has_template_name = false;
-  let storage_has_contract_version = false;
-  let storage_has_contract_mode = false;
 
   let result_modal_open = false;
   let result_modal_title = '';
@@ -135,7 +135,7 @@
       .filter((c) => c.field_name.length > 0);
   }
 
-  function withSystemContractFields(cols: ColumnDef[]) {
+  function withRequiredTableFields(cols: ColumnDef[]) {
     const base = (Array.isArray(cols) ? cols : []).map((c) => ({
       field_name: String(c?.field_name || '').trim(),
       field_type: String(c?.field_type || 'text').trim(),
@@ -143,29 +143,12 @@
     }));
     const existing = new Set(base.map((c) => c.field_name.toLowerCase()));
     const merged = [...base];
-    for (const sys of SYSTEM_CONTRACT_FIELDS) {
+    for (const sys of REQUIRED_TABLE_FIELDS) {
       if (!existing.has(sys.field_name.toLowerCase())) {
         merged.push({ ...sys });
       }
     }
     return merged;
-  }
-
-  function defaultDataContract(): DataContract {
-    return {
-      id: DEFAULT_CONTRACT_ID,
-      name: 'Default',
-      schema_name: 'showcase',
-      table_name: 'new_table',
-      table_class: 'custom',
-      description: 'Шаблон по умолчанию с системными полями',
-      columns: withSystemContractFields([]),
-      partition_enabled: false,
-      partition_column: '',
-      partition_interval: 'day',
-      contract_version: 1,
-      contract_mode: 'safe_add_only'
-    };
   }
 
   function bronzeTemplate(): DataContract {
@@ -176,7 +159,7 @@
       table_name: 'wb_ads_raw1',
       table_class: 'bronze_raw',
       description: 'Сырые ответы API (append-only JSON)',
-      columns: withSystemContractFields([
+      columns: withRequiredTableFields([
         { field_name: 'dataset', field_type: 'text', description: 'dataset name' },
         { field_name: 'endpoint', field_type: 'text', description: 'endpoint name' },
         { field_name: 'request_id', field_type: 'text', description: 'request id' },
@@ -199,7 +182,7 @@
       table_name: 'wb_ads_daily',
       table_class: 'silver_table',
       description: 'Дневная агрегированная таблица рекламы',
-      columns: withSystemContractFields([
+      columns: withRequiredTableFields([
         { field_name: 'event_date', field_type: 'date', description: 'дата метрики' },
         { field_name: 'campaign_id', field_type: 'text', description: 'идентификатор кампании' },
         { field_name: 'impressions', field_type: 'bigint', description: 'показы' },
@@ -223,19 +206,12 @@
       table_class: 'custom',
       description: 'Служебная таблица для хранения шаблонов блока «Создание таблиц»',
       columns: [
-        { field_name: 'contract_name', field_type: 'text', description: 'имя шаблона (новое поле)' },
-        { field_name: 'template_name', field_type: 'text', description: 'legacy: имя шаблона' },
-        { field_name: 'data_contract_schema', field_type: 'text', description: 'схема таблицы контрактов данных' },
-        { field_name: 'data_contract_table', field_type: 'text', description: 'таблица контрактов данных' },
-        { field_name: 'data_contract_version', field_type: 'int', description: 'версия связанного контракта данных' },
-        { field_name: 'data_contract_state', field_type: 'text', description: 'состояние связанного контракта данных' },
+        { field_name: 'template_name', field_type: 'text', description: 'имя шаблона' },
         { field_name: 'schema_name', field_type: 'text', description: 'схема таблицы' },
         { field_name: 'table_name', field_type: 'text', description: 'имя таблицы' },
         { field_name: 'table_class', field_type: 'text', description: 'класс таблицы' },
         { field_name: 'description', field_type: 'text', description: 'описание' },
         { field_name: 'columns', field_type: 'jsonb', description: 'json список полей' },
-        { field_name: 'contract_version', field_type: 'int', description: 'версия шаблона (техническое поле)' },
-        { field_name: 'contract_mode', field_type: 'text', description: 'режим шаблона (техническое поле)' },
         { field_name: 'partition_enabled', field_type: 'boolean', description: 'включено ли партиционирование' },
         { field_name: 'partition_column', field_type: 'text', description: 'колонка партиционирования' },
         { field_name: 'partition_interval', field_type: 'text', description: 'интервал партиционирования' }
@@ -251,7 +227,7 @@
   function contractsSystemTemplate(): DataContract {
     return {
       id: 'builtin_data_contracts_table',
-      name: 'System: Таблица контрактов данных',
+      name: 'System: Хранилище контрактов данных',
       schema_name: 'ao_system',
       table_name: 'table_data_contract_versions',
       table_class: 'custom',
@@ -279,6 +255,7 @@
   }
 
   const STORAGE_REQUIRED_COLUMNS = [
+    { name: 'template_name', types: ['text', 'character varying', 'varchar'] },
     { name: 'schema_name', types: ['text', 'character varying', 'varchar'] },
     { name: 'table_name', types: ['text', 'character varying', 'varchar'] },
     { name: 'table_class', types: ['text', 'character varying', 'varchar'] },
@@ -334,8 +311,6 @@
       const map = new Map(cols.map((c) => [String(c.name || '').toLowerCase(), normalizeTypeName(c.type)]));
       storage_has_contract_name = map.has('contract_name');
       storage_has_template_name = map.has('template_name');
-      storage_has_contract_version = map.has('contract_version');
-      storage_has_contract_mode = map.has('contract_mode');
       if (!storage_has_contract_name && !storage_has_template_name) {
         storage_status = 'invalid';
         storage_status_message = storageInstruction('Структура таблицы не подходит: нет колонки contract_name или template_name.');
@@ -411,7 +386,7 @@
           storage_ctids: r?.ctid ? [String(r.ctid)] : []
         });
       }
-      tableTemplates = [defaultDataContract(), bronzeTemplate(), silverTemplate(), storageSystemTemplate(), contractsSystemTemplate(), ...custom];
+      tableTemplates = [bronzeTemplate(), silverTemplate(), storageSystemTemplate(), contractsSystemTemplate(), ...custom];
       error = '';
     } catch (e: any) {
       storage_status = 'error';
@@ -446,9 +421,9 @@
             contract_mode: x?.contract_mode === 'strict_sync' ? 'strict_sync' : 'safe_add_only'
           }))
         : [];
-      tableTemplates = [defaultDataContract(), bronzeTemplate(), silverTemplate(), storageSystemTemplate(), contractsSystemTemplate(), ...custom];
+      tableTemplates = [bronzeTemplate(), silverTemplate(), storageSystemTemplate(), contractsSystemTemplate(), ...custom];
     } catch {
-      tableTemplates = [defaultDataContract(), bronzeTemplate(), silverTemplate(), storageSystemTemplate(), contractsSystemTemplate()];
+      tableTemplates = [bronzeTemplate(), silverTemplate(), storageSystemTemplate(), contractsSystemTemplate()];
     }
   }
 
@@ -457,7 +432,7 @@
     table_name = t.table_name;
     table_class = t.table_class;
     description = t.description;
-    columns = (t.columns || []).map((c) => ({ ...c }));
+    columns = withRequiredTableFields((t.columns || []).map((c) => ({ ...c })));
     partition_enabled = !!t.partition_enabled;
     partition_column = t.partition_column || 'event_date';
     partition_interval = t.partition_interval || 'day';
@@ -476,7 +451,6 @@
   async function loadTableTemplates() {
     parseStorageTableConfig();
     await loadTemplatesFromStorage();
-    applyDefaultContractIfEmpty();
   }
 
   function saveTableTemplatesLocal() {
@@ -514,10 +488,8 @@
       partition_column: t.partition_column || '',
       partition_interval: t.partition_interval || 'day'
     };
-    if (storage_has_contract_name) row.contract_name = t.name;
     if (storage_has_template_name) row.template_name = t.name;
-    if (storage_has_contract_version) row.contract_version = Number(t.contract_version || 1);
-    if (storage_has_contract_mode) row.contract_mode = t.contract_mode || 'safe_add_only';
+    if (!storage_has_template_name && storage_has_contract_name) row.contract_name = t.name;
 
     await apiJson(`${apiBase}/rows/add`, {
       method: 'POST',
@@ -557,17 +529,9 @@
     applyTemplate(t);
   }
 
-  function applyDefaultContractIfEmpty() {
-    if (selectedTemplateId) return;
-    if (schema_name.trim() || table_name.trim() || description.trim()) return;
-    if (normalizeColumns(columns).length > 0) return;
-    const d = tableTemplates.find((t) => t.id === DEFAULT_CONTRACT_ID);
-    if (d) applyTemplate(d);
-  }
-
   async function startNewTemplate() {
     const name = String(templateNameDraft || '').trim();
-    const cols = normalizeColumns(columns);
+    const cols = withRequiredTableFields(normalizeColumns(columns));
     if (!name) throw new Error('Укажи название шаблона');
     if (!cols.length) throw new Error('Добавь хотя бы одно поле');
     if (storage_status !== 'ok') throw new Error(storage_status_message || 'Сначала подключи таблицу хранения шаблонов');
@@ -609,7 +573,7 @@
     if (storage_status !== 'ok') throw new Error(storage_status_message || 'Сначала подключи таблицу хранения шаблонов');
 
     const name = String(templateNameDraft || '').trim();
-    const cols = normalizeColumns(columns);
+    const cols = withRequiredTableFields(normalizeColumns(columns));
     if (!name) throw new Error('Укажи название шаблона');
     if (!cols.length) throw new Error('Добавь хотя бы одно поле');
 
@@ -698,9 +662,16 @@
     columns = [...columns, { field_name: '', field_type: 'text', description: '' }];
   }
 
+  function isRequiredField(name: string) {
+    const n = String(name || '').trim().toLowerCase();
+    return REQUIRED_TABLE_FIELDS.some((f) => f.field_name.toLowerCase() === n);
+  }
+
   function removeField(ix: number) {
+    const fieldName = String(columns[ix]?.field_name || '');
+    if (isRequiredField(fieldName)) return;
     columns = columns.filter((_, i) => i !== ix);
-    if (columns.length === 0) columns = [{ field_name: '', field_type: 'text', description: '' }];
+    if (columns.length === 0) columns = REQUIRED_TABLE_FIELDS.map((c) => ({ ...c }));
   }
 
   function validate() {
@@ -729,7 +700,7 @@
       if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
 
       validate();
-      const cols = normalizeColumns(columns);
+      const cols = withRequiredTableFields(normalizeColumns(columns));
 
       const response = await apiJson(`${apiBase}/tables/create`, {
         method: 'POST',
@@ -924,7 +895,12 @@
                 {/each}
               </select>
               <input placeholder="описание" bind:value={c.description} />
-              <button class="danger icon-btn" on:click={() => removeField(ix)} title="Удалить поле">x</button>
+              <button
+                class="danger icon-btn"
+                on:click={() => removeField(ix)}
+                disabled={isRequiredField(c.field_name)}
+                title={isRequiredField(c.field_name) ? 'Обязательное поле' : 'Удалить поле'}
+              >x</button>
             </div>
           {/each}
           <div class="fields-footer">
@@ -984,7 +960,13 @@
         {#each tableTemplates as t}
           <div class="row-item" class:activeitem={selectedTemplateId === t.id}>
             <button class="item-button" on:click={() => applySelectedTemplate(t.id)}>{t.name}</button>
-            <button class="danger icon-btn" on:click={() => onDeleteTemplateClick(t.id)} title="Удалить шаблон">x</button>
+            <div class="row-actions">
+              {#if t.id.startsWith('builtin_')}
+                <span class="system-badge">System</span>
+              {:else}
+                <button class="danger icon-btn" on:click={() => onDeleteTemplateClick(t.id)} title="Удалить шаблон">x</button>
+              {/if}
+            </div>
           </div>
         {/each}
       </div>
@@ -1024,6 +1006,8 @@
   .aside-title { font-weight:700; font-size:14px; line-height:1.3; margin-bottom:0; }
   .list { display:flex; flex-direction:column; gap:8px; overflow:visible; max-height:none; }
   .row-item { display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; border:1px solid #e6eaf2; border-radius:14px; background:#fff; padding:8px 10px; }
+  .row-actions { display:flex; align-items:center; justify-content:flex-end; min-width:54px; }
+  .system-badge { font-size:11px; line-height:1; padding:4px 8px; border-radius:999px; border:1px solid #cbd5e1; color:#334155; background:#f8fafc; font-weight:600; }
   .row-name { font-weight:400; font-size:13px; line-height:1.25; word-break:break-word; }
   .item-button { text-align:left; border:0; background:transparent; padding:0; font-weight:400; font-size:13px; line-height:1.25; color:inherit; }
   .activeitem { border-color:#0f172a; background:#0f172a; color:#fff; }
@@ -1032,7 +1016,9 @@
   .tables-list .row-name { color:#fff; }
   .templates-list .row-item { background:#0f172a; border-color:#0f172a; }
   .templates-list .item-button { color:#fff; }
+  .templates-list .system-badge { border-color:#334155; color:#e2e8f0; background:#1e293b; }
   .templates-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
+  .templates-list .activeitem .system-badge { border-color:#cbd5e1; color:#334155; background:#f8fafc; }
   .templates-list .activeitem .item-button { color:#0f172a; font-size:15px; font-weight:600; letter-spacing:.01em; }
   .templates-list .activeitem .item-button::before { content:'●'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
 
