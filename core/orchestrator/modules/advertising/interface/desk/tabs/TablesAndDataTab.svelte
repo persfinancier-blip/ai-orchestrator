@@ -760,13 +760,14 @@
               <div class="row-actions">
                 {#if isActiveContract(c)}
                   <span class="system-badge">Active</span>
+                {:else}
+                  <button
+                    class="danger icon-btn"
+                    on:click={() => deleteContractVersion(c)}
+                    disabled={!canWrite()}
+                    title="Удалить версию контракта"
+                  >x</button>
                 {/if}
-                <button
-                  class="danger icon-btn"
-                  on:click={() => deleteContractVersion(c)}
-                  disabled={!canWrite()}
-                  title="Удалить версию контракта"
-                >x</button>
               </div>
             </div>
           {/each}
