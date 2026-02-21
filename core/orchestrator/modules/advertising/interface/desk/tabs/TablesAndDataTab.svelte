@@ -55,7 +55,6 @@
   let contracts_error = '';
   let contractVersions: ContractVersion[] = [];
   let selectedContractId = '';
-  let activeContractVersion = 0;
   let contracts_storage_schema = 'ao_system';
   let contracts_storage_table = 'table_data_contract_versions';
   let contracts_storage_picker_open = false;
@@ -237,8 +236,7 @@
           created_at: String(r?.created_at || '')
         }))
         .sort((a, b) => b.version - a.version);
-      const active = contractVersions.find((x) => String(x.lifecycle_state || '').trim() === 'active');
-      activeContractVersion = Number(active?.version || contractVersions[0]?.version || 0);
+      const active = contractVersions.find((x) => isActiveContract(x));
       if (!selectedContractId || !contractVersions.some((x) => contractRowId(x) === selectedContractId)) {
         selectedContractId = contractRowId(active || contractVersions[0]);
       }
@@ -246,7 +244,6 @@
       contracts_error = e?.message ?? String(e);
       contractVersions = [];
       selectedContractId = '';
-      activeContractVersion = 0;
     } finally {
       contracts_loading = false;
     }
@@ -256,23 +253,23 @@
     return contractRowId(c) === selectedContractId;
   }
 
-  function isActiveContractVersion(version: number) {
-    return Number(version) === Number(activeContractVersion);
+  function isActiveContract(c: ContractVersion | null | undefined) {
+    return String(c?.lifecycle_state || '').trim() === 'active';
   }
 
-  function canDeleteContractVersion(version: number) {
-    return canWrite() && !isActiveContractVersion(version);
+  function canDeleteContractVersion(c: ContractVersion | null | undefined) {
+    return canWrite() && !isActiveContract(c);
   }
 
-  async function deleteContractVersion(version: number) {
+  async function deleteContractVersion(contract: ContractVersion) {
     try {
       if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
-      if (isActiveContractVersion(version)) throw new Error('Активную версию контракта удалить нельзя');
+      if (isActiveContract(contract)) throw new Error('Активную версию контракта удалить нельзя');
       if (!preview_schema || !preview_table) throw new Error('Таблица не выбрана');
+      const version = Number(contract?.version || 0);
       const ok = confirm(`Удалить версию контракта v${version}?`);
       if (!ok) return;
-      const hit = contractVersions.find((x) => Number(x.version) === Number(version));
-      const ctid = String(hit?.__ctid || '');
+      const ctid = String(contract?.__ctid || '');
       if (!ctid) throw new Error('Не найден CTID версии контракта для удаления');
 
       await apiJson(`${apiBase}/rows/delete`, {
@@ -780,13 +777,13 @@
                 {#if c.lifecycle_state === 'table_deleted'} · таблица удалена{/if}
               </button>
               <div class="row-actions">
-                {#if isActiveContractVersion(c.version)}
+                {#if isActiveContract(c)}
                   <span class="system-badge">Active</span>
                 {:else}
                   <button
                     class="danger icon-btn"
-                    on:click={() => deleteContractVersion(c.version)}
-                    disabled={!canDeleteContractVersion(c.version)}
+                    on:click={() => deleteContractVersion(c)}
+                    disabled={!canDeleteContractVersion(c)}
                     title="Удалить версию контракта"
                   >x</button>
                 {/if}
