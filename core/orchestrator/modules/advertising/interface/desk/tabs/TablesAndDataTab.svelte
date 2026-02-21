@@ -763,6 +763,9 @@
                 {#if c.lifecycle_state === 'table_deleted'} · таблица удалена{/if}
               </button>
               <div class="row-actions">
+                {#if selectedContractId === c.id}
+                  <span class="system-badge">Active</span>
+                {/if}
                 <button
                   class="danger icon-btn"
                   on:click={() => deleteContractVersion(c)}
