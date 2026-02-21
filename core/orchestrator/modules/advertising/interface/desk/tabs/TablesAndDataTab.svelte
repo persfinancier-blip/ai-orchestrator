@@ -54,6 +54,7 @@
   let contracts_storage_picker_open = false;
   let contracts_storage_pick_value = '';
   const SETTINGS_SYSTEM_TABLE = 'ao_system.table_settings_store';
+  const SERVER_WRITES_SYSTEM_TABLE = 'ao_system.table_server_writes_store';
 
   const CONTRACTS_REQUIRED_COLUMNS = [
     { name: 'schema_name', types: ['text', 'character varying', 'varchar'] },
@@ -73,12 +74,13 @@
     return role === 'data_admin';
   }
 
-  function isSettingsSystemTable(schema: string, table: string): boolean {
-    return `${String(schema || '').trim()}.${String(table || '').trim()}` === SETTINGS_SYSTEM_TABLE;
+  function isSystemTable(schema: string, table: string): boolean {
+    const qn = `${String(schema || '').trim()}.${String(table || '').trim()}`;
+    return qn === SETTINGS_SYSTEM_TABLE || qn === SERVER_WRITES_SYSTEM_TABLE;
   }
 
   function canEditSelectedTable(): boolean {
-    return canWrite() && !isSettingsSystemTable(preview_schema, preview_table);
+    return canWrite() && !isSystemTable(preview_schema, preview_table);
   }
 
   async function parseContractsStorageConfig() {
@@ -466,7 +468,7 @@
                 {t.schema_name}.{t.table_name}
               </button>
               <div class="row-actions">
-                {#if isSettingsSystemTable(t.schema_name, t.table_name)}
+                {#if isSystemTable(t.schema_name, t.table_name)}
                   <span class="system-badge">System</span>
                 {:else}
                   <button

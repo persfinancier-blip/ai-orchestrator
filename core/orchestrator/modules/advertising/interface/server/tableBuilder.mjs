@@ -1,4 +1,4 @@
-import express from 'express';
+﻿import express from 'express';
 import { pool } from './db.mjs';
 
 export const tableBuilderRouter = express.Router();
@@ -40,11 +40,16 @@ const DEFAULT_CONFIG = Object.freeze({
   contracts_schema: 'ao_system',
   contracts_table: 'table_data_contract_versions',
   templates_schema: 'ao_system',
-  templates_table: 'table_templates_store'
+  templates_table: 'table_templates_store',
+  server_writes_schema: 'ao_system',
+  server_writes_table: 'table_server_writes_store'
 });
 const SETTINGS_CACHE_MS = Number(process.env.AO_SETTINGS_CACHE_MS || 5000);
 let settingsCache = { at: 0, value: { ...DEFAULT_CONFIG } };
-const PROTECTED_SYSTEM_TABLES = new Set([`${SETTINGS_SCHEMA}.${SETTINGS_TABLE}`]);
+let PROTECTED_SYSTEM_TABLES = new Set([
+  `${SETTINGS_SCHEMA}.${SETTINGS_TABLE}`,
+  `${DEFAULT_CONFIG.server_writes_schema}.${DEFAULT_CONFIG.server_writes_table}`
+]);
 const SETTINGS_REQUIRED_COLUMNS = [
   { name: 'setting_key', types: ['text', 'character varying', 'varchar'] },
   { name: 'setting_value', types: ['jsonb', 'json'] },
@@ -78,6 +83,18 @@ const TEMPLATES_REQUIRED_COLUMNS = [
   { name: 'partition_column', types: ['text', 'character varying', 'varchar'] },
   { name: 'partition_interval', types: ['text', 'character varying', 'varchar'] }
 ];
+const SERVER_WRITES_REQUIRED_COLUMNS = [
+  { name: 'rule_key', types: ['text', 'character varying', 'varchar'] },
+  { name: 'target_schema', types: ['text', 'character varying', 'varchar'] },
+  { name: 'target_table', types: ['text', 'character varying', 'varchar'] },
+  { name: 'operation', types: ['text', 'character varying', 'varchar'] },
+  { name: 'payload', types: ['jsonb', 'json'] },
+  { name: 'scope', types: ['text', 'character varying', 'varchar'] },
+  { name: 'description', types: ['text', 'character varying', 'varchar'] },
+  { name: 'is_active', types: ['boolean'] },
+  { name: 'updated_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] },
+  { name: 'updated_by', types: ['text', 'character varying', 'varchar'] }
+];
 const SYSTEM_CONTRACT_COLUMNS = [
   { name: 'ao_source', type: 'text' },
   { name: 'ao_run_id', type: 'text' },
@@ -95,6 +112,16 @@ function normalizeSettingIdent(value, fallback) {
 
 function contractsQname(config) {
   return `${qi(config.contracts_schema)}.${qi(config.contracts_table)}`;
+}
+
+function syncProtectedSystemTables(config) {
+  const next = new Set([`${SETTINGS_SCHEMA}.${SETTINGS_TABLE}`]);
+  if (config?.server_writes_schema && config?.server_writes_table) {
+    next.add(`${config.server_writes_schema}.${config.server_writes_table}`);
+  } else {
+    next.add(`${DEFAULT_CONFIG.server_writes_schema}.${DEFAULT_CONFIG.server_writes_table}`);
+  }
+  PROTECTED_SYSTEM_TABLES = next;
 }
 
 function isProtectedSystemTable(schema, table) {
@@ -195,6 +222,11 @@ async function ensureDefaultSettingsRows(client) {
       key: 'templates_storage',
       value: { schema: DEFAULT_CONFIG.templates_schema, table: DEFAULT_CONFIG.templates_table },
       description: 'Хранилище шаблонов таблиц'
+    },
+    {
+      key: 'server_writes_storage',
+      value: { schema: DEFAULT_CONFIG.server_writes_schema, table: DEFAULT_CONFIG.server_writes_table },
+      description: 'Хранилище правил серверных записей'
     }
   ];
 
@@ -202,12 +234,20 @@ async function ensureDefaultSettingsRows(client) {
     await client.query(
       `
       INSERT INTO ${SETTINGS_QNAME}
-        (setting_key, setting_value, scope, description, is_active, updated_at, updated_by)
+        (setting_key, setting_value, scope, description, is_active, updated_at, updated_by,
+         ao_source, ao_run_id, ao_created_at, ao_updated_at, ao_contract_schema, ao_contract_name, ao_contract_version)
       VALUES
-        ($1, $2::jsonb, 'global', $3, true, now(), 'system_bootstrap')
+        ($1, $2::jsonb, 'global', $3, true, now(), 'system_bootstrap',
+         'system_bootstrap', 'settings_bootstrap', now(), now(), $4, $5, 1)
       ON CONFLICT (setting_key) DO NOTHING
       `,
-      [row.key, JSON.stringify(row.value), row.description]
+      [
+        row.key,
+        JSON.stringify(row.value),
+        row.description,
+        DEFAULT_CONFIG.contracts_schema,
+        defaultContractName(SETTINGS_SCHEMA, SETTINGS_TABLE)
+      ]
     );
   }
 }
@@ -239,6 +279,20 @@ function applySettingValue(target, key, value) {
   }
   if (key === 'templates_storage_table') {
     target.templates_table = normalizeSettingIdent(value, target.templates_table);
+    return;
+  }
+  if (key === 'server_writes_storage') {
+    const parsed = parseStorageSettingValue(value);
+    target.server_writes_schema = normalizeSettingIdent(parsed.schema, target.server_writes_schema);
+    target.server_writes_table = normalizeSettingIdent(parsed.table, target.server_writes_table);
+    return;
+  }
+  if (key === 'server_writes_storage_schema') {
+    target.server_writes_schema = normalizeSettingIdent(value, target.server_writes_schema);
+    return;
+  }
+  if (key === 'server_writes_storage_table') {
+    target.server_writes_table = normalizeSettingIdent(value, target.server_writes_table);
   }
 }
 
@@ -286,6 +340,60 @@ async function loadRuntimeConfig(client, { force = false } = {}) {
     next.templates_table = DEFAULT_CONFIG.templates_table;
   }
 
+  const serverWritesOk = await hasRequiredColumns(
+    client,
+    next.server_writes_schema,
+    next.server_writes_table,
+    SERVER_WRITES_REQUIRED_COLUMNS
+  );
+  if (!serverWritesOk) {
+    next.server_writes_schema = DEFAULT_CONFIG.server_writes_schema;
+    next.server_writes_table = DEFAULT_CONFIG.server_writes_table;
+  }
+
+  const contractsQn = await ensureContractsTable(client, next);
+  const templatesQn = await ensureTemplatesStorageTable(client, next);
+  const serverWritesQn = await ensureServerWritesTable(client, next);
+  await ensureDefaultServerWriteRules(client, next, serverWritesQn);
+
+  await ensureContractVersionForTable(
+    client,
+    contractsQn,
+    SETTINGS_SCHEMA,
+    SETTINGS_TABLE,
+    'system_bootstrap:settings_storage',
+    'system_bootstrap',
+    next.contracts_schema
+  );
+  await ensureContractVersionForTable(
+    client,
+    contractsQn,
+    next.contracts_schema,
+    next.contracts_table,
+    'system_bootstrap:contracts_storage',
+    'system_bootstrap',
+    next.contracts_schema
+  );
+  await ensureContractVersionForTable(
+    client,
+    contractsQn,
+    next.templates_schema,
+    next.templates_table,
+    'system_bootstrap:templates_storage',
+    'system_bootstrap',
+    next.contracts_schema
+  );
+  await ensureContractVersionForTable(
+    client,
+    contractsQn,
+    next.server_writes_schema,
+    next.server_writes_table,
+    'system_bootstrap:server_writes_storage',
+    'system_bootstrap',
+    next.contracts_schema
+  );
+
+  syncProtectedSystemTables(next);
   settingsCache = { at: now, value: next };
   return next;
 }
@@ -360,6 +468,119 @@ async function ensureTemplatesStorageTable(client, config) {
   return templatesQn;
 }
 
+async function ensureServerWritesTable(client, config) {
+  const schema = normalizeSettingIdent(config?.server_writes_schema, DEFAULT_CONFIG.server_writes_schema);
+  const table = normalizeSettingIdent(config?.server_writes_table, DEFAULT_CONFIG.server_writes_table);
+  const qn = `${qi(schema)}.${qi(table)}`;
+
+  await client.query(`CREATE SCHEMA IF NOT EXISTS ${qi(schema)}`);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ${qn} (
+      id bigserial PRIMARY KEY,
+      rule_key text NOT NULL UNIQUE,
+      target_schema text NOT NULL,
+      target_table text NOT NULL,
+      operation text NOT NULL,
+      payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+      scope text NOT NULL DEFAULT 'global',
+      description text NOT NULL DEFAULT '',
+      is_active boolean NOT NULL DEFAULT true,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      updated_by text NOT NULL DEFAULT 'system'
+    )
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_table_server_writes_store_active_idx
+    ON ${qn} (is_active, rule_key)
+  `);
+  await ensureSystemContractColumns(client, qn);
+  return qn;
+}
+
+async function ensureDefaultServerWriteRules(client, config, serverWritesQn) {
+  const contractsSchema = normalizeSettingIdent(config?.contracts_schema, DEFAULT_CONFIG.contracts_schema);
+  const contractsTable = normalizeSettingIdent(config?.contracts_table, DEFAULT_CONFIG.contracts_table);
+  const templatesSchema = normalizeSettingIdent(config?.templates_schema, DEFAULT_CONFIG.templates_schema);
+  const templatesTable = normalizeSettingIdent(config?.templates_table, DEFAULT_CONFIG.templates_table);
+  const writesSchema = normalizeSettingIdent(config?.server_writes_schema, DEFAULT_CONFIG.server_writes_schema);
+  const writesTable = normalizeSettingIdent(config?.server_writes_table, DEFAULT_CONFIG.server_writes_table);
+  const contractName = defaultContractName(writesSchema, writesTable);
+
+  const defaults = [
+    {
+      rule_key: 'settings_defaults_bootstrap',
+      target_schema: SETTINGS_SCHEMA,
+      target_table: SETTINGS_TABLE,
+      operation: 'upsert_settings_defaults',
+      payload: { setting_keys: ['contracts_storage', 'templates_storage', 'server_writes_storage'] },
+      description: 'Сервер поддерживает обязательные ключи в таблице настроек'
+    },
+    {
+      rule_key: 'contracts_auto_create',
+      target_schema: contractsSchema,
+      target_table: contractsTable,
+      operation: 'insert_contract_version',
+      payload: { trigger: ['table_create', 'column_add', 'column_drop', 'table_rename', 'system_bootstrap'] },
+      description: 'Сервер автоматически создает версии контрактов данных'
+    },
+    {
+      rule_key: 'templates_storage_sync',
+      target_schema: templatesSchema,
+      target_table: templatesTable,
+      operation: 'upsert_template',
+      payload: { trigger: ['template_add', 'template_save', 'template_delete'] },
+      description: 'Сервер сохраняет шаблоны таблиц в подключенное хранилище'
+    },
+    {
+      rule_key: 'server_writes_rules_self',
+      target_schema: writesSchema,
+      target_table: writesTable,
+      operation: 'upsert_rule',
+      payload: { trigger: ['bootstrap', 'settings_reload'] },
+      description: 'Сервер поддерживает актуальные правила записей'
+    }
+  ];
+
+  for (const row of defaults) {
+    await client.query(
+      `
+      INSERT INTO ${serverWritesQn}
+        (rule_key, target_schema, target_table, operation, payload, scope, description, is_active, updated_at, updated_by,
+         ao_source, ao_run_id, ao_created_at, ao_updated_at, ao_contract_schema, ao_contract_name, ao_contract_version)
+      VALUES
+        ($1, $2, $3, $4, $5::jsonb, 'global', $6, true, now(), 'system_bootstrap',
+         'system_bootstrap', 'server_rules_bootstrap', now(), now(), $7, $8, 1)
+      ON CONFLICT (rule_key)
+      DO UPDATE SET
+        target_schema = EXCLUDED.target_schema,
+        target_table = EXCLUDED.target_table,
+        operation = EXCLUDED.operation,
+        payload = EXCLUDED.payload,
+        description = EXCLUDED.description,
+        is_active = true,
+        updated_at = now(),
+        updated_by = 'system_bootstrap',
+        ao_source = EXCLUDED.ao_source,
+        ao_run_id = EXCLUDED.ao_run_id,
+        ao_updated_at = now(),
+        ao_contract_schema = EXCLUDED.ao_contract_schema,
+        ao_contract_name = EXCLUDED.ao_contract_name,
+        ao_contract_version = EXCLUDED.ao_contract_version
+      `,
+      [
+        row.rule_key,
+        row.target_schema,
+        row.target_table,
+        row.operation,
+        JSON.stringify(row.payload),
+        row.description,
+        contractsSchema,
+        contractName
+      ]
+    );
+  }
+}
+
 async function ensureSystemContractColumns(client, tableQname) {
   for (const c of SYSTEM_CONTRACT_COLUMNS) {
     await client.query(`ALTER TABLE ${tableQname} ADD COLUMN IF NOT EXISTS ${qi(c.name)} ${c.type}`);
@@ -419,6 +640,10 @@ async function getTableDescription(client, schema, table) {
 async function getNextContractVersion(client, schema, table) {
   const config = await loadRuntimeConfig(client);
   const contractsQn = await ensureContractsTable(client, config);
+  return getNextContractVersionWithQn(client, contractsQn, schema, table);
+}
+
+async function getNextContractVersionWithQn(client, contractsQn, schema, table) {
   const r = await client.query(
     `SELECT COALESCE(MAX(version), 0) AS max_v FROM ${contractsQn} WHERE schema_name = $1 AND table_name = $2`,
     [schema, table]
@@ -430,13 +655,31 @@ async function getNextContractVersion(client, schema, table) {
 async function createContractVersion(client, { schema, table, description, columns, reason, by }) {
   const config = await loadRuntimeConfig(client);
   const contractsQn = await ensureContractsTable(client, config);
-  const version = await getNextContractVersion(client, schema, table);
+  return createContractVersionWithQn(client, contractsQn, {
+    schema,
+    table,
+    description,
+    columns,
+    reason,
+    by,
+    contracts_schema: config.contracts_schema
+  });
+}
+
+async function createContractVersionWithQn(
+  client,
+  contractsQn,
+  { schema, table, description, columns, reason, by, contracts_schema = DEFAULT_CONFIG.contracts_schema }
+) {
+  const version = await getNextContractVersionWithQn(client, contractsQn, schema, table);
   await client.query(
     `
     INSERT INTO ${contractsQn}
-      (schema_name, table_name, contract_name, version, lifecycle_state, deleted_at, description, columns, change_reason, changed_by)
+      (schema_name, table_name, contract_name, version, lifecycle_state, deleted_at, description, columns, change_reason, changed_by,
+       ao_source, ao_run_id, ao_created_at, ao_updated_at, ao_contract_schema, ao_contract_name, ao_contract_version)
     VALUES
-      ($1, $2, $3, $4, 'active', NULL, $5, $6::jsonb, $7, $8)
+      ($1, $2, $3, $4, 'active', NULL, $5, $6::jsonb, $7, $8,
+       'table_builder', $9, now(), now(), $10, $3, $4)
     `,
     [
       schema,
@@ -446,7 +689,9 @@ async function createContractVersion(client, { schema, table, description, colum
       String(description || ''),
       JSON.stringify(Array.isArray(columns) ? columns : []),
       String(reason || ''),
-      String(by || 'ui')
+      String(by || 'ui'),
+      `${String(reason || 'contract_update').replace(/[^a-zA-Z0-9_:-]/g, '_')}_${Date.now()}`,
+      String(contracts_schema || DEFAULT_CONFIG.contracts_schema)
     ]
   );
   return version;
@@ -456,6 +701,38 @@ async function createContractVersionFromTable(client, schema, table, reason, by)
   const cols = await getTableColumnsSnapshot(client, schema, table);
   const description = await getTableDescription(client, schema, table);
   return createContractVersion(client, { schema, table, description, columns: cols, reason, by });
+}
+
+async function hasActiveContractVersion(client, contractsQn, schema, table) {
+  const r = await client.query(
+    `
+    SELECT 1
+    FROM ${contractsQn}
+    WHERE schema_name = $1
+      AND table_name = $2
+      AND lifecycle_state <> 'deleted_by_user'
+    LIMIT 1
+    `,
+    [schema, table]
+  );
+  return Boolean(r.rows?.length);
+}
+
+async function ensureContractVersionForTable(client, contractsQn, schema, table, reason, by, contractsSchema) {
+  const exists = await hasActiveContractVersion(client, contractsQn, schema, table);
+  if (exists) return false;
+  const cols = await getTableColumnsSnapshot(client, schema, table);
+  const description = await getTableDescription(client, schema, table);
+  await createContractVersionWithQn(client, contractsQn, {
+    schema,
+    table,
+    description,
+    columns: cols,
+    reason,
+    by,
+    contracts_schema: contractsSchema
+  });
+  return true;
 }
 
 async function markContractsDeletedByTableDrop(client, schema, table) {
@@ -626,9 +903,11 @@ tableBuilderRouter.post('/settings/upsert', requireDataAdmin, async (req, res) =
     await client.query(
       `
       INSERT INTO ${SETTINGS_QNAME}
-        (setting_key, setting_value, scope, description, is_active, updated_by, updated_at)
+        (setting_key, setting_value, scope, description, is_active, updated_by, updated_at,
+         ao_source, ao_run_id, ao_created_at, ao_updated_at, ao_contract_schema, ao_contract_name, ao_contract_version)
       VALUES
-        ($1, $2::jsonb, $3, $4, $5, $6, now())
+        ($1, $2::jsonb, $3, $4, $5, $6, now(),
+         'settings_api', $7, now(), now(), $8, $9, 1)
       ON CONFLICT (setting_key)
       DO UPDATE SET
         setting_value = EXCLUDED.setting_value,
@@ -636,14 +915,31 @@ tableBuilderRouter.post('/settings/upsert', requireDataAdmin, async (req, res) =
         description = EXCLUDED.description,
         is_active = EXCLUDED.is_active,
         updated_by = EXCLUDED.updated_by,
-        updated_at = now()
+        updated_at = now(),
+        ao_source = EXCLUDED.ao_source,
+        ao_run_id = EXCLUDED.ao_run_id,
+        ao_updated_at = now(),
+        ao_contract_schema = EXCLUDED.ao_contract_schema,
+        ao_contract_name = EXCLUDED.ao_contract_name,
+        ao_contract_version = EXCLUDED.ao_contract_version
       `,
-      [setting_key, JSON.stringify(setting_value), scope, description, is_active, updated_by]
+      [
+        setting_key,
+        JSON.stringify(setting_value),
+        scope,
+        description,
+        is_active,
+        updated_by,
+        `settings_upsert_${Date.now()}`,
+        DEFAULT_CONFIG.contracts_schema,
+        defaultContractName(SETTINGS_SCHEMA, SETTINGS_TABLE)
+      ]
     );
 
     const effective = await loadRuntimeConfig(client, { force: true });
     await ensureContractsTable(client, effective);
     await ensureTemplatesStorageTable(client, effective);
+    await ensureServerWritesTable(client, effective);
     return res.json({ ok: true, setting_key, effective });
   } catch (e) {
     return res.status(500).json({ error: 'settings_upsert_failed', details: String(e?.message || e) });
@@ -658,6 +954,7 @@ tableBuilderRouter.post('/settings/reload', requireDataAdmin, async (_req, res) 
     const effective = await loadRuntimeConfig(client, { force: true });
     await ensureContractsTable(client, effective);
     await ensureTemplatesStorageTable(client, effective);
+    await ensureServerWritesTable(client, effective);
     return res.json({ ok: true, effective });
   } catch (e) {
     return res.status(500).json({ error: 'settings_reload_failed', details: String(e?.message || e) });
@@ -1158,8 +1455,10 @@ export async function bootstrapTableBuilder() {
     await ensureSettingsTable(client);
     await ensureContractsTable(client, effective);
     await ensureTemplatesStorageTable(client, effective);
+    await ensureServerWritesTable(client, effective);
     return { ok: true, effective };
   } finally {
     client.release();
   }
 }
+

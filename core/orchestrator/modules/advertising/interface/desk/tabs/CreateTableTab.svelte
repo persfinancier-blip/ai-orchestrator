@@ -47,6 +47,7 @@
   const STORAGE_DEFAULT_TABLE = 'table_templates_store';
   const STORAGE_CONTRACT_NAME = 'Хранилище шаблонов таблиц';
   const SETTINGS_SYSTEM_TABLE = 'ao_system.table_settings_store';
+  const SERVER_WRITES_SYSTEM_TABLE = 'ao_system.table_server_writes_store';
   const REQUIRED_TABLE_FIELDS: ColumnDef[] = [
     { field_name: 'ao_source', field_type: 'text', description: 'источник данных (техническое поле)' },
     { field_name: 'ao_run_id', field_type: 'text', description: 'идентификатор запуска (техническое поле)' },
@@ -97,8 +98,9 @@
     return role === 'data_admin';
   }
 
-  function isSettingsSystemTable(schema: string, table: string): boolean {
-    return `${String(schema || '').trim()}.${String(table || '').trim()}` === SETTINGS_SYSTEM_TABLE;
+  function isSystemTable(schema: string, table: string): boolean {
+    const qn = `${String(schema || '').trim()}.${String(table || '').trim()}`;
+    return qn === SETTINGS_SYSTEM_TABLE || qn === SERVER_WRITES_SYSTEM_TABLE;
   }
 
   function sleep(ms: number) {
@@ -289,6 +291,34 @@
     };
   }
 
+  function serverWritesSystemTemplate(): DataContract {
+    return {
+      id: 'builtin_server_writes_table',
+      name: 'Таблица серверных записей',
+      schema_name: 'ao_system',
+      table_name: 'table_server_writes_store',
+      table_class: 'custom',
+      description: 'Системная таблица правил серверных записей в БД',
+      columns: withRequiredTableFields([
+        { field_name: 'rule_key', field_type: 'text', description: 'уникальный ключ правила' },
+        { field_name: 'target_schema', field_type: 'text', description: 'схема таблицы назначения' },
+        { field_name: 'target_table', field_type: 'text', description: 'имя таблицы назначения' },
+        { field_name: 'operation', field_type: 'text', description: 'тип серверной операции' },
+        { field_name: 'payload', field_type: 'jsonb', description: 'параметры операции (json)' },
+        { field_name: 'scope', field_type: 'text', description: 'область действия (global/module)' },
+        { field_name: 'description', field_type: 'text', description: 'описание правила' },
+        { field_name: 'is_active', field_type: 'boolean', description: 'включено ли правило' },
+        { field_name: 'updated_at', field_type: 'timestamptz', description: 'время обновления' },
+        { field_name: 'updated_by', field_type: 'text', description: 'кто обновил' }
+      ]),
+      partition_enabled: false,
+      partition_column: '',
+      partition_interval: 'day',
+      contract_version: 1,
+      contract_mode: 'safe_add_only'
+    };
+  }
+
   const FIELD_TYPE_TO_DB_TYPES: Record<string, string[]> = {
     text: ['text', 'character varying', 'varchar'],
     int: ['integer', 'int4', 'int'],
@@ -422,6 +452,7 @@
         storageSystemTemplate(),
         contractsSystemTemplate(),
         settingsSystemTemplate(),
+        serverWritesSystemTemplate(),
         ...custom
       ];
       error = '';
@@ -439,7 +470,8 @@
       silverTemplate(),
       storageSystemTemplate(),
       contractsSystemTemplate(),
-      settingsSystemTemplate()
+      settingsSystemTemplate(),
+      serverWritesSystemTemplate()
     ];
   }
 
@@ -868,7 +900,7 @@
               <div class="row-item">
                 <div class="row-name">{t.schema_name}.{t.table_name}</div>
                 <div class="row-actions">
-                  {#if isSettingsSystemTable(t.schema_name, t.table_name)}
+                  {#if isSystemTable(t.schema_name, t.table_name)}
                     <span class="system-badge">System</span>
                   {:else}
                     <button class="danger icon-btn" on:click={() => deleteTableNow(t.schema_name, t.table_name)} title="Удалить таблицу">x</button>
