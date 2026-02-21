@@ -622,10 +622,6 @@
       result_modal_title = 'Таблица создана';
       result_modal_text = response ? JSON.stringify(response, null, 2) : 'Операция выполнена успешно.';
       result_modal_open = true;
-
-      forceRefreshTables().catch(() => {
-        // Ошибка обновления списка не должна блокировать результат создания
-      });
     } catch (e: any) {
       error = e?.name === 'AbortError'
         ? 'Сервер не ответил вовремя. Проверьте статус базы и повторите попытку.'
