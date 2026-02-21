@@ -529,11 +529,11 @@
 
   .aside { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#f8fafc; }
   .aside-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
-  .aside-title { font-weight:700; margin-bottom:8px; }
+  .aside-title { font-weight:400; font-size:14px; line-height:1.3; margin-bottom:8px; }
   .list { display:flex; flex-direction:column; gap:8px; overflow:visible; max-height:none; }
   .row-item { display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; border:1px solid #e6eaf2; border-radius:14px; background:#fff; padding:10px 12px; }
-  .row-name { font-weight:700; font-size:14px; line-height:1.2; word-break:break-word; }
-  .item-button { text-align:left; border:0; background:transparent; padding:0; font-weight:700; font-size:14px; line-height:1.2; color:inherit; }
+  .row-name { font-weight:400; font-size:14px; line-height:1.3; word-break:break-word; }
+  .item-button { text-align:left; border:0; background:transparent; padding:0; font-weight:400; font-size:14px; line-height:1.3; color:inherit; }
   .activeitem { border-color:#0f172a; background:#0f172a; color:#fff; }
   .activeitem .item-button { color:#fff; }
   .tables-list .row-item { background:#0f172a; border-color:#0f172a; }
