@@ -454,10 +454,17 @@
           </label>
 
           <div class="w100 partition-toggle">
-            <label class="inline-check">
-              <input type="checkbox" bind:checked={partition_enabled} />
+            <button
+              type="button"
+              class="partition-btn"
+              class:active={partition_enabled}
+              on:click={() => (partition_enabled = !partition_enabled)}
+            >
+              {#if partition_enabled}
+                <span class="partition-indicator">●</span>
+              {/if}
               <span>Партиционирование</span>
-            </label>
+            </button>
           </div>
         </div>
 
@@ -600,8 +607,25 @@
   .fields-footer { margin-top:12px; }
 
   .partition-toggle { display:flex; align-items:flex-start; justify-content:flex-start; }
-  .inline-check { display:inline-flex; align-items:center; gap:8px; font-size:13px; color:#334155; margin:0; line-height:1; }
-  .inline-check input { margin:0; }
+  .partition-btn {
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    background:#0f172a;
+    border-color:#0f172a;
+    color:#fff;
+    font-size:14px;
+    font-weight:500;
+    line-height:1.2;
+    padding:10px 14px;
+  }
+  .partition-btn.active {
+    background:#fff;
+    border-color:#e6eaf2;
+    color:#0f172a;
+    font-weight:600;
+  }
+  .partition-indicator { font-size:11px; line-height:1; }
   .actions { margin-top:14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
   .template-controls { display:flex; flex-direction:column; gap:8px; margin-bottom:8px; }
   .inline-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
