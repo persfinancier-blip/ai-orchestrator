@@ -425,6 +425,29 @@ async function ensureContractsTable(client, config) {
     CREATE INDEX IF NOT EXISTS ao_table_data_contract_versions_lookup_idx
     ON ${contractsQn} (schema_name, table_name, version DESC)
   `);
+  // Normalize legacy data: keep only latest active row per table before enabling unique partial index.
+  await client.query(`
+    WITH ranked AS (
+      SELECT
+        id,
+        ROW_NUMBER() OVER (
+          PARTITION BY schema_name, table_name
+          ORDER BY version DESC, created_at DESC, id DESC
+        ) AS rn
+      FROM ${contractsQn}
+      WHERE lifecycle_state = 'active'
+    )
+    UPDATE ${contractsQn} c
+    SET lifecycle_state = 'inactive'
+    FROM ranked r
+    WHERE c.id = r.id
+      AND r.rn > 1
+  `);
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS ao_table_data_contract_versions_one_active_idx
+    ON ${contractsQn} (schema_name, table_name)
+    WHERE lifecycle_state = 'active'
+  `);
   await ensureSystemContractColumns(client, contractsQn);
 
   const ok = await hasRequiredColumns(client, contractsSchema, contractsTable, CONTRACTS_REQUIRED_COLUMNS);
@@ -674,6 +697,16 @@ async function createContractVersionWithQn(
   const version = await getNextContractVersionWithQn(client, contractsQn, schema, table);
   await client.query(
     `
+    UPDATE ${contractsQn}
+    SET lifecycle_state = 'inactive'
+    WHERE schema_name = $1
+      AND table_name = $2
+      AND lifecycle_state = 'active'
+    `,
+    [schema, table]
+  );
+  await client.query(
+    `
     INSERT INTO ${contractsQn}
       (schema_name, table_name, contract_name, version, lifecycle_state, deleted_at, description, columns, change_reason, changed_by,
        ao_source, ao_run_id, ao_created_at, ao_updated_at, ao_contract_schema, ao_contract_name, ao_contract_version)
@@ -710,7 +743,7 @@ async function hasActiveContractVersion(client, contractsQn, schema, table) {
     FROM ${contractsQn}
     WHERE schema_name = $1
       AND table_name = $2
-      AND lifecycle_state <> 'deleted_by_user'
+      AND lifecycle_state = 'active'
     LIMIT 1
     `,
     [schema, table]
@@ -759,13 +792,28 @@ async function getLatestContractMeta(client, schema, table) {
     FROM ${contractsQn}
     WHERE schema_name = $1
       AND table_name = $2
-      AND lifecycle_state <> 'deleted_by_user'
-    ORDER BY version DESC
+      AND lifecycle_state = 'active'
+    ORDER BY version DESC, created_at DESC, id DESC
     LIMIT 1
     `,
     [schema, table]
   );
-  const row = r.rows?.[0] || null;
+  let row = r.rows?.[0] || null;
+  if (!row) {
+    const fallback = await client.query(
+      `
+      SELECT contract_name, version
+      FROM ${contractsQn}
+      WHERE schema_name = $1
+        AND table_name = $2
+        AND lifecycle_state <> 'deleted_by_user'
+      ORDER BY version DESC, created_at DESC, id DESC
+      LIMIT 1
+      `,
+      [schema, table]
+    );
+    row = fallback.rows?.[0] || null;
+  }
   if (!row) return null;
   return {
     contract_name: String(row.contract_name || defaultContractName(schema, table)),
