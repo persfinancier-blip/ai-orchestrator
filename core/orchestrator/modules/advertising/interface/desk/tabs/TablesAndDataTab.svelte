@@ -128,7 +128,7 @@
       );
       const rows = Array.isArray(j?.rows) ? j.rows : [];
       const fromDb = rows
-        .map((r: any) => String(r?.template_name || '').trim())
+        .map((r: any) => String(r?.contract_name || r?.template_name || '').trim())
         .filter((name: string) => Boolean(name));
 
       const all = ['Bronze', 'Silver', ...fromDb];
@@ -463,21 +463,21 @@
 
     <aside class="aside">
       <div class="aside-head">
-        <div class="aside-title">Шаблоны таблиц</div>
+        <div class="aside-title">Контракты данных</div>
         <button
           class="icon-btn refresh-btn"
           on:click={loadTemplatesPanel}
           disabled={templates_loading}
-          title="Обновить шаблоны"
+          title="Обновить контракты"
         >↻</button>
       </div>
       <div class="storage-meta">
         <span>Хранятся в таблице:</span>
         <span class="plain-value">ao_system.table_templates_store</span>
       </div>
-      <p class="hint">Управление шаблонами выполняется на вкладке «Создание».</p>
+      <p class="hint">Управление контрактами выполняется на вкладке «Создание».</p>
       {#if tableTemplateNames.length === 0}
-        <p class="hint">Шаблоны не найдены.</p>
+        <p class="hint">Контракты не найдены.</p>
       {:else}
         <div class="list templates-list">
           {#each tableTemplateNames as name}

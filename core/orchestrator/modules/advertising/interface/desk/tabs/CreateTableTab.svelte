@@ -18,7 +18,7 @@
   export let existingTables: ExistingTable[] = [];
 
   type ColumnDef = { field_name: string; field_type: string; description?: string };
-  type TableTemplate = {
+  type DataContract = {
     id: string;
     name: string;
     schema_name: string;
@@ -29,6 +29,8 @@
     partition_enabled: boolean;
     partition_column: string;
     partition_interval: 'day' | 'month';
+    contract_version: number;
+    contract_mode: 'safe_add_only' | 'strict_sync';
     storage_ctids?: string[];
   };
 
@@ -36,11 +38,13 @@
   const CREATE_TIMEOUT_MS = 30000;
   const CREATE_BUTTON_LABEL = 'Создать таблицу';
   const CREATE_WAIT_LABEL = 'Запрос создания отправлен. Ожидаем ответ сервера...';
-  const TABLE_TEMPLATES_KEY = 'ao_create_table_templates_v1';
-  const TABLE_TEMPLATES_STORAGE_KEY = 'ao_create_table_templates_storage_v1';
+  const DATA_CONTRACTS_KEY = 'ao_data_contracts_v1';
+  const DATA_CONTRACTS_STORAGE_KEY = 'ao_data_contracts_storage_v1';
+  const TABLE_TEMPLATES_KEY = 'ao_create_table_templates_v1'; // legacy fallback
+  const TABLE_TEMPLATES_STORAGE_KEY = 'ao_create_table_templates_storage_v1'; // legacy fallback
   const STORAGE_DEFAULT_SCHEMA = 'ao_system';
   const STORAGE_DEFAULT_TABLE = 'table_templates_store';
-  const STORAGE_TEMPLATE_NAME = 'System: Хранилище шаблонов таблиц';
+  const STORAGE_CONTRACT_NAME = 'System: Хранилище контрактов таблиц';
 
   let error = '';
   let schema_name = '';
@@ -53,7 +57,7 @@
   let partition_column = 'event_date';
   let partition_interval: 'day' | 'month' = 'day';
 
-  let tableTemplates: TableTemplate[] = [];
+  let tableTemplates: DataContract[] = [];
   let selectedTemplateId = '';
   let templateNameDraft = '';
   let storage_schema = STORAGE_DEFAULT_SCHEMA;
@@ -62,6 +66,10 @@
   let storage_pick_value = '';
   let storage_status: 'checking' | 'ok' | 'invalid' | 'missing' | 'error' = 'checking';
   let storage_status_message = '';
+  let storage_has_contract_name = false;
+  let storage_has_template_name = false;
+  let storage_has_contract_version = false;
+  let storage_has_contract_mode = false;
 
   let result_modal_open = false;
   let result_modal_title = '';
@@ -120,7 +128,7 @@
       .filter((c) => c.field_name.length > 0);
   }
 
-  function bronzeTemplate(): TableTemplate {
+  function bronzeTemplate(): DataContract {
     return {
       id: 'builtin_bronze',
       name: 'Bronze',
@@ -137,11 +145,13 @@
       ],
       partition_enabled: true,
       partition_column: 'ingested_at',
-      partition_interval: 'day'
+      partition_interval: 'day',
+      contract_version: 1,
+      contract_mode: 'safe_add_only'
     };
   }
 
-  function silverTemplate(): TableTemplate {
+  function silverTemplate(): DataContract {
     return {
       id: 'builtin_silver',
       name: 'Silver',
@@ -158,37 +168,43 @@
       ],
       partition_enabled: true,
       partition_column: 'event_date',
-      partition_interval: 'day'
+      partition_interval: 'day',
+      contract_version: 1,
+      contract_mode: 'safe_add_only'
     };
   }
 
-  function storageSystemTemplate(): TableTemplate {
+  function storageSystemTemplate(): DataContract {
     return {
-      id: 'builtin_storage_templates',
-      name: STORAGE_TEMPLATE_NAME,
+      id: 'builtin_storage_contracts',
+      name: STORAGE_CONTRACT_NAME,
       schema_name: STORAGE_DEFAULT_SCHEMA,
       table_name: STORAGE_DEFAULT_TABLE,
       table_class: 'custom',
-      description: 'Служебная таблица для хранения шаблонов блока «Создание таблиц»',
+      description: 'Служебная таблица для хранения контрактов блока «Создание таблиц»',
       columns: [
-        { field_name: 'template_name', field_type: 'text', description: 'имя шаблона' },
+        { field_name: 'contract_name', field_type: 'text', description: 'имя контракта' },
+        { field_name: 'template_name', field_type: 'text', description: 'legacy: имя шаблона' },
         { field_name: 'schema_name', field_type: 'text', description: 'схема таблицы' },
         { field_name: 'table_name', field_type: 'text', description: 'имя таблицы' },
         { field_name: 'table_class', field_type: 'text', description: 'класс таблицы' },
         { field_name: 'description', field_type: 'text', description: 'описание' },
         { field_name: 'columns', field_type: 'jsonb', description: 'json список полей' },
+        { field_name: 'contract_version', field_type: 'int', description: 'версия контракта' },
+        { field_name: 'contract_mode', field_type: 'text', description: 'режим контракта' },
         { field_name: 'partition_enabled', field_type: 'boolean', description: 'включено ли партиционирование' },
         { field_name: 'partition_column', field_type: 'text', description: 'колонка партиционирования' },
         { field_name: 'partition_interval', field_type: 'text', description: 'интервал партиционирования' }
       ],
       partition_enabled: false,
       partition_column: '',
-      partition_interval: 'day'
+      partition_interval: 'day',
+      contract_version: 1,
+      contract_mode: 'safe_add_only'
     };
   }
 
   const STORAGE_REQUIRED_COLUMNS = [
-    { name: 'template_name', types: ['text', 'character varying', 'varchar'] },
     { name: 'schema_name', types: ['text', 'character varying', 'varchar'] },
     { name: 'table_name', types: ['text', 'character varying', 'varchar'] },
     { name: 'table_class', types: ['text', 'character varying', 'varchar'] },
@@ -204,12 +220,13 @@
   }
 
   function storageInstruction(prefix: string) {
-    return `${prefix} Выберите системный шаблон «${STORAGE_TEMPLATE_NAME}», создайте таблицу и подключите ее здесь.`;
+    return `${prefix} Выберите системный контракт «${STORAGE_CONTRACT_NAME}», создайте таблицу и подключите ее здесь.`;
   }
 
   function parseStorageTableConfig() {
     try {
-      const raw = JSON.parse(localStorage.getItem(TABLE_TEMPLATES_STORAGE_KEY) || '{}');
+      const raw =
+        JSON.parse(localStorage.getItem(DATA_CONTRACTS_STORAGE_KEY) || localStorage.getItem(TABLE_TEMPLATES_STORAGE_KEY) || '{}');
       if (raw && typeof raw.schema === 'string' && typeof raw.table === 'string') {
         storage_schema = raw.schema.trim() || STORAGE_DEFAULT_SCHEMA;
         storage_table = raw.table.trim() || STORAGE_DEFAULT_TABLE;
@@ -221,7 +238,9 @@
   }
 
   function saveStorageTableConfig() {
-    localStorage.setItem(TABLE_TEMPLATES_STORAGE_KEY, JSON.stringify({ schema: storage_schema, table: storage_table }));
+    const payload = JSON.stringify({ schema: storage_schema, table: storage_table });
+    localStorage.setItem(DATA_CONTRACTS_STORAGE_KEY, payload);
+    localStorage.setItem(TABLE_TEMPLATES_STORAGE_KEY, payload);
   }
 
   async function checkStorageTable(schema: string, table: string) {
@@ -239,6 +258,15 @@
       }
 
       const map = new Map(cols.map((c) => [String(c.name || '').toLowerCase(), normalizeTypeName(c.type)]));
+      storage_has_contract_name = map.has('contract_name');
+      storage_has_template_name = map.has('template_name');
+      storage_has_contract_version = map.has('contract_version');
+      storage_has_contract_mode = map.has('contract_mode');
+      if (!storage_has_contract_name && !storage_has_template_name) {
+        storage_status = 'invalid';
+        storage_status_message = storageInstruction('Структура таблицы не подходит: нет колонки contract_name или template_name.');
+        return false;
+      }
       for (const need of STORAGE_REQUIRED_COLUMNS) {
         const actual = map.get(need.name);
         if (!actual || !need.types.some((t) => actual.includes(t))) {
@@ -251,7 +279,7 @@
       }
 
       storage_status = 'ok';
-      storage_status_message = `Хранилище подключено: ${schema}.${table}`;
+      storage_status_message = `Хранилище контрактов подключено: ${schema}.${table}`;
       return true;
     } catch (e: any) {
       const msg = String(e?.message || '');
@@ -274,7 +302,7 @@
         `${apiBase}/preview?schema=${encodeURIComponent(storage_schema)}&table=${encodeURIComponent(storage_table)}&limit=5000`
       );
       const rows = Array.isArray(j?.rows) ? j.rows : [];
-      const custom: TableTemplate[] = [];
+      const custom: DataContract[] = [];
       for (const r of rows) {
         const parsedColumns = Array.isArray(r?.columns)
           ? r.columns
@@ -286,8 +314,9 @@
                 return [];
               }
             })();
-        const name = String(r?.template_name || '').trim();
+        const name = String(r?.contract_name || r?.template_name || '').trim();
         if (!name) continue;
+        const rawMode = String(r?.contract_mode || 'safe_add_only').trim();
         custom.push({
           id: uid(),
           name,
@@ -303,6 +332,8 @@
           partition_enabled: Boolean(r?.partition_enabled),
           partition_column: String(r?.partition_column || 'event_date'),
           partition_interval: String(r?.partition_interval || 'day') === 'month' ? 'month' : 'day',
+          contract_version: Number(r?.contract_version || 1) > 0 ? Number(r?.contract_version || 1) : 1,
+          contract_mode: rawMode === 'strict_sync' ? 'strict_sync' : 'safe_add_only',
           storage_ctids: r?.ctid ? [String(r.ctid)] : []
         });
       }
@@ -310,7 +341,7 @@
       error = '';
     } catch (e: any) {
       storage_status = 'error';
-      storage_status_message = storageInstruction('Ошибка загрузки шаблонов из таблицы.');
+      storage_status_message = storageInstruction('Ошибка загрузки контрактов из таблицы.');
       loadTableTemplatesLocalOnly();
       error = e?.message || String(e);
     }
@@ -318,7 +349,7 @@
 
   function loadTableTemplatesLocalOnly() {
     try {
-      const raw = JSON.parse(localStorage.getItem(TABLE_TEMPLATES_KEY) || '[]');
+      const raw = JSON.parse(localStorage.getItem(DATA_CONTRACTS_KEY) || localStorage.getItem(TABLE_TEMPLATES_KEY) || '[]');
       const custom = Array.isArray(raw)
         ? raw.map((x: any) => ({
             id: String(x?.id || uid()),
@@ -336,7 +367,9 @@
               : [],
             partition_enabled: Boolean(x?.partition_enabled),
             partition_column: String(x?.partition_column || 'event_date'),
-            partition_interval: x?.partition_interval === 'month' ? 'month' : 'day'
+            partition_interval: x?.partition_interval === 'month' ? 'month' : 'day',
+            contract_version: Number(x?.contract_version || 1) > 0 ? Number(x?.contract_version || 1) : 1,
+            contract_mode: x?.contract_mode === 'strict_sync' ? 'strict_sync' : 'safe_add_only'
           }))
         : [];
       tableTemplates = [bronzeTemplate(), silverTemplate(), storageSystemTemplate(), ...custom];
@@ -345,7 +378,7 @@
     }
   }
 
-  function applyTemplate(t: TableTemplate) {
+  function applyTemplate(t: DataContract) {
     schema_name = t.schema_name;
     table_name = t.table_name;
     table_class = t.table_class;
@@ -373,17 +406,19 @@
 
   function saveTableTemplatesLocal() {
     const custom = tableTemplates.filter((t) => !t.id.startsWith('builtin_'));
-    localStorage.setItem(TABLE_TEMPLATES_KEY, JSON.stringify(custom.slice(0, 300)));
+    const payload = JSON.stringify(custom.slice(0, 300));
+    localStorage.setItem(DATA_CONTRACTS_KEY, payload);
+    localStorage.setItem(TABLE_TEMPLATES_KEY, payload);
   }
 
-  async function saveTemplateToStorage(t: TableTemplate) {
+  async function saveTemplateToStorage(t: DataContract) {
     const isValid = await checkStorageTable(storage_schema, storage_table);
     if (!isValid) throw new Error(storage_status_message || 'Таблица хранения недоступна');
     const rows = await apiJson<{ rows: any[] }>(
       `${apiBase}/preview?schema=${encodeURIComponent(storage_schema)}&table=${encodeURIComponent(storage_table)}&limit=5000`
     );
     const found = (Array.isArray(rows?.rows) ? rows.rows : []).filter(
-      (r) => String(r?.template_name || '').trim().toLowerCase() === t.name.toLowerCase()
+      (r) => String(r?.contract_name || r?.template_name || '').trim().toLowerCase() === t.name.toLowerCase()
     );
     for (const r of found) {
       if (r?.ctid) {
@@ -394,23 +429,28 @@
         });
       }
     }
+    const row: Record<string, any> = {
+      schema_name: t.schema_name,
+      table_name: t.table_name,
+      table_class: t.table_class,
+      description: t.description,
+      columns: JSON.stringify(t.columns || []),
+      partition_enabled: !!t.partition_enabled,
+      partition_column: t.partition_column || '',
+      partition_interval: t.partition_interval || 'day'
+    };
+    if (storage_has_contract_name) row.contract_name = t.name;
+    if (storage_has_template_name) row.template_name = t.name;
+    if (storage_has_contract_version) row.contract_version = Number(t.contract_version || 1);
+    if (storage_has_contract_mode) row.contract_mode = t.contract_mode || 'safe_add_only';
+
     await apiJson(`${apiBase}/rows/add`, {
       method: 'POST',
       headers: headers(),
       body: JSON.stringify({
         schema: storage_schema,
         table: storage_table,
-        row: {
-          template_name: t.name,
-          schema_name: t.schema_name,
-          table_name: t.table_name,
-          table_class: t.table_class,
-          description: t.description,
-          columns: JSON.stringify(t.columns || []),
-          partition_enabled: !!t.partition_enabled,
-          partition_column: t.partition_column || '',
-          partition_interval: t.partition_interval || 'day'
-        }
+        row
       })
     });
   }
@@ -422,7 +462,7 @@
       `${apiBase}/preview?schema=${encodeURIComponent(storage_schema)}&table=${encodeURIComponent(storage_table)}&limit=5000`
     );
     const found = (Array.isArray(rows?.rows) ? rows.rows : []).filter(
-      (r) => String(r?.template_name || '').trim().toLowerCase() === templateName.toLowerCase()
+      (r) => String(r?.contract_name || r?.template_name || '').trim().toLowerCase() === templateName.toLowerCase()
     );
     for (const r of found) {
       if (r?.ctid) {
@@ -445,14 +485,14 @@
   async function startNewTemplate() {
     const name = String(templateNameDraft || '').trim();
     const cols = normalizeColumns(columns);
-    if (!name) throw new Error('Укажи название шаблона');
+    if (!name) throw new Error('Укажи название контракта');
     if (!cols.length) throw new Error('Добавь хотя бы одно поле');
-    if (storage_status !== 'ok') throw new Error(storage_status_message || 'Сначала подключи таблицу хранения шаблонов');
+    if (storage_status !== 'ok') throw new Error(storage_status_message || 'Сначала подключи таблицу хранения контрактов');
     if (tableTemplates.some((t) => !t.id.startsWith('builtin_') && t.name.trim().toLowerCase() === name.toLowerCase())) {
-      throw new Error('Шаблон с таким названием уже существует');
+      throw new Error('Контракт с таким названием уже существует');
     }
 
-    const newTemplate: TableTemplate = {
+    const newTemplate: DataContract = {
       id: uid(),
       name,
       schema_name: schema_name.trim(),
@@ -462,7 +502,9 @@
       columns: cols,
       partition_enabled,
       partition_column: partition_column.trim(),
-      partition_interval
+      partition_interval,
+      contract_version: 1,
+      contract_mode: 'safe_add_only'
     };
 
     await saveTemplateToStorage(newTemplate);
@@ -474,18 +516,18 @@
   }
 
   async function saveCurrentTemplate() {
-    if (!selectedTemplateId) throw new Error('Сначала добавь или выбери шаблон');
+    if (!selectedTemplateId) throw new Error('Сначала добавь или выбери контракт');
     if (selectedTemplateId.startsWith('builtin_')) {
-      throw new Error('Встроенный шаблон нельзя сохранить. Нажми «Добавить шаблон»');
+      throw new Error('Встроенный контракт нельзя сохранить. Нажми «Добавить контракт»');
     }
 
     const idx = tableTemplates.findIndex((x) => x.id === selectedTemplateId);
-    if (idx < 0) throw new Error('Активный шаблон не найден');
-    if (storage_status !== 'ok') throw new Error(storage_status_message || 'Сначала подключи таблицу хранения шаблонов');
+    if (idx < 0) throw new Error('Активный контракт не найден');
+    if (storage_status !== 'ok') throw new Error(storage_status_message || 'Сначала подключи таблицу хранения контрактов');
 
     const name = String(templateNameDraft || '').trim();
     const cols = normalizeColumns(columns);
-    if (!name) throw new Error('Укажи название шаблона');
+    if (!name) throw new Error('Укажи название контракта');
     if (!cols.length) throw new Error('Добавь хотя бы одно поле');
 
     const updated = {
@@ -498,8 +540,10 @@
       columns: cols,
       partition_enabled,
       partition_column: partition_column.trim(),
-      partition_interval
-    } as TableTemplate;
+      partition_interval,
+      contract_version: Number(tableTemplates[idx].contract_version || 1),
+      contract_mode: tableTemplates[idx].contract_mode || 'safe_add_only'
+    } as DataContract;
 
     await saveTemplateToStorage(updated);
     await loadTemplatesFromStorage();
@@ -510,9 +554,9 @@
   }
 
   async function deleteTemplateById(id: string) {
-    if (!id) throw new Error('Сначала выбери шаблон');
-    if (id.startsWith('builtin_')) throw new Error('Встроенный шаблон удалить нельзя');
-    if (storage_status !== 'ok') throw new Error(storage_status_message || 'Сначала подключи таблицу хранения шаблонов');
+    if (!id) throw new Error('Сначала выбери контракт');
+    if (id.startsWith('builtin_')) throw new Error('Встроенный контракт удалить нельзя');
+    if (storage_status !== 'ok') throw new Error(storage_status_message || 'Сначала подключи таблицу хранения контрактов');
 
     const t = tableTemplates.find((x) => x.id === id);
     if (t) {
@@ -818,12 +862,12 @@
 
     <aside class="aside">
       <div class="aside-head">
-        <div class="aside-title">Шаблоны таблиц</div>
+        <div class="aside-title">Контракты данных</div>
         <button
           class="icon-btn refresh-btn"
           on:click={refreshTemplatesPanel}
           disabled={refreshingTemplates}
-          title="Обновить шаблоны"
+          title="Обновить контракты"
         >↻</button>
       </div>
       <div class="storage-meta templates-meta">
@@ -843,17 +887,17 @@
         </div>
       {/if}
       <div class="template-controls">
-        <input class="template-name" bind:value={templateNameDraft} placeholder="Название шаблона" />
+        <input class="template-name" bind:value={templateNameDraft} placeholder="Название контракта данных" />
         <div class="inline-actions">
-          <button on:click={onAddTemplateClick}>Добавить шаблон</button>
-          <button on:click={onSaveTemplateClick}>Сохранить шаблон</button>
+          <button on:click={onAddTemplateClick}>Добавить контракт</button>
+          <button on:click={onSaveTemplateClick}>Сохранить контракт</button>
         </div>
       </div>
       <div class="list templates-list">
         {#each tableTemplates as t}
           <div class="row-item" class:activeitem={selectedTemplateId === t.id}>
             <button class="item-button" on:click={() => applySelectedTemplate(t.id)}>{t.name}</button>
-            <button class="danger icon-btn" on:click={() => onDeleteTemplateClick(t.id)} title="Удалить шаблон">x</button>
+            <button class="danger icon-btn" on:click={() => onDeleteTemplateClick(t.id)} title="Удалить контракт">x</button>
           </div>
         {/each}
       </div>
