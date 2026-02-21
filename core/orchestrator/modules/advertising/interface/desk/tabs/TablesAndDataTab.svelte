@@ -21,7 +21,7 @@
   let preview_loading = false;
   let preview_error = '';
 
-  let modal = '' as '' | 'addColumn' | 'confirmDropColumn' | 'confirmDropTable' | 'confirmDeleteRow';
+  let modal = '' as '' | 'addColumn' | 'confirmDropColumn' | 'confirmDeleteRow';
   let modal_error = '';
 
   let new_col_name = '';
@@ -136,36 +136,6 @@
       modal = '';
       await loadColumns();
       await loadPreview();
-      await refreshTables();
-    } catch (e: any) {
-      modal_error = e?.message ?? String(e);
-    }
-  }
-
-  function confirmDropTable() {
-    modal_error = '';
-    modal = 'confirmDropTable';
-  }
-
-  async function dropTableNow() {
-    modal_error = '';
-    try {
-      if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
-      if (!preview_schema || !preview_table) throw new Error('Таблица не выбрана');
-
-      await apiJson(`${apiBase}/tables/drop`, {
-        method: 'POST',
-        headers: headers(),
-        body: JSON.stringify({ schema: preview_schema, table: preview_table })
-      });
-
-      modal = '';
-      preview_columns = [];
-      preview_rows = [];
-      newRow = {};
-      preview_schema = '';
-      preview_table = '';
-
       await refreshTables();
     } catch (e: any) {
       modal_error = e?.message ?? String(e);
@@ -302,9 +272,6 @@
           <div class="quick">
             <button on:click={refreshPreviewAll} disabled={preview_loading || !preview_schema || !preview_table}>
               {preview_loading ? 'Загрузка…' : 'Обновить предпросмотр'}
-            </button>
-            <button class="danger" on:click={confirmDropTable} disabled={!canWrite() || !preview_schema || !preview_table}>
-              Удалить таблицу
             </button>
           </div>
         </div>
@@ -467,22 +434,6 @@
           <button on:click={() => (modal = '')}>Отмена</button>
         </div>
 
-      {:else if modal === 'confirmDropTable'}
-        <h3 style="margin-top:0;">Удалить таблицу?</h3>
-        <p class="hint">Действие необратимо.</p>
-
-        {#if modal_error}
-          <div class="alert" style="margin-top:12px;">
-            <div class="alert-title">Ошибка</div>
-            <pre>{modal_error}</pre>
-          </div>
-        {/if}
-
-        <div class="modal-actions">
-          <button class="danger" on:click={dropTableNow} disabled={!canWrite()}>Удалить</button>
-          <button on:click={() => (modal = '')}>Отмена</button>
-        </div>
-
       {:else if modal === 'confirmDeleteRow'}
         <h3 style="margin-top:0;">Удалить строку?</h3>
         <p class="hint">Удаление по CTID: {pending_delete_row_ctid}</p>
@@ -545,13 +496,13 @@
   .thname { font-weight:700; }
   .xbtn { border-color:transparent; background:transparent; color:#b91c1c; border-radius:10px; width:34px; min-width:34px; padding:6px 0; cursor:pointer; text-transform:lowercase; font-size:14px; font-weight:400; line-height:1; }
   .thadd { width: 1%; white-space: nowrap; }
-  .plusbtn { border-radius:12px; border-color:transparent; background:transparent; width:34px; min-width:34px; padding:6px 0; font-size:20px; line-height:1; cursor:pointer; }
+  .plusbtn { border-radius:12px; border-color:transparent; background:transparent; width:34px; min-width:34px; padding:6px 0; font-size:20px; line-height:1; font-weight:400; cursor:pointer; }
 
-  .rowactions { width: 1%; white-space: nowrap; }
+  .rowactions { width:44px; min-width:44px; white-space: nowrap; text-align:center; }
   .trash { border-color:transparent; background:transparent; color:#b91c1c; border-radius:12px; padding:6px 10px; cursor:pointer; }
-  .addrow-icon { border-radius:12px; border-color:transparent; background:transparent; width:34px; min-width:34px; padding:6px 0; font-size:20px; line-height:1; cursor:pointer; }
+  .addrow-icon { border-radius:12px; border-color:transparent; background:transparent; width:34px; min-width:34px; padding:6px 0; font-size:20px; line-height:1; font-weight:400; cursor:pointer; }
 
-  .cellinput { width: 100%; border-radius: 12px; border:1px solid #e6eaf2; padding:8px 10px; }
+  .cellinput { display:block; width:100%; min-width:120px; box-sizing:border-box; border-radius:12px; border:1px solid #e6eaf2; padding:8px 10px; }
 
   button { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; background:#fff; cursor:pointer; }
   button:disabled { opacity:.6; cursor:not-allowed; }
