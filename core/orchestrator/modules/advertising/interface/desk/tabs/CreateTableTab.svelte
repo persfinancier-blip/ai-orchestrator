@@ -252,6 +252,31 @@
     };
   }
 
+  function settingsSystemTemplate(): DataContract {
+    return {
+      id: 'builtin_settings_table',
+      name: 'Таблица настроек',
+      schema_name: 'ao_system',
+      table_name: 'table_settings_store',
+      table_class: 'custom',
+      description: 'Системная таблица настроек сервера, API и подключений к БД',
+      columns: [
+        { field_name: 'setting_key', field_type: 'text', description: 'уникальный ключ настройки' },
+        { field_name: 'setting_value', field_type: 'jsonb', description: 'значение настройки (json)' },
+        { field_name: 'scope', field_type: 'text', description: 'область применения (global/module/env)' },
+        { field_name: 'description', field_type: 'text', description: 'описание настройки' },
+        { field_name: 'is_active', field_type: 'boolean', description: 'включена ли настройка' },
+        { field_name: 'updated_at', field_type: 'timestamptz', description: 'время обновления' },
+        { field_name: 'updated_by', field_type: 'text', description: 'кто обновил' }
+      ],
+      partition_enabled: false,
+      partition_column: '',
+      partition_interval: 'day',
+      contract_version: 1,
+      contract_mode: 'safe_add_only'
+    };
+  }
+
   const FIELD_TYPE_TO_DB_TYPES: Record<string, string[]> = {
     text: ['text', 'character varying', 'varchar'],
     int: ['integer', 'int4', 'int'],
@@ -383,7 +408,14 @@
           storage_ctids: r?.__ctid ? [String(r.__ctid)] : []
         });
       }
-      tableTemplates = [bronzeTemplate(), silverTemplate(), storageSystemTemplate(), contractsSystemTemplate(), ...custom];
+      tableTemplates = [
+        bronzeTemplate(),
+        silverTemplate(),
+        storageSystemTemplate(),
+        contractsSystemTemplate(),
+        settingsSystemTemplate(),
+        ...custom
+      ];
       error = '';
     } catch (e: any) {
       storage_status = 'error';
@@ -418,9 +450,22 @@
             contract_mode: x?.contract_mode === 'strict_sync' ? 'strict_sync' : 'safe_add_only'
           }))
         : [];
-      tableTemplates = [bronzeTemplate(), silverTemplate(), storageSystemTemplate(), contractsSystemTemplate(), ...custom];
+      tableTemplates = [
+        bronzeTemplate(),
+        silverTemplate(),
+        storageSystemTemplate(),
+        contractsSystemTemplate(),
+        settingsSystemTemplate(),
+        ...custom
+      ];
     } catch {
-      tableTemplates = [bronzeTemplate(), silverTemplate(), storageSystemTemplate(), contractsSystemTemplate()];
+      tableTemplates = [
+        bronzeTemplate(),
+        silverTemplate(),
+        storageSystemTemplate(),
+        contractsSystemTemplate(),
+        settingsSystemTemplate()
+      ];
     }
   }
 
