@@ -8,8 +8,6 @@
   export let apiBase: string;
   export let role: Role;
   export let loading: boolean;
-  export let dbStatus: 'checking' | 'ok' | 'error' = 'checking';
-  export let dbStatusMessage = '';
 
   export let refreshTables: () => Promise<void>;
   export let hardReloadConstructor: (() => Promise<void>) | undefined = undefined;
@@ -100,16 +98,6 @@
     } finally {
       refreshingTables = false;
     }
-  }
-
-  function dbConnectionLabel() {
-    if (dbStatus === 'ok') {
-      return `Подключение к базе: OK. Таблиц доступно: ${existingTables.length}.`;
-    }
-    if (dbStatus === 'error') {
-      return dbStatusMessage || 'Подключение к базе: ошибка.';
-    }
-    return 'Проверяем подключение к базе...';
   }
 
   function normalizeColumns(cols: ColumnDef[]) {
@@ -700,9 +688,6 @@
         <div class="aside-title">Текущие таблицы</div>
         <button class="icon-btn refresh-btn" on:click={forceRefreshTables} disabled={loading || refreshingTables} title="Обновить список">↻</button>
       </div>
-      <div class="storage-status" class:bad={dbStatus !== 'ok'}>
-        {dbConnectionLabel()}
-      </div>
       {#if existingTables.length === 0}
         <div class="hint">Пока нет данных.</div>
       {:else}
@@ -839,9 +824,6 @@
           <button on:click={applyStorageTableChoice} disabled={!storage_pick_value}>Подключить</button>
         </div>
       {/if}
-      <div class="storage-status" class:bad={storage_status !== 'ok'}>
-        {storage_status_message}
-      </div>
       <div class="template-controls">
         <input class="template-name" bind:value={templateNameDraft} placeholder="Название шаблона" />
         <div class="inline-actions">
@@ -950,8 +932,6 @@
   .link-btn { border:0; background:transparent; color:#0f172a; padding:0; text-decoration:underline; font-size:12px; font-weight:500; }
   .storage-picker { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
   .storage-picker select { flex:1; min-width:0; }
-  .storage-status { font-size:12px; color:#16a34a; margin:0 0 8px 0; line-height:1.35; }
-  .storage-status.bad { color:#b45309; }
 
   button { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; background:#fff; cursor:pointer; }
   button:disabled { opacity:.6; cursor:not-allowed; }

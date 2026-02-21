@@ -167,8 +167,6 @@
         apiBase={API_BASE}
         {role}
         {loading}
-        {dbStatus}
-        {dbStatusMessage}
         {headers}
         {apiJson}
         {refreshTables}
