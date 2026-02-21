@@ -45,6 +45,13 @@
   const STORAGE_DEFAULT_SCHEMA = 'ao_system';
   const STORAGE_DEFAULT_TABLE = 'table_templates_store';
   const STORAGE_CONTRACT_NAME = 'System: Хранилище контрактов таблиц';
+  const DEFAULT_CONTRACT_ID = 'builtin_default_contract';
+  const SYSTEM_CONTRACT_FIELDS: ColumnDef[] = [
+    { field_name: 'ao_source', field_type: 'text', description: 'источник данных (техническое поле)' },
+    { field_name: 'ao_run_id', field_type: 'text', description: 'идентификатор запуска (техническое поле)' },
+    { field_name: 'ao_created_at', field_type: 'timestamptz', description: 'время создания записи (техническое поле)' },
+    { field_name: 'ao_updated_at', field_type: 'timestamptz', description: 'время обновления записи (техническое поле)' }
+  ];
 
   let error = '';
   let schema_name = '';
@@ -128,6 +135,39 @@
       .filter((c) => c.field_name.length > 0);
   }
 
+  function withSystemContractFields(cols: ColumnDef[]) {
+    const base = (Array.isArray(cols) ? cols : []).map((c) => ({
+      field_name: String(c?.field_name || '').trim(),
+      field_type: String(c?.field_type || 'text').trim(),
+      description: String(c?.description || '').trim()
+    }));
+    const existing = new Set(base.map((c) => c.field_name.toLowerCase()));
+    const merged = [...base];
+    for (const sys of SYSTEM_CONTRACT_FIELDS) {
+      if (!existing.has(sys.field_name.toLowerCase())) {
+        merged.push({ ...sys });
+      }
+    }
+    return merged;
+  }
+
+  function defaultDataContract(): DataContract {
+    return {
+      id: DEFAULT_CONTRACT_ID,
+      name: 'Default',
+      schema_name: 'showcase',
+      table_name: 'new_table',
+      table_class: 'custom',
+      description: 'Контракт по умолчанию с системными полями',
+      columns: withSystemContractFields([]),
+      partition_enabled: false,
+      partition_column: '',
+      partition_interval: 'day',
+      contract_version: 1,
+      contract_mode: 'safe_add_only'
+    };
+  }
+
   function bronzeTemplate(): DataContract {
     return {
       id: 'builtin_bronze',
@@ -136,13 +176,13 @@
       table_name: 'wb_ads_raw1',
       table_class: 'bronze_raw',
       description: 'Сырые ответы API (append-only JSON)',
-      columns: [
+      columns: withSystemContractFields([
         { field_name: 'dataset', field_type: 'text', description: 'dataset name' },
         { field_name: 'endpoint', field_type: 'text', description: 'endpoint name' },
         { field_name: 'request_id', field_type: 'text', description: 'request id' },
         { field_name: 'ingested_at', field_type: 'timestamptz', description: 'ingest timestamp' },
         { field_name: 'payload', field_type: 'jsonb', description: 'raw payload' }
-      ],
+      ]),
       partition_enabled: true,
       partition_column: 'ingested_at',
       partition_interval: 'day',
@@ -159,13 +199,13 @@
       table_name: 'wb_ads_daily',
       table_class: 'silver_table',
       description: 'Дневная агрегированная таблица рекламы',
-      columns: [
+      columns: withSystemContractFields([
         { field_name: 'event_date', field_type: 'date', description: 'дата метрики' },
         { field_name: 'campaign_id', field_type: 'text', description: 'идентификатор кампании' },
         { field_name: 'impressions', field_type: 'bigint', description: 'показы' },
         { field_name: 'clicks', field_type: 'bigint', description: 'клики' },
         { field_name: 'spend', field_type: 'numeric', description: 'расход' }
-      ],
+      ]),
       partition_enabled: true,
       partition_column: 'event_date',
       partition_interval: 'day',
@@ -337,7 +377,7 @@
           storage_ctids: r?.ctid ? [String(r.ctid)] : []
         });
       }
-      tableTemplates = [bronzeTemplate(), silverTemplate(), storageSystemTemplate(), ...custom];
+      tableTemplates = [defaultDataContract(), bronzeTemplate(), silverTemplate(), storageSystemTemplate(), ...custom];
       error = '';
     } catch (e: any) {
       storage_status = 'error';
@@ -372,9 +412,9 @@
             contract_mode: x?.contract_mode === 'strict_sync' ? 'strict_sync' : 'safe_add_only'
           }))
         : [];
-      tableTemplates = [bronzeTemplate(), silverTemplate(), storageSystemTemplate(), ...custom];
+      tableTemplates = [defaultDataContract(), bronzeTemplate(), silverTemplate(), storageSystemTemplate(), ...custom];
     } catch {
-      tableTemplates = [bronzeTemplate(), silverTemplate(), storageSystemTemplate()];
+      tableTemplates = [defaultDataContract(), bronzeTemplate(), silverTemplate(), storageSystemTemplate()];
     }
   }
 
@@ -402,6 +442,7 @@
   async function loadTableTemplates() {
     parseStorageTableConfig();
     await loadTemplatesFromStorage();
+    applyDefaultContractIfEmpty();
   }
 
   function saveTableTemplatesLocal() {
@@ -480,6 +521,14 @@
     const t = tableTemplates.find((x) => x.id === id);
     if (!t) return;
     applyTemplate(t);
+  }
+
+  function applyDefaultContractIfEmpty() {
+    if (selectedTemplateId) return;
+    if (schema_name.trim() || table_name.trim() || description.trim()) return;
+    if (normalizeColumns(columns).length > 0) return;
+    const d = tableTemplates.find((t) => t.id === DEFAULT_CONTRACT_ID);
+    if (d) applyTemplate(d);
   }
 
   async function startNewTemplate() {
