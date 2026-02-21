@@ -890,17 +890,15 @@
   .row-actions { display:flex; align-items:center; justify-content:flex-end; min-width:54px; flex-shrink:0; }
   .system-badge { font-size:11px; line-height:1; padding:4px 8px; border-radius:999px; border:1px solid #cbd5e1; color:#334155; background:#f8fafc; font-weight:600; }
   .item-button { text-align:left; border:0; background:transparent; padding:0; font-weight:400; font-size:14px; line-height:1.3; color:inherit; min-width:0; width:100%; overflow-wrap:anywhere; word-break:break-word; }
-  .activeitem { border-color:#e6eaf2; background:#fff; color:#0f172a; }
-  .activeitem .item-button { color:#0f172a; font-weight:600; }
-  .activeitem .item-button::before { content:'●'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
   .tables-list .row-item { background:#0f172a; border-color:#0f172a; }
   .tables-list .item-button { color:#fff; }
   .tables-list .system-badge { border-color:#334155; color:#e2e8f0; background:#1e293b; }
   .contracts-list .row-item { background:#0f172a; border-color:#0f172a; }
-  .contracts-list .item-button { color:#fff; }
+  .contracts-list .item-button { color:#fff; font-size:13px; font-weight:400; line-height:1.25; letter-spacing:0; }
   .contracts-list .icon-btn { color:#fff; }
   .tables-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
   .tables-list .activeitem .item-button { color:#0f172a !important; font-size:15px !important; font-weight:600 !important; letter-spacing:.01em !important; line-height:1.25; }
+  .tables-list .activeitem .item-button::before { content:'●'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
   .contracts-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
   .contracts-list .activeitem .item-button { color:#0f172a !important; font-size:15px !important; font-weight:600 !important; letter-spacing:.01em !important; line-height:1.25; }
   .contracts-list .activeitem .item-button::before { content:'●'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
