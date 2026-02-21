@@ -21,7 +21,7 @@
   let error = '';
   let existingTables: ExistingTable[] = [];
   let dbStatus: 'checking' | 'ok' | 'error' = 'checking';
-  let dbStatusMessage = 'РџСЂРѕРІРµСЂРєР° РїРѕРґРєР»СЋС‡РµРЅРёСЏ Рє Р±Р°Р·Рµ...';
+  let dbStatusMessage = 'Проверка подключения к базе...';
 
   async function apiJson<T = any>(url: string, init?: RequestInit): Promise<T> {
     const res = await fetch(url, init);
@@ -52,25 +52,28 @@
     loading = true;
     error = '';
     dbStatus = 'checking';
-    dbStatusMessage = 'РџСЂРѕРІРµСЂРєР° РїРѕРґРєР»СЋС‡РµРЅРёСЏ Рє Р±Р°Р·Рµ...';
+    dbStatusMessage = 'Проверка подключения к базе...';
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
       const j = await apiJson<{ existing_tables: ExistingTable[] }>(`${API_BASE}/tables`, {
         headers: { 'X-AO-ROLE': role },
         signal: controller.signal
       });
-      clearTimeout(timeoutId);
+
       existingTables = j.existing_tables || [];
       dbStatus = 'ok';
-      dbStatusMessage = `РџРѕРґРєР»СЋС‡РµРЅРёРµ Рє Р±Р°Р·Рµ: OK. РўР°Р±Р»РёС† РґРѕСЃС‚СѓРїРЅРѕ: ${existingTables.length}.`;
+      dbStatusMessage = `Подключение к базе: OK. Таблиц доступно: ${existingTables.length}.`;
     } catch (e: any) {
       error = e?.name === 'AbortError'
         ? 'Таймаут проверки подключения к базе.'
         : (e?.message ?? String(e));
       dbStatus = 'error';
-      dbStatusMessage = `РџРѕРґРєР»СЋС‡РµРЅРёРµ Рє Р±Р°Р·Рµ: РѕС€РёР±РєР°. ${error}`;
+      dbStatusMessage = `Подключение к базе: ошибка. ${error}`;
     } finally {
+      clearTimeout(timeoutId);
       loading = false;
     }
   }
@@ -86,14 +89,14 @@
 <div class="page">
   <header class="top">
     <div>
-      <h1>РљРѕРЅСЃС‚СЂСѓРєС‚РѕСЂ С‚Р°Р±Р»РёС†</h1>
+      <h1>Конструктор таблиц</h1>
       <p class="sub">
-        РЎРѕР·РґР°РЅРёРµ/СЂРµРґР°РєС‚РёСЂРѕРІР°РЅРёРµ С‚Р°Р±Р»РёС†. РћС‚РґРµР»СЊРЅРѕ: Р±СѓРґСѓС‰РёР№ РєРѕРЅСЃС‚СЂСѓРєС‚РѕСЂ API Рё Р±СѓРґСѓС‰РёР№ workflow вЂњРЈРїСЂР°РІР»РµРЅРёРµ РґР°РЅРЅС‹РјРёвЂќ.
+        Создание и редактирование таблиц. Отдельно доступны конструктор API и блок управления данными.
       </p>
     </div>
 
     <div class="role">
-      <span>Р РѕР»СЊ:</span>
+      <span>Роль:</span>
       <select bind:value={role} on:change={refreshTables}>
         <option value="viewer">viewer</option>
         <option value="operator">operator</option>
@@ -103,15 +106,15 @@
   </header>
 
   <nav class="tabs">
-    <button class:active={tab === 'constructor'} on:click={() => (tab = 'constructor')}>РЎРѕР·РґР°РЅРёРµ</button>
-    <button class:active={tab === 'tables'} on:click={() => (tab = 'tables')}>РўР°Р±Р»РёС†С‹ Рё РґР°РЅРЅС‹Рµ</button>
+    <button class:active={tab === 'constructor'} on:click={() => (tab = 'constructor')}>Создание</button>
+    <button class:active={tab === 'tables'} on:click={() => (tab = 'tables')}>Таблицы и данные</button>
     <button class:active={tab === 'api_builder'} on:click={() => (tab = 'api_builder')}>API</button>
-    <button class:active={tab === 'data_management'} on:click={() => (tab = 'data_management')}>РЈРїСЂР°РІР»РµРЅРёРµ РґР°РЅРЅС‹РјРё</button>
+    <button class:active={tab === 'data_management'} on:click={() => (tab = 'data_management')}>Управление данными</button>
   </nav>
 
   {#if error}
     <div class="alert">
-      <div class="alert-title">РћС€РёР±РєР°</div>
+      <div class="alert-title">Ошибка</div>
       <pre>{error}</pre>
     </div>
   {/if}
@@ -164,10 +167,8 @@
   .tabs { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
   .tabs button { padding:8px 12px; border-radius:12px; border:1px solid #e6eaf2; background:#fff; cursor:pointer; }
   .tabs button.active { background:#0f172a; color:#fff; border-color:#0f172a; }
+
   .alert { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #f3c0c0; background: #fff5f5; }
   .alert-title { font-weight: 700; margin-bottom: 6px; }
   pre { margin:0; white-space: pre-wrap; word-break: break-word; }
 </style>
-
-
-
