@@ -130,6 +130,7 @@
   let authRawTouched = false;
   let authSyncLock: 'left' | 'right' | null = null;
   let authRawDebounce: any = null;
+  let authTemplateNameDraft = '';
   let authTemplateRows: KvRow[] = [];
   let authTemplates: Array<{ id: string; name: string; type: string; fields: AuthTemplateField[] }> = [];
   let selectedAuthTemplateId = '';
@@ -215,6 +216,7 @@
     headersRawDraft = selected.headersJson || '';
     bodyRawDraft = selected.bodyJson || '';
     const t = selected.authTemplate || { name: '', type: 'custom', fields: [] };
+    authTemplateNameDraft = String(t.name || '');
     authTemplateRows = (t.fields || []).map((f) => ({ id: uid(), key: f.key, value: f.value }));
     const matched = authTemplates.find((x) => x.name === t.name);
     selectedAuthTemplateId = matched?.id || '';
@@ -303,7 +305,7 @@
         key: String(key || ''),
         value: String(value ?? '')
       }));
-      const next: AuthTemplateModel = canonicalAuthTemplateFromLeft(selected);
+      const next: AuthTemplateModel = canonicalAuthTemplateFromLeft();
       next.fields = fields;
       authSyncLock = 'right';
       authTemplateRows = next.fields.map((f) => ({ id: uid(), key: f.key, value: f.value }));
@@ -319,8 +321,8 @@
     }
   }
 
-  function canonicalAuthTemplateFromLeft(source: ApiSource | null): AuthTemplateModel {
-    const cur = source?.authTemplate || { name: '', type: 'header', fields: [] };
+  function canonicalAuthTemplateFromLeft(): AuthTemplateModel {
+    const cur = getSelected()?.authTemplate || selected?.authTemplate || { name: '', type: 'header', fields: [] };
     const fields = authTemplateRows
       .map((r) => ({ key: (r.key || '').trim(), value: r.value || '' }))
       .filter((r) => r.key.length > 0);
@@ -335,7 +337,7 @@
     if (!selected) return;
     if (authSyncLock === 'right') return;
     authSyncLock = 'left';
-    const next = canonicalAuthTemplateFromLeft(selected);
+    const next = canonicalAuthTemplateFromLeft();
     authRawDraft = JSON.stringify(authFieldsToRawObject(next.fields), null, 2);
     authRawError = '';
     mutateSelected((s) => {
@@ -363,10 +365,10 @@
   }
 
   function setAuthTemplateName(name: string) {
+    authTemplateNameDraft = name;
     mutateSelected((s) => {
       s.authTemplate.name = name;
     });
-    syncAuthLeftToRawAndSource();
   }
 
   function setAuthTemplatePlacement(type: string) {
@@ -389,21 +391,30 @@
     if (kind === 'bearer') {
       authTemplateRows = [{ id: uid(), key: 'Authorization', value: 'Bearer YOUR_TOKEN' }];
       mutateSelected((s) => {
-        if (!String(s.authTemplate.name || '').trim()) s.authTemplate.name = 'Bearer токен';
+        if (!String(s.authTemplate.name || '').trim()) {
+          s.authTemplate.name = 'Bearer токен';
+          authTemplateNameDraft = s.authTemplate.name;
+        }
         s.authTemplate.type = 'header';
       });
     }
     if (kind === 'api_header') {
       authTemplateRows = [{ id: uid(), key: 'X-API-Key', value: 'YOUR_API_KEY' }];
       mutateSelected((s) => {
-        if (!String(s.authTemplate.name || '').trim()) s.authTemplate.name = 'API ключ в заголовке';
+        if (!String(s.authTemplate.name || '').trim()) {
+          s.authTemplate.name = 'API ключ в заголовке';
+          authTemplateNameDraft = s.authTemplate.name;
+        }
         s.authTemplate.type = 'header';
       });
     }
     if (kind === 'api_query') {
       authTemplateRows = [{ id: uid(), key: 'api_key', value: 'YOUR_API_KEY' }];
       mutateSelected((s) => {
-        if (!String(s.authTemplate.name || '').trim()) s.authTemplate.name = 'API ключ в URL';
+        if (!String(s.authTemplate.name || '').trim()) {
+          s.authTemplate.name = 'API ключ в URL';
+          authTemplateNameDraft = s.authTemplate.name;
+        }
         s.authTemplate.type = 'query';
       });
     }
@@ -448,9 +459,9 @@
       err = 'Сначала исправьте RAW JSON';
       return;
     }
-    const left = canonicalAuthTemplateFromLeft(selected);
+    const left = canonicalAuthTemplateFromLeft();
     const t: AuthTemplateModel = {
-      name: String(selected.authTemplate?.name || '').trim(),
+      name: String(authTemplateNameDraft || selected.authTemplate?.name || '').trim(),
       type: String(selected.authTemplate?.type || 'header'),
       fields: left.fields
     };
@@ -483,6 +494,7 @@
     const t = authTemplates.find((x) => x.id === id);
     if (!t || !selected) return;
     authSyncLock = 'right';
+    authTemplateNameDraft = t.name;
     authTemplateRows = t.fields.map((f) => ({ id: uid(), key: f.key, value: f.value }));
     mutateSelected((s) => {
       s.authTemplate = { name: t.name, type: t.type, fields: t.fields.map((f) => ({ ...f })) };
@@ -1348,7 +1360,7 @@
                     <input
                       class="auth-name-input"
                       placeholder="Название шаблона типа подключения (например: WB Token)"
-                      value={selected.authTemplate?.name || ''}
+                      value={authTemplateNameDraft}
                       on:input={(e) => setAuthTemplateName(e.currentTarget.value)}
                     />
                     <button class="quarter" on:click={saveCurrentAuthTemplate}>Сохранить шаблон</button>
