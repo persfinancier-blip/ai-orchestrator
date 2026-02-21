@@ -398,6 +398,18 @@ tableBuilderRouter.get('/settings', requireDataAdmin, async (_req, res) => {
   }
 });
 
+tableBuilderRouter.get('/settings/effective', async (_req, res) => {
+  const client = await pool.connect();
+  try {
+    const effective = await loadRuntimeConfig(client, { force: true });
+    return res.json({ ok: true, effective });
+  } catch (e) {
+    return res.status(500).json({ error: 'settings_effective_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
 tableBuilderRouter.post('/settings/upsert', requireDataAdmin, async (req, res) => {
   const setting_key = String(req.body?.setting_key || '').trim();
   const scope = String(req.body?.scope || 'global').trim() || 'global';

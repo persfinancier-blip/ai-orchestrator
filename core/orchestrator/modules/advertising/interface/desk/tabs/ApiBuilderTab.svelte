@@ -440,25 +440,11 @@
   }
 
   function loadAuthTemplates() {
-    try {
-      const raw = JSON.parse(localStorage.getItem(AUTH_TEMPLATES_KEY) || '[]');
-      authTemplates = Array.isArray(raw)
-        ? raw.map((x: any) => ({
-            id: String(x?.id || uid()),
-            name: String(x?.name || ''),
-            type: String(x?.type || 'custom'),
-            fields: Array.isArray(x?.fields)
-              ? x.fields.map((f: any) => ({ key: String(f?.key || ''), value: String(f?.value || '') }))
-              : []
-          }))
-        : [];
-    } catch {
-      authTemplates = [];
-    }
+    authTemplates = [];
   }
 
   function saveAuthTemplates() {
-    localStorage.setItem(AUTH_TEMPLATES_KEY, JSON.stringify(authTemplates.slice(0, 500)));
+    // local storage disabled
   }
 
   function saveCurrentAuthTemplate() {
@@ -668,29 +654,19 @@
   }
 
   function loadAll() {
-    try {
-      const raw = JSON.parse(localStorage.getItem(SOURCES_KEY) || '[]') || [];
-      sources = raw.map(normalizeSource);
-    } catch {
-      sources = [];
-    }
-
-    try {
-      history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]') || [];
-    } catch {
-      history = [];
-    }
+    sources = [];
+    history = [];
 
     if (!selectedId && sources.length) selectedId = sources[0].id;
     loadAuthTemplates();
   }
 
   function saveSources() {
-    localStorage.setItem(SOURCES_KEY, JSON.stringify(sources.slice(0, 200)));
+    // local storage disabled
   }
 
   function saveHistory() {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 300)));
+    // local storage disabled
   }
 
   function getSelected(): ApiSource | null {

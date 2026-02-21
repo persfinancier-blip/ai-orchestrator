@@ -10,17 +10,17 @@ function safeParseJson<T>(raw: string | null, fallback: T): T {
 }
 
 export function loadVisualSchemes(storageKey: string): VisualScheme[] {
-  return safeParseJson<VisualScheme[]>(localStorage.getItem(storageKey), []);
+  return [];
 }
 
 export function saveVisualSchemes(storageKey: string, schemes: VisualScheme[]): void {
-  localStorage.setItem(storageKey, JSON.stringify(schemes));
+  // local storage disabled
 }
 
 export function loadDatasetPresets(storageKey: string): DatasetPreset[] {
-  return safeParseJson<DatasetPreset[]>(localStorage.getItem(storageKey), []);
+  return [];
 }
 
 export function saveDatasetPresets(storageKey: string, presets: DatasetPreset[]): void {
-  localStorage.setItem(storageKey, JSON.stringify(presets));
+  // local storage disabled
 }

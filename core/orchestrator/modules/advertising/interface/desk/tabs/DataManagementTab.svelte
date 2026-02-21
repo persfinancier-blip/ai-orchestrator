@@ -17,8 +17,6 @@
     updatedAt: number;
   };
 
-  const SOURCES_KEY = 'ao_api_builder_sources_v1';
-
   let sources: ApiSource[] = [];
   let selectedId: string | null = null;
 
@@ -29,11 +27,7 @@
   let previewStatus = 0;
 
   function loadSources() {
-    try {
-      sources = JSON.parse(localStorage.getItem(SOURCES_KEY) || '[]') || [];
-    } catch {
-      sources = [];
-    }
+    sources = [];
     if (!selectedId && sources.length) selectedId = sources[0].id;
   }
 

@@ -48,8 +48,6 @@
     toPort: string;
   };
 
-  const STORAGE_KEY = 'ai-orchestrator.workflow-v2';
-
   let activeTab: Tab = 'graph';
   let nodes: WorkflowNode[] = [];
   let edges: WorkflowEdge[] = [];
@@ -73,33 +71,15 @@
   $: persist();
 
   function persist(): void {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ nodes, edges, panX, panY, zoom }));
-    } catch {
-      // ignore
-    }
+    // local storage disabled
   }
 
   function restore(): void {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as {
-        nodes?: WorkflowNode[];
-        edges?: WorkflowEdge[];
-        panX?: number;
-        panY?: number;
-        zoom?: number;
-      };
-      nodes = parsed.nodes ?? [];
-      edges = parsed.edges ?? [];
-      panX = parsed.panX ?? 0;
-      panY = parsed.panY ?? 0;
-      zoom = parsed.zoom ?? 1;
-    } catch {
-      nodes = [];
-      edges = [];
-    }
+    nodes = [];
+    edges = [];
+    panX = 0;
+    panY = 0;
+    zoom = 1;
   }
 
   function sourceList(): SourceItem[] {

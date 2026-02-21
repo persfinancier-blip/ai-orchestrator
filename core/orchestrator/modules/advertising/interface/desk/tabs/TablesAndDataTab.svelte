@@ -54,7 +54,6 @@
   let contracts_storage_picker_open = false;
   let contracts_storage_pick_value = '';
 
-  const CONTRACTS_STORAGE_KEY = 'ao_data_contracts_storage_table_v1';
   const CONTRACTS_REQUIRED_COLUMNS = [
     { name: 'schema_name', types: ['text', 'character varying', 'varchar'] },
     { name: 'table_name', types: ['text', 'character varying', 'varchar'] },
@@ -73,26 +72,20 @@
     return role === 'data_admin';
   }
 
-  function parseContractsStorageConfig() {
+  async function parseContractsStorageConfig() {
+    contracts_storage_schema = 'ao_system';
+    contracts_storage_table = 'table_data_contract_versions';
     try {
-      const raw = JSON.parse(localStorage.getItem(CONTRACTS_STORAGE_KEY) || '{}');
-      const schema = String(raw?.schema || '').trim();
-      const table = String(raw?.table || '').trim();
-      if (schema && table) {
-        contracts_storage_schema = schema;
-        contracts_storage_table = table;
-      }
+      const j = await apiJson<{ effective?: any }>(`${apiBase}/settings/effective`);
+      const eff = j?.effective || {};
+      const nextSchema = String(eff?.contracts_schema || '').trim();
+      const nextTable = String(eff?.contracts_table || '').trim();
+      if (nextSchema) contracts_storage_schema = nextSchema;
+      if (nextTable) contracts_storage_table = nextTable;
     } catch {
-      // ignore
+      // ignore and keep defaults
     }
     contracts_storage_pick_value = `${contracts_storage_schema}.${contracts_storage_table}`;
-  }
-
-  function saveContractsStorageConfig() {
-    localStorage.setItem(
-      CONTRACTS_STORAGE_KEY,
-      JSON.stringify({ schema: contracts_storage_schema, table: contracts_storage_table })
-    );
   }
 
   function normalizeTypeName(type: string) {
@@ -401,9 +394,9 @@
     }
   }
 
-  onMount(() => {
-    parseContractsStorageConfig();
-    loadContractsPanel();
+  onMount(async () => {
+    await parseContractsStorageConfig();
+    await loadContractsPanel();
   });
 
   async function applyContractsStorageChoice() {
@@ -414,7 +407,6 @@
     if (!ok) return;
     contracts_storage_schema = schema;
     contracts_storage_table = table;
-    saveContractsStorageConfig();
     try {
       await apiJson(`${apiBase}/settings/upsert`, {
         method: 'POST',

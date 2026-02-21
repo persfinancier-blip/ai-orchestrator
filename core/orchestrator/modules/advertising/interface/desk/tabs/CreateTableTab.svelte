@@ -304,24 +304,20 @@
     return `${prefix} Выберите системный шаблон «${STORAGE_CONTRACT_NAME}», создайте таблицу и подключите ее здесь.`;
   }
 
-  function parseStorageTableConfig() {
+  async function parseStorageTableConfig() {
+    storage_schema = STORAGE_DEFAULT_SCHEMA;
+    storage_table = STORAGE_DEFAULT_TABLE;
     try {
-      const raw =
-        JSON.parse(localStorage.getItem(DATA_CONTRACTS_STORAGE_KEY) || localStorage.getItem(TABLE_TEMPLATES_STORAGE_KEY) || '{}');
-      if (raw && typeof raw.schema === 'string' && typeof raw.table === 'string') {
-        storage_schema = raw.schema.trim() || STORAGE_DEFAULT_SCHEMA;
-        storage_table = raw.table.trim() || STORAGE_DEFAULT_TABLE;
-      }
+      const j = await apiJson<{ effective?: any }>(`${apiBase}/settings/effective`);
+      const eff = j?.effective || {};
+      const nextSchema = String(eff?.templates_schema || '').trim();
+      const nextTable = String(eff?.templates_table || '').trim();
+      if (nextSchema) storage_schema = nextSchema;
+      if (nextTable) storage_table = nextTable;
     } catch {
       storage_schema = STORAGE_DEFAULT_SCHEMA;
       storage_table = STORAGE_DEFAULT_TABLE;
     }
-  }
-
-  function saveStorageTableConfig() {
-    const payload = JSON.stringify({ schema: storage_schema, table: storage_table });
-    localStorage.setItem(DATA_CONTRACTS_STORAGE_KEY, payload);
-    localStorage.setItem(TABLE_TEMPLATES_STORAGE_KEY, payload);
   }
 
   async function checkStorageTable(schema: string, table: string) {
@@ -365,7 +361,7 @@
   async function loadTemplatesFromStorage() {
     const isValid = await checkStorageTable(storage_schema, storage_table);
     if (!isValid) {
-      loadTableTemplatesLocalOnly();
+      loadTableTemplatesFallback();
       return;
     }
     try {
@@ -420,53 +416,19 @@
     } catch (e: any) {
       storage_status = 'error';
       storage_status_message = storageInstruction('Ошибка загрузки шаблонов из таблицы.');
-      loadTableTemplatesLocalOnly();
+      loadTableTemplatesFallback();
       error = e?.message || String(e);
     }
   }
 
-  function loadTableTemplatesLocalOnly() {
-    try {
-      const raw = JSON.parse(localStorage.getItem(DATA_CONTRACTS_KEY) || localStorage.getItem(TABLE_TEMPLATES_KEY) || '[]');
-      const custom = Array.isArray(raw)
-        ? raw.map((x: any) => ({
-            id: String(x?.id || uid()),
-            name: String(x?.name || ''),
-            schema_name: String(x?.schema_name || ''),
-            table_name: String(x?.table_name || ''),
-            table_class: String(x?.table_class || 'custom'),
-            description: String(x?.description || ''),
-            columns: Array.isArray(x?.columns)
-              ? x.columns.map((c: any) => ({
-                  field_name: String(c?.field_name || ''),
-                  field_type: String(c?.field_type || 'text'),
-                  description: String(c?.description || '')
-                }))
-              : [],
-            partition_enabled: Boolean(x?.partition_enabled),
-            partition_column: String(x?.partition_column || 'event_date'),
-            partition_interval: x?.partition_interval === 'month' ? 'month' : 'day',
-            contract_version: Number(x?.contract_version || 1) > 0 ? Number(x?.contract_version || 1) : 1,
-            contract_mode: x?.contract_mode === 'strict_sync' ? 'strict_sync' : 'safe_add_only'
-          }))
-        : [];
-      tableTemplates = [
-        bronzeTemplate(),
-        silverTemplate(),
-        storageSystemTemplate(),
-        contractsSystemTemplate(),
-        settingsSystemTemplate(),
-        ...custom
-      ];
-    } catch {
-      tableTemplates = [
-        bronzeTemplate(),
-        silverTemplate(),
-        storageSystemTemplate(),
-        contractsSystemTemplate(),
-        settingsSystemTemplate()
-      ];
-    }
+  function loadTableTemplatesFallback() {
+    tableTemplates = [
+      bronzeTemplate(),
+      silverTemplate(),
+      storageSystemTemplate(),
+      contractsSystemTemplate(),
+      settingsSystemTemplate()
+    ];
   }
 
   function applyTemplate(t: DataContract) {
@@ -491,15 +453,12 @@
   }
 
   async function loadTableTemplates() {
-    parseStorageTableConfig();
+    await parseStorageTableConfig();
     await loadTemplatesFromStorage();
   }
 
   function saveTableTemplatesLocal() {
-    const custom = tableTemplates.filter((t) => !t.id.startsWith('builtin_'));
-    const payload = JSON.stringify(custom.slice(0, 300));
-    localStorage.setItem(DATA_CONTRACTS_KEY, payload);
-    localStorage.setItem(TABLE_TEMPLATES_KEY, payload);
+    // local storage disabled: source of truth is server DB
   }
 
   async function saveTemplateToStorage(t: DataContract) {
@@ -694,7 +653,6 @@
     if (!ok) return;
     storage_schema = schema;
     storage_table = table;
-    saveStorageTableConfig();
     try {
       await apiJson(`${apiBase}/settings/upsert`, {
         method: 'POST',
