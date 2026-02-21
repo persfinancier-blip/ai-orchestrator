@@ -33,6 +33,82 @@ function qlit(v) {
 }
 
 const KNOWN_TYPES = new Set(['text', 'int', 'bigint', 'numeric', 'boolean', 'date', 'timestamptz', 'jsonb', 'uuid']);
+const CONTRACT_BINDINGS_SCHEMA = 'ao_system';
+const CONTRACT_BINDINGS_TABLE = 'table_contract_bindings';
+const CONTRACT_BINDINGS_QNAME = `${qi(CONTRACT_BINDINGS_SCHEMA)}.${qi(CONTRACT_BINDINGS_TABLE)}`;
+
+async function ensureContractBindingsTable(client) {
+  await client.query(`CREATE SCHEMA IF NOT EXISTS ${qi(CONTRACT_BINDINGS_SCHEMA)}`);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ${CONTRACT_BINDINGS_QNAME} (
+      schema_name text NOT NULL,
+      table_name text NOT NULL,
+      contract_name text NOT NULL,
+      contract_version int NOT NULL DEFAULT 1,
+      contract_mode text NOT NULL DEFAULT 'safe_add_only',
+      contract_id text NULL,
+      sync_state text NOT NULL DEFAULT 'in_sync',
+      last_applied_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (schema_name, table_name)
+    )
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_table_contract_bindings_contract_name_idx
+    ON ${CONTRACT_BINDINGS_QNAME} (contract_name)
+  `);
+}
+
+function normalizeContract(raw) {
+  const c = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null;
+  if (!c) return null;
+  const contract_name = String(c.name || '').trim();
+  if (!contract_name) return null;
+  const contract_version = Number(c.version || 1);
+  const contract_mode = String(c.mode || 'safe_add_only').trim() === 'strict_sync' ? 'strict_sync' : 'safe_add_only';
+  const contract_id = String(c.id || '').trim();
+  return {
+    contract_name,
+    contract_version: Number.isFinite(contract_version) && contract_version > 0 ? Math.trunc(contract_version) : 1,
+    contract_mode,
+    contract_id: contract_id || null
+  };
+}
+
+async function upsertContractBinding(client, schema, table, contract) {
+  if (!contract?.contract_name) return;
+  await ensureContractBindingsTable(client);
+  await client.query(
+    `
+    INSERT INTO ${CONTRACT_BINDINGS_QNAME}
+      (schema_name, table_name, contract_name, contract_version, contract_mode, contract_id, sync_state, last_applied_at, updated_at)
+    VALUES
+      ($1, $2, $3, $4, $5, $6, 'in_sync', now(), now())
+    ON CONFLICT (schema_name, table_name)
+    DO UPDATE SET
+      contract_name = EXCLUDED.contract_name,
+      contract_version = EXCLUDED.contract_version,
+      contract_mode = EXCLUDED.contract_mode,
+      contract_id = EXCLUDED.contract_id,
+      sync_state = 'in_sync',
+      last_applied_at = now(),
+      updated_at = now()
+    `,
+    [schema, table, contract.contract_name, contract.contract_version, contract.contract_mode, contract.contract_id]
+  );
+}
+
+async function markContractDrift(client, schema, table) {
+  await ensureContractBindingsTable(client);
+  await client.query(
+    `
+    UPDATE ${CONTRACT_BINDINGS_QNAME}
+    SET sync_state = 'drift', updated_at = now()
+    WHERE schema_name = $1 AND table_name = $2
+    `,
+    [schema, table]
+  );
+}
 
 function normalizeColumns(columns) {
   const cols = Array.isArray(columns) ? columns : [];
@@ -69,6 +145,30 @@ tableBuilderRouter.get('/tables', async (_req, res) => {
     return res.json({ drafts: [], existing_tables });
   } catch (e) {
     return res.status(500).json({ error: 'tables_list_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+tableBuilderRouter.get('/contracts/usage', requireDataAdmin, async (req, res) => {
+  const name = String(req.query.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'bad_request', details: 'name is required' });
+
+  const client = await pool.connect();
+  try {
+    await ensureContractBindingsTable(client);
+    const r = await client.query(
+      `
+      SELECT schema_name, table_name, contract_name, contract_version, contract_mode, sync_state, updated_at
+      FROM ${CONTRACT_BINDINGS_QNAME}
+      WHERE LOWER(contract_name) = LOWER($1)
+      ORDER BY schema_name, table_name
+      `,
+      [name]
+    );
+    return res.json({ usage: r.rows || [] });
+  } catch (e) {
+    return res.status(500).json({ error: 'contracts_usage_failed', details: String(e?.message || e) });
   } finally {
     client.release();
   }
@@ -143,6 +243,7 @@ tableBuilderRouter.post('/tables/create', requireDataAdmin, async (req, res) => 
   const table_class = String(req.body?.table_class || 'custom').trim();
   const description = String(req.body?.description || '').trim();
   const created_by = String(req.body?.created_by || 'ui').trim();
+  const contract = normalizeContract(req.body?.contract);
 
   let partitioning = req.body?.partitioning || { enabled: false };
   const partition_enabled = !!partitioning?.enabled;
@@ -273,9 +374,13 @@ tableBuilderRouter.post('/tables/create', requireDataAdmin, async (req, res) => 
       }
     }
 
+    if (contract) {
+      await upsertContractBinding(client, schema_name, table_name, contract);
+    }
+
     await client.query('COMMIT');
 
-    return res.json({ ok: true, schema_name, table_name });
+    return res.json({ ok: true, schema_name, table_name, contract_linked: !!contract, contract_name: contract?.contract_name || null });
   } catch (e) {
     try {
       await client.query('ROLLBACK');
@@ -296,6 +401,11 @@ tableBuilderRouter.post('/tables/drop', requireDataAdmin, async (req, res) => {
 
   const client = await pool.connect();
   try {
+    await ensureContractBindingsTable(client);
+    await client.query(
+      `DELETE FROM ${CONTRACT_BINDINGS_QNAME} WHERE schema_name = $1 AND table_name = $2`,
+      [schema, table]
+    );
     await client.query(`DROP TABLE IF EXISTS ${qname(schema, table)} CASCADE`);
     return res.json({ ok: true, schema, table });
   } catch (e) {
@@ -319,9 +429,23 @@ tableBuilderRouter.post('/tables/rename', requireDataAdmin, async (req, res) => 
 
   const client = await pool.connect();
   try {
+    await client.query('BEGIN');
     await client.query(`ALTER TABLE ${qname(schema, table)} RENAME TO ${qi(new_table)}`);
+    await ensureContractBindingsTable(client);
+    await client.query(
+      `
+      UPDATE ${CONTRACT_BINDINGS_QNAME}
+      SET table_name = $3, updated_at = now()
+      WHERE schema_name = $1 AND table_name = $2
+      `,
+      [schema, table, new_table]
+    );
+    await client.query('COMMIT');
     return res.json({ ok: true, schema, table, new_table, renamed: true });
   } catch (e) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {}
     const code = e?.code ? String(e.code) : '';
     if (code === '42P07') {
       return res.status(409).json({ error: 'rename_failed', details: 'table_with_new_name_already_exists' });
@@ -344,6 +468,7 @@ tableBuilderRouter.post('/columns/drop', requireDataAdmin, async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query(`ALTER TABLE ${qname(schema, table)} DROP COLUMN IF EXISTS ${qi(column)}`);
+    await markContractDrift(client, schema, table);
     return res.json({ ok: true, schema, table, column });
   } catch (e) {
     return res.status(500).json({ error: 'drop_column_failed', details: String(e?.message || e) });
@@ -376,6 +501,7 @@ tableBuilderRouter.post('/columns/add', requireDataAdmin, async (req, res) => {
         `COMMENT ON COLUMN ${qname(schema, table)}.${qi(colName)} IS ${qlit(colDescription)}`
       );
     }
+    await markContractDrift(client, schema, table);
     return res.json({ ok: true, schema, table, column: { name: colName, type: colType, description: colDescription } });
   } catch (e) {
     return res.status(500).json({ error: 'add_column_failed', details: String(e?.message || e) });

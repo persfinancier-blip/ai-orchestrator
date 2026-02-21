@@ -523,6 +523,21 @@
     applyTemplate(t);
   }
 
+  function getActiveContract(): DataContract | null {
+    if (!selectedTemplateId) return null;
+    return tableTemplates.find((x) => x.id === selectedTemplateId) || null;
+  }
+
+  async function fetchContractUsage(name: string) {
+    const n = String(name || '').trim();
+    if (!n) return [];
+    const j = await apiJson<{ usage: Array<{ schema_name: string; table_name: string; sync_state?: string; contract_version?: number }> }>(
+      `${apiBase}/contracts/usage?name=${encodeURIComponent(n)}`,
+      { headers: { 'X-AO-ROLE': role } }
+    );
+    return Array.isArray(j?.usage) ? j.usage : [];
+  }
+
   function applyDefaultContractIfEmpty() {
     if (selectedTemplateId) return;
     if (schema_name.trim() || table_name.trim() || description.trim()) return;
@@ -567,7 +582,7 @@
   async function saveCurrentTemplate() {
     if (!selectedTemplateId) throw new Error('Сначала добавь или выбери контракт');
     if (selectedTemplateId.startsWith('builtin_')) {
-      throw new Error('Встроенный контракт нельзя сохранить. Нажми «Добавить контракт»');
+      throw new Error('Встроенный контракт нельзя сохранить. Нажми «Добавить»');
     }
 
     const idx = tableTemplates.findIndex((x) => x.id === selectedTemplateId);
@@ -590,10 +605,14 @@
       partition_enabled,
       partition_column: partition_column.trim(),
       partition_interval,
-      contract_version: Number(tableTemplates[idx].contract_version || 1),
+      contract_version: Number(tableTemplates[idx].contract_version || 1) + 1,
       contract_mode: tableTemplates[idx].contract_mode || 'safe_add_only'
     } as DataContract;
 
+    const previousName = String(tableTemplates[idx].name || '').trim();
+    if (previousName && previousName.toLowerCase() !== name.toLowerCase()) {
+      await deleteTemplateFromStorage(previousName);
+    }
     await saveTemplateToStorage(updated);
     await loadTemplatesFromStorage();
     const actual = tableTemplates.find((x) => x.name.trim().toLowerCase() === name.toLowerCase());
@@ -609,6 +628,11 @@
 
     const t = tableTemplates.find((x) => x.id === id);
     if (t) {
+      const usage = await fetchContractUsage(t.name);
+      if (usage.length) {
+        const tables = usage.map((u) => `${u.schema_name}.${u.table_name} (${u.sync_state || 'unknown'})`).join(', ');
+        throw new Error(`Контракт используется в таблицах: ${tables}. Сначала отвяжи или обнови эти таблицы.`);
+      }
       await deleteTemplateFromStorage(t.name);
       await loadTemplatesFromStorage();
     }
@@ -692,6 +716,7 @@
 
       validate();
       const cols = normalizeColumns(columns);
+      const activeContract = getActiveContract();
 
       const response = await apiJson(`${apiBase}/tables/create`, {
         method: 'POST',
@@ -703,6 +728,14 @@
           table_class,
           description: description.trim(),
           columns: cols,
+          contract: activeContract
+            ? {
+                id: activeContract.id,
+                name: activeContract.name,
+                version: Number(activeContract.contract_version || 1),
+                mode: activeContract.contract_mode || 'safe_add_only'
+              }
+            : null,
           partitioning: partition_enabled
             ? { enabled: true, column: partition_column.trim(), interval: partition_interval }
             : { enabled: false }
@@ -938,8 +971,8 @@
       <div class="template-controls">
         <input class="template-name" bind:value={templateNameDraft} placeholder="Название контракта данных" />
         <div class="inline-actions">
-          <button on:click={onAddTemplateClick}>Добавить контракт</button>
-          <button on:click={onSaveTemplateClick}>Сохранить контракт</button>
+          <button on:click={onAddTemplateClick}>Добавить</button>
+          <button on:click={onSaveTemplateClick}>Сохранить</button>
         </div>
       </div>
       <div class="list templates-list">
