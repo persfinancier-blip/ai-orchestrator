@@ -49,6 +49,9 @@
     bindings: DbBinding[];
   };
 
+  type AuthTemplateField = { key: string; value: string };
+  type AuthTemplateModel = { name: string; type: string; fields: AuthTemplateField[] };
+
   type ApiSource = {
     id: string;
     name: string;
@@ -60,6 +63,7 @@
     bodyJson: string;
     exampleRequest: string;
     auth: AuthConfig;
+    authTemplate: AuthTemplateModel;
     pagination: PaginationConfig;
     db: DbConfig;
     createdAt: number;
@@ -80,6 +84,7 @@
 
   const SOURCES_KEY = 'ao_api_builder_sources_v2';
   const HISTORY_KEY = 'ao_api_builder_history_v1';
+  const AUTH_TEMPLATES_KEY = 'ao_api_builder_auth_templates_v1';
 
   const PLACEHOLDER_HEADERS = '{"Authorization":"Bearer ..."}';
   const PLACEHOLDER_QUERY = '{"date_from":"2026-01-01"}';
@@ -121,6 +126,13 @@
   let headersRawDraft = '';
   let bodyRawDraft = '';
   let authRawDraft = '';
+  let authRawError = '';
+  let authRawTouched = false;
+  let authSyncLock: 'left' | 'right' | null = null;
+  let authRawDebounce: any = null;
+  let authTemplateRows: KvRow[] = [];
+  let authTemplates: Array<{ id: string; name: string; type: string; fields: AuthTemplateField[] }> = [];
+  let selectedAuthTemplateId = '';
   let settingsRawDraft = '';
   let scriptRawDraft = '';
   let paramRows: KvRow[] = [];
@@ -192,7 +204,16 @@
     paramsRawDraft = selected.queryJson || '';
     headersRawDraft = selected.headersJson || '';
     bodyRawDraft = selected.bodyJson || '';
-    authRawDraft = JSON.stringify(selected.auth || {}, null, 2);
+    const t = selected.authTemplate || { name: '', type: 'custom', fields: [] };
+    authTemplateRows = (t.fields || []).map((f) => ({ id: uid(), key: f.key, value: f.value }));
+    const matched = authTemplates.find((x) => x.name === t.name);
+    selectedAuthTemplateId = matched?.id || '';
+    authRawDraft = JSON.stringify(
+      { name: t.name || '', type: t.type || 'custom', fields: t.fields || [] },
+      null,
+      2
+    );
+    authRawError = '';
     settingsRawDraft = JSON.stringify({ pagination: selected.pagination || {} }, null, 2);
     scriptRawDraft = scriptRawDraft || '';
     try { paramRows = objectToKvRows(safeJsonParse(paramsRawDraft)); } catch { paramRows = []; }
@@ -268,21 +289,163 @@
   }
 
   function parseAuthRaw() {
+    authRawTouched = true;
     try {
       const a = safeJsonParse(authRawDraft);
+      const fields = Array.isArray(a?.fields)
+        ? a.fields.map((f: any) => ({ key: String(f?.key || ''), value: String(f?.value || '') }))
+        : [];
+      const next: AuthTemplateModel = {
+        name: String(a?.name || ''),
+        type: String(a?.type || 'custom'),
+        fields
+      };
+      authSyncLock = 'right';
+      authTemplateRows = next.fields.map((f) => ({ id: uid(), key: f.key, value: f.value }));
       mutateSelected((s) => {
-        s.auth.mode = toAuthMode(String(a.mode ?? s.auth.mode));
-        s.auth.bearerToken = String(a.bearerToken ?? s.auth.bearerToken ?? '');
-        s.auth.basicUsername = String(a.basicUsername ?? s.auth.basicUsername ?? '');
-        s.auth.basicPassword = String(a.basicPassword ?? s.auth.basicPassword ?? '');
-        s.auth.apiKeyName = String(a.apiKeyName ?? s.auth.apiKeyName ?? '');
-        s.auth.apiKeyValue = String(a.apiKeyValue ?? s.auth.apiKeyValue ?? '');
-        s.auth.apiKeyIn = toApiKeyIn(String(a.apiKeyIn ?? s.auth.apiKeyIn ?? 'header'));
+        s.authTemplate = { ...next, fields: [...next.fields] };
       });
+      authRawError = '';
       err = '';
     } catch {
-      err = 'Авторизация RAW: некорректный JSON';
+      authRawError = 'Некорректный JSON';
+    } finally {
+      authSyncLock = null;
     }
+  }
+
+  function canonicalAuthTemplateFromLeft(source: ApiSource | null): AuthTemplateModel {
+    const cur = source?.authTemplate || { name: '', type: 'custom', fields: [] };
+    const fields = authTemplateRows
+      .map((r) => ({ key: (r.key || '').trim(), value: r.value || '' }))
+      .filter((r) => r.key.length > 0);
+    return {
+      name: String(cur.name || ''),
+      type: String(cur.type || 'custom'),
+      fields
+    };
+  }
+
+  function syncAuthLeftToRawAndSource() {
+    if (!selected) return;
+    if (authSyncLock === 'right') return;
+    authSyncLock = 'left';
+    const next = canonicalAuthTemplateFromLeft(selected);
+    authRawDraft = JSON.stringify(next, null, 2);
+    authRawError = '';
+    mutateSelected((s) => {
+      s.authTemplate = { ...next, fields: [...next.fields] };
+    });
+    authSyncLock = null;
+  }
+
+  function scheduleParseAuthRaw() {
+    if (authSyncLock === 'left') return;
+    if (authRawDebounce) clearTimeout(authRawDebounce);
+    authRawDebounce = setTimeout(() => {
+      parseAuthRaw();
+    }, 400);
+  }
+
+  function addAuthTemplateRow() {
+    authTemplateRows = [...authTemplateRows, { id: uid(), key: '', value: '' }];
+    syncAuthLeftToRawAndSource();
+  }
+
+  function removeAuthTemplateRow(id: string) {
+    authTemplateRows = authTemplateRows.filter((r) => r.id !== id);
+    syncAuthLeftToRawAndSource();
+  }
+
+  function setAuthTemplateName(name: string) {
+    mutateSelected((s) => {
+      s.authTemplate.name = name;
+    });
+    syncAuthLeftToRawAndSource();
+  }
+
+  function setAuthTemplateType(type: string) {
+    mutateSelected((s) => {
+      s.authTemplate.type = type;
+    });
+    syncAuthLeftToRawAndSource();
+  }
+
+  function loadAuthTemplates() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(AUTH_TEMPLATES_KEY) || '[]');
+      authTemplates = Array.isArray(raw)
+        ? raw.map((x: any) => ({
+            id: String(x?.id || uid()),
+            name: String(x?.name || ''),
+            type: String(x?.type || 'custom'),
+            fields: Array.isArray(x?.fields)
+              ? x.fields.map((f: any) => ({ key: String(f?.key || ''), value: String(f?.value || '') }))
+              : []
+          }))
+        : [];
+    } catch {
+      authTemplates = [];
+    }
+  }
+
+  function saveAuthTemplates() {
+    localStorage.setItem(AUTH_TEMPLATES_KEY, JSON.stringify(authTemplates.slice(0, 500)));
+  }
+
+  function saveCurrentAuthTemplate() {
+    if (!selected) return;
+    if (authRawError) {
+      err = 'Сначала исправьте RAW JSON';
+      return;
+    }
+    try {
+      const raw = safeJsonParse(authRawDraft);
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        err = 'RAW должен быть JSON-объектом';
+        return;
+      }
+    } catch {
+      err = 'Сначала исправьте RAW JSON';
+      return;
+    }
+    const t = canonicalAuthTemplateFromLeft(selected);
+    if (!t.name.trim()) {
+      err = 'Введите название шаблона авторизации';
+      return;
+    }
+    if (t.fields.some((f) => !f.key.trim())) {
+      err = 'У шаблона есть поле с пустым названием';
+      return;
+    }
+    try {
+      JSON.parse(JSON.stringify(t));
+    } catch {
+      err = 'Некорректный JSON';
+      return;
+    }
+    const idx = authTemplates.findIndex((x) => x.name === t.name);
+    const item = { id: idx >= 0 ? authTemplates[idx].id : uid(), ...t };
+    if (idx >= 0) authTemplates[idx] = item;
+    else authTemplates = [item, ...authTemplates];
+    saveAuthTemplates();
+    selectedAuthTemplateId = item.id;
+    previewApplyMessage = 'Шаблон сохранён';
+    err = '';
+  }
+
+  function applySelectedAuthTemplate(id: string) {
+    selectedAuthTemplateId = id;
+    const t = authTemplates.find((x) => x.id === id);
+    if (!t || !selected) return;
+    authSyncLock = 'right';
+    authTemplateRows = t.fields.map((f) => ({ id: uid(), key: f.key, value: f.value }));
+    mutateSelected((s) => {
+      s.authTemplate = { name: t.name, type: t.type, fields: t.fields.map((f) => ({ ...f })) };
+    });
+    authRawDraft = JSON.stringify({ name: t.name, type: t.type, fields: t.fields }, null, 2);
+    authRawError = '';
+    authSyncLock = null;
   }
 
   function parseSettingsRaw() {
@@ -327,6 +490,11 @@
         apiKeyValue: '',
         apiKeyIn: 'header'
       },
+      authTemplate: {
+        name: '',
+        type: 'custom',
+        fields: []
+      },
       pagination: {
         mode: 'none',
         pageParam: 'page',
@@ -353,6 +521,16 @@
     const d = defaultSource();
     const src = { ...d, ...(s || {}) };
     src.auth = { ...d.auth, ...(s?.auth || {}) };
+    src.authTemplate = {
+      ...d.authTemplate,
+      ...(s?.authTemplate || {}),
+      fields: Array.isArray(s?.authTemplate?.fields)
+        ? s.authTemplate.fields.map((f: any) => ({
+            key: String(f?.key || ''),
+            value: String(f?.value || '')
+          }))
+        : []
+    };
     src.pagination = { ...d.pagination, ...(s?.pagination || {}) };
     src.db = { ...d.db, ...(s?.db || {}) };
     src.db.bindings = Array.isArray(s?.db?.bindings)
@@ -401,6 +579,7 @@
     }
 
     if (!selectedId && sources.length) selectedId = sources[0].id;
+    loadAuthTemplates();
   }
 
   function saveSources() {
@@ -424,6 +603,7 @@
       const next: ApiSource = {
         ...s,
         auth: { ...s.auth },
+        authTemplate: { ...s.authTemplate, fields: [...(s.authTemplate?.fields || [])] },
         pagination: { ...s.pagination },
         db: { ...s.db, bindings: [...s.db.bindings] },
         updatedAt: Date.now()
@@ -578,6 +758,14 @@
     if (source.auth.mode === 'apiKey' && source.auth.apiKeyName.trim()) {
       if (source.auth.apiKeyIn === 'header') headersObj[source.auth.apiKeyName.trim()] = source.auth.apiKeyValue;
       if (source.auth.apiKeyIn === 'query') queryObj[source.auth.apiKeyName.trim()] = source.auth.apiKeyValue;
+    }
+
+    for (const f of source.authTemplate?.fields || []) {
+      const k = String(f?.key || '').trim();
+      if (!k) continue;
+      const v = String(f?.value ?? '');
+      if (String(source.authTemplate?.type || 'custom') === 'query') queryObj[k] = v;
+      else headersObj[k] = v;
     }
 
     if (source.pagination.mode === 'page') {
@@ -1006,7 +1194,6 @@
   $: syncEditorsFromSelected();
   $: if (selected) ensureTableSelection();
   $: if (selectedId) generatedApiPreview = buildGeneratedPreview(selected);
-  $: if (selected) authRawDraft = JSON.stringify(selected.auth || {}, null, 2);
   $: if (selected) settingsRawDraft = JSON.stringify({ pagination: selected.pagination || {} }, null, 2);
   $: if (!editingPreview) previewDraft = generatedApiPreview;
   $: selectedId, tick().then(autosizeCompareTextareas);
@@ -1082,38 +1269,61 @@
               <div class="auth-split">
                 <div class="auth-left" bind:this={authFieldsEl}>
                   <div class="auth-top">
-                    <select class="quarter" value={selected.auth.mode} on:change={(e) => mutateSelected((s) => (s.auth.mode = toAuthMode(e.currentTarget.value)))}>
-                      <option value="none">Тип: none</option>
-                      <option value="bearer">Тип: bearer</option>
-                      <option value="basic">Тип: basic</option>
-                      <option value="apiKey">Тип: apiKey</option>
+                    <select class="quarter" value={selectedAuthTemplateId} on:change={(e) => applySelectedAuthTemplate(e.currentTarget.value)}>
+                      <option value="">Шаблон авторизации</option>
+                      {#each authTemplates as t}
+                        <option value={t.id}>{t.name}</option>
+                      {/each}
                     </select>
                   </div>
                   <div class="auth-fields">
-                    {#if selected.auth.mode === 'bearer'}
-                      <input placeholder="Key value" value={selected.auth.bearerToken} on:input={(e) => mutateSelected((s) => (s.auth.bearerToken = e.currentTarget.value))} />
-                    {/if}
-
-                    {#if selected.auth.mode === 'basic'}
-                      <input placeholder="Key name" value={selected.auth.basicUsername} on:input={(e) => mutateSelected((s) => (s.auth.basicUsername = e.currentTarget.value))} />
-                      <input placeholder="Key value" value={selected.auth.basicPassword} on:input={(e) => mutateSelected((s) => (s.auth.basicPassword = e.currentTarget.value))} />
-                    {/if}
-
-                    {#if selected.auth.mode === 'apiKey'}
-                      <input placeholder="Key name" value={selected.auth.apiKeyName} on:input={(e) => mutateSelected((s) => (s.auth.apiKeyName = e.currentTarget.value))} />
-                      <input placeholder="Key value" value={selected.auth.apiKeyValue} on:input={(e) => mutateSelected((s) => (s.auth.apiKeyValue = e.currentTarget.value))} />
-                      <select value={selected.auth.apiKeyIn} on:change={(e) => mutateSelected((s) => (s.auth.apiKeyIn = toApiKeyIn(e.currentTarget.value)))}>
-                        <option value="header">Add to: header</option>
-                        <option value="query">Add to: query</option>
-                      </select>
-                    {/if}
+                    <input
+                      placeholder="Название шаблона авторизации (например: WB Token)"
+                      value={selected.authTemplate?.name || ''}
+                      on:input={(e) => setAuthTemplateName(e.currentTarget.value)}
+                    />
+                    <select value={selected.authTemplate?.type || 'custom'} on:change={(e) => setAuthTemplateType(e.currentTarget.value)}>
+                      <option value="custom">Тип: custom</option>
+                      <option value="header">Тип: header</option>
+                      <option value="query">Тип: query</option>
+                    </select>
+                    <div class="auth-rows">
+                      {#each authTemplateRows as r (r.id)}
+                        <div class="auth-row">
+                          <input
+                            class="key-col"
+                            placeholder="Название"
+                            value={r.key}
+                            on:input={(e) => { r.key = e.currentTarget.value; authTemplateRows = [...authTemplateRows]; syncAuthLeftToRawAndSource(); }}
+                          />
+                          <input
+                            class="val-col"
+                            placeholder="Значение"
+                            value={r.value}
+                            on:input={(e) => { r.value = e.currentTarget.value; authTemplateRows = [...authTemplateRows]; syncAuthLeftToRawAndSource(); }}
+                          />
+                          <button class="danger" on:click={() => removeAuthTemplateRow(r.id)}>x</button>
+                        </div>
+                      {/each}
+                    </div>
+                    <button on:click={addAuthTemplateRow}>+ Добавить поле</button>
                   </div>
                 </div>
                 <div class="auth-right">
                   <div class="auth-top">
-                    <button class="quarter" on:click={parseAuthRaw}>RAW</button>
+                    <button class="quarter" on:click={saveCurrentAuthTemplate}>Сохранить шаблон</button>
                   </div>
-                  <textarea bind:this={authRawEl} bind:value={authRawDraft} placeholder="mode: apiKey"></textarea>
+                  <textarea
+                    class:invalid={!!authRawError}
+                    bind:this={authRawEl}
+                    bind:value={authRawDraft}
+                    placeholder="JSON шаблон авторизации"
+                    on:input={() => { authRawTouched = true; scheduleParseAuthRaw(); }}
+                    on:blur={parseAuthRaw}
+                  ></textarea>
+                  {#if authRawError}
+                    <p class="error">{authRawError}</p>
+                  {/if}
                 </div>
               </div>
             </div>
@@ -1505,7 +1715,12 @@
   .auth-top .quarter { width:50%; min-width:0; max-width:none; }
   .auth-fields { display:flex; flex-direction:column; gap:10px; margin-top:10px; }
   .auth-fields input, .auth-fields select, .auth-right textarea { width:100%; }
+  .auth-rows { display:flex; flex-direction:column; gap:8px; }
+  .auth-row { display:grid; grid-template-columns: 25% 1fr auto; gap:8px; align-items:center; }
+  .auth-row .key-col { min-width:0; }
+  .auth-row .val-col { min-width:0; }
   .auth-right textarea { margin-top:10px; resize:none; overflow:hidden; max-width:100%; }
+  .auth-right textarea.invalid { border-color:#ef4444; background:#fff5f5; }
   @media (max-width: 1100px) { .auth-split { grid-template-columns: 1fr; } }
 
   label { display:flex; flex-direction:column; gap:6px; font-size:13px; }
