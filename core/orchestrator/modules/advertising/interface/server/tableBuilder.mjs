@@ -67,6 +67,15 @@ const CONTRACTS_REQUIRED_COLUMNS = [
   { name: 'changed_by', types: ['text', 'character varying', 'varchar'] },
   { name: 'created_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] }
 ];
+const SYSTEM_CONTRACT_COLUMNS = [
+  { name: 'ao_source', type: 'text' },
+  { name: 'ao_run_id', type: 'text' },
+  { name: 'ao_created_at', type: 'timestamptz' },
+  { name: 'ao_updated_at', type: 'timestamptz' },
+  { name: 'ao_contract_schema', type: 'text' },
+  { name: 'ao_contract_name', type: 'text' },
+  { name: 'ao_contract_version', type: 'integer' }
+];
 
 function normalizeSettingIdent(value, fallback) {
   const v = String(value || '').trim();
@@ -161,6 +170,7 @@ async function ensureSettingsTable(client) {
     CREATE INDEX IF NOT EXISTS ao_table_settings_store_active_idx
     ON ${SETTINGS_QNAME} (is_active, setting_key)
   `);
+  await ensureSystemContractColumns(client, SETTINGS_QNAME);
 }
 
 async function ensureDefaultSettingsRows(client) {
@@ -274,6 +284,7 @@ async function ensureContractsTable(client, config) {
     CREATE INDEX IF NOT EXISTS ao_table_data_contract_versions_lookup_idx
     ON ${contractsQn} (schema_name, table_name, version DESC)
   `);
+  await ensureSystemContractColumns(client, contractsQn);
 
   const ok = await hasRequiredColumns(client, contractsSchema, contractsTable, CONTRACTS_REQUIRED_COLUMNS);
   if (ok) return contractsQn;
@@ -312,7 +323,14 @@ async function ensureTemplatesStorageTable(client, config) {
     CREATE INDEX IF NOT EXISTS ao_table_templates_store_name_idx
     ON ${templatesQn} (template_name)
   `);
+  await ensureSystemContractColumns(client, templatesQn);
   return templatesQn;
+}
+
+async function ensureSystemContractColumns(client, tableQname) {
+  for (const c of SYSTEM_CONTRACT_COLUMNS) {
+    await client.query(`ALTER TABLE ${tableQname} ADD COLUMN IF NOT EXISTS ${qi(c.name)} ${c.type}`);
+  }
 }
 
 function defaultContractName(schema, table) {

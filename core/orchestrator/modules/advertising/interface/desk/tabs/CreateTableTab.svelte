@@ -208,7 +208,7 @@
       table_name: STORAGE_DEFAULT_TABLE,
       table_class: 'custom',
       description: 'Служебная таблица для хранения шаблонов блока «Создание таблиц»',
-      columns: [
+      columns: withRequiredTableFields([
         { field_name: 'template_name', field_type: 'text', description: 'имя шаблона' },
         { field_name: 'schema_name', field_type: 'text', description: 'схема таблицы' },
         { field_name: 'table_name', field_type: 'text', description: 'имя таблицы' },
@@ -218,7 +218,7 @@
         { field_name: 'partition_enabled', field_type: 'boolean', description: 'включено ли партиционирование' },
         { field_name: 'partition_column', field_type: 'text', description: 'колонка партиционирования' },
         { field_name: 'partition_interval', field_type: 'text', description: 'интервал партиционирования' }
-      ],
+      ]),
       partition_enabled: false,
       partition_column: '',
       partition_interval: 'day',
@@ -235,7 +235,7 @@
       table_name: 'table_data_contract_versions',
       table_class: 'custom',
       description: 'Системная таблица версий контрактов данных',
-      columns: [
+      columns: withRequiredTableFields([
         { field_name: 'id', field_type: 'bigint', description: 'идентификатор версии' },
         { field_name: 'schema_name', field_type: 'text', description: 'схема таблицы' },
         { field_name: 'table_name', field_type: 'text', description: 'имя таблицы' },
@@ -248,7 +248,7 @@
         { field_name: 'change_reason', field_type: 'text', description: 'причина изменения' },
         { field_name: 'changed_by', field_type: 'text', description: 'кто изменил' },
         { field_name: 'created_at', field_type: 'timestamptz', description: 'время создания версии' }
-      ],
+      ]),
       partition_enabled: false,
       partition_column: '',
       partition_interval: 'day',
@@ -265,7 +265,7 @@
       table_name: 'table_settings_store',
       table_class: 'custom',
       description: 'Системная таблица настроек сервера, API и подключений к БД',
-      columns: [
+      columns: withRequiredTableFields([
         { field_name: 'setting_key', field_type: 'text', description: 'уникальный ключ настройки' },
         { field_name: 'setting_value', field_type: 'jsonb', description: 'значение настройки (json)' },
         { field_name: 'scope', field_type: 'text', description: 'область применения (global/module/env)' },
@@ -273,7 +273,7 @@
         { field_name: 'is_active', field_type: 'boolean', description: 'включена ли настройка' },
         { field_name: 'updated_at', field_type: 'timestamptz', description: 'время обновления' },
         { field_name: 'updated_by', field_type: 'text', description: 'кто обновил' }
-      ],
+      ]),
       partition_enabled: false,
       partition_column: '',
       partition_interval: 'day',
