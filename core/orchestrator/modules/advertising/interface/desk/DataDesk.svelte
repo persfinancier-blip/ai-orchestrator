@@ -53,8 +53,10 @@
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), TABLES_TIMEOUT_MS);
     try {
-      const res = await fetch(`${API_BASE}/tables`, {
+      const url = `${API_BASE}/tables?_ts=${Date.now()}`;
+      const res = await fetch(url, {
         method: 'GET',
+        cache: 'no-store',
         headers: {
           Accept: 'application/json',
           'X-AO-ROLE': currentRole
