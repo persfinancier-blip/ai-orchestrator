@@ -122,6 +122,7 @@
       {headers}
       {apiJson}
       {refreshTables}
+      {existingTables}
       onCreated={onCreated}
     />
   {:else if tab === 'tables'}

@@ -3,6 +3,7 @@
   import { onMount } from 'svelte';
 
   export type Role = 'viewer' | 'operator' | 'data_admin';
+  export type ExistingTable = { schema_name: string; table_name: string };
 
   export let apiBase: string;
   export let role: Role;
@@ -15,6 +16,7 @@
 
   export let headers: () => Record<string, string>;
   export let apiJson: <T = any>(url: string, init?: RequestInit) => Promise<T>;
+  export let existingTables: ExistingTable[] = [];
 
   type ColumnDef = { field_name: string; field_type: string; description?: string };
   type TableTemplate = {
@@ -219,13 +221,15 @@
     error = '';
   }
 
-  function deleteCurrentTemplate() {
-    if (!selectedTemplateId) throw new Error('Сначала выбери шаблон');
-    if (selectedTemplateId.startsWith('builtin_')) throw new Error('Встроенный шаблон удалить нельзя');
+  function deleteTemplateById(id: string) {
+    if (!id) throw new Error('Сначала выбери шаблон');
+    if (id.startsWith('builtin_')) throw new Error('Встроенный шаблон удалить нельзя');
 
-    tableTemplates = tableTemplates.filter((x) => x.id !== selectedTemplateId);
-    selectedTemplateId = '';
-    templateNameDraft = '';
+    tableTemplates = tableTemplates.filter((x) => x.id !== id);
+    if (selectedTemplateId === id) {
+      selectedTemplateId = '';
+      templateNameDraft = '';
+    }
     saveTableTemplates();
     error = '';
   }
@@ -238,9 +242,9 @@
     }
   }
 
-  function onDeleteTemplateClick() {
+  function onDeleteTemplateClick(id: string) {
     try {
-      deleteCurrentTemplate();
+      deleteTemplateById(id);
     } catch (e: any) {
       error = e?.message || String(e);
     }
@@ -323,6 +327,24 @@
     }
   }
 
+  async function deleteTableNow(schema: string, table: string) {
+    error = '';
+    try {
+      if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
+      const ok = confirm(`Удалить таблицу ${schema}.${table}?`);
+      if (!ok) return;
+
+      await apiJson(`${apiBase}/tables/drop`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ schema, table })
+      });
+      await refreshTables();
+    } catch (e: any) {
+      error = e?.message ?? String(e);
+    }
+  }
+
   function closeResultModal() {
     result_modal_open = false;
     if (result_is_success && result_created_schema && result_created_table) {
@@ -337,122 +359,142 @@
 
 {#if error}
   <div class="alert">
-    <div class="alert-title">Ошибка создания</div>
+    <div class="alert-title">Ошибка</div>
     <pre>{error}</pre>
   </div>
 {/if}
 
-<section class="grid single">
-  <div class="panel">
-    <div class="panel-head">
-      <h2>Создать таблицу</h2>
-      <div class="quick">
-        <select value={selectedTemplateId} on:change={(e) => applySelectedTemplate(e.currentTarget.value)}>
-          <option value="">Шаблон таблицы</option>
-          {#each tableTemplates as t}
-            <option value={t.id}>{t.name}</option>
-          {/each}
-        </select>
-        <input class="template-name" bind:value={templateNameDraft} placeholder="Название шаблона" />
-        <button on:click={startNewTemplate}>Добавить шаблон</button>
-        <button on:click={onSaveTemplateClick}>Сохранить шаблон</button>
-        <button class="danger icon-btn" on:click={onDeleteTemplateClick}>x</button>
-        <button on:click={pickTemplateBronze}>Bronze</button>
-        <button on:click={pickTemplateSilver}>Silver</button>
+<section class="panel">
+  <div class="panel-head">
+    <h2>Создание таблиц</h2>
+    <div class="muted">{dbStatusMessage || DEFAULT_DB_STATUS_LABEL}</div>
+  </div>
+
+  <div class="layout">
+    <aside class="aside">
+      <div class="aside-title">Текущие таблицы</div>
+      <div class="quick" style="margin-bottom:8px;">
         <button on:click={refreshTables} disabled={loading}>{loading ? 'Загрузка…' : 'Обновить список'}</button>
       </div>
-    </div>
-
-    <div class="form">
-      <label>
-        Схема
-        <input bind:value={schema_name} placeholder="например: showcase / bronze / silver_adv" />
-      </label>
-
-      <label>
-        Таблица
-        <input bind:value={table_name} placeholder="например: advertising" />
-      </label>
-
-      <label>
-        Класс (для себя)
-        <select bind:value={table_class}>
-          <option value="custom">custom</option>
-          <option value="bronze_raw">bronze_raw</option>
-          <option value="silver_table">silver_table</option>
-          <option value="showcase_table">showcase_table</option>
-        </select>
-      </label>
-
-      <label>
-        Описание
-        <input bind:value={description} placeholder="что это за таблица" />
-      </label>
-    </div>
-
-    <div class="fields">
-      <div class="fields-head">
-        <h3>Поля</h3>
-      </div>
-
-      {#each columns as c, ix}
-        <div class="field-row">
-          <input placeholder="имя поля" bind:value={c.field_name} />
-          <select bind:value={c.field_type}>
-            {#each typeOptions as t}
-              <option value={t}>{t}</option>
-            {/each}
-          </select>
-          <input placeholder="описание" bind:value={c.description} />
-          <button class="danger icon-btn" on:click={() => removeField(ix)} title="Удалить поле">x</button>
+      {#if existingTables.length === 0}
+        <div class="hint">Пока нет данных.</div>
+      {:else}
+        <div class="list">
+          {#each existingTables as t}
+            <div class="row-item">
+              <div class="row-name">{t.schema_name}.{t.table_name}</div>
+              <button class="danger icon-btn" on:click={() => deleteTableNow(t.schema_name, t.table_name)} title="Удалить таблицу">x</button>
+            </div>
+          {/each}
         </div>
-      {/each}
+      {/if}
+    </aside>
 
-      <div class="fields-footer">
-        <button on:click={addField}>+ Добавить поле</button>
-      </div>
-    </div>
-
-    <div class="panel2">
-      <h3>Партиционирование</h3>
-      <label class="row">
-        <input type="checkbox" bind:checked={partition_enabled} />
-        <span>Включить партиции</span>
-      </label>
-
-      {#if partition_enabled}
+    <div class="main">
+      <div class="card">
         <div class="form">
           <label>
-            Колонка для партиций
-            <input bind:value={partition_column} placeholder="event_date / ingested_at / ..." />
+            Схема
+            <input bind:value={schema_name} placeholder="например: showcase / bronze / silver_adv" />
           </label>
+
           <label>
-            Интервал
-            <select bind:value={partition_interval}>
-              <option value="day">day</option>
-              <option value="month">month</option>
+            Таблица
+            <input bind:value={table_name} placeholder="например: advertising" />
+          </label>
+
+          <label>
+            Класс (для себя)
+            <select bind:value={table_class}>
+              <option value="custom">custom</option>
+              <option value="bronze_raw">bronze_raw</option>
+              <option value="silver_table">silver_table</option>
+              <option value="showcase_table">showcase_table</option>
             </select>
           </label>
+
+          <label>
+            Описание
+            <input bind:value={description} placeholder="что это за таблица" />
+          </label>
         </div>
-      {/if}
+
+        <div class="subcard">
+          <h3>Поля</h3>
+          {#each columns as c, ix}
+            <div class="field-row">
+              <input placeholder="имя поля" bind:value={c.field_name} />
+              <select bind:value={c.field_type}>
+                {#each typeOptions as t}
+                  <option value={t}>{t}</option>
+                {/each}
+              </select>
+              <input placeholder="описание" bind:value={c.description} />
+              <button class="danger icon-btn" on:click={() => removeField(ix)} title="Удалить поле">x</button>
+            </div>
+          {/each}
+          <div class="fields-footer">
+            <button on:click={addField}>+ Добавить поле</button>
+          </div>
+        </div>
+
+        <div class="subcard">
+          <h3>Партиционирование</h3>
+          <label class="row">
+            <input type="checkbox" bind:checked={partition_enabled} />
+            <span>Включить партиции</span>
+          </label>
+
+          {#if partition_enabled}
+            <div class="form" style="margin-top:10px;">
+              <label>
+                Колонка для партиций
+                <input bind:value={partition_column} placeholder="event_date / ingested_at / ..." />
+              </label>
+              <label>
+                Интервал
+                <select bind:value={partition_interval}>
+                  <option value="day">day</option>
+                  <option value="month">month</option>
+                </select>
+              </label>
+            </div>
+          {/if}
+        </div>
+
+        <div class="actions">
+          <button class="primary" on:click={createTableNow} disabled={loading || creating || !canWrite()}>
+            {CREATE_BUTTON_LABEL}
+          </button>
+          {#if creating}
+            <span class="hint">{CREATE_WAIT_LABEL}</span>
+          {/if}
+        </div>
+
+        {#if !canWrite()}
+          <p class="hint">Кнопка активна только при роли <b>data_admin</b>.</p>
+        {/if}
+      </div>
     </div>
 
-    <div class="actions">
-      <button class="primary" on:click={createTableNow} disabled={loading || creating || !canWrite()}>
-        {CREATE_BUTTON_LABEL}
-      </button>
-      {#if creating}
-        <span class="hint">{CREATE_WAIT_LABEL}</span>
-      {/if}
-    </div>
-
-    <div class="statusline" class:ok={dbStatus === 'ok'} class:error={dbStatus === 'error'}>
-      {dbStatusMessage || DEFAULT_DB_STATUS_LABEL}
-    </div>
-
-    {#if !canWrite()}
-      <p class="hint">Кнопка активна только при роли <b>data_admin</b>.</p>
-    {/if}
+    <aside class="aside">
+      <div class="aside-title">Шаблоны таблиц</div>
+      <div class="template-controls">
+        <input class="template-name" bind:value={templateNameDraft} placeholder="Название шаблона" />
+        <div class="inline-actions">
+          <button on:click={startNewTemplate}>Добавить шаблон</button>
+          <button on:click={onSaveTemplateClick}>Сохранить шаблон</button>
+        </div>
+      </div>
+      <div class="list">
+        {#each tableTemplates as t}
+          <div class="row-item" class:activeitem={selectedTemplateId === t.id}>
+            <button class="item-button" on:click={() => applySelectedTemplate(t.id)}>{t.name}</button>
+            <button class="danger icon-btn" on:click={() => onDeleteTemplateClick(t.id)} title="Удалить шаблон">x</button>
+          </div>
+        {/each}
+      </div>
+    </aside>
   </div>
 </section>
 
@@ -476,33 +518,42 @@
 {/if}
 
 <style>
-  .grid { display:grid; gap: 12px; margin-top: 12px; }
-  .grid.single { grid-template-columns: 1fr; }
-
-  .panel { background:#fff; border:1px solid #e6eaf2; border-radius:18px; padding:14px; box-shadow:0 6px 20px rgba(15,23,42,.05); }
+  .panel { background:#fff; border:1px solid #e6eaf2; border-radius:18px; padding:14px; box-shadow:0 6px 20px rgba(15,23,42,.05); margin-top:12px; }
   .panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
   .panel-head h2 { margin:0; font-size:18px; }
-  .quick { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  .quick select, .quick input { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; background:#fff; }
-  .quick .template-name { min-width:220px; }
+  .muted { color:#64748b; font-size:13px; }
 
-  .form { display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:12px; }
+  .layout { display:grid; grid-template-columns: 320px 1fr 360px; gap:12px; margin-top:12px; align-items:start; }
+  @media (max-width: 1300px) { .layout { grid-template-columns: 320px 1fr; } }
+  @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
+
+  .aside { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#f8fafc; }
+  .aside-title { font-weight:700; margin-bottom:8px; }
+  .list { display:flex; flex-direction:column; gap:8px; }
+  .row-item { display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; border:1px solid #e6eaf2; border-radius:14px; background:#fff; padding:8px; }
+  .row-name { font-size:13px; word-break:break-word; }
+  .item-button { text-align:left; border:0; background:transparent; padding:2px 4px; }
+  .activeitem { border-color:#0f172a; background:#f1f5f9; }
+
+  .main { min-width:0; }
+  .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; }
+  .subcard { margin-top:10px; border:1px dashed #e6eaf2; border-radius:14px; padding:10px; }
+  .subcard h3 { margin:0 0 8px 0; font-size:14px; }
+
+  .form { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
   @media (max-width: 1100px) { .form { grid-template-columns: 1fr; } }
-  .form label { display:flex; flex-direction:column; gap:6px; font-size:13px; }
-  .form input, .form select { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; outline:none; background:#fff; }
+  label { display:flex; flex-direction:column; gap:6px; font-size:13px; }
+  input, select { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; outline:none; background:#fff; box-sizing:border-box; }
 
-  .fields { margin-top:14px; border-top:1px dashed #e6eaf2; padding-top:14px; }
-  .fields-head h3 { margin:0; font-size:16px; }
   .field-row { display:grid; grid-template-columns: 1.2fr .8fr 1.6fr auto; gap:8px; margin-top:10px; }
   @media (max-width: 1100px) { .field-row { grid-template-columns: 1fr; } }
-  .field-row input, .field-row select { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; }
   .fields-footer { margin-top:12px; }
 
-  .panel2 { margin-top:14px; border-top:1px dashed #e6eaf2; padding-top:14px; }
-  .panel2 h3 { margin:0 0 10px 0; font-size:16px; }
   .row { display:flex; align-items:center; gap:10px; }
-
-  .actions { margin-top:14px; display:flex; gap:10px; align-items:center; }
+  .actions { margin-top:14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .quick { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .template-controls { display:flex; flex-direction:column; gap:8px; margin-bottom:8px; }
+  .inline-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
 
   button { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; background:#fff; cursor:pointer; }
   button:disabled { opacity:.6; cursor:not-allowed; }
@@ -511,15 +562,12 @@
   .icon-btn { width:44px; min-width:44px; padding:10px 0; text-transform:uppercase; }
 
   .hint { margin:10px 0 0; color:#64748b; font-size:13px; }
-  .statusline { margin-top:12px; border:1px solid #e6eaf2; border-radius:12px; padding:10px 12px; background:#f8fafc; color:#334155; font-size:13px; }
-  .statusline.ok { border-color:#bbf7d0; background:#f0fdf4; color:#166534; }
-  .statusline.error { border-color:#fecaca; background:#fef2f2; color:#991b1b; }
-
   .alert { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #f3c0c0; background: #fff5f5; }
   .alert-title { font-weight: 700; margin-bottom: 6px; }
-  pre { margin:0; white-space: pre-wrap; word-break: break-word; }
+
   .modal-bg { position: fixed; inset: 0; background: rgba(15,23,42,.35); display:flex; align-items:center; justify-content:center; padding: 18px; z-index: 1000; }
   .modal { width: min(560px, 100%); background:#fff; border-radius:18px; border:1px solid #e6eaf2; padding:14px; box-shadow:0 20px 60px rgba(15,23,42,.25); }
   .modal h3 { margin: 0 0 10px 0; }
   .modal-actions { display:flex; justify-content:flex-end; margin-top:12px; }
+  pre { margin:0; white-space: pre-wrap; word-break: break-word; }
 </style>
