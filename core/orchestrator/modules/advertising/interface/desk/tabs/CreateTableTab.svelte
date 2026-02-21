@@ -442,13 +442,6 @@
             <input bind:value={table_name} placeholder="например: advertising" />
           </label>
 
-          <div class="w100 partition-toggle">
-            <label class="inline-check">
-              <input type="checkbox" bind:checked={partition_enabled} />
-              <span>Партиционирование</span>
-            </label>
-          </div>
-
           <label class="w100">
             Описание таблицы
             <textarea
@@ -459,6 +452,13 @@
               on:input={syncDescriptionHeight}
             ></textarea>
           </label>
+
+          <div class="w100 partition-toggle">
+            <label class="inline-check">
+              <input type="checkbox" bind:checked={partition_enabled} />
+              <span>Партиционирование</span>
+            </label>
+          </div>
         </div>
 
         {#if partition_enabled}
@@ -600,7 +600,8 @@
   .fields-footer { margin-top:12px; }
 
   .partition-toggle { display:flex; align-items:flex-start; justify-content:flex-start; }
-  .inline-check { display:flex; align-items:center; gap:8px; font-size:13px; color:#334155; margin:0; }
+  .inline-check { display:inline-flex; align-items:center; gap:8px; font-size:13px; color:#334155; margin:0; line-height:1; }
+  .inline-check input { margin:0; }
   .actions { margin-top:14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
   .template-controls { display:flex; flex-direction:column; gap:8px; margin-bottom:8px; }
   .inline-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
