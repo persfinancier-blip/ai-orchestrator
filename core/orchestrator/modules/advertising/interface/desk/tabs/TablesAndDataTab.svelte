@@ -55,6 +55,19 @@
   let contracts_storage_pick_value = '';
 
   const CONTRACTS_STORAGE_KEY = 'ao_data_contracts_storage_table_v1';
+  const CONTRACTS_REQUIRED_COLUMNS = [
+    { name: 'schema_name', types: ['text', 'character varying', 'varchar'] },
+    { name: 'table_name', types: ['text', 'character varying', 'varchar'] },
+    { name: 'contract_name', types: ['text', 'character varying', 'varchar'] },
+    { name: 'version', types: ['integer', 'int', 'bigint'] },
+    { name: 'lifecycle_state', types: ['text', 'character varying', 'varchar'] },
+    { name: 'deleted_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] },
+    { name: 'description', types: ['text', 'character varying', 'varchar'] },
+    { name: 'columns', types: ['jsonb', 'json'] },
+    { name: 'change_reason', types: ['text', 'character varying', 'varchar'] },
+    { name: 'changed_by', types: ['text', 'character varying', 'varchar'] },
+    { name: 'created_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] }
+  ];
 
   function canWrite(): boolean {
     return role === 'data_admin';
@@ -80,6 +93,35 @@
       CONTRACTS_STORAGE_KEY,
       JSON.stringify({ schema: contracts_storage_schema, table: contracts_storage_table })
     );
+  }
+
+  function normalizeTypeName(type: string) {
+    return String(type || '').toLowerCase().trim();
+  }
+
+  async function checkContractsStorageTable(schema: string, table: string) {
+    try {
+      const j = await apiJson<{ columns: Array<{ name: string; type: string }> }>(
+        `${apiBase}/columns?schema=${encodeURIComponent(schema)}&table=${encodeURIComponent(table)}`
+      );
+      const cols = Array.isArray(j?.columns) ? j.columns : [];
+      if (!cols.length) {
+        contracts_error = `Таблица ${schema}.${table} не найдена или пуста. Выбери таблицу хранилища контрактов.`;
+        return false;
+      }
+      const map = new Map(cols.map((c) => [String(c.name || '').toLowerCase(), normalizeTypeName(c.type)]));
+      for (const need of CONTRACTS_REQUIRED_COLUMNS) {
+        const actual = map.get(need.name);
+        if (!actual || !need.types.some((t) => actual.includes(t))) {
+          contracts_error = `Структура ${schema}.${table} не подходит: колонка ${need.name} отсутствует или имеет неверный тип.`;
+          return false;
+        }
+      }
+      return true;
+    } catch (e: any) {
+      contracts_error = e?.message ?? String(e);
+      return false;
+    }
   }
 
   function pickExisting(t: ExistingTable) {
@@ -132,6 +174,11 @@
     contracts_error = '';
     try {
       if (!preview_schema || !preview_table) {
+        contractVersions = [];
+        return;
+      }
+      const ok = await checkContractsStorageTable(contracts_storage_schema, contracts_storage_table);
+      if (!ok) {
         contractVersions = [];
         return;
       }
@@ -363,6 +410,8 @@
     if (!contracts_storage_pick_value) return;
     const [schema, table] = contracts_storage_pick_value.split('.');
     if (!schema || !table) return;
+    const ok = await checkContractsStorageTable(schema, table);
+    if (!ok) return;
     contracts_storage_schema = schema;
     contracts_storage_table = table;
     saveContractsStorageConfig();
