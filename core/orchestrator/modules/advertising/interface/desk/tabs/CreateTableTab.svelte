@@ -44,7 +44,7 @@
   const TABLE_TEMPLATES_STORAGE_KEY = 'ao_create_table_templates_storage_v1'; // legacy fallback
   const STORAGE_DEFAULT_SCHEMA = 'ao_system';
   const STORAGE_DEFAULT_TABLE = 'table_templates_store';
-  const STORAGE_CONTRACT_NAME = 'System: Хранилище контрактов таблиц';
+  const STORAGE_CONTRACT_NAME = 'System: Хранилище шаблонов таблиц';
   const DEFAULT_CONTRACT_ID = 'builtin_default_contract';
   const SYSTEM_CONTRACT_FIELDS: ColumnDef[] = [
     { field_name: 'ao_source', field_type: 'text', description: 'источник данных (техническое поле)' },
@@ -158,7 +158,7 @@
       schema_name: 'showcase',
       table_name: 'new_table',
       table_class: 'custom',
-      description: 'Контракт по умолчанию с системными полями',
+      description: 'Шаблон по умолчанию с системными полями',
       columns: withSystemContractFields([]),
       partition_enabled: false,
       partition_column: '',
@@ -221,20 +221,50 @@
       schema_name: STORAGE_DEFAULT_SCHEMA,
       table_name: STORAGE_DEFAULT_TABLE,
       table_class: 'custom',
-      description: 'Служебная таблица для хранения контрактов блока «Создание таблиц»',
+      description: 'Служебная таблица для хранения шаблонов блока «Создание таблиц»',
       columns: [
-        { field_name: 'contract_name', field_type: 'text', description: 'имя контракта' },
+        { field_name: 'contract_name', field_type: 'text', description: 'имя шаблона (новое поле)' },
         { field_name: 'template_name', field_type: 'text', description: 'legacy: имя шаблона' },
         { field_name: 'schema_name', field_type: 'text', description: 'схема таблицы' },
         { field_name: 'table_name', field_type: 'text', description: 'имя таблицы' },
         { field_name: 'table_class', field_type: 'text', description: 'класс таблицы' },
         { field_name: 'description', field_type: 'text', description: 'описание' },
         { field_name: 'columns', field_type: 'jsonb', description: 'json список полей' },
-        { field_name: 'contract_version', field_type: 'int', description: 'версия контракта' },
-        { field_name: 'contract_mode', field_type: 'text', description: 'режим контракта' },
+        { field_name: 'contract_version', field_type: 'int', description: 'версия шаблона (техническое поле)' },
+        { field_name: 'contract_mode', field_type: 'text', description: 'режим шаблона (техническое поле)' },
         { field_name: 'partition_enabled', field_type: 'boolean', description: 'включено ли партиционирование' },
         { field_name: 'partition_column', field_type: 'text', description: 'колонка партиционирования' },
         { field_name: 'partition_interval', field_type: 'text', description: 'интервал партиционирования' }
+      ],
+      partition_enabled: false,
+      partition_column: '',
+      partition_interval: 'day',
+      contract_version: 1,
+      contract_mode: 'safe_add_only'
+    };
+  }
+
+  function contractsSystemTemplate(): DataContract {
+    return {
+      id: 'builtin_data_contracts_table',
+      name: 'System: Таблица контрактов данных',
+      schema_name: 'ao_system',
+      table_name: 'table_data_contract_versions',
+      table_class: 'custom',
+      description: 'Системная таблица версий контрактов данных',
+      columns: [
+        { field_name: 'id', field_type: 'bigint', description: 'идентификатор версии' },
+        { field_name: 'schema_name', field_type: 'text', description: 'схема таблицы' },
+        { field_name: 'table_name', field_type: 'text', description: 'имя таблицы' },
+        { field_name: 'contract_name', field_type: 'text', description: 'имя контракта' },
+        { field_name: 'version', field_type: 'int', description: 'версия контракта' },
+        { field_name: 'lifecycle_state', field_type: 'text', description: 'состояние версии' },
+        { field_name: 'deleted_at', field_type: 'timestamptz', description: 'время удаления/архивации' },
+        { field_name: 'description', field_type: 'text', description: 'описание таблицы' },
+        { field_name: 'columns', field_type: 'jsonb', description: 'список колонок' },
+        { field_name: 'change_reason', field_type: 'text', description: 'причина изменения' },
+        { field_name: 'changed_by', field_type: 'text', description: 'кто изменил' },
+        { field_name: 'created_at', field_type: 'timestamptz', description: 'время создания версии' }
       ],
       partition_enabled: false,
       partition_column: '',
@@ -260,7 +290,7 @@
   }
 
   function storageInstruction(prefix: string) {
-    return `${prefix} Выберите системный контракт «${STORAGE_CONTRACT_NAME}», создайте таблицу и подключите ее здесь.`;
+    return `${prefix} Выберите системный шаблон «${STORAGE_CONTRACT_NAME}», создайте таблицу и подключите ее здесь.`;
   }
 
   function parseStorageTableConfig() {
@@ -319,7 +349,7 @@
       }
 
       storage_status = 'ok';
-      storage_status_message = `Хранилище контрактов подключено: ${schema}.${table}`;
+      storage_status_message = `Хранилище шаблонов подключено: ${schema}.${table}`;
       return true;
     } catch (e: any) {
       const msg = String(e?.message || '');
@@ -377,11 +407,11 @@
           storage_ctids: r?.ctid ? [String(r.ctid)] : []
         });
       }
-      tableTemplates = [defaultDataContract(), bronzeTemplate(), silverTemplate(), storageSystemTemplate(), ...custom];
+      tableTemplates = [defaultDataContract(), bronzeTemplate(), silverTemplate(), storageSystemTemplate(), contractsSystemTemplate(), ...custom];
       error = '';
     } catch (e: any) {
       storage_status = 'error';
-      storage_status_message = storageInstruction('Ошибка загрузки контрактов из таблицы.');
+      storage_status_message = storageInstruction('Ошибка загрузки шаблонов из таблицы.');
       loadTableTemplatesLocalOnly();
       error = e?.message || String(e);
     }
@@ -412,9 +442,9 @@
             contract_mode: x?.contract_mode === 'strict_sync' ? 'strict_sync' : 'safe_add_only'
           }))
         : [];
-      tableTemplates = [defaultDataContract(), bronzeTemplate(), silverTemplate(), storageSystemTemplate(), ...custom];
+      tableTemplates = [defaultDataContract(), bronzeTemplate(), silverTemplate(), storageSystemTemplate(), contractsSystemTemplate(), ...custom];
     } catch {
-      tableTemplates = [defaultDataContract(), bronzeTemplate(), silverTemplate(), storageSystemTemplate()];
+      tableTemplates = [defaultDataContract(), bronzeTemplate(), silverTemplate(), storageSystemTemplate(), contractsSystemTemplate()];
     }
   }
 
@@ -523,21 +553,6 @@
     applyTemplate(t);
   }
 
-  function getActiveContract(): DataContract | null {
-    if (!selectedTemplateId) return null;
-    return tableTemplates.find((x) => x.id === selectedTemplateId) || null;
-  }
-
-  async function fetchContractUsage(name: string) {
-    const n = String(name || '').trim();
-    if (!n) return [];
-    const j = await apiJson<{ usage: Array<{ schema_name: string; table_name: string; sync_state?: string; contract_version?: number }> }>(
-      `${apiBase}/contracts/usage?name=${encodeURIComponent(n)}`,
-      { headers: { 'X-AO-ROLE': role } }
-    );
-    return Array.isArray(j?.usage) ? j.usage : [];
-  }
-
   function applyDefaultContractIfEmpty() {
     if (selectedTemplateId) return;
     if (schema_name.trim() || table_name.trim() || description.trim()) return;
@@ -549,11 +564,11 @@
   async function startNewTemplate() {
     const name = String(templateNameDraft || '').trim();
     const cols = normalizeColumns(columns);
-    if (!name) throw new Error('Укажи название контракта');
+    if (!name) throw new Error('Укажи название шаблона');
     if (!cols.length) throw new Error('Добавь хотя бы одно поле');
-    if (storage_status !== 'ok') throw new Error(storage_status_message || 'Сначала подключи таблицу хранения контрактов');
+    if (storage_status !== 'ok') throw new Error(storage_status_message || 'Сначала подключи таблицу хранения шаблонов');
     if (tableTemplates.some((t) => !t.id.startsWith('builtin_') && t.name.trim().toLowerCase() === name.toLowerCase())) {
-      throw new Error('Контракт с таким названием уже существует');
+      throw new Error('Шаблон с таким названием уже существует');
     }
 
     const newTemplate: DataContract = {
@@ -580,18 +595,18 @@
   }
 
   async function saveCurrentTemplate() {
-    if (!selectedTemplateId) throw new Error('Сначала добавь или выбери контракт');
+    if (!selectedTemplateId) throw new Error('Сначала добавь или выбери шаблон');
     if (selectedTemplateId.startsWith('builtin_')) {
-      throw new Error('Встроенный контракт нельзя сохранить. Нажми «Добавить»');
+      throw new Error('Встроенный шаблон нельзя сохранить. Нажми «Добавить»');
     }
 
     const idx = tableTemplates.findIndex((x) => x.id === selectedTemplateId);
-    if (idx < 0) throw new Error('Активный контракт не найден');
-    if (storage_status !== 'ok') throw new Error(storage_status_message || 'Сначала подключи таблицу хранения контрактов');
+    if (idx < 0) throw new Error('Активный шаблон не найден');
+    if (storage_status !== 'ok') throw new Error(storage_status_message || 'Сначала подключи таблицу хранения шаблонов');
 
     const name = String(templateNameDraft || '').trim();
     const cols = normalizeColumns(columns);
-    if (!name) throw new Error('Укажи название контракта');
+    if (!name) throw new Error('Укажи название шаблона');
     if (!cols.length) throw new Error('Добавь хотя бы одно поле');
 
     const updated = {
@@ -605,7 +620,7 @@
       partition_enabled,
       partition_column: partition_column.trim(),
       partition_interval,
-      contract_version: Number(tableTemplates[idx].contract_version || 1) + 1,
+      contract_version: Number(tableTemplates[idx].contract_version || 1),
       contract_mode: tableTemplates[idx].contract_mode || 'safe_add_only'
     } as DataContract;
 
@@ -622,17 +637,12 @@
   }
 
   async function deleteTemplateById(id: string) {
-    if (!id) throw new Error('Сначала выбери контракт');
-    if (id.startsWith('builtin_')) throw new Error('Встроенный контракт удалить нельзя');
-    if (storage_status !== 'ok') throw new Error(storage_status_message || 'Сначала подключи таблицу хранения контрактов');
+    if (!id) throw new Error('Сначала выбери шаблон');
+    if (id.startsWith('builtin_')) throw new Error('Встроенный шаблон удалить нельзя');
+    if (storage_status !== 'ok') throw new Error(storage_status_message || 'Сначала подключи таблицу хранения шаблонов');
 
     const t = tableTemplates.find((x) => x.id === id);
     if (t) {
-      const usage = await fetchContractUsage(t.name);
-      if (usage.length) {
-        const tables = usage.map((u) => `${u.schema_name}.${u.table_name} (${u.sync_state || 'unknown'})`).join(', ');
-        throw new Error(`Контракт используется в таблицах: ${tables}. Сначала отвяжи или обнови эти таблицы.`);
-      }
       await deleteTemplateFromStorage(t.name);
       await loadTemplatesFromStorage();
     }
@@ -716,7 +726,6 @@
 
       validate();
       const cols = normalizeColumns(columns);
-      const activeContract = getActiveContract();
 
       const response = await apiJson(`${apiBase}/tables/create`, {
         method: 'POST',
@@ -728,14 +737,6 @@
           table_class,
           description: description.trim(),
           columns: cols,
-          contract: activeContract
-            ? {
-                id: activeContract.id,
-                name: activeContract.name,
-                version: Number(activeContract.contract_version || 1),
-                mode: activeContract.contract_mode || 'safe_add_only'
-              }
-            : null,
           partitioning: partition_enabled
             ? { enabled: true, column: partition_column.trim(), interval: partition_interval }
             : { enabled: false }
@@ -944,12 +945,12 @@
 
     <aside class="aside">
       <div class="aside-head">
-        <div class="aside-title">Контракты данных</div>
+        <div class="aside-title">Шаблоны таблиц</div>
         <button
           class="icon-btn refresh-btn"
           on:click={refreshTemplatesPanel}
           disabled={refreshingTemplates}
-          title="Обновить контракты"
+          title="Обновить шаблоны"
         >↻</button>
       </div>
       <div class="storage-meta templates-meta">
@@ -969,7 +970,7 @@
         </div>
       {/if}
       <div class="template-controls">
-        <input class="template-name" bind:value={templateNameDraft} placeholder="Название контракта данных" />
+        <input class="template-name" bind:value={templateNameDraft} placeholder="Название шаблона" />
         <div class="inline-actions">
           <button on:click={onAddTemplateClick}>Добавить</button>
           <button on:click={onSaveTemplateClick}>Сохранить</button>
@@ -979,7 +980,7 @@
         {#each tableTemplates as t}
           <div class="row-item" class:activeitem={selectedTemplateId === t.id}>
             <button class="item-button" on:click={() => applySelectedTemplate(t.id)}>{t.name}</button>
-            <button class="danger icon-btn" on:click={() => onDeleteTemplateClick(t.id)} title="Удалить контракт">x</button>
+            <button class="danger icon-btn" on:click={() => onDeleteTemplateClick(t.id)} title="Удалить шаблон">x</button>
           </div>
         {/each}
       </div>

@@ -33,78 +33,133 @@ function qlit(v) {
 }
 
 const KNOWN_TYPES = new Set(['text', 'int', 'bigint', 'numeric', 'boolean', 'date', 'timestamptz', 'jsonb', 'uuid']);
-const CONTRACT_BINDINGS_SCHEMA = 'ao_system';
-const CONTRACT_BINDINGS_TABLE = 'table_contract_bindings';
-const CONTRACT_BINDINGS_QNAME = `${qi(CONTRACT_BINDINGS_SCHEMA)}.${qi(CONTRACT_BINDINGS_TABLE)}`;
+const CONTRACTS_SCHEMA = 'ao_system';
+const CONTRACTS_TABLE = 'table_data_contract_versions';
+const CONTRACTS_QNAME = `${qi(CONTRACTS_SCHEMA)}.${qi(CONTRACTS_TABLE)}`;
 
-async function ensureContractBindingsTable(client) {
-  await client.query(`CREATE SCHEMA IF NOT EXISTS ${qi(CONTRACT_BINDINGS_SCHEMA)}`);
+async function ensureContractsTable(client) {
+  await client.query(`CREATE SCHEMA IF NOT EXISTS ${qi(CONTRACTS_SCHEMA)}`);
   await client.query(`
-    CREATE TABLE IF NOT EXISTS ${CONTRACT_BINDINGS_QNAME} (
+    CREATE TABLE IF NOT EXISTS ${CONTRACTS_QNAME} (
+      id bigserial PRIMARY KEY,
       schema_name text NOT NULL,
       table_name text NOT NULL,
       contract_name text NOT NULL,
-      contract_version int NOT NULL DEFAULT 1,
-      contract_mode text NOT NULL DEFAULT 'safe_add_only',
-      contract_id text NULL,
-      sync_state text NOT NULL DEFAULT 'in_sync',
-      last_applied_at timestamptz NOT NULL DEFAULT now(),
-      updated_at timestamptz NOT NULL DEFAULT now(),
-      PRIMARY KEY (schema_name, table_name)
+      version int NOT NULL,
+      lifecycle_state text NOT NULL DEFAULT 'active',
+      deleted_at timestamptz NULL,
+      description text NOT NULL DEFAULT '',
+      columns jsonb NOT NULL DEFAULT '[]'::jsonb,
+      change_reason text NOT NULL DEFAULT '',
+      changed_by text NOT NULL DEFAULT 'ui',
+      created_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE(schema_name, table_name, version)
     )
   `);
   await client.query(`
-    CREATE INDEX IF NOT EXISTS ao_table_contract_bindings_contract_name_idx
-    ON ${CONTRACT_BINDINGS_QNAME} (contract_name)
+    CREATE INDEX IF NOT EXISTS ao_table_data_contract_versions_lookup_idx
+    ON ${CONTRACTS_QNAME} (schema_name, table_name, version DESC)
   `);
 }
 
-function normalizeContract(raw) {
-  const c = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null;
-  if (!c) return null;
-  const contract_name = String(c.name || '').trim();
-  if (!contract_name) return null;
-  const contract_version = Number(c.version || 1);
-  const contract_mode = String(c.mode || 'safe_add_only').trim() === 'strict_sync' ? 'strict_sync' : 'safe_add_only';
-  const contract_id = String(c.id || '').trim();
-  return {
-    contract_name,
-    contract_version: Number.isFinite(contract_version) && contract_version > 0 ? Math.trunc(contract_version) : 1,
-    contract_mode,
-    contract_id: contract_id || null
-  };
+function defaultContractName(schema, table) {
+  return `${schema}.${table}`;
 }
 
-async function upsertContractBinding(client, schema, table, contract) {
-  if (!contract?.contract_name) return;
-  await ensureContractBindingsTable(client);
-  await client.query(
+async function getTableColumnsSnapshot(client, schema, table) {
+  const r = await client.query(
     `
-    INSERT INTO ${CONTRACT_BINDINGS_QNAME}
-      (schema_name, table_name, contract_name, contract_version, contract_mode, contract_id, sync_state, last_applied_at, updated_at)
-    VALUES
-      ($1, $2, $3, $4, $5, $6, 'in_sync', now(), now())
-    ON CONFLICT (schema_name, table_name)
-    DO UPDATE SET
-      contract_name = EXCLUDED.contract_name,
-      contract_version = EXCLUDED.contract_version,
-      contract_mode = EXCLUDED.contract_mode,
-      contract_id = EXCLUDED.contract_id,
-      sync_state = 'in_sync',
-      last_applied_at = now(),
-      updated_at = now()
+    SELECT
+      c.column_name AS field_name,
+      c.data_type AS field_type,
+      COALESCE(d.description, '') AS description
+    FROM information_schema.columns c
+    LEFT JOIN pg_catalog.pg_namespace n
+      ON n.nspname = c.table_schema
+    LEFT JOIN pg_catalog.pg_class cls
+      ON cls.relnamespace = n.oid
+     AND cls.relname = c.table_name
+    LEFT JOIN pg_catalog.pg_attribute a
+      ON a.attrelid = cls.oid
+     AND a.attname = c.column_name
+    LEFT JOIN pg_catalog.pg_description d
+      ON d.objoid = cls.oid
+     AND d.objsubid = a.attnum
+    WHERE c.table_schema = $1
+      AND c.table_name = $2
+    ORDER BY c.ordinal_position
     `,
-    [schema, table, contract.contract_name, contract.contract_version, contract.contract_mode, contract.contract_id]
+    [schema, table]
   );
+  return (r.rows || []).map((x) => ({
+    field_name: String(x.field_name || ''),
+    field_type: String(x.field_type || ''),
+    description: String(x.description || '')
+  }));
 }
 
-async function markContractDrift(client, schema, table) {
-  await ensureContractBindingsTable(client);
+async function getTableDescription(client, schema, table) {
+  const r = await client.query(
+    `
+    SELECT COALESCE(obj_description(c.oid), '') AS description
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = $1 AND c.relname = $2
+    LIMIT 1
+    `,
+    [schema, table]
+  );
+  return String(r.rows?.[0]?.description || '');
+}
+
+async function getNextContractVersion(client, schema, table) {
+  await ensureContractsTable(client);
+  const r = await client.query(
+    `SELECT COALESCE(MAX(version), 0) AS max_v FROM ${CONTRACTS_QNAME} WHERE schema_name = $1 AND table_name = $2`,
+    [schema, table]
+  );
+  const maxV = Number(r.rows?.[0]?.max_v || 0);
+  return Number.isFinite(maxV) ? maxV + 1 : 1;
+}
+
+async function createContractVersion(client, { schema, table, description, columns, reason, by }) {
+  const version = await getNextContractVersion(client, schema, table);
   await client.query(
     `
-    UPDATE ${CONTRACT_BINDINGS_QNAME}
-    SET sync_state = 'drift', updated_at = now()
-    WHERE schema_name = $1 AND table_name = $2
+    INSERT INTO ${CONTRACTS_QNAME}
+      (schema_name, table_name, contract_name, version, lifecycle_state, deleted_at, description, columns, change_reason, changed_by)
+    VALUES
+      ($1, $2, $3, $4, 'active', NULL, $5, $6::jsonb, $7, $8)
+    `,
+    [
+      schema,
+      table,
+      defaultContractName(schema, table),
+      version,
+      String(description || ''),
+      JSON.stringify(Array.isArray(columns) ? columns : []),
+      String(reason || ''),
+      String(by || 'ui')
+    ]
+  );
+  return version;
+}
+
+async function createContractVersionFromTable(client, schema, table, reason, by) {
+  const cols = await getTableColumnsSnapshot(client, schema, table);
+  const description = await getTableDescription(client, schema, table);
+  return createContractVersion(client, { schema, table, description, columns: cols, reason, by });
+}
+
+async function markContractsDeletedByTableDrop(client, schema, table) {
+  await ensureContractsTable(client);
+  await client.query(
+    `
+    UPDATE ${CONTRACTS_QNAME}
+    SET lifecycle_state = 'table_deleted', deleted_at = now()
+    WHERE schema_name = $1
+      AND table_name = $2
+      AND lifecycle_state <> 'deleted_by_user'
     `,
     [schema, table]
   );
@@ -150,25 +205,66 @@ tableBuilderRouter.get('/tables', async (_req, res) => {
   }
 });
 
-tableBuilderRouter.get('/contracts/usage', requireDataAdmin, async (req, res) => {
-  const name = String(req.query.name || '').trim();
-  if (!name) return res.status(400).json({ error: 'bad_request', details: 'name is required' });
+tableBuilderRouter.get('/contracts', requireDataAdmin, async (req, res) => {
+  const schema = String(req.query.schema || '').trim();
+  const table = String(req.query.table || '').trim();
+  if (!isIdent(schema) || !isIdent(table)) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid schema/table' });
+  }
 
   const client = await pool.connect();
   try {
-    await ensureContractBindingsTable(client);
+    await ensureContractsTable(client);
     const r = await client.query(
       `
-      SELECT schema_name, table_name, contract_name, contract_version, contract_mode, sync_state, updated_at
-      FROM ${CONTRACT_BINDINGS_QNAME}
-      WHERE LOWER(contract_name) = LOWER($1)
-      ORDER BY schema_name, table_name
+      SELECT
+        schema_name,
+        table_name,
+        contract_name,
+        version,
+        lifecycle_state,
+        deleted_at,
+        description,
+        columns,
+        change_reason,
+        changed_by,
+        created_at
+      FROM ${CONTRACTS_QNAME}
+      WHERE schema_name = $1 AND table_name = $2
+      ORDER BY version DESC
       `,
-      [name]
+      [schema, table]
     );
-    return res.json({ usage: r.rows || [] });
+    return res.json({ contracts: r.rows || [] });
   } catch (e) {
-    return res.status(500).json({ error: 'contracts_usage_failed', details: String(e?.message || e) });
+    return res.status(500).json({ error: 'contracts_list_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+tableBuilderRouter.post('/contracts/version/delete', requireDataAdmin, async (req, res) => {
+  const schema = String(req.body?.schema || '').trim();
+  const table = String(req.body?.table || '').trim();
+  const version = Number(req.body?.version || 0);
+  if (!isIdent(schema) || !isIdent(table) || !Number.isFinite(version) || version <= 0) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid schema/table/version' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await ensureContractsTable(client);
+    const r = await client.query(
+      `
+      UPDATE ${CONTRACTS_QNAME}
+      SET lifecycle_state = 'deleted_by_user', deleted_at = now()
+      WHERE schema_name = $1 AND table_name = $2 AND version = $3
+      `,
+      [schema, table, Math.trunc(version)]
+    );
+    return res.json({ ok: true, schema, table, version: Math.trunc(version), affected: r.rowCount || 0 });
+  } catch (e) {
+    return res.status(500).json({ error: 'contract_delete_failed', details: String(e?.message || e) });
   } finally {
     client.release();
   }
@@ -243,7 +339,6 @@ tableBuilderRouter.post('/tables/create', requireDataAdmin, async (req, res) => 
   const table_class = String(req.body?.table_class || 'custom').trim();
   const description = String(req.body?.description || '').trim();
   const created_by = String(req.body?.created_by || 'ui').trim();
-  const contract = normalizeContract(req.body?.contract);
 
   let partitioning = req.body?.partitioning || { enabled: false };
   const partition_enabled = !!partitioning?.enabled;
@@ -374,13 +469,18 @@ tableBuilderRouter.post('/tables/create', requireDataAdmin, async (req, res) => 
       }
     }
 
-    if (contract) {
-      await upsertContractBinding(client, schema_name, table_name, contract);
-    }
+    await createContractVersion(client, {
+      schema: schema_name,
+      table: table_name,
+      description,
+      columns,
+      reason: 'table_created',
+      by: created_by
+    });
 
     await client.query('COMMIT');
 
-    return res.json({ ok: true, schema_name, table_name, contract_linked: !!contract, contract_name: contract?.contract_name || null });
+    return res.json({ ok: true, schema_name, table_name });
   } catch (e) {
     try {
       await client.query('ROLLBACK');
@@ -401,11 +501,7 @@ tableBuilderRouter.post('/tables/drop', requireDataAdmin, async (req, res) => {
 
   const client = await pool.connect();
   try {
-    await ensureContractBindingsTable(client);
-    await client.query(
-      `DELETE FROM ${CONTRACT_BINDINGS_QNAME} WHERE schema_name = $1 AND table_name = $2`,
-      [schema, table]
-    );
+    await markContractsDeletedByTableDrop(client, schema, table);
     await client.query(`DROP TABLE IF EXISTS ${qname(schema, table)} CASCADE`);
     return res.json({ ok: true, schema, table });
   } catch (e) {
@@ -431,15 +527,16 @@ tableBuilderRouter.post('/tables/rename', requireDataAdmin, async (req, res) => 
   try {
     await client.query('BEGIN');
     await client.query(`ALTER TABLE ${qname(schema, table)} RENAME TO ${qi(new_table)}`);
-    await ensureContractBindingsTable(client);
+    await ensureContractsTable(client);
     await client.query(
       `
-      UPDATE ${CONTRACT_BINDINGS_QNAME}
-      SET table_name = $3, updated_at = now()
+      UPDATE ${CONTRACTS_QNAME}
+      SET table_name = $3, contract_name = $4
       WHERE schema_name = $1 AND table_name = $2
       `,
-      [schema, table, new_table]
+      [schema, table, new_table, defaultContractName(schema, new_table)]
     );
+    await createContractVersionFromTable(client, schema, new_table, 'table_renamed', req.header('X-AO-ROLE') || 'ui');
     await client.query('COMMIT');
     return res.json({ ok: true, schema, table, new_table, renamed: true });
   } catch (e) {
@@ -468,7 +565,7 @@ tableBuilderRouter.post('/columns/drop', requireDataAdmin, async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query(`ALTER TABLE ${qname(schema, table)} DROP COLUMN IF EXISTS ${qi(column)}`);
-    await markContractDrift(client, schema, table);
+    await createContractVersionFromTable(client, schema, table, `column_dropped:${column}`, req.header('X-AO-ROLE') || 'ui');
     return res.json({ ok: true, schema, table, column });
   } catch (e) {
     return res.status(500).json({ error: 'drop_column_failed', details: String(e?.message || e) });
@@ -501,7 +598,7 @@ tableBuilderRouter.post('/columns/add', requireDataAdmin, async (req, res) => {
         `COMMENT ON COLUMN ${qname(schema, table)}.${qi(colName)} IS ${qlit(colDescription)}`
       );
     }
-    await markContractDrift(client, schema, table);
+    await createContractVersionFromTable(client, schema, table, `column_added:${colName}`, req.header('X-AO-ROLE') || 'ui');
     return res.json({ ok: true, schema, table, column: { name: colName, type: colType, description: colDescription } });
   } catch (e) {
     return res.status(500).json({ error: 'add_column_failed', details: String(e?.message || e) });

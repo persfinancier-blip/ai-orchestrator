@@ -5,6 +5,16 @@
   export type Role = 'viewer' | 'operator' | 'data_admin';
   export type ExistingTable = { schema_name: string; table_name: string };
   export type ColumnMeta = { name: string; type: string; description?: string; is_nullable?: boolean };
+  export type ContractVersion = {
+    schema_name: string;
+    table_name: string;
+    contract_name: string;
+    version: number;
+    lifecycle_state: string;
+    deleted_at?: string | null;
+    description?: string;
+    created_at?: string;
+  };
 
   export let apiBase: string;
   export let role: Role;
@@ -35,14 +45,9 @@
 
   let newRow: Record<string, string> = {};
   let rename_table_name = '';
-  let templates_loading = false;
-  let templates_error = '';
-  let tableTemplateNames: string[] = [];
-
-  const TABLE_TEMPLATES_KEY = 'ao_create_table_templates_v1';
-  const TABLE_TEMPLATES_STORAGE_KEY = 'ao_create_table_templates_storage_v1';
-  const STORAGE_DEFAULT_SCHEMA = 'ao_system';
-  const STORAGE_DEFAULT_TABLE = 'table_templates_store';
+  let contracts_loading = false;
+  let contracts_error = '';
+  let contractVersions: ContractVersion[] = [];
 
   function canWrite(): boolean {
     return role === 'data_admin';
@@ -54,6 +59,7 @@
     rename_table_name = t.table_name;
     loadColumns();
     loadPreview();
+    loadContractsPanel();
   }
 
   async function loadColumns() {
@@ -92,51 +98,41 @@
     await loadPreview();
   }
 
-  function parseStorageConfig() {
+  async function loadContractsPanel() {
+    contracts_loading = true;
+    contracts_error = '';
     try {
-      const raw = JSON.parse(localStorage.getItem(TABLE_TEMPLATES_STORAGE_KEY) || '{}');
-      const schema = String(raw?.schema || '').trim() || STORAGE_DEFAULT_SCHEMA;
-      const table = String(raw?.table || '').trim() || STORAGE_DEFAULT_TABLE;
-      return { schema, table };
-    } catch {
-      return { schema: STORAGE_DEFAULT_SCHEMA, table: STORAGE_DEFAULT_TABLE };
-    }
-  }
-
-  function loadTemplateNamesFromLocalStorage() {
-    try {
-      const raw = JSON.parse(localStorage.getItem(TABLE_TEMPLATES_KEY) || '[]');
-      const fromLocal = Array.isArray(raw)
-        ? raw.map((x: any) => String(x?.name || '').trim()).filter(Boolean)
-        : [];
-      const all = ['Bronze', 'Silver', ...fromLocal];
-      tableTemplateNames = Array.from(new Set(all.map((x) => x.trim()).filter(Boolean)));
-      templates_error = '';
-    } catch {
-      tableTemplateNames = ['Bronze', 'Silver'];
-      templates_error = '';
-    }
-  }
-
-  async function loadTemplatesPanel() {
-    templates_loading = true;
-    templates_error = '';
-    try {
-      const { schema, table } = parseStorageConfig();
-      const j = await apiJson<{ rows: any[] }>(
-        `${apiBase}/preview?schema=${encodeURIComponent(schema)}&table=${encodeURIComponent(table)}&limit=5000`
+      if (!preview_schema || !preview_table) {
+        contractVersions = [];
+        return;
+      }
+      const j = await apiJson<{ contracts: ContractVersion[] }>(
+        `${apiBase}/contracts?schema=${encodeURIComponent(preview_schema)}&table=${encodeURIComponent(preview_table)}`,
+        { headers: { 'X-AO-ROLE': role } }
       );
-      const rows = Array.isArray(j?.rows) ? j.rows : [];
-      const fromDb = rows
-        .map((r: any) => String(r?.contract_name || r?.template_name || '').trim())
-        .filter((name: string) => Boolean(name));
-
-      const all = ['Bronze', 'Silver', ...fromDb];
-      tableTemplateNames = Array.from(new Set(all.map((x) => x.trim()).filter(Boolean)));
-    } catch {
-      loadTemplateNamesFromLocalStorage();
+      contractVersions = (j.contracts || []).filter((x) => x.lifecycle_state !== 'deleted_by_user');
+    } catch (e: any) {
+      contracts_error = e?.message ?? String(e);
+      contractVersions = [];
     } finally {
-      templates_loading = false;
+      contracts_loading = false;
+    }
+  }
+
+  async function deleteContractVersion(version: number) {
+    try {
+      if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
+      if (!preview_schema || !preview_table) throw new Error('Таблица не выбрана');
+      const ok = confirm(`Удалить версию контракта v${version}?`);
+      if (!ok) return;
+      await apiJson(`${apiBase}/contracts/version/delete`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ schema: preview_schema, table: preview_table, version })
+      });
+      await loadContractsPanel();
+    } catch (e: any) {
+      contracts_error = e?.message ?? String(e);
     }
   }
 
@@ -168,6 +164,7 @@
       modal = '';
       await loadColumns();
       await loadPreview();
+      await loadContractsPanel();
       await refreshTables();
     } catch (e: any) {
       modal_error = e?.message ?? String(e);
@@ -196,6 +193,7 @@
       modal = '';
       await loadColumns();
       await loadPreview();
+      await loadContractsPanel();
       await refreshTables();
     } catch (e: any) {
       modal_error = e?.message ?? String(e);
@@ -219,6 +217,7 @@
         preview_table = '';
         preview_columns = [];
         preview_rows = [];
+        contractVersions = [];
         newRow = {};
       }
 
@@ -273,6 +272,7 @@
       await refreshTables();
       await loadColumns();
       await loadPreview();
+      await loadContractsPanel();
     } catch (e: any) {
       preview_error = e?.message ?? String(e);
     }
@@ -305,7 +305,7 @@
   }
 
   onMount(() => {
-    loadTemplatesPanel();
+    loadContractsPanel();
   });
 </script>
 
@@ -466,29 +466,44 @@
         <div class="aside-title">Контракты данных</div>
         <button
           class="icon-btn refresh-btn"
-          on:click={loadTemplatesPanel}
-          disabled={templates_loading}
+          on:click={loadContractsPanel}
+          disabled={contracts_loading}
           title="Обновить контракты"
         >↻</button>
       </div>
       <div class="storage-meta">
         <span>Хранятся в таблице:</span>
-        <span class="plain-value">ao_system.table_templates_store</span>
+        <span class="plain-value">ao_system.table_data_contract_versions</span>
       </div>
-      <p class="hint">Управление контрактами выполняется на вкладке «Создание».</p>
-      {#if tableTemplateNames.length === 0}
-        <p class="hint">Контракты не найдены.</p>
+      <p class="hint">
+        {#if preview_schema && preview_table}
+          Для таблицы: {preview_schema}.{preview_table}
+        {:else}
+          Выбери таблицу слева
+        {/if}
+      </p>
+      {#if contractVersions.length === 0}
+        <p class="hint">Версии контракта не найдены.</p>
       {:else}
         <div class="list templates-list">
-          {#each tableTemplateNames as name}
+          {#each contractVersions as c}
             <div class="row-item">
-              <div class="item-button">{name}</div>
+              <div class="item-button">
+                v{c.version}
+                {#if c.lifecycle_state === 'table_deleted'} · таблица удалена{/if}
+              </div>
+              <button
+                class="danger icon-btn"
+                on:click={() => deleteContractVersion(c.version)}
+                disabled={!canWrite()}
+                title="Удалить версию контракта"
+              >x</button>
             </div>
           {/each}
         </div>
       {/if}
-      {#if templates_error}
-        <p class="hint">{templates_error}</p>
+      {#if contracts_error}
+        <p class="hint">{contracts_error}</p>
       {/if}
     </aside>
   </div>
