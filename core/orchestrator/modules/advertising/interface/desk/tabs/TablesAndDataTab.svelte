@@ -223,8 +223,11 @@
           String(r?.table_name || '').trim() === preview_table &&
           String(r?.lifecycle_state || '').trim() !== 'deleted_by_user'
         )
-        .map((r: any) => ({
-          id: String(r?.__ctid || `${preview_schema}.${preview_table}.v${Number(r?.version || 0)}.${String(r?.created_at || '')}`),
+        .map((r: any, idx: number) => ({
+          id: String(
+            r?.__ctid ||
+              `${preview_schema}.${preview_table}.v${Number(r?.version || 0)}.${String(r?.created_at || '')}.${idx}`
+          ),
           __ctid: String(r?.__ctid || ''),
           schema_name: String(r?.schema_name || ''),
           table_name: String(r?.table_name || ''),
@@ -903,6 +906,7 @@
   .contracts-list .row-item { background:#0f172a; border-color:#0f172a; }
   .contracts-list .item-button { color:#fff; }
   .contracts-list .icon-btn { color:#fff; }
+  .contracts-list .danger.icon-btn { color:#fff; }
   .tables-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
   .tables-list .activeitem .item-button { color:#0f172a; }
   .contracts-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
@@ -912,6 +916,7 @@
   .contracts-list .activeitem .item-button::before { content:'●'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
   .contracts-list .contract-selected .item-button::before { content:'●'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
   .contracts-list .activeitem .icon-btn { color:#b91c1c; }
+  .contracts-list .contract-selected .danger.icon-btn { color:#b91c1c; }
 
   .main { min-width:0; }
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; }
