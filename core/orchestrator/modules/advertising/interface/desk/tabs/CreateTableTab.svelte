@@ -1,6 +1,7 @@
 ﻿<!-- File: core/orchestrator/modules/advertising/interface/desk/tabs/CreateTableTab.svelte -->
 <script lang="ts">
   import { onMount } from 'svelte';
+
   export type Role = 'viewer' | 'operator' | 'data_admin';
 
   export let apiBase: string;
@@ -15,34 +16,7 @@
   export let headers: () => Record<string, string>;
   export let apiJson: <T = any>(url: string, init?: RequestInit) => Promise<T>;
 
-  let error = '';
-
-  let schema_name = '';
-  let table_name = '';
-  let description = '';
-  let table_class = 'custom';
-
-  const typeOptions = ['text', 'int', 'bigint', 'numeric', 'boolean', 'date', 'timestamptz', 'jsonb', 'uuid'];
-  const CREATE_TIMEOUT_MS = 30000;
-  const CREATE_BUTTON_LABEL = '\u0421\u043e\u0437\u0434\u0430\u0442\u044c \u0442\u0430\u0431\u043b\u0438\u0446\u0443';
-  const CREATE_WAIT_LABEL = '\u0417\u0430\u043f\u0440\u043e\u0441 \u0441\u043e\u0437\u0434\u0430\u043d\u0438\u044f \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d. \u041e\u0436\u0438\u0434\u0430\u0435\u043c \u043e\u0442\u0432\u0435\u0442 \u0441\u0435\u0440\u0432\u0435\u0440\u0430...';
-  const DEFAULT_DB_STATUS_LABEL = '\u0421\u0442\u0430\u0442\u0443\u0441 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u044f \u043a \u0431\u0430\u0437\u0435: \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445.';
-
   type ColumnDef = { field_name: string; field_type: string; description?: string };
-  let columns: ColumnDef[] = [{ field_name: '', field_type: 'text', description: '' }];
-
-  let partition_enabled = false;
-  let partition_column = 'event_date';
-  let partition_interval: 'day' | 'month' = 'day';
-
-  let result_modal_open = false;
-  let result_modal_title = '';
-  let result_modal_text = '';
-  let result_created_schema = '';
-  let result_created_table = '';
-  let result_is_success = false;
-  let creating = false;
-  const TABLE_TEMPLATES_KEY = 'ao_create_table_templates_v1';
   type TableTemplate = {
     id: string;
     name: string;
@@ -55,110 +29,94 @@
     partition_column: string;
     partition_interval: 'day' | 'month';
   };
+
+  const typeOptions = ['text', 'int', 'bigint', 'numeric', 'boolean', 'date', 'timestamptz', 'jsonb', 'uuid'];
+  const CREATE_TIMEOUT_MS = 30000;
+  const CREATE_BUTTON_LABEL = 'Создать таблицу';
+  const CREATE_WAIT_LABEL = 'Запрос создания отправлен. Ожидаем ответ сервера...';
+  const DEFAULT_DB_STATUS_LABEL = 'Статус подключения к базе: нет данных.';
+  const TABLE_TEMPLATES_KEY = 'ao_create_table_templates_v1';
+
+  let error = '';
+  let schema_name = '';
+  let table_name = '';
+  let description = '';
+  let table_class = 'custom';
+  let columns: ColumnDef[] = [{ field_name: '', field_type: 'text', description: '' }];
+  let partition_enabled = false;
+  let partition_column = 'event_date';
+  let partition_interval: 'day' | 'month' = 'day';
+
   let tableTemplates: TableTemplate[] = [];
   let selectedTemplateId = '';
   let templateNameDraft = '';
+
+  let result_modal_open = false;
+  let result_modal_title = '';
+  let result_modal_text = '';
+  let result_created_schema = '';
+  let result_created_table = '';
+  let result_is_success = false;
+  let creating = false;
+
+  function uid() {
+    return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  }
 
   function canWrite(): boolean {
     return role === 'data_admin';
   }
 
-  function pickTemplateBronze() {
-    schema_name = 'bronze';
-    table_name = 'wb_ads_raw1';
-    table_class = 'bronze_raw';
-    description = 'РЎС‹СЂС‹Рµ РѕС‚РІРµС‚С‹ API (append-only JSON)';
-    columns = [
-      { field_name: 'dataset', field_type: 'text', description: 'dataset name' },
-      { field_name: 'endpoint', field_type: 'text', description: 'endpoint name' },
-      { field_name: 'request_id', field_type: 'text', description: 'request id' },
-      { field_name: 'ingested_at', field_type: 'timestamptz', description: 'ingest timestamp' },
-      { field_name: 'payload', field_type: 'jsonb', description: 'raw payload' }
-    ];
-    partition_enabled = true;
-    partition_column = 'ingested_at';
-    partition_interval = 'day';
-    selectedTemplateId = 'builtin_bronze';
-    templateNameDraft = 'Bronze';
+  function normalizeColumns(cols: ColumnDef[]) {
+    return cols
+      .map((c) => ({
+        field_name: (c.field_name || '').trim(),
+        field_type: (c.field_type || '').trim(),
+        description: (c.description || '').trim()
+      }))
+      .filter((c) => c.field_name.length > 0);
   }
 
-
-  function pickTemplateSilver() {
-    schema_name = 'silver_adv';
-    table_name = 'wb_ads_daily';
-    table_class = 'silver_table';
-    description = 'Р”РЅРµРІРЅР°СЏ Р°РіСЂРµРіРёСЂРѕРІР°РЅРЅР°СЏ С‚Р°Р±Р»РёС†Р° СЂРµРєР»Р°РјС‹';
-    columns = [
-      { field_name: 'event_date', field_type: 'date', description: 'РґР°С‚Р° РјРµС‚СЂРёРєРё' },
-      { field_name: 'campaign_id', field_type: 'text', description: 'РёРґРµРЅС‚РёС„РёРєР°С‚РѕСЂ РєР°РјРїР°РЅРёРё' },
-      { field_name: 'impressions', field_type: 'bigint', description: 'РїРѕРєР°Р·С‹' },
-      { field_name: 'clicks', field_type: 'bigint', description: 'РєР»РёРєРё' },
-      { field_name: 'spend', field_type: 'numeric', description: 'СЂР°СЃС…РѕРґ' }
-    ];
-    partition_enabled = true;
-    partition_column = 'event_date';
-    partition_interval = 'day';
-    selectedTemplateId = 'builtin_silver';
-    templateNameDraft = 'Silver';
-  }
-  function uid() {
-    return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-  }
-
-  function currentTableTemplate(name: string, id?: string): TableTemplate {
+  function bronzeTemplate(): TableTemplate {
     return {
-      id: id || uid(),
-      name,
-      schema_name: schema_name.trim(),
-      table_name: table_name.trim(),
-      table_class: table_class.trim() || 'custom',
-      description: description.trim(),
-      columns: normalizeColumns(columns),
-      partition_enabled,
-      partition_column: partition_column.trim(),
-      partition_interval
+      id: 'builtin_bronze',
+      name: 'Bronze',
+      schema_name: 'bronze',
+      table_name: 'wb_ads_raw1',
+      table_class: 'bronze_raw',
+      description: 'Сырые ответы API (append-only JSON)',
+      columns: [
+        { field_name: 'dataset', field_type: 'text', description: 'dataset name' },
+        { field_name: 'endpoint', field_type: 'text', description: 'endpoint name' },
+        { field_name: 'request_id', field_type: 'text', description: 'request id' },
+        { field_name: 'ingested_at', field_type: 'timestamptz', description: 'ingest timestamp' },
+        { field_name: 'payload', field_type: 'jsonb', description: 'raw payload' }
+      ],
+      partition_enabled: true,
+      partition_column: 'ingested_at',
+      partition_interval: 'day'
     };
   }
 
-  function getBuiltinTemplates(): TableTemplate[] {
-    return [
-      {
-        id: 'builtin_bronze',
-        name: 'Bronze',
-        schema_name: 'bronze',
-        table_name: 'wb_ads_raw1',
-        table_class: 'bronze_raw',
-        description: 'Raw API payload',
-        columns: [
-          { field_name: 'dataset', field_type: 'text', description: 'dataset name' },
-          { field_name: 'endpoint', field_type: 'text', description: 'endpoint name' },
-          { field_name: 'request_id', field_type: 'text', description: 'request id' },
-          { field_name: 'ingested_at', field_type: 'timestamptz', description: 'ingest timestamp' },
-          { field_name: 'payload', field_type: 'jsonb', description: 'raw payload' }
-        ],
-        partition_enabled: true,
-        partition_column: 'ingested_at',
-        partition_interval: 'day'
-      },
-      {
-        id: 'builtin_silver',
-        name: 'Silver',
-        schema_name: 'silver_adv',
-        table_name: 'wb_ads_daily',
-        table_class: 'silver_table',
-        description: 'Daily aggregated ads table',
-        columns: [
-          { field_name: 'event_date', field_type: 'date', description: 'date' },
-          { field_name: 'campaign_id', field_type: 'text', description: 'campaign id' },
-          { field_name: 'impressions', field_type: 'bigint', description: 'impressions' },
-          { field_name: 'clicks', field_type: 'bigint', description: 'clicks' },
-          { field_name: 'spend', field_type: 'numeric', description: 'spend' }
-        ],
-        partition_enabled: true,
-        partition_column: 'event_date',
-        partition_interval: 'day'
-      }
-    ];
+  function silverTemplate(): TableTemplate {
+    return {
+      id: 'builtin_silver',
+      name: 'Silver',
+      schema_name: 'silver_adv',
+      table_name: 'wb_ads_daily',
+      table_class: 'silver_table',
+      description: 'Дневная агрегированная таблица рекламы',
+      columns: [
+        { field_name: 'event_date', field_type: 'date', description: 'дата метрики' },
+        { field_name: 'campaign_id', field_type: 'text', description: 'идентификатор кампании' },
+        { field_name: 'impressions', field_type: 'bigint', description: 'показы' },
+        { field_name: 'clicks', field_type: 'bigint', description: 'клики' },
+        { field_name: 'spend', field_type: 'numeric', description: 'расход' }
+      ],
+      partition_enabled: true,
+      partition_column: 'event_date',
+      partition_interval: 'day'
+    };
   }
 
   function applyTemplate(t: TableTemplate) {
@@ -170,6 +128,16 @@
     partition_enabled = !!t.partition_enabled;
     partition_column = t.partition_column || 'event_date';
     partition_interval = t.partition_interval || 'day';
+    selectedTemplateId = t.id;
+    templateNameDraft = t.name;
+  }
+
+  function pickTemplateBronze() {
+    applyTemplate(bronzeTemplate());
+  }
+
+  function pickTemplateSilver() {
+    applyTemplate(silverTemplate());
   }
 
   function loadTableTemplates() {
@@ -195,9 +163,9 @@
             partition_interval: x?.partition_interval === 'month' ? 'month' : 'day'
           }))
         : [];
-      tableTemplates = [...getBuiltinTemplates(), ...custom];
+      tableTemplates = [bronzeTemplate(), silverTemplate(), ...custom];
     } catch {
-      tableTemplates = getBuiltinTemplates();
+      tableTemplates = [bronzeTemplate(), silverTemplate()];
     }
   }
 
@@ -210,7 +178,6 @@
     selectedTemplateId = id;
     const t = tableTemplates.find((x) => x.id === id);
     if (!t) return;
-    templateNameDraft = t.name;
     applyTemplate(t);
   }
 
@@ -223,14 +190,29 @@
   function saveCurrentTemplate() {
     const name = String(templateNameDraft || '').trim();
     const cols = normalizeColumns(columns);
-    if (!name) throw new Error('РЈРєР°Р¶Рё РЅР°Р·РІР°РЅРёРµ С€Р°Р±Р»РѕРЅР°');
-    if (!cols.length) throw new Error('Р”РѕР±Р°РІСЊ С…РѕС‚СЏ Р±С‹ РѕРґРЅРѕ РїРѕР»Рµ');
+    if (!name) throw new Error('Укажи название шаблона');
+    if (!cols.length) throw new Error('Добавь хотя бы одно поле');
+
     const idxById = selectedTemplateId ? tableTemplates.findIndex((x) => x.id === selectedTemplateId) : -1;
     const idxByName = idxById < 0 ? tableTemplates.findIndex((x) => x.name === name) : -1;
     const idx = idxById >= 0 ? idxById : idxByName;
-    const next = currentTableTemplate(name, idx >= 0 ? tableTemplates[idx].id : undefined);
+
+    const next: TableTemplate = {
+      id: idx >= 0 ? tableTemplates[idx].id : uid(),
+      name,
+      schema_name: schema_name.trim(),
+      table_name: table_name.trim(),
+      table_class: table_class.trim() || 'custom',
+      description: description.trim(),
+      columns: cols,
+      partition_enabled,
+      partition_column: partition_column.trim(),
+      partition_interval
+    };
+
     if (idx >= 0) tableTemplates[idx] = next;
     else tableTemplates = [next, ...tableTemplates];
+
     selectedTemplateId = next.id;
     templateNameDraft = next.name;
     saveTableTemplates();
@@ -238,8 +220,9 @@
   }
 
   function deleteCurrentTemplate() {
-    if (!selectedTemplateId) throw new Error('РЎРЅР°С‡Р°Р»Р° РІС‹Р±РµСЂРё С€Р°Р±Р»РѕРЅ');
-    if (selectedTemplateId.startsWith('builtin_')) throw new Error('Р’СЃС‚СЂРѕРµРЅРЅС‹Р№ С€Р°Р±Р»РѕРЅ СѓРґР°Р»РёС‚СЊ РЅРµР»СЊР·СЏ');
+    if (!selectedTemplateId) throw new Error('Сначала выбери шаблон');
+    if (selectedTemplateId.startsWith('builtin_')) throw new Error('Встроенный шаблон удалить нельзя');
+
     tableTemplates = tableTemplates.filter((x) => x.id !== selectedTemplateId);
     selectedTemplateId = '';
     templateNameDraft = '';
@@ -262,6 +245,7 @@
       error = e?.message || String(e);
     }
   }
+
   function addField() {
     columns = [...columns, { field_name: '', field_type: 'text', description: '' }];
   }
@@ -271,37 +255,30 @@
     if (columns.length === 0) columns = [{ field_name: '', field_type: 'text', description: '' }];
   }
 
-  function normalizeColumns(cols: ColumnDef[]) {
-    return cols
-      .map((c) => ({
-        field_name: (c.field_name || '').trim(),
-        field_type: (c.field_type || '').trim(),
-        description: (c.description || '').trim()
-      }))
-      .filter((c) => c.field_name.length > 0);
-  }
-
   function validate() {
-    if (!schema_name.trim()) throw new Error('РЈРєР°Р¶Рё СЃС…РµРјСѓ');
-    if (!table_name.trim()) throw new Error('РЈРєР°Р¶Рё РёРјСЏ С‚Р°Р±Р»РёС†С‹');
-    if (!table_class.trim()) throw new Error('РЈРєР°Р¶Рё РєР»Р°СЃСЃ');
+    if (!schema_name.trim()) throw new Error('Укажи схему');
+    if (!table_name.trim()) throw new Error('Укажи имя таблицы');
+    if (!table_class.trim()) throw new Error('Укажи класс');
+
     const cols = normalizeColumns(columns);
-    if (cols.length === 0) throw new Error('Р”РѕР±Р°РІСЊ С…РѕС‚СЏ Р±С‹ РѕРґРЅРѕ РїРѕР»Рµ');
-    for (const c of cols) if (!c.field_type) throw new Error("РЈРєР°Р¶Рё С‚РёРї РґР»СЏ РєР°Р¶РґРѕРіРѕ РїРѕР»СЏ");
+    if (cols.length === 0) throw new Error('Добавь хотя бы одно поле');
+    for (const c of cols) if (!c.field_type) throw new Error('Укажи тип для каждого поля');
 
     if (partition_enabled) {
-      if (!partition_column.trim()) throw new Error('РџР°СЂС‚РёС†РёРѕРЅРёСЂРѕРІР°РЅРёРµ РІРєР»СЋС‡РµРЅРѕ: СѓРєР°Р¶Рё РєРѕР»РѕРЅРєСѓ');
-      if (!partition_interval) throw new Error('РџР°СЂС‚РёС†РёРѕРЅРёСЂРѕРІР°РЅРёРµ РІРєР»СЋС‡РµРЅРѕ: СѓРєР°Р¶Рё РёРЅС‚РµСЂРІР°Р»');
+      if (!partition_column.trim()) throw new Error('Партиционирование включено: укажи колонку');
+      if (!partition_interval) throw new Error('Партиционирование включено: укажи интервал');
     }
   }
 
   async function createTableNow() {
     error = '';
     creating = true;
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), CREATE_TIMEOUT_MS);
+
     try {
-      if (!canWrite()) throw new Error('РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ РїСЂР°РІ (РЅСѓР¶РЅР° СЂРѕР»СЊ data_admin)');
+      if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
 
       validate();
       const cols = normalizeColumns(columns);
@@ -325,19 +302,19 @@
       result_created_schema = schema_name.trim();
       result_created_table = table_name.trim();
       result_is_success = true;
-      result_modal_title = 'РўР°Р±Р»РёС†Р° СЃРѕР·РґР°РЅР°';
-      result_modal_text = response ? JSON.stringify(response, null, 2) : 'РћРїРµСЂР°С†РёСЏ РІС‹РїРѕР»РЅРµРЅР° СѓСЃРїРµС€РЅРѕ.';
+      result_modal_title = 'Таблица создана';
+      result_modal_text = response ? JSON.stringify(response, null, 2) : 'Операция выполнена успешно.';
       result_modal_open = true;
 
       refreshTables().catch(() => {
-        // РћС€РёР±РєР° РѕР±РЅРѕРІР»РµРЅРёСЏ СЃРїРёСЃРєР° РЅРµ РґРѕР»Р¶РЅР° Р±Р»РѕРєРёСЂРѕРІР°С‚СЊ СЂРµР·СѓР»СЊС‚Р°С‚ СЃРѕР·РґР°РЅРёСЏ
+        // Ошибка обновления списка не должна блокировать результат создания
       });
     } catch (e: any) {
       error = e?.name === 'AbortError'
-        ? 'РЎРµСЂРІРµСЂ РЅРµ РѕС‚РІРµС‚РёР» РІРѕРІСЂРµРјСЏ. РџСЂРѕРІРµСЂСЊС‚Рµ СЃС‚Р°С‚СѓСЃ Р±Р°Р·С‹ Рё РїРѕРІС‚РѕСЂРёС‚Рµ РїРѕРїС‹С‚РєСѓ.'
+        ? 'Сервер не ответил вовремя. Проверьте статус базы и повторите попытку.'
         : (e?.message ?? String(e));
       result_is_success = false;
-      result_modal_title = 'РћС€РёР±РєР° СЃРѕР·РґР°РЅРёСЏ';
+      result_modal_title = 'Ошибка создания';
       result_modal_text = error;
       result_modal_open = true;
     } finally {
@@ -360,7 +337,7 @@
 
 {#if error}
   <div class="alert">
-    <div class="alert-title">РћС€РёР±РєР° СЃРѕР·РґР°РЅРёСЏ</div>
+    <div class="alert-title">Ошибка создания</div>
     <pre>{error}</pre>
   </div>
 {/if}
@@ -368,7 +345,7 @@
 <section class="grid single">
   <div class="panel">
     <div class="panel-head">
-      <h2>РЎРѕР·РґР°С‚СЊ С‚Р°Р±Р»РёС†Сѓ</h2>
+      <h2>Создать таблицу</h2>
       <div class="quick">
         <select value={selectedTemplateId} on:change={(e) => applySelectedTemplate(e.currentTarget.value)}>
           <option value="">Шаблон таблицы</option>
@@ -382,23 +359,23 @@
         <button class="danger icon-btn" on:click={onDeleteTemplateClick}>x</button>
         <button on:click={pickTemplateBronze}>Bronze</button>
         <button on:click={pickTemplateSilver}>Silver</button>
-        <button on:click={refreshTables} disabled={loading}>{loading ? 'Р—Р°РіСЂСѓР·РєР°вЂ¦' : 'РћР±РЅРѕРІРёС‚СЊ СЃРїРёСЃРѕРє'}</button>
+        <button on:click={refreshTables} disabled={loading}>{loading ? 'Загрузка…' : 'Обновить список'}</button>
       </div>
     </div>
 
     <div class="form">
       <label>
-        РЎС…РµРјР°
-        <input bind:value={schema_name} placeholder="РЅР°РїСЂРёРјРµСЂ: showcase / bronze / silver_adv" />
+        Схема
+        <input bind:value={schema_name} placeholder="например: showcase / bronze / silver_adv" />
       </label>
 
       <label>
-        РўР°Р±Р»РёС†Р°
-        <input bind:value={table_name} placeholder="РЅР°РїСЂРёРјРµСЂ: advertising" />
+        Таблица
+        <input bind:value={table_name} placeholder="например: advertising" />
       </label>
 
       <label>
-        РљР»Р°СЃСЃ (РґР»СЏ СЃРµР±СЏ)
+        Класс (для себя)
         <select bind:value={table_class}>
           <option value="custom">custom</option>
           <option value="bronze_raw">bronze_raw</option>
@@ -408,49 +385,49 @@
       </label>
 
       <label>
-        РћРїРёСЃР°РЅРёРµ
-        <input bind:value={description} placeholder="С‡С‚Рѕ СЌС‚Рѕ Р·Р° С‚Р°Р±Р»РёС†Р°" />
+        Описание
+        <input bind:value={description} placeholder="что это за таблица" />
       </label>
     </div>
 
     <div class="fields">
       <div class="fields-head">
-        <h3>РџРѕР»СЏ</h3>
+        <h3>Поля</h3>
       </div>
 
       {#each columns as c, ix}
         <div class="field-row">
-          <input placeholder="РёРјСЏ РїРѕР»СЏ" bind:value={c.field_name} />
+          <input placeholder="имя поля" bind:value={c.field_name} />
           <select bind:value={c.field_type}>
             {#each typeOptions as t}
               <option value={t}>{t}</option>
             {/each}
           </select>
-          <input placeholder="РѕРїРёСЃР°РЅРёРµ" bind:value={c.description} />
-          <button class="danger icon-btn" on:click={() => removeField(ix)} title="РЈРґР°Р»РёС‚СЊ РїРѕР»Рµ">x</button>
+          <input placeholder="описание" bind:value={c.description} />
+          <button class="danger icon-btn" on:click={() => removeField(ix)} title="Удалить поле">x</button>
         </div>
       {/each}
 
       <div class="fields-footer">
-        <button on:click={addField}>+ Р”РѕР±Р°РІРёС‚СЊ РїРѕР»Рµ</button>
+        <button on:click={addField}>+ Добавить поле</button>
       </div>
     </div>
 
     <div class="panel2">
-      <h3>РџР°СЂС‚РёС†РёРѕРЅРёСЂРѕРІР°РЅРёРµ</h3>
+      <h3>Партиционирование</h3>
       <label class="row">
         <input type="checkbox" bind:checked={partition_enabled} />
-        <span>Р’РєР»СЋС‡РёС‚СЊ РїР°СЂС‚РёС†РёРё</span>
+        <span>Включить партиции</span>
       </label>
 
       {#if partition_enabled}
         <div class="form">
           <label>
-            РљРѕР»РѕРЅРєР° РґР»СЏ РїР°СЂС‚РёС†РёР№
+            Колонка для партиций
             <input bind:value={partition_column} placeholder="event_date / ingested_at / ..." />
           </label>
           <label>
-            РРЅС‚РµСЂРІР°Р»
+            Интервал
             <select bind:value={partition_interval}>
               <option value="day">day</option>
               <option value="month">month</option>
@@ -474,7 +451,7 @@
     </div>
 
     {#if !canWrite()}
-      <p class="hint">РљРЅРѕРїРєР° Р°РєС‚РёРІРЅР° С‚РѕР»СЊРєРѕ РїСЂРё СЂРѕР»Рё <b>data_admin</b>.</p>
+      <p class="hint">Кнопка активна только при роли <b>data_admin</b>.</p>
     {/if}
   </div>
 </section>
@@ -484,7 +461,7 @@
     class="modal-bg"
     role="button"
     tabindex="0"
-    aria-label="Р—Р°РєСЂС‹С‚СЊ РѕРєРЅРѕ СЂРµР·СѓР»СЊС‚Р°С‚Р°"
+    aria-label="Закрыть окно результата"
     on:click={closeResultModal}
     on:keydown={(e) => (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') && closeResultModal()}
   >
@@ -507,7 +484,7 @@
   .panel-head h2 { margin:0; font-size:18px; }
   .quick { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .quick select, .quick input { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; background:#fff; }
-  .quick .template-name { min-width: 220px; }
+  .quick .template-name { min-width:220px; }
 
   .form { display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:12px; }
   @media (max-width: 1100px) { .form { grid-template-columns: 1fr; } }
@@ -546,4 +523,3 @@
   .modal h3 { margin: 0 0 10px 0; }
   .modal-actions { display:flex; justify-content:flex-end; margin-top:12px; }
 </style>
-
