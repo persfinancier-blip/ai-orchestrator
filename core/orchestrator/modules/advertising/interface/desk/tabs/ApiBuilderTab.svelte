@@ -378,10 +378,6 @@
     syncAuthLeftToRawAndSource();
   }
 
-  function authPlacementText(type: string) {
-    return type === 'query' ? 'Данные пойдут в URL' : 'Данные пойдут в заголовок';
-  }
-
   function authTypeLabel(type: string) {
     return type === 'query' ? 'URL' : 'Заголовок';
   }
@@ -1387,7 +1383,6 @@
                     on:input={() => { authRawTouched = true; scheduleParseAuthRaw(); }}
                     on:blur={parseAuthRaw}
                   ></textarea>
-                  <p class="hint">{authPlacementText(selected.authTemplate?.type || 'header')}</p>
                   {#if authRawError}
                     <p class="error">{authRawError}</p>
                   {/if}
