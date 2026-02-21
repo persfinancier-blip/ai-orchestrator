@@ -497,13 +497,29 @@
       err = 'Некорректный JSON. Проверь скобки и кавычки.';
       return;
     }
-    const idx = authTemplates.findIndex((x) => x.name === t.name);
+    const idxBySelected = selectedAuthTemplateId
+      ? authTemplates.findIndex((x) => x.id === selectedAuthTemplateId)
+      : -1;
+    const idxByName = idxBySelected < 0 ? authTemplates.findIndex((x) => x.name === t.name) : -1;
+    const idx = idxBySelected >= 0 ? idxBySelected : idxByName;
     const item = { id: idx >= 0 ? authTemplates[idx].id : uid(), ...t };
     if (idx >= 0) authTemplates[idx] = item;
     else authTemplates = [item, ...authTemplates];
     saveAuthTemplates();
     selectedAuthTemplateId = item.id;
     previewApplyMessage = 'Шаблон сохранён';
+    err = '';
+  }
+
+  function deleteCurrentAuthTemplate() {
+    if (!selectedAuthTemplateId) {
+      err = 'Сначала выбери шаблон для удаления';
+      return;
+    }
+    authTemplates = authTemplates.filter((x) => x.id !== selectedAuthTemplateId);
+    saveAuthTemplates();
+    selectedAuthTemplateId = '';
+    previewApplyMessage = 'Шаблон удалён';
     err = '';
   }
 
@@ -1382,6 +1398,7 @@
                       on:input={(e) => setAuthTemplateName(e.currentTarget.value)}
                     />
                     <button class="quarter" on:click={saveCurrentAuthTemplate}>Сохранить шаблон</button>
+                    <button class="danger" on:click={deleteCurrentAuthTemplate}>Удалить шаблон</button>
                   </div>
                   <div class="auth-right-controls">
                     <select
@@ -1410,87 +1427,6 @@
                   {/if}
                 </div>
               </div>
-            </div>
-
-            <div class="subcard">
-              <h3>Настройки</h3>
-              <div class="grid">
-                <label>
-                  Тип
-                  <select value={selected.pagination.mode} on:change={(e) => mutateSelected((s) => (s.pagination.mode = toPaginationMode(e.currentTarget.value)))}>
-                    <option value="none">none</option>
-                    <option value="page">page</option>
-                    <option value="offset">offset</option>
-                  </select>
-                </label>
-
-                {#if selected.pagination.mode === 'page'}
-                  <label>
-                    page param
-                    <input value={selected.pagination.pageParam} on:input={(e) => mutateSelected((s) => (s.pagination.pageParam = e.currentTarget.value))} />
-                  </label>
-                  <label>
-                    page size param
-                    <input value={selected.pagination.pageSizeParam} on:input={(e) => mutateSelected((s) => (s.pagination.pageSizeParam = e.currentTarget.value))} />
-                  </label>
-                  <label>
-                    start page
-                    <input type="number" value={selected.pagination.pageStart} on:input={(e) => mutateSelected((s) => (s.pagination.pageStart = Number(e.currentTarget.value || 1)))} />
-                  </label>
-                  <label>
-                    page size
-                    <input type="number" value={selected.pagination.defaultPageSize} on:input={(e) => mutateSelected((s) => (s.pagination.defaultPageSize = Number(e.currentTarget.value || 50)))} />
-                  </label>
-                {/if}
-
-                {#if selected.pagination.mode === 'offset'}
-                  <label>
-                    offset param
-                    <input value={selected.pagination.offsetParam} on:input={(e) => mutateSelected((s) => (s.pagination.offsetParam = e.currentTarget.value))} />
-                  </label>
-                  <label>
-                    limit param
-                    <input value={selected.pagination.limitParam} on:input={(e) => mutateSelected((s) => (s.pagination.limitParam = e.currentTarget.value))} />
-                  </label>
-                  <label>
-                    offset start
-                    <input type="number" value={selected.pagination.offsetStart} on:input={(e) => mutateSelected((s) => (s.pagination.offsetStart = Number(e.currentTarget.value || 0)))} />
-                  </label>
-                  <label>
-                    default limit
-                    <input type="number" value={selected.pagination.defaultLimit} on:input={(e) => mutateSelected((s) => (s.pagination.defaultLimit = Number(e.currentTarget.value || 50)))} />
-                  </label>
-                {/if}
-              </div>
-              <label class="wide">
-                RAW (Settings)
-                <textarea bind:value={settingsRawDraft} placeholder="pagination mode: none"></textarea>
-              </label>
-              <div class="inline-actions">
-                <button on:click={parseSettingsRaw}>Разобрать</button>
-              </div>
-            </div>
-
-            <div class="subcard">
-              <h3>Параметры</h3>
-              <div class="inline-actions">
-                <button on:click={() => { paramRows = [...paramRows, { id: uid(), key: '', value: '' }]; }}>+ Параметр</button>
-                <button on:click={syncParamsRowsToRaw}>Собрать RAW</button>
-                <button on:click={parseParamsRaw}>Разобрать RAW</button>
-              </div>
-              <div class="bindings">
-                {#each paramRows as r (r.id)}
-                  <div class="binding-row">
-                    <input placeholder="key" value={r.key} on:input={(e) => { r.key = e.currentTarget.value; paramRows = [...paramRows]; syncParamsRowsToRaw(); }} />
-                    <input placeholder="value" value={r.value} on:input={(e) => { r.value = e.currentTarget.value; paramRows = [...paramRows]; syncParamsRowsToRaw(); }} />
-                    <button class="danger" on:click={() => { paramRows = paramRows.filter((x) => x.id !== r.id); syncParamsRowsToRaw(); }}>Удалить</button>
-                  </div>
-                {/each}
-              </div>
-              <label class="wide">
-                RAW (Parameters)
-                <textarea bind:value={paramsRawDraft} placeholder={PLACEHOLDER_QUERY}></textarea>
-              </label>
             </div>
 
             <div class="subcard">
@@ -1818,7 +1754,7 @@
   .auth-top { height: 42px; display:flex; align-items:stretch; justify-content:flex-start; }
   .auth-top .quarter { width:100%; min-width:0; max-width:none; }
   .auth-top select { width:100%; }
-  .auth-right-top { display:grid; grid-template-columns: 1fr minmax(180px, 34%); gap:10px; align-items:center; margin-bottom:10px; }
+  .auth-right-top { display:grid; grid-template-columns: 1fr minmax(170px, 26%) minmax(150px, 22%); gap:10px; align-items:center; margin-bottom:10px; }
   .auth-right-controls { display:flex; flex-direction:column; gap:8px; margin-bottom:10px; }
   .auth-name-input { min-width:0; }
   .auth-fields { display:flex; flex-direction:column; gap:10px; margin-top:10px; }
