@@ -440,6 +440,10 @@
           <label class="w60">
             Название таблицы
             <input bind:value={table_name} placeholder="например: advertising" />
+            <span class="inline-check">
+              <input type="checkbox" bind:checked={partition_enabled} />
+              <span>Партиционирование</span>
+            </span>
           </label>
 
           <label class="w100">
@@ -473,14 +477,9 @@
           </div>
         </div>
 
-        <div class="subcard">
-          <h3>Партиционирование</h3>
-          <label class="row">
-            <input type="checkbox" bind:checked={partition_enabled} />
-            <span>Включить партиции</span>
-          </label>
-
-          {#if partition_enabled}
+        {#if partition_enabled}
+          <div class="subcard">
+            <h3>Партиционирование</h3>
             <div class="form" style="margin-top:10px;">
               <label>
                 Колонка для партиций
@@ -494,8 +493,8 @@
                 </select>
               </label>
             </div>
-          {/if}
-        </div>
+          </div>
+        {/if}
 
         <div class="actions">
           <button class="primary" on:click={createTableNow} disabled={loading || creating || !canWrite()}>
@@ -598,6 +597,7 @@
   .fields-footer { margin-top:12px; }
 
   .row { display:flex; align-items:center; gap:10px; }
+  .inline-check { display:flex; align-items:center; gap:8px; margin-top:8px; font-size:13px; color:#334155; }
   .actions { margin-top:14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
   .template-controls { display:flex; flex-direction:column; gap:8px; margin-bottom:8px; }
   .inline-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
