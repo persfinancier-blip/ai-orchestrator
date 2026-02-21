@@ -1,6 +1,6 @@
 ﻿<!-- File: core/orchestrator/modules/advertising/interface/desk/tabs/TablesAndDataTab.svelte -->
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
 
   export type Role = 'viewer' | 'operator' | 'data_admin';
   export type ExistingTable = { schema_name: string; table_name: string };
@@ -45,7 +45,11 @@
   let pending_delete_row_ctid = '';
 
   let newRow: Record<string, string> = {};
-  let rename_table_name = '';
+  let edit_schema_name = '';
+  let edit_table_name = '';
+  let table_description = '';
+  let tableDescriptionEl: HTMLTextAreaElement | null = null;
+  let columnDescriptionDrafts: Record<string, string> = {};
   let contracts_loading = false;
   let contracts_error = '';
   let contractVersions: ContractVersion[] = [];
@@ -131,10 +135,27 @@
   function pickExisting(t: ExistingTable) {
     preview_schema = t.schema_name;
     preview_table = t.table_name;
-    rename_table_name = t.table_name;
+    edit_schema_name = t.schema_name;
+    edit_table_name = t.table_name;
     loadColumns();
     loadPreview();
+    loadTableMeta();
     loadContractsPanel();
+  }
+
+  async function loadTableMeta() {
+    preview_error = '';
+    try {
+      if (!preview_schema || !preview_table) return;
+      const j = await apiJson<{ description?: string }>(
+        `${apiBase}/tables/meta?schema=${encodeURIComponent(preview_schema)}&table=${encodeURIComponent(preview_table)}`
+      );
+      table_description = String(j?.description || '');
+      await tick();
+      syncTableDescriptionHeight();
+    } catch (e: any) {
+      preview_error = e?.message ?? String(e);
+    }
   }
 
   async function loadColumns() {
@@ -147,6 +168,9 @@
       );
       preview_columns = j.columns || [];
       newRow = Object.fromEntries(preview_columns.map((c) => [c.name, '']));
+      columnDescriptionDrafts = Object.fromEntries(
+        preview_columns.map((c) => [c.name, String(c.description || '')])
+      );
     } catch (e: any) {
       preview_error = e?.message ?? String(e);
     }
@@ -171,6 +195,7 @@
   async function refreshPreviewAll() {
     await loadColumns();
     await loadPreview();
+    await loadTableMeta();
   }
 
   async function loadContractsPanel() {
@@ -322,6 +347,10 @@
         preview_rows = [];
         contractVersions = [];
         newRow = {};
+        columnDescriptionDrafts = {};
+        edit_schema_name = '';
+        edit_table_name = '';
+        table_description = '';
       }
 
       await refreshTables();
@@ -352,29 +381,60 @@
     }
   }
 
-  async function saveTableName() {
+  async function saveTableMeta() {
     preview_error = '';
     try {
       if (!canEditSelectedTable()) throw new Error('Системную таблицу нельзя редактировать');
       if (!preview_schema || !preview_table) throw new Error('Таблица не выбрана');
-      const nextName = rename_table_name.trim();
-      if (!nextName) throw new Error('Укажи новое название таблицы');
+      const nextSchema = edit_schema_name.trim();
+      const nextTable = edit_table_name.trim();
+      if (!nextSchema) throw new Error('Укажи схему');
+      if (!nextTable) throw new Error('Укажи новое название таблицы');
 
-      await apiJson(`${apiBase}/tables/rename`, {
+      await apiJson(`${apiBase}/tables/update-meta`, {
         method: 'POST',
         headers: headers(),
         body: JSON.stringify({
           schema: preview_schema,
           table: preview_table,
-          new_table: nextName
+          new_schema: nextSchema,
+          new_table: nextTable,
+          description: table_description
         })
       });
 
-      preview_table = nextName;
-      rename_table_name = nextName;
+      preview_schema = nextSchema;
+      preview_table = nextTable;
+      edit_schema_name = nextSchema;
+      edit_table_name = nextTable;
       await refreshTables();
       await loadColumns();
       await loadPreview();
+      await loadTableMeta();
+      await loadContractsPanel();
+    } catch (e: any) {
+      preview_error = e?.message ?? String(e);
+    }
+  }
+
+  async function saveColumnDescription(name: string) {
+    preview_error = '';
+    try {
+      if (!canEditSelectedTable()) throw new Error('Системную таблицу нельзя редактировать');
+      if (!preview_schema || !preview_table) throw new Error('Таблица не выбрана');
+      const nextDescription = String(columnDescriptionDrafts[name] || '').trim();
+
+      await apiJson(`${apiBase}/columns/describe`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({
+          schema: preview_schema,
+          table: preview_table,
+          column: name,
+          description: nextDescription
+        })
+      });
+      preview_columns = preview_columns.map((c) => (c.name === name ? { ...c, description: nextDescription } : c));
       await loadContractsPanel();
     } catch (e: any) {
       preview_error = e?.message ?? String(e);
@@ -439,6 +499,14 @@
     contracts_storage_picker_open = false;
     await loadContractsPanel();
   }
+
+  function syncTableDescriptionHeight() {
+    if (!tableDescriptionEl) return;
+    tableDescriptionEl.style.height = 'auto';
+    tableDescriptionEl.style.height = `${Math.max(tableDescriptionEl.scrollHeight, 56)}px`;
+  }
+
+  $: table_description, tick().then(syncTableDescriptionHeight);
 </script>
 
 <section class="panel">
@@ -512,13 +580,28 @@
         {#if preview_schema && preview_table}
           <div class="rename-row">
             <input
+              class="rename-input schema-input"
+              bind:value={edit_schema_name}
+              placeholder="Схема"
+              disabled={!canEditSelectedTable()}
+            />
+            <input
               class="rename-input"
-              bind:value={rename_table_name}
+              bind:value={edit_table_name}
               placeholder="Название таблицы"
               disabled={!canEditSelectedTable()}
             />
-            <button class="primary" on:click={saveTableName} disabled={!canEditSelectedTable()}>Сохранить</button>
+            <button class="primary save-meta-btn" on:click={saveTableMeta} disabled={!canEditSelectedTable()}>Сохранить</button>
           </div>
+          <textarea
+            class="table-desc-input"
+            bind:this={tableDescriptionEl}
+            bind:value={table_description}
+            rows="2"
+            placeholder="Описание таблицы"
+            disabled={!canEditSelectedTable()}
+            on:input={syncTableDescriptionHeight}
+          ></textarea>
         {/if}
 
         {#if preview_error}
@@ -589,6 +672,26 @@
                 </tr>
               </tfoot>
             </table>
+            </div>
+
+            <div class="column-descriptions">
+              {#each preview_columns as c}
+                <div class="desc-row">
+                  <div class="desc-name">{c.name}</div>
+                  <input
+                    class="desc-input"
+                    bind:value={columnDescriptionDrafts[c.name]}
+                    placeholder="Описание поля"
+                    disabled={!canEditSelectedTable()}
+                  />
+                  <button
+                    class="icon-btn save-mini-btn"
+                    on:click={() => saveColumnDescription(c.name)}
+                    disabled={!canEditSelectedTable()}
+                    title="Сохранить описание поля"
+                  >✓</button>
+                </div>
+              {/each}
             </div>
 
             {#if !canEditSelectedTable()}
@@ -762,8 +865,11 @@
   .panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
   .panel-head h2 { margin:0; font-size:18px; }
   .quick { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  .rename-row { margin-top:10px; display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; }
+  .rename-row { margin-top:10px; display:grid; grid-template-columns: 5fr 12fr 3fr; gap:8px; align-items:center; }
+  .schema-input { min-width:0; }
   .rename-input { width:100%; box-sizing:border-box; border-radius:12px; border:1px solid #e6eaf2; padding:10px 12px; }
+  .save-meta-btn { width:100%; }
+  .table-desc-input { width:100%; box-sizing:border-box; margin-top:8px; border-radius:12px; border:1px solid #e6eaf2; padding:10px 12px; min-height:56px; resize:none; overflow:hidden; }
 
   .layout { display:grid; grid-template-columns: 320px 1fr 360px; gap:12px; margin-top:12px; align-items:start; }
   @media (max-width: 1300px) { .layout { grid-template-columns: 320px 1fr; } }
@@ -814,6 +920,11 @@
   .rowactions { width:44px; min-width:44px; white-space: nowrap; text-align:center; }
   .trash { border-color:transparent; background:transparent; color:#b91c1c; border-radius:12px; padding:6px 10px; cursor:pointer; }
   .addrow-icon { border-radius:12px; border-color:transparent; background:transparent; width:34px; min-width:34px; padding:6px 0; font-size:20px; line-height:1; font-weight:400; cursor:pointer; }
+  .column-descriptions { margin-top:10px; display:flex; flex-direction:column; gap:8px; }
+  .desc-row { display:grid; grid-template-columns: minmax(140px, 1fr) minmax(0, 3fr) auto; gap:8px; align-items:center; }
+  .desc-name { font-size:12px; color:#334155; font-weight:600; }
+  .desc-input { width:100%; box-sizing:border-box; border-radius:12px; border:1px solid #e6eaf2; padding:8px 10px; }
+  .save-mini-btn { width:34px; min-width:34px; padding:6px 0; color:#16a34a; border-color:transparent; background:transparent; }
 
   .cellinput { display:block; width:100%; min-width:120px; box-sizing:border-box; border-radius:12px; border:1px solid #e6eaf2; padding:8px 10px; }
 
@@ -837,6 +948,7 @@
 
   .form { display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:12px; }
   @media (max-width: 900px) { .form { grid-template-columns: 1fr; } }
+  @media (max-width: 900px) { .rename-row { grid-template-columns: 1fr; } }
   .form label { display:flex; flex-direction:column; gap:6px; font-size:13px; }
   .form input, .form select { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; }
 </style>

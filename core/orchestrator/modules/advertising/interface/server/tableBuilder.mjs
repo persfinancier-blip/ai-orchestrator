@@ -1321,6 +1321,96 @@ tableBuilderRouter.post('/tables/rename', requireDataAdmin, async (req, res) => 
   }
 });
 
+tableBuilderRouter.get('/tables/meta', async (req, res) => {
+  const schema = String(req.query.schema || '').trim();
+  const table = String(req.query.table || '').trim();
+  if (!isIdent(schema) || !isIdent(table)) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid schema/table' });
+  }
+
+  const client = await pool.connect();
+  try {
+    const description = await getTableDescription(client, schema, table);
+    return res.json({ ok: true, schema, table, description });
+  } catch (e) {
+    return res.status(500).json({ error: 'table_meta_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+tableBuilderRouter.post('/tables/update-meta', requireDataAdmin, async (req, res) => {
+  const schema = String(req.body?.schema || '').trim();
+  const table = String(req.body?.table || '').trim();
+  const new_schema = String(req.body?.new_schema || schema).trim();
+  const new_table = String(req.body?.new_table || table).trim();
+  const description = String(req.body?.description || '').trim();
+
+  if (!isIdent(schema) || !isIdent(table) || !isIdent(new_schema) || !isIdent(new_table)) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid schema/table/new_schema/new_table' });
+  }
+  if (isProtectedSystemTable(schema, table)) {
+    return res.status(403).json({ error: 'forbidden', details: 'protected_system_table' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    let currentSchema = schema;
+    let currentTable = table;
+
+    if (new_schema !== currentSchema) {
+      await client.query(`CREATE SCHEMA IF NOT EXISTS ${qi(new_schema)}`);
+      await client.query(`ALTER TABLE ${qname(currentSchema, currentTable)} SET SCHEMA ${qi(new_schema)}`);
+      currentSchema = new_schema;
+    }
+
+    if (new_table !== currentTable) {
+      await client.query(`ALTER TABLE ${qname(currentSchema, currentTable)} RENAME TO ${qi(new_table)}`);
+      currentTable = new_table;
+    }
+
+    await client.query(`COMMENT ON TABLE ${qname(currentSchema, currentTable)} IS ${qlit(description)}`);
+
+    const config = await loadRuntimeConfig(client);
+    const contractsQn = await ensureContractsTable(client, config);
+    await client.query(
+      `
+      UPDATE ${contractsQn}
+      SET schema_name = $3, table_name = $4, contract_name = $5
+      WHERE schema_name = $1 AND table_name = $2
+      `,
+      [schema, table, currentSchema, currentTable, defaultContractName(currentSchema, currentTable)]
+    );
+
+    await createContractVersionFromTable(
+      client,
+      currentSchema,
+      currentTable,
+      'table_meta_updated',
+      req.header('X-AO-ROLE') || 'ui'
+    );
+
+    await client.query('COMMIT');
+    return res.json({
+      ok: true,
+      schema,
+      table,
+      new_schema: currentSchema,
+      new_table: currentTable,
+      description
+    });
+  } catch (e) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {}
+    return res.status(500).json({ error: 'table_meta_update_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
 tableBuilderRouter.post('/columns/drop', requireDataAdmin, async (req, res) => {
   const schema = String(req.body?.schema || '').trim();
   const table = String(req.body?.table || '').trim();
@@ -1376,6 +1466,37 @@ tableBuilderRouter.post('/columns/add', requireDataAdmin, async (req, res) => {
     return res.json({ ok: true, schema, table, column: { name: colName, type: colType, description: colDescription } });
   } catch (e) {
     return res.status(500).json({ error: 'add_column_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+tableBuilderRouter.post('/columns/describe', requireDataAdmin, async (req, res) => {
+  const schema = String(req.body?.schema || '').trim();
+  const table = String(req.body?.table || '').trim();
+  const column = String(req.body?.column || '').trim();
+  const description = String(req.body?.description || '').trim();
+
+  if (!isIdent(schema) || !isIdent(table) || !isIdent(column)) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid schema/table/column' });
+  }
+  if (isProtectedSystemTable(schema, table)) {
+    return res.status(403).json({ error: 'forbidden', details: 'protected_system_table' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query(`COMMENT ON COLUMN ${qname(schema, table)}.${qi(column)} IS ${qlit(description)}`);
+    await createContractVersionFromTable(
+      client,
+      schema,
+      table,
+      `column_description_updated:${column}`,
+      req.header('X-AO-ROLE') || 'ui'
+    );
+    return res.json({ ok: true, schema, table, column, description });
+  } catch (e) {
+    return res.status(500).json({ error: 'column_describe_failed', details: String(e?.message || e) });
   } finally {
     client.release();
   }
