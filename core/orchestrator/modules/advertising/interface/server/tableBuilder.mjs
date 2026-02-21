@@ -45,6 +45,28 @@ const DEFAULT_CONFIG = Object.freeze({
 const SETTINGS_CACHE_MS = Number(process.env.AO_SETTINGS_CACHE_MS || 5000);
 let settingsCache = { at: 0, value: { ...DEFAULT_CONFIG } };
 const PROTECTED_SYSTEM_TABLES = new Set([`${SETTINGS_SCHEMA}.${SETTINGS_TABLE}`]);
+const SETTINGS_REQUIRED_COLUMNS = [
+  { name: 'setting_key', types: ['text', 'character varying', 'varchar'] },
+  { name: 'setting_value', types: ['jsonb', 'json'] },
+  { name: 'scope', types: ['text', 'character varying', 'varchar'] },
+  { name: 'description', types: ['text', 'character varying', 'varchar'] },
+  { name: 'is_active', types: ['boolean'] },
+  { name: 'updated_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] },
+  { name: 'updated_by', types: ['text', 'character varying', 'varchar'] }
+];
+const CONTRACTS_REQUIRED_COLUMNS = [
+  { name: 'schema_name', types: ['text', 'character varying', 'varchar'] },
+  { name: 'table_name', types: ['text', 'character varying', 'varchar'] },
+  { name: 'contract_name', types: ['text', 'character varying', 'varchar'] },
+  { name: 'version', types: ['integer', 'bigint', 'int'] },
+  { name: 'lifecycle_state', types: ['text', 'character varying', 'varchar'] },
+  { name: 'deleted_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] },
+  { name: 'description', types: ['text', 'character varying', 'varchar'] },
+  { name: 'columns', types: ['jsonb', 'json'] },
+  { name: 'change_reason', types: ['text', 'character varying', 'varchar'] },
+  { name: 'changed_by', types: ['text', 'character varying', 'varchar'] },
+  { name: 'created_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] }
+];
 
 function normalizeSettingIdent(value, fallback) {
   const v = String(value || '').trim();
@@ -57,6 +79,29 @@ function contractsQname(config) {
 
 function isProtectedSystemTable(schema, table) {
   return PROTECTED_SYSTEM_TABLES.has(`${String(schema || '').trim()}.${String(table || '').trim()}`);
+}
+
+function normalizeTypeName(type) {
+  return String(type || '').toLowerCase().trim();
+}
+
+async function hasRequiredColumns(client, schema, table, required) {
+  const r = await client.query(
+    `
+    SELECT column_name AS name, data_type AS type
+    FROM information_schema.columns
+    WHERE table_schema = $1 AND table_name = $2
+    `,
+    [schema, table]
+  );
+  const cols = Array.isArray(r.rows) ? r.rows : [];
+  if (!cols.length) return false;
+  const map = new Map(cols.map((c) => [String(c.name || '').toLowerCase(), normalizeTypeName(c.type)]));
+  for (const need of required) {
+    const actual = map.get(String(need.name || '').toLowerCase());
+    if (!actual || !need.types.some((t) => actual.includes(String(t)))) return false;
+  }
+  return true;
 }
 
 async function ensureSettingsTable(client) {
@@ -77,6 +122,28 @@ async function ensureSettingsTable(client) {
     CREATE INDEX IF NOT EXISTS ao_table_settings_store_active_idx
     ON ${SETTINGS_QNAME} (is_active, setting_key)
   `);
+
+  const ok = await hasRequiredColumns(client, SETTINGS_SCHEMA, SETTINGS_TABLE, SETTINGS_REQUIRED_COLUMNS);
+  if (!ok) {
+    const backupTable = `${SETTINGS_TABLE}__broken_${Date.now()}`;
+    await client.query(`ALTER TABLE ${SETTINGS_QNAME} RENAME TO ${qi(backupTable)}`);
+    await client.query(`
+      CREATE TABLE ${SETTINGS_QNAME} (
+        id bigserial PRIMARY KEY,
+        setting_key text NOT NULL UNIQUE,
+        setting_value jsonb NOT NULL,
+        scope text NOT NULL DEFAULT 'global',
+        description text NOT NULL DEFAULT '',
+        is_active boolean NOT NULL DEFAULT true,
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        updated_by text NOT NULL DEFAULT 'system'
+      )
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS ao_table_settings_store_active_idx
+      ON ${SETTINGS_QNAME} (is_active, setting_key)
+    `);
+  }
 }
 
 async function ensureDefaultSettingsRows(client) {
@@ -190,7 +257,18 @@ async function ensureContractsTable(client, config) {
     CREATE INDEX IF NOT EXISTS ao_table_data_contract_versions_lookup_idx
     ON ${contractsQn} (schema_name, table_name, version DESC)
   `);
-  return contractsQn;
+
+  const ok = await hasRequiredColumns(client, contractsSchema, contractsTable, CONTRACTS_REQUIRED_COLUMNS);
+  if (ok) return contractsQn;
+
+  const isDefault =
+    contractsSchema === DEFAULT_CONFIG.contracts_schema &&
+    contractsTable === DEFAULT_CONFIG.contracts_table;
+  if (isDefault) {
+    throw new Error('contracts_storage_invalid_structure');
+  }
+
+  return ensureContractsTable(client, DEFAULT_CONFIG);
 }
 
 async function ensureTemplatesStorageTable(client, config) {
