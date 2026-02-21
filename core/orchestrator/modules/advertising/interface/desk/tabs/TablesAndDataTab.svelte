@@ -900,9 +900,9 @@
   .contracts-list .item-button { color:#fff; }
   .contracts-list .icon-btn { color:#fff; }
   .tables-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
-  .tables-list .activeitem .item-button { color:#0f172a; font-size:15px; font-weight:600; letter-spacing:.01em; }
+  .tables-list .activeitem .item-button { color:#0f172a !important; font-size:15px !important; font-weight:600 !important; letter-spacing:.01em !important; line-height:1.25; }
   .contracts-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
-  .contracts-list .activeitem .item-button { color:#0f172a; font-size:15px; font-weight:600; letter-spacing:.01em; }
+  .contracts-list .activeitem .item-button { color:#0f172a !important; font-size:15px !important; font-weight:600 !important; letter-spacing:.01em !important; line-height:1.25; }
   .contracts-list .activeitem .item-button::before { content:'●'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
   .contracts-list .activeitem .icon-btn { color:#b91c1c; }
 
