@@ -284,12 +284,11 @@
           </div>
         {/if}
 
-        {#if !preview_schema || !preview_table}
-          <p class="hint">Выбери таблицу слева.</p>
-        {:else if preview_columns.length === 0}
-          <p class="hint">Колонки не загружены. Нажми «Обновить предпросмотр».</p>
-        {:else}
-          <div class="preview">
+        {#if preview_schema && preview_table}
+          {#if preview_columns.length === 0}
+            <p class="hint">Колонки не загружены. Нажми «Обновить предпросмотр».</p>
+          {:else}
+            <div class="preview">
             <table>
               <thead>
                 <tr>
@@ -346,10 +345,11 @@
                 </tr>
               </tfoot>
             </table>
-          </div>
+            </div>
 
-          {#if !canWrite()}
-            <p class="hint">Редактирование доступно только при роли <b>data_admin</b>.</p>
+            {#if !canWrite()}
+              <p class="hint">Редактирование доступно только при роли <b>data_admin</b>.</p>
+            {/if}
           {/if}
         {/if}
       </div>
