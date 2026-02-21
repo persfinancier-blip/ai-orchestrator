@@ -53,6 +53,8 @@
   let contracts_loading = false;
   let contracts_error = '';
   let contractVersions: ContractVersion[] = [];
+  let selectedContractVersion = 0;
+  let activeContractVersion = 0;
   let contracts_storage_schema = 'ao_system';
   let contracts_storage_table = 'table_data_contract_versions';
   let contracts_storage_picker_open = false;
@@ -233,17 +235,37 @@
           created_at: String(r?.created_at || '')
         }))
         .sort((a, b) => b.version - a.version);
+      const active = contractVersions.find((x) => String(x.lifecycle_state || '').trim() === 'active');
+      activeContractVersion = Number(active?.version || contractVersions[0]?.version || 0);
+      if (!contractVersions.some((x) => Number(x.version) === Number(selectedContractVersion))) {
+        selectedContractVersion = activeContractVersion;
+      }
     } catch (e: any) {
       contracts_error = e?.message ?? String(e);
       contractVersions = [];
+      selectedContractVersion = 0;
+      activeContractVersion = 0;
     } finally {
       contracts_loading = false;
     }
   }
 
+  function isSelectedContractVersion(version: number) {
+    return Number(version) === Number(selectedContractVersion);
+  }
+
+  function isActiveContractVersion(version: number) {
+    return Number(version) === Number(activeContractVersion);
+  }
+
+  function canDeleteContractVersion(version: number) {
+    return canWrite() && !isActiveContractVersion(version);
+  }
+
   async function deleteContractVersion(version: number) {
     try {
       if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
+      if (isActiveContractVersion(version)) throw new Error('Активную версию контракта удалить нельзя');
       if (!preview_schema || !preview_table) throw new Error('Таблица не выбрана');
       const ok = confirm(`Удалить версию контракта v${version}?`);
       if (!ok) return;
@@ -260,6 +282,10 @@
     } catch (e: any) {
       contracts_error = e?.message ?? String(e);
     }
+  }
+
+  function pickContractVersion(version: number) {
+    selectedContractVersion = Number(version || 0);
   }
 
   function openAddColumnModal() {
@@ -745,19 +771,25 @@
       {#if contractVersions.length === 0}
         <p class="hint">Версии контракта не найдены.</p>
       {:else}
-        <div class="list templates-list">
+        <div class="list contracts-list">
           {#each contractVersions as c}
-            <div class="row-item">
-              <div class="item-button">
+            <div class="row-item" class:activeitem={isSelectedContractVersion(c.version)}>
+              <button class="item-button" on:click={() => pickContractVersion(c.version)}>
                 v{c.version}
                 {#if c.lifecycle_state === 'table_deleted'} · таблица удалена{/if}
+              </button>
+              <div class="row-actions">
+                {#if isActiveContractVersion(c.version)}
+                  <span class="system-badge">Active</span>
+                {:else}
+                  <button
+                    class="danger icon-btn"
+                    on:click={() => deleteContractVersion(c.version)}
+                    disabled={!canDeleteContractVersion(c.version)}
+                    title="Удалить версию контракта"
+                  >x</button>
+                {/if}
               </div>
-              <button
-                class="danger icon-btn"
-                on:click={() => deleteContractVersion(c.version)}
-                disabled={!canWrite()}
-                title="Удалить версию контракта"
-              >x</button>
             </div>
           {/each}
         </div>
@@ -884,10 +916,15 @@
   .tables-list .row-item { background:#0f172a; border-color:#0f172a; }
   .tables-list .item-button { color:#fff; }
   .tables-list .system-badge { border-color:#334155; color:#e2e8f0; background:#1e293b; }
-  .templates-list .row-item { background:#0f172a; border-color:#0f172a; }
-  .templates-list .item-button { color:#fff; }
+  .contracts-list .row-item { background:#0f172a; border-color:#0f172a; }
+  .contracts-list .item-button { color:#fff; }
+  .contracts-list .icon-btn { color:#fff; }
   .tables-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
   .tables-list .activeitem .item-button { color:#0f172a; }
+  .contracts-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
+  .contracts-list .activeitem .item-button { color:#0f172a; font-weight:600; }
+  .contracts-list .activeitem .item-button::before { content:'●'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
+  .contracts-list .activeitem .icon-btn { color:#b91c1c; }
 
   .main { min-width:0; }
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; }
