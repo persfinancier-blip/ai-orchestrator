@@ -1,5 +1,7 @@
 ﻿<!-- File: core/orchestrator/modules/advertising/interface/desk/tabs/TablesAndDataTab.svelte -->
 <script lang="ts">
+  import { onMount } from 'svelte';
+
   export type Role = 'viewer' | 'operator' | 'data_admin';
   export type ExistingTable = { schema_name: string; table_name: string };
   export type ColumnMeta = { name: string; type: string; description?: string; is_nullable?: boolean };
@@ -33,6 +35,14 @@
 
   let newRow: Record<string, string> = {};
   let rename_table_name = '';
+  let templates_loading = false;
+  let templates_error = '';
+  let tableTemplateNames: string[] = [];
+
+  const TABLE_TEMPLATES_KEY = 'ao_create_table_templates_v1';
+  const TABLE_TEMPLATES_STORAGE_KEY = 'ao_create_table_templates_storage_v1';
+  const STORAGE_DEFAULT_SCHEMA = 'ao_system';
+  const STORAGE_DEFAULT_TABLE = 'table_templates_store';
 
   function canWrite(): boolean {
     return role === 'data_admin';
@@ -80,6 +90,54 @@
   async function refreshPreviewAll() {
     await loadColumns();
     await loadPreview();
+  }
+
+  function parseStorageConfig() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(TABLE_TEMPLATES_STORAGE_KEY) || '{}');
+      const schema = String(raw?.schema || '').trim() || STORAGE_DEFAULT_SCHEMA;
+      const table = String(raw?.table || '').trim() || STORAGE_DEFAULT_TABLE;
+      return { schema, table };
+    } catch {
+      return { schema: STORAGE_DEFAULT_SCHEMA, table: STORAGE_DEFAULT_TABLE };
+    }
+  }
+
+  function loadTemplateNamesFromLocalStorage() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(TABLE_TEMPLATES_KEY) || '[]');
+      const fromLocal = Array.isArray(raw)
+        ? raw.map((x: any) => String(x?.name || '').trim()).filter(Boolean)
+        : [];
+      const all = ['Bronze', 'Silver', ...fromLocal];
+      tableTemplateNames = Array.from(new Set(all.map((x) => x.trim()).filter(Boolean)));
+      templates_error = '';
+    } catch {
+      tableTemplateNames = ['Bronze', 'Silver'];
+      templates_error = '';
+    }
+  }
+
+  async function loadTemplatesPanel() {
+    templates_loading = true;
+    templates_error = '';
+    try {
+      const { schema, table } = parseStorageConfig();
+      const j = await apiJson<{ rows: any[] }>(
+        `${apiBase}/preview?schema=${encodeURIComponent(schema)}&table=${encodeURIComponent(table)}&limit=5000`
+      );
+      const rows = Array.isArray(j?.rows) ? j.rows : [];
+      const fromDb = rows
+        .map((r: any) => String(r?.template_name || '').trim())
+        .filter((name: string) => Boolean(name));
+
+      const all = ['Bronze', 'Silver', ...fromDb];
+      tableTemplateNames = Array.from(new Set(all.map((x) => x.trim()).filter(Boolean)));
+    } catch {
+      loadTemplateNamesFromLocalStorage();
+    } finally {
+      templates_loading = false;
+    }
   }
 
   function openAddColumnModal() {
@@ -245,6 +303,10 @@
       modal_error = e?.message ?? String(e);
     }
   }
+
+  onMount(() => {
+    loadTemplatesPanel();
+  });
 </script>
 
 <section class="panel">
@@ -402,13 +464,32 @@
     <aside class="aside">
       <div class="aside-head">
         <div class="aside-title">Шаблоны таблиц</div>
-        <button class="icon-btn refresh-btn" on:click={refreshTables} disabled={loading} title="Обновить список">↻</button>
+        <button
+          class="icon-btn refresh-btn"
+          on:click={loadTemplatesPanel}
+          disabled={templates_loading}
+          title="Обновить шаблоны"
+        >↻</button>
       </div>
       <div class="storage-meta">
         <span>Хранятся в таблице:</span>
         <span class="plain-value">ao_system.table_templates_store</span>
       </div>
       <p class="hint">Управление шаблонами выполняется на вкладке «Создание».</p>
+      {#if tableTemplateNames.length === 0}
+        <p class="hint">Шаблоны не найдены.</p>
+      {:else}
+        <div class="list templates-list">
+          {#each tableTemplateNames as name}
+            <div class="row-item">
+              <div class="item-button">{name}</div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+      {#if templates_error}
+        <p class="hint">{templates_error}</p>
+      {/if}
     </aside>
   </div>
 </section>
@@ -522,6 +603,8 @@
   .activeitem .item-button::before { content:'●'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
   .tables-list .row-item { background:#0f172a; border-color:#0f172a; }
   .tables-list .item-button { color:#fff; }
+  .templates-list .row-item { background:#0f172a; border-color:#0f172a; }
+  .templates-list .item-button { color:#fff; }
   .tables-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
   .tables-list .activeitem .item-button { color:#0f172a; }
 
