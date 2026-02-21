@@ -163,6 +163,16 @@
     return o;
   }
 
+  function authFieldsToRawObject(fields: AuthTemplateField[]): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const f of fields || []) {
+      const k = String(f?.key || '').trim();
+      if (!k) continue;
+      out[k] = String(f?.value ?? '');
+    }
+    return out;
+  }
+
   function flattenBodyObject(obj: any, prefix = '', out: BodyRow[] = []): BodyRow[] {
     if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
       for (const [k, v] of Object.entries(obj)) {
@@ -208,11 +218,7 @@
     authTemplateRows = (t.fields || []).map((f) => ({ id: uid(), key: f.key, value: f.value }));
     const matched = authTemplates.find((x) => x.name === t.name);
     selectedAuthTemplateId = matched?.id || '';
-    authRawDraft = JSON.stringify(
-      { name: t.name || '', type: t.type || 'custom', fields: t.fields || [] },
-      null,
-      2
-    );
+    authRawDraft = JSON.stringify(authFieldsToRawObject(t.fields || []), null, 2);
     authRawError = '';
     settingsRawDraft = JSON.stringify({ pagination: selected.pagination || {} }, null, 2);
     scriptRawDraft = scriptRawDraft || '';
@@ -292,14 +298,13 @@
     authRawTouched = true;
     try {
       const a = safeJsonParse(authRawDraft);
-      const fields = Array.isArray(a?.fields)
-        ? a.fields.map((f: any) => ({ key: String(f?.key || ''), value: String(f?.value || '') }))
-        : [];
-      const next: AuthTemplateModel = {
-        name: String(a?.name || ''),
-        type: String(a?.type || 'custom'),
-        fields
-      };
+      if (!a || typeof a !== 'object' || Array.isArray(a)) throw new Error('bad_raw');
+      const fields = Object.entries(a).map(([key, value]) => ({
+        key: String(key || ''),
+        value: String(value ?? '')
+      }));
+      const next: AuthTemplateModel = canonicalAuthTemplateFromLeft(selected);
+      next.fields = fields;
       authSyncLock = 'right';
       authTemplateRows = next.fields.map((f) => ({ id: uid(), key: f.key, value: f.value }));
       mutateSelected((s) => {
@@ -315,13 +320,13 @@
   }
 
   function canonicalAuthTemplateFromLeft(source: ApiSource | null): AuthTemplateModel {
-    const cur = source?.authTemplate || { name: '', type: 'custom', fields: [] };
+    const cur = source?.authTemplate || { name: '', type: 'header', fields: [] };
     const fields = authTemplateRows
       .map((r) => ({ key: (r.key || '').trim(), value: r.value || '' }))
       .filter((r) => r.key.length > 0);
     return {
       name: String(cur.name || ''),
-      type: String(cur.type || 'custom'),
+      type: String(cur.type || 'header'),
       fields
     };
   }
@@ -331,7 +336,7 @@
     if (authSyncLock === 'right') return;
     authSyncLock = 'left';
     const next = canonicalAuthTemplateFromLeft(selected);
-    authRawDraft = JSON.stringify(next, null, 2);
+    authRawDraft = JSON.stringify(authFieldsToRawObject(next.fields), null, 2);
     authRawError = '';
     mutateSelected((s) => {
       s.authTemplate = { ...next, fields: [...next.fields] };
@@ -433,9 +438,8 @@
       err = 'Сначала исправьте RAW JSON';
       return;
     }
-    let rawTemplate: any = {};
     try {
-      rawTemplate = safeJsonParse(authRawDraft);
+      const rawTemplate = safeJsonParse(authRawDraft);
       if (!rawTemplate || typeof rawTemplate !== 'object' || Array.isArray(rawTemplate)) {
         err = 'RAW должен быть JSON-объектом';
         return;
@@ -446,8 +450,8 @@
     }
     const left = canonicalAuthTemplateFromLeft(selected);
     const t: AuthTemplateModel = {
-      name: String(selected.authTemplate?.name || rawTemplate?.name || '').trim(),
-      type: String(selected.authTemplate?.type || rawTemplate?.type || 'header'),
+      name: String(selected.authTemplate?.name || '').trim(),
+      type: String(selected.authTemplate?.type || 'header'),
       fields: left.fields
     };
     if (!t.name.trim()) {
@@ -483,7 +487,7 @@
     mutateSelected((s) => {
       s.authTemplate = { name: t.name, type: t.type, fields: t.fields.map((f) => ({ ...f })) };
     });
-    authRawDraft = JSON.stringify({ name: t.name, type: t.type, fields: t.fields }, null, 2);
+    authRawDraft = JSON.stringify(authFieldsToRawObject(t.fields), null, 2);
     authRawError = '';
     authSyncLock = null;
   }
@@ -1367,7 +1371,7 @@
                     class:invalid={!!authRawError}
                     bind:this={authRawEl}
                     bind:value={authRawDraft}
-                    placeholder="JSON шаблон авторизации"
+                    placeholder={'{"Authorization":"Bearer ..."}'}
                     on:input={() => { authRawTouched = true; scheduleParseAuthRaw(); }}
                     on:blur={parseAuthRaw}
                   ></textarea>
