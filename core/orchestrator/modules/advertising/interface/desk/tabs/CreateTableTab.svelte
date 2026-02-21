@@ -1,6 +1,6 @@
 ﻿<!-- File: core/orchestrator/modules/advertising/interface/desk/tabs/CreateTableTab.svelte -->
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
 
   export type Role = 'viewer' | 'operator' | 'data_admin';
   export type ExistingTable = { schema_name: string; table_name: string };
@@ -43,6 +43,7 @@
   let schema_name = '';
   let table_name = '';
   let description = '';
+  let descriptionEl: HTMLTextAreaElement | null = null;
   let table_class = 'custom';
   let columns: ColumnDef[] = [{ field_name: '', field_type: 'text', description: '' }];
   let partition_enabled = false;
@@ -354,7 +355,16 @@
 
   onMount(() => {
     loadTableTemplates();
+    tick().then(syncDescriptionHeight);
   });
+
+  function syncDescriptionHeight() {
+    if (!descriptionEl) return;
+    descriptionEl.style.height = 'auto';
+    descriptionEl.style.height = `${Math.max(descriptionEl.scrollHeight, 72)}px`;
+  }
+
+  $: description, tick().then(syncDescriptionHeight);
 </script>
 
 {#if error}
@@ -392,18 +402,8 @@
 
     <div class="main">
       <div class="card">
-        <div class="form">
-          <label>
-            Схема
-            <input bind:value={schema_name} placeholder="например: showcase / bronze / silver_adv" />
-          </label>
-
-          <label>
-            Таблица
-            <input bind:value={table_name} placeholder="например: advertising" />
-          </label>
-
-          <label>
+        <div class="form create-form">
+          <label class="w20">
             Класс (для себя)
             <select bind:value={table_class}>
               <option value="custom">custom</option>
@@ -413,9 +413,25 @@
             </select>
           </label>
 
-          <label>
-            Описание
-            <input bind:value={description} placeholder="что это за таблица" />
+          <label class="w20">
+            Схема
+            <input bind:value={schema_name} placeholder="например: showcase / bronze / silver_adv" />
+          </label>
+
+          <label class="w60">
+            Название таблицы
+            <input bind:value={table_name} placeholder="например: advertising" />
+          </label>
+
+          <label class="w100">
+            Описание таблицы
+            <textarea
+              bind:this={descriptionEl}
+              bind:value={description}
+              rows="2"
+              placeholder="что это за таблица"
+              on:input={syncDescriptionHeight}
+            ></textarea>
           </label>
         </div>
 
@@ -550,9 +566,13 @@
   .subcard h3 { margin:0 0 8px 0; font-size:14px; }
 
   .form { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+  .create-form { grid-template-columns: 1fr 1fr 3fr; }
+  .create-form .w20, .create-form .w60, .create-form .w100 { min-width:0; }
+  .create-form .w100 { grid-column: 1 / -1; }
   @media (max-width: 1100px) { .form { grid-template-columns: 1fr; } }
   label { display:flex; flex-direction:column; gap:6px; font-size:13px; }
-  input, select { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; outline:none; background:#fff; box-sizing:border-box; }
+  input, select, textarea { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; outline:none; background:#fff; box-sizing:border-box; }
+  .create-form textarea { min-height:72px; resize:none; overflow:hidden; }
 
   .field-row { display:grid; grid-template-columns: 1.2fr .8fr 1.6fr auto; gap:8px; margin-top:10px; }
   @media (max-width: 1100px) { .field-row { grid-template-columns: 1fr; } }
