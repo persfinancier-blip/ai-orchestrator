@@ -71,6 +71,7 @@
   let result_is_success = false;
   let creating = false;
   let refreshingTables = false;
+  let refreshingTemplates = false;
   let tablesSignature = '';
 
   function uid() {
@@ -97,6 +98,15 @@
       }
     } finally {
       refreshingTables = false;
+    }
+  }
+
+  async function refreshTemplatesPanel() {
+    refreshingTemplates = true;
+    try {
+      await loadTableTemplates();
+    } finally {
+      refreshingTemplates = false;
     }
   }
 
@@ -811,7 +821,15 @@
     </div>
 
     <aside class="aside">
-      <div class="aside-title">Шаблоны таблиц</div>
+      <div class="aside-head">
+        <div class="aside-title">Шаблоны таблиц</div>
+        <button
+          class="icon-btn refresh-btn"
+          on:click={refreshTemplatesPanel}
+          disabled={refreshingTemplates}
+          title="Обновить шаблоны"
+        >↻</button>
+      </div>
       <div class="storage-meta templates-meta">
         <span>Хранятся в таблице:</span>
         <button class="link-btn" on:click={() => { storage_picker_open = !storage_picker_open; storage_pick_value = `${storage_schema}.${storage_table}`; }}>
@@ -876,7 +894,7 @@
 
   .aside { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#f8fafc; }
   .aside-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
-  .aside-title { font-weight:700; font-size:14px; line-height:1.3; margin-bottom:8px; }
+  .aside-title { font-weight:700; font-size:14px; line-height:1.3; margin-bottom:0; }
   .list { display:flex; flex-direction:column; gap:8px; overflow:visible; max-height:none; }
   .row-item { display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; border:1px solid #e6eaf2; border-radius:14px; background:#fff; padding:10px 12px; }
   .row-name { font-weight:400; font-size:14px; line-height:1.3; word-break:break-word; }
@@ -933,8 +951,8 @@
   .actions { margin-top:14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
   .template-controls { display:flex; flex-direction:column; gap:8px; margin-bottom:8px; }
   .inline-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  .storage-meta { margin-top:-2px; margin-bottom:8px; display:flex; align-items:center; gap:6px; font-size:12px; color:#64748b; }
-  .templates-meta { margin-top:6px; }
+  .storage-meta { margin-top:0; margin-bottom:8px; display:flex; align-items:center; gap:6px; font-size:12px; color:#64748b; }
+  .templates-meta { margin-top:0; }
   .link-btn { border:0; background:transparent; color:#0f172a; padding:0; text-decoration:underline; font-size:12px; font-weight:500; }
   .plain-value { color:#0f172a; font-size:12px; font-weight:500; }
   .storage-picker { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
