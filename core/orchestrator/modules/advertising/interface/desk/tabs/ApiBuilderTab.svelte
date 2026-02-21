@@ -523,6 +523,19 @@
     err = '';
   }
 
+  function startNewAuthTemplate() {
+    if (!selected) return;
+    selectedAuthTemplateId = '';
+    authTemplateNameDraft = '';
+    authTemplateRows = [];
+    mutateSelected((s) => {
+      s.authTemplate = { name: '', type: 'header', fields: [] };
+    });
+    authRawDraft = '{}';
+    authRawError = '';
+    err = '';
+  }
+
   function applySelectedAuthTemplate(id: string) {
     selectedAuthTemplateId = id;
     const t = authTemplates.find((x) => x.id === id);
@@ -1365,6 +1378,8 @@
                         <option value={t.id}>{t.name} ({authTypeLabel(t.type)})</option>
                       {/each}
                     </select>
+                    <button class="quarter" on:click={startNewAuthTemplate}>Добавить шаблон</button>
+                    <button class="danger icon-btn" on:click={deleteCurrentAuthTemplate}>x</button>
                   </div>
                   <div class="auth-fields">
                     <div class="auth-rows">
@@ -1398,7 +1413,7 @@
                       on:input={(e) => setAuthTemplateName(e.currentTarget.value)}
                     />
                     <button class="quarter" on:click={saveCurrentAuthTemplate}>Сохранить шаблон</button>
-                    <button class="danger" on:click={deleteCurrentAuthTemplate}>Удалить шаблон</button>
+                    <button class="danger icon-btn" on:click={deleteCurrentAuthTemplate}>x</button>
                   </div>
                   <div class="auth-right-controls">
                     <select
@@ -1751,11 +1766,12 @@
   @media (max-width: 1100px) { .method-url { grid-template-columns: 1fr; } }
   .auth-split { display:grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap:12px; align-items:start; }
   .auth-left, .auth-right { min-width: 0; }
-  .auth-top { height: 42px; display:flex; align-items:stretch; justify-content:flex-start; }
+  .auth-top { display:grid; grid-template-columns: 1fr minmax(170px, 26%) 44px; gap:10px; align-items:center; }
   .auth-top .quarter { width:100%; min-width:0; max-width:none; }
   .auth-top select { width:100%; }
-  .auth-right-top { display:grid; grid-template-columns: 1fr minmax(170px, 26%) minmax(150px, 22%); gap:10px; align-items:center; margin-bottom:10px; }
+  .auth-right-top { display:grid; grid-template-columns: 1fr minmax(170px, 26%) 44px; gap:10px; align-items:center; margin-bottom:10px; }
   .auth-right-controls { display:flex; flex-direction:column; gap:8px; margin-bottom:10px; }
+  .icon-btn { width:44px; min-width:44px; padding:10px 0; text-transform:uppercase; }
   .auth-name-input { min-width:0; }
   .auth-fields { display:flex; flex-direction:column; gap:10px; margin-top:10px; }
   .auth-fields input, .auth-right textarea { width:100%; }
@@ -1765,7 +1781,7 @@
   .auth-row .val-col { min-width:0; }
   .auth-right textarea { resize:none; overflow:hidden; max-width:100%; }
   .auth-right textarea.invalid { border-color:#ef4444; background:#fff5f5; }
-  @media (max-width: 1400px) { .auth-right-top { grid-template-columns: 1fr; } }
+  @media (max-width: 1400px) { .auth-top, .auth-right-top { grid-template-columns: 1fr; } .icon-btn { width:100%; min-width:0; } }
   @media (max-width: 1100px) { .auth-split { grid-template-columns: 1fr; } }
 
   label { display:flex; flex-direction:column; gap:6px; font-size:13px; }
