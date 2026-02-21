@@ -86,7 +86,7 @@
   }
 
   function canEditSelectedTable(): boolean {
-    return canWrite() && !isSystemTable(preview_schema, preview_table);
+    return canWrite();
   }
 
   async function parseContractsStorageConfig() {
@@ -699,15 +699,6 @@
             </table>
             </div>
 
-            {#if !canEditSelectedTable()}
-              <p class="hint">
-                {#if !canWrite()}
-                  Редактирование доступно только при роли <b>data_admin</b>.
-                {:else}
-                  Системная таблица защищена от редактирования.
-                {/if}
-              </p>
-            {/if}
           {/if}
         {/if}
       </div>
