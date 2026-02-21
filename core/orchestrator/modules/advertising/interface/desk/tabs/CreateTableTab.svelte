@@ -787,7 +787,7 @@
             </div>
           {/each}
           <div class="fields-footer">
-            <button on:click={addField}>+ Добавить поле</button>
+            <button class="add-field-icon" on:click={addField} title="Добавить поле" aria-label="Добавить поле">+</button>
           </div>
         </div>
 
@@ -904,6 +904,7 @@
   .field-row { display:grid; grid-template-columns: 1.2fr .8fr 1.6fr auto; gap:8px; margin-top:10px; }
   @media (max-width: 1100px) { .field-row { grid-template-columns: 1fr; } }
   .fields-footer { margin-top:12px; }
+  .add-field-icon { width:44px; min-width:44px; padding:10px 0; font-size:20px; line-height:1; }
 
   .partition-toggle { display:flex; align-items:flex-start; justify-content:flex-start; }
   .partition-btn {
