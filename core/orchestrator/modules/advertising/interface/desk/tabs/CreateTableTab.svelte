@@ -908,7 +908,7 @@
   .field-row { display:grid; grid-template-columns: 1.2fr .8fr 1.6fr auto; gap:8px; margin-top:10px; }
   @media (max-width: 1100px) { .field-row { grid-template-columns: 1fr; } }
   .fields-footer { margin-top:12px; }
-  .add-field-icon { width:44px; min-width:44px; padding:10px 0; font-size:20px; line-height:1; }
+  .add-field-icon { width:44px; min-width:44px; padding:10px 0; font-size:20px; line-height:1; border-color:transparent; background:transparent; }
 
   .partition-toggle { display:flex; align-items:flex-start; justify-content:flex-start; }
   .partition-btn {
