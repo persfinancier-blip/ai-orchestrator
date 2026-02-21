@@ -230,7 +230,8 @@
         return;
       }
       const j = await apiJson<{ contracts: any[] }>(
-        `${apiBase}/contracts?schema=${encodeURIComponent(preview_schema)}&table=${encodeURIComponent(preview_table)}`
+        `${apiBase}/contracts?schema=${encodeURIComponent(preview_schema)}&table=${encodeURIComponent(preview_table)}`,
+        { headers: headers() }
       );
       const rows = Array.isArray(j?.contracts) ? j.contracts : [];
       contractVersions = rows
