@@ -383,7 +383,7 @@
           partition_interval: String(r?.partition_interval || 'day') === 'month' ? 'month' : 'day',
           contract_version: Number(r?.contract_version || 1) > 0 ? Number(r?.contract_version || 1) : 1,
           contract_mode: rawMode === 'strict_sync' ? 'strict_sync' : 'safe_add_only',
-          storage_ctids: r?.ctid ? [String(r.ctid)] : []
+          storage_ctids: r?.__ctid ? [String(r.__ctid)] : []
         });
       }
       tableTemplates = [bronzeTemplate(), silverTemplate(), storageSystemTemplate(), contractsSystemTemplate(), ...custom];
@@ -470,11 +470,11 @@
       (r) => String(r?.contract_name || r?.template_name || '').trim().toLowerCase() === t.name.toLowerCase()
     );
     for (const r of found) {
-      if (r?.ctid) {
+      if (r?.__ctid) {
         await apiJson(`${apiBase}/rows/delete`, {
           method: 'POST',
           headers: headers(),
-          body: JSON.stringify({ schema: storage_schema, table: storage_table, ctid: String(r.ctid) })
+          body: JSON.stringify({ schema: storage_schema, table: storage_table, ctid: String(r.__ctid) })
         });
       }
     }
@@ -512,11 +512,11 @@
       (r) => String(r?.contract_name || r?.template_name || '').trim().toLowerCase() === templateName.toLowerCase()
     );
     for (const r of found) {
-      if (r?.ctid) {
+      if (r?.__ctid) {
         await apiJson(`${apiBase}/rows/delete`, {
           method: 'POST',
           headers: headers(),
-          body: JSON.stringify({ schema: storage_schema, table: storage_table, ctid: String(r.ctid) })
+          body: JSON.stringify({ schema: storage_schema, table: storage_table, ctid: String(r.__ctid) })
         });
       }
     }
