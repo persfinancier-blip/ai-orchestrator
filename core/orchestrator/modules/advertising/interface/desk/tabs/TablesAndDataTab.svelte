@@ -54,6 +54,7 @@
   let contracts_error = '';
   let contractVersions: ContractVersion[] = [];
   let selectedContractVersion = 0;
+  let selectedContractCtid = '';
   let activeContractVersion = 0;
   let contracts_storage_schema = 'ao_system';
   let contracts_storage_table = 'table_data_contract_versions';
@@ -237,21 +238,26 @@
         .sort((a, b) => b.version - a.version);
       const active = contractVersions.find((x) => String(x.lifecycle_state || '').trim() === 'active');
       activeContractVersion = Number(active?.version || contractVersions[0]?.version || 0);
-      if (!contractVersions.some((x) => Number(x.version) === Number(selectedContractVersion))) {
+      if (
+        !selectedContractCtid ||
+        !contractVersions.some((x) => String(x.__ctid || `v:${x.version}`) === selectedContractCtid)
+      ) {
         selectedContractVersion = activeContractVersion;
+        selectedContractCtid = String(active?.__ctid || `v:${activeContractVersion}`);
       }
     } catch (e: any) {
       contracts_error = e?.message ?? String(e);
       contractVersions = [];
       selectedContractVersion = 0;
+      selectedContractCtid = '';
       activeContractVersion = 0;
     } finally {
       contracts_loading = false;
     }
   }
 
-  function isSelectedContractVersion(version: number) {
-    return Number(version) === Number(selectedContractVersion);
+  function isSelectedContract(c: ContractVersion) {
+    return String(c?.__ctid || `v:${c?.version || 0}`) === selectedContractCtid;
   }
 
   function isActiveContractVersion(version: number) {
@@ -284,8 +290,9 @@
     }
   }
 
-  function pickContractVersion(version: number) {
-    selectedContractVersion = Number(version || 0);
+  function pickContractVersion(contract: ContractVersion) {
+    selectedContractVersion = Number(contract?.version || 0);
+    selectedContractCtid = String(contract?.__ctid || `v:${contract?.version || 0}`);
   }
 
   function openAddColumnModal() {
@@ -768,8 +775,8 @@
       {:else}
         <div class="list contracts-list">
           {#each contractVersions as c}
-            <div class="row-item" class:activeitem={isSelectedContractVersion(c.version)} class:contract-selected={isSelectedContractVersion(c.version)}>
-              <button class="item-button" on:click={() => pickContractVersion(c.version)}>
+            <div class="row-item" class:activeitem={isSelectedContract(c)} class:contract-selected={isSelectedContract(c)}>
+              <button class="item-button" type="button" on:click={() => pickContractVersion(c)}>
                 v{c.version}
                 {#if c.lifecycle_state === 'table_deleted'} · таблица удалена{/if}
               </button>
