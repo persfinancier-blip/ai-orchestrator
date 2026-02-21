@@ -433,9 +433,10 @@
       err = 'Сначала исправьте RAW JSON';
       return;
     }
+    let rawTemplate: any = {};
     try {
-      const raw = safeJsonParse(authRawDraft);
-      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      rawTemplate = safeJsonParse(authRawDraft);
+      if (!rawTemplate || typeof rawTemplate !== 'object' || Array.isArray(rawTemplate)) {
         err = 'RAW должен быть JSON-объектом';
         return;
       }
@@ -443,7 +444,12 @@
       err = 'Сначала исправьте RAW JSON';
       return;
     }
-    const t = canonicalAuthTemplateFromLeft(selected);
+    const left = canonicalAuthTemplateFromLeft(selected);
+    const t: AuthTemplateModel = {
+      name: String(selected.authTemplate?.name || rawTemplate?.name || '').trim(),
+      type: String(selected.authTemplate?.type || rawTemplate?.type || 'header'),
+      fields: left.fields
+    };
     if (!t.name.trim()) {
       err = 'Введите название шаблона типа подключения';
       return;
