@@ -77,6 +77,10 @@
     return `${String(schema || '').trim()}.${String(table || '').trim()}` === SETTINGS_SYSTEM_TABLE;
   }
 
+  function canEditSelectedTable(): boolean {
+    return canWrite() && !isSettingsSystemTable(preview_schema, preview_table);
+  }
+
   async function parseContractsStorageConfig() {
     contracts_storage_schema = 'ao_system';
     contracts_storage_table = 'table_data_contract_versions';
@@ -232,6 +236,7 @@
   }
 
   function openAddColumnModal() {
+    if (!canEditSelectedTable()) return;
     modal_error = '';
     new_col_name = '';
     new_col_type = 'text';
@@ -242,7 +247,7 @@
   async function addColumnToTable() {
     modal_error = '';
     try {
-      if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
+      if (!canEditSelectedTable()) throw new Error('Системную таблицу нельзя редактировать');
       if (!preview_schema || !preview_table) throw new Error('Таблица не выбрана');
       if (!new_col_name.trim()) throw new Error('Укажи имя столбца');
 
@@ -267,6 +272,7 @@
   }
 
   function confirmDropColumn(name: string) {
+    if (!canEditSelectedTable()) return;
     modal_error = '';
     pending_drop_column = name;
     modal = 'confirmDropColumn';
@@ -275,7 +281,7 @@
   async function dropColumnNow() {
     modal_error = '';
     try {
-      if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
+      if (!canEditSelectedTable()) throw new Error('Системную таблицу нельзя редактировать');
       if (!preview_schema || !preview_table) throw new Error('Таблица не выбрана');
       if (!pending_drop_column) throw new Error('Колонка не выбрана');
 
@@ -325,7 +331,7 @@
   async function addRowNow() {
     preview_error = '';
     try {
-      if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
+      if (!canEditSelectedTable()) throw new Error('Системную таблицу нельзя редактировать');
       if (!preview_schema || !preview_table) throw new Error('Таблица не выбрана');
 
       const row: Record<string, any> = {};
@@ -347,7 +353,7 @@
   async function saveTableName() {
     preview_error = '';
     try {
-      if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
+      if (!canEditSelectedTable()) throw new Error('Системную таблицу нельзя редактировать');
       if (!preview_schema || !preview_table) throw new Error('Таблица не выбрана');
       const nextName = rename_table_name.trim();
       if (!nextName) throw new Error('Укажи новое название таблицы');
@@ -374,6 +380,7 @@
   }
 
   function confirmDeleteRow(ctid: string) {
+    if (!canEditSelectedTable()) return;
     modal_error = '';
     pending_delete_row_ctid = ctid;
     modal = 'confirmDeleteRow';
@@ -382,7 +389,7 @@
   async function deleteRowNow() {
     modal_error = '';
     try {
-      if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
+      if (!canEditSelectedTable()) throw new Error('Системную таблицу нельзя редактировать');
       if (!preview_schema || !preview_table) throw new Error('Таблица не выбрана');
       if (!pending_delete_row_ctid) throw new Error('CTID не задан');
 
@@ -506,9 +513,9 @@
               class="rename-input"
               bind:value={rename_table_name}
               placeholder="Название таблицы"
-              disabled={!canWrite()}
+              disabled={!canEditSelectedTable()}
             />
-            <button class="primary" on:click={saveTableName} disabled={!canWrite()}>Сохранить</button>
+            <button class="primary" on:click={saveTableName} disabled={!canEditSelectedTable()}>Сохранить</button>
           </div>
         {/if}
 
@@ -534,7 +541,7 @@
                         <button
                           class="xbtn"
                           on:click={() => confirmDropColumn(c.name)}
-                          disabled={!canWrite()}
+                          disabled={!canEditSelectedTable()}
                           title="Удалить столбец"
                         >
                           x
@@ -543,7 +550,7 @@
                     </th>
                   {/each}
                   <th class="thadd">
-                    <button class="plusbtn" on:click={openAddColumnModal} disabled={!canWrite()} title="Добавить столбец">+</button>
+                    <button class="plusbtn" on:click={openAddColumnModal} disabled={!canEditSelectedTable()} title="Добавить столбец">+</button>
                   </th>
                 </tr>
               </thead>
@@ -560,7 +567,7 @@
                         <td>{typeof r[c.name] === 'object' ? JSON.stringify(r[c.name]) : String(r[c.name] ?? '')}</td>
                       {/each}
                       <td class="rowactions">
-                        <button class="trash" on:click={() => confirmDeleteRow(r.__ctid)} disabled={!canWrite()} title="Удалить строку">x</button>
+                        <button class="trash" on:click={() => confirmDeleteRow(r.__ctid)} disabled={!canEditSelectedTable()} title="Удалить строку">x</button>
                       </td>
                     </tr>
                   {/each}
@@ -571,19 +578,25 @@
                 <tr>
                   {#each preview_columns as c}
                     <td>
-                      <input class="cellinput" bind:value={newRow[c.name]} placeholder={c.type} disabled={!canWrite()} />
+                      <input class="cellinput" bind:value={newRow[c.name]} placeholder={c.type} disabled={!canEditSelectedTable()} />
                     </td>
                   {/each}
                   <td class="rowactions">
-                    <button class="addrow-icon" on:click={addRowNow} disabled={!canWrite()} title="Добавить строку">+</button>
+                    <button class="addrow-icon" on:click={addRowNow} disabled={!canEditSelectedTable()} title="Добавить строку">+</button>
                   </td>
                 </tr>
               </tfoot>
             </table>
             </div>
 
-            {#if !canWrite()}
-              <p class="hint">Редактирование доступно только при роли <b>data_admin</b>.</p>
+            {#if !canEditSelectedTable()}
+              <p class="hint">
+                {#if !canWrite()}
+                  Редактирование доступно только при роли <b>data_admin</b>.
+                {:else}
+                  Системная таблица защищена от редактирования.
+                {/if}
+              </p>
             {/if}
           {/if}
         {/if}
@@ -702,7 +715,7 @@
         {/if}
 
         <div class="modal-actions">
-          <button class="primary" on:click={addColumnToTable} disabled={!canWrite()}>Добавить</button>
+          <button class="primary" on:click={addColumnToTable} disabled={!canEditSelectedTable()}>Добавить</button>
           <button on:click={() => (modal = '')}>Отмена</button>
         </div>
 
@@ -718,7 +731,7 @@
         {/if}
 
         <div class="modal-actions">
-          <button class="danger" on:click={dropColumnNow} disabled={!canWrite()}>Удалить</button>
+          <button class="danger" on:click={dropColumnNow} disabled={!canEditSelectedTable()}>Удалить</button>
           <button on:click={() => (modal = '')}>Отмена</button>
         </div>
 
@@ -734,7 +747,7 @@
         {/if}
 
         <div class="modal-actions">
-          <button class="danger" on:click={deleteRowNow} disabled={!canWrite()}>Удалить</button>
+          <button class="danger" on:click={deleteRowNow} disabled={!canEditSelectedTable()}>Удалить</button>
           <button on:click={() => (modal = '')}>Отмена</button>
         </div>
       {/if}
