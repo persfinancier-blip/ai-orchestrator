@@ -1,4 +1,4 @@
-<!-- File: core/orchestrator/modules/advertising/interface/desk/DataDesk.svelte -->
+﻿<!-- File: core/orchestrator/modules/advertising/interface/desk/DataDesk.svelte -->
 <script lang="ts">
   import { onMount } from 'svelte';
 
@@ -21,7 +21,7 @@
   let error = '';
   let existingTables: ExistingTable[] = [];
   let dbStatus: 'checking' | 'ok' | 'error' = 'checking';
-  let dbStatusMessage = 'Проверка подключения к базе...';
+  let dbStatusMessage = 'РџСЂРѕРІРµСЂРєР° РїРѕРґРєР»СЋС‡РµРЅРёСЏ Рє Р±Р°Р·Рµ...';
 
   async function apiJson<T = any>(url: string, init?: RequestInit): Promise<T> {
     const res = await fetch(url, init);
@@ -52,16 +52,24 @@
     loading = true;
     error = '';
     dbStatus = 'checking';
-    dbStatusMessage = 'Проверка подключения к базе...';
+    dbStatusMessage = 'РџСЂРѕРІРµСЂРєР° РїРѕРґРєР»СЋС‡РµРЅРёСЏ Рє Р±Р°Р·Рµ...';
     try {
-      const j = await apiJson<{ existing_tables: ExistingTable[] }>(`${API_BASE}/tables`);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      const j = await apiJson<{ existing_tables: ExistingTable[] }>(`${API_BASE}/tables`, {
+        headers: { 'X-AO-ROLE': role },
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
       existingTables = j.existing_tables || [];
       dbStatus = 'ok';
-      dbStatusMessage = `Подключение к базе: OK. Таблиц доступно: ${existingTables.length}.`;
+      dbStatusMessage = `РџРѕРґРєР»СЋС‡РµРЅРёРµ Рє Р±Р°Р·Рµ: OK. РўР°Р±Р»РёС† РґРѕСЃС‚СѓРїРЅРѕ: ${existingTables.length}.`;
     } catch (e: any) {
-      error = e?.message ?? String(e);
+      error = e?.name === 'AbortError'
+        ? 'Таймаут проверки подключения к базе.'
+        : (e?.message ?? String(e));
       dbStatus = 'error';
-      dbStatusMessage = `Подключение к базе: ошибка. ${error}`;
+      dbStatusMessage = `РџРѕРґРєР»СЋС‡РµРЅРёРµ Рє Р±Р°Р·Рµ: РѕС€РёР±РєР°. ${error}`;
     } finally {
       loading = false;
     }
@@ -78,15 +86,15 @@
 <div class="page">
   <header class="top">
     <div>
-      <h1>Конструктор таблиц</h1>
+      <h1>РљРѕРЅСЃС‚СЂСѓРєС‚РѕСЂ С‚Р°Р±Р»РёС†</h1>
       <p class="sub">
-        Создание/редактирование таблиц. Отдельно: будущий конструктор API и будущий workflow “Управление данными”.
+        РЎРѕР·РґР°РЅРёРµ/СЂРµРґР°РєС‚РёСЂРѕРІР°РЅРёРµ С‚Р°Р±Р»РёС†. РћС‚РґРµР»СЊРЅРѕ: Р±СѓРґСѓС‰РёР№ РєРѕРЅСЃС‚СЂСѓРєС‚РѕСЂ API Рё Р±СѓРґСѓС‰РёР№ workflow вЂњРЈРїСЂР°РІР»РµРЅРёРµ РґР°РЅРЅС‹РјРёвЂќ.
       </p>
     </div>
 
     <div class="role">
-      <span>Роль:</span>
-      <select bind:value={role}>
+      <span>Р РѕР»СЊ:</span>
+      <select bind:value={role} on:change={refreshTables}>
         <option value="viewer">viewer</option>
         <option value="operator">operator</option>
         <option value="data_admin">data_admin</option>
@@ -95,15 +103,15 @@
   </header>
 
   <nav class="tabs">
-    <button class:active={tab === 'constructor'} on:click={() => (tab = 'constructor')}>Создание</button>
-    <button class:active={tab === 'tables'} on:click={() => (tab = 'tables')}>Таблицы и данные</button>
+    <button class:active={tab === 'constructor'} on:click={() => (tab = 'constructor')}>РЎРѕР·РґР°РЅРёРµ</button>
+    <button class:active={tab === 'tables'} on:click={() => (tab = 'tables')}>РўР°Р±Р»РёС†С‹ Рё РґР°РЅРЅС‹Рµ</button>
     <button class:active={tab === 'api_builder'} on:click={() => (tab = 'api_builder')}>API</button>
-    <button class:active={tab === 'data_management'} on:click={() => (tab = 'data_management')}>Управление данными</button>
+    <button class:active={tab === 'data_management'} on:click={() => (tab = 'data_management')}>РЈРїСЂР°РІР»РµРЅРёРµ РґР°РЅРЅС‹РјРё</button>
   </nav>
 
   {#if error}
     <div class="alert">
-      <div class="alert-title">Ошибка</div>
+      <div class="alert-title">РћС€РёР±РєР°</div>
       <pre>{error}</pre>
     </div>
   {/if}
@@ -160,3 +168,6 @@
   .alert-title { font-weight: 700; margin-bottom: 6px; }
   pre { margin:0; white-space: pre-wrap; word-break: break-word; }
 </style>
+
+
+
