@@ -85,6 +85,23 @@ function normalizeTypeName(type) {
   return String(type || '').toLowerCase().trim();
 }
 
+function parseStorageSettingValue(value) {
+  if (typeof value === 'string') {
+    const raw = value.trim();
+    if (!raw) return { schema: '', table: '' };
+    const dot = raw.indexOf('.');
+    if (dot > 0 && dot < raw.length - 1) {
+      return { schema: raw.slice(0, dot).trim(), table: raw.slice(dot + 1).trim() };
+    }
+    return { schema: '', table: '' };
+  }
+  const obj = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return {
+    schema: String(obj.schema ?? obj.schema_name ?? '').trim(),
+    table: String(obj.table ?? obj.table_name ?? '').trim()
+  };
+}
+
 async function hasRequiredColumns(client, schema, table, required) {
   const r = await client.query(
     `
@@ -176,9 +193,9 @@ async function ensureDefaultSettingsRows(client) {
 
 function applySettingValue(target, key, value) {
   if (key === 'contracts_storage') {
-    const obj = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-    target.contracts_schema = normalizeSettingIdent(obj.schema, target.contracts_schema);
-    target.contracts_table = normalizeSettingIdent(obj.table, target.contracts_table);
+    const parsed = parseStorageSettingValue(value);
+    target.contracts_schema = normalizeSettingIdent(parsed.schema, target.contracts_schema);
+    target.contracts_table = normalizeSettingIdent(parsed.table, target.contracts_table);
     return;
   }
   if (key === 'contracts_storage_schema') {
@@ -190,9 +207,9 @@ function applySettingValue(target, key, value) {
     return;
   }
   if (key === 'templates_storage') {
-    const obj = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-    target.templates_schema = normalizeSettingIdent(obj.schema, target.templates_schema);
-    target.templates_table = normalizeSettingIdent(obj.table, target.templates_table);
+    const parsed = parseStorageSettingValue(value);
+    target.templates_schema = normalizeSettingIdent(parsed.schema, target.templates_schema);
+    target.templates_table = normalizeSettingIdent(parsed.table, target.templates_table);
     return;
   }
   if (key === 'templates_storage_schema') {
