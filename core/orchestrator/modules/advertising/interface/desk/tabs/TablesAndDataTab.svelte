@@ -236,9 +236,8 @@
           created_at: String(r?.created_at || '')
         }))
         .sort((a, b) => b.version - a.version);
-      const active = contractVersions.find((x) => isActiveContract(x));
       if (!selectedContractId || !contractVersions.some((x) => contractRowId(x) === selectedContractId)) {
-        selectedContractId = contractRowId(active || contractVersions[0]);
+        selectedContractId = contractRowId(contractVersions[0]);
       }
     } catch (e: any) {
       contracts_error = e?.message ?? String(e);
@@ -253,18 +252,9 @@
     return contractRowId(c) === selectedContractId;
   }
 
-  function isActiveContract(c: ContractVersion | null | undefined) {
-    return String(c?.lifecycle_state || '').trim() === 'active';
-  }
-
-  function canDeleteContractVersion(c: ContractVersion | null | undefined) {
-    return canWrite() && !isActiveContract(c);
-  }
-
   async function deleteContractVersion(contract: ContractVersion) {
     try {
       if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
-      if (isActiveContract(contract)) throw new Error('Активную версию контракта удалить нельзя');
       if (!preview_schema || !preview_table) throw new Error('Таблица не выбрана');
       const version = Number(contract?.version || 0);
       const ok = confirm(`Удалить версию контракта v${version}?`);
@@ -777,16 +767,12 @@
                 {#if c.lifecycle_state === 'table_deleted'} · таблица удалена{/if}
               </button>
               <div class="row-actions">
-                {#if isActiveContract(c)}
-                  <span class="system-badge">Active</span>
-                {:else}
-                  <button
-                    class="danger icon-btn"
-                    on:click={() => deleteContractVersion(c)}
-                    disabled={!canDeleteContractVersion(c)}
-                    title="Удалить версию контракта"
-                  >x</button>
-                {/if}
+                <button
+                  class="danger icon-btn"
+                  on:click={() => deleteContractVersion(c)}
+                  disabled={!canWrite()}
+                  title="Удалить версию контракта"
+                >x</button>
               </div>
             </div>
           {/each}
