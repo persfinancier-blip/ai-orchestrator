@@ -16,6 +16,7 @@
 
   type Tab = 'constructor' | 'tables' | 'api_builder' | 'data_management';
   let tab: Tab = 'constructor';
+  let constructorRenderKey = 0;
 
   let loading = false;
   let error = '';
@@ -116,6 +117,14 @@
     refreshTables();
   }
 
+  async function hardReloadConstructor(): Promise<void> {
+    try {
+      await refreshTables();
+    } finally {
+      constructorRenderKey += 1;
+    }
+  }
+
   onMount(refreshTables);
 </script>
 
@@ -153,18 +162,21 @@
   {/if}
 
   {#if tab === 'constructor'}
-    <CreateTableTab
-      apiBase={API_BASE}
-      {role}
-      {loading}
-      {dbStatus}
-      {dbStatusMessage}
-      {headers}
-      {apiJson}
-      {refreshTables}
-      {existingTables}
-      onCreated={onCreated}
-    />
+    {#key constructorRenderKey}
+      <CreateTableTab
+        apiBase={API_BASE}
+        {role}
+        {loading}
+        {dbStatus}
+        {dbStatusMessage}
+        {headers}
+        {apiJson}
+        {refreshTables}
+        {existingTables}
+        hardReloadConstructor={hardReloadConstructor}
+        onCreated={onCreated}
+      />
+    {/key}
   {:else if tab === 'tables'}
     <TablesAndDataTab
       apiBase={API_BASE}

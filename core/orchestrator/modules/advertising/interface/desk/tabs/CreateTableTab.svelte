@@ -12,6 +12,7 @@
   export let dbStatusMessage = '';
 
   export let refreshTables: () => Promise<void>;
+  export let hardReloadConstructor: (() => Promise<void>) | undefined = undefined;
   export let onCreated: (schema: string, table: string) => void;
 
   export let headers: () => Record<string, string>;
@@ -89,9 +90,13 @@
   async function forceRefreshTables() {
     refreshingTables = true;
     try {
-      await refreshTables();
-      await sleep(450);
-      await refreshTables();
+      if (hardReloadConstructor) {
+        await hardReloadConstructor();
+      } else {
+        await refreshTables();
+        await sleep(450);
+        await refreshTables();
+      }
     } finally {
       refreshingTables = false;
     }
