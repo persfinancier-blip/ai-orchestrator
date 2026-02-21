@@ -44,6 +44,7 @@ const DEFAULT_CONFIG = Object.freeze({
 });
 const SETTINGS_CACHE_MS = Number(process.env.AO_SETTINGS_CACHE_MS || 5000);
 let settingsCache = { at: 0, value: { ...DEFAULT_CONFIG } };
+const PROTECTED_SYSTEM_TABLES = new Set([`${SETTINGS_SCHEMA}.${SETTINGS_TABLE}`]);
 
 function normalizeSettingIdent(value, fallback) {
   const v = String(value || '').trim();
@@ -52,6 +53,10 @@ function normalizeSettingIdent(value, fallback) {
 
 function contractsQname(config) {
   return `${qi(config.contracts_schema)}.${qi(config.contracts_table)}`;
+}
+
+function isProtectedSystemTable(schema, table) {
+  return PROTECTED_SYSTEM_TABLES.has(`${String(schema || '').trim()}.${String(table || '').trim()}`);
 }
 
 async function ensureSettingsTable(client) {
@@ -794,6 +799,9 @@ tableBuilderRouter.post('/tables/drop', requireDataAdmin, async (req, res) => {
   if (!isIdent(schema) || !isIdent(table)) {
     return res.status(400).json({ error: 'bad_request', details: 'invalid schema/table' });
   }
+  if (isProtectedSystemTable(schema, table)) {
+    return res.status(403).json({ error: 'forbidden', details: 'protected_system_table' });
+  }
 
   const client = await pool.connect();
   try {
@@ -814,6 +822,9 @@ tableBuilderRouter.post('/tables/rename', requireDataAdmin, async (req, res) => 
 
   if (!isIdent(schema) || !isIdent(table) || !isIdent(new_table)) {
     return res.status(400).json({ error: 'bad_request', details: 'invalid schema/table/new_table' });
+  }
+  if (isProtectedSystemTable(schema, table)) {
+    return res.status(403).json({ error: 'forbidden', details: 'protected_system_table' });
   }
   if (table === new_table) {
     return res.json({ ok: true, schema, table, new_table, renamed: false });
@@ -858,6 +869,9 @@ tableBuilderRouter.post('/columns/drop', requireDataAdmin, async (req, res) => {
   if (!isIdent(schema) || !isIdent(table) || !isIdent(column)) {
     return res.status(400).json({ error: 'bad_request', details: 'invalid schema/table/column' });
   }
+  if (isProtectedSystemTable(schema, table)) {
+    return res.status(403).json({ error: 'forbidden', details: 'protected_system_table' });
+  }
 
   const client = await pool.connect();
   try {
@@ -880,6 +894,9 @@ tableBuilderRouter.post('/columns/add', requireDataAdmin, async (req, res) => {
 
   if (!isIdent(schema) || !isIdent(table) || !isIdent(colName)) {
     return res.status(400).json({ error: 'bad_request', details: 'invalid schema/table/column' });
+  }
+  if (isProtectedSystemTable(schema, table)) {
+    return res.status(403).json({ error: 'forbidden', details: 'protected_system_table' });
   }
   if (!KNOWN_TYPES.has(colType)) {
     return res.status(400).json({ error: 'bad_request', details: 'invalid column type' });
@@ -911,6 +928,9 @@ tableBuilderRouter.post('/rows/add', requireDataAdmin, async (req, res) => {
 
   if (!isIdent(schema) || !isIdent(table)) {
     return res.status(400).json({ error: 'bad_request', details: 'invalid schema/table' });
+  }
+  if (isProtectedSystemTable(schema, table)) {
+    return res.status(403).json({ error: 'forbidden', details: 'protected_system_table' });
   }
   if (!row || typeof row !== 'object' || Array.isArray(row)) {
     return res.status(400).json({ error: 'bad_request', details: 'invalid row payload' });
@@ -946,6 +966,9 @@ tableBuilderRouter.post('/rows/delete', requireDataAdmin, async (req, res) => {
 
   if (!isIdent(schema) || !isIdent(table)) {
     return res.status(400).json({ error: 'bad_request', details: 'invalid schema/table' });
+  }
+  if (isProtectedSystemTable(schema, table)) {
+    return res.status(403).json({ error: 'forbidden', details: 'protected_system_table' });
   }
   if (!ctid || !/^\(\d+,\d+\)$/.test(ctid)) {
     return res.status(400).json({ error: 'bad_request', details: 'invalid ctid' });
