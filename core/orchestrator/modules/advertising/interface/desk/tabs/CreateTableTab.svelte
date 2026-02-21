@@ -538,6 +538,10 @@
   .activeitem .item-button { color:#fff; }
   .tables-list .row-item { background:#0f172a; border-color:#0f172a; }
   .tables-list .row-name { color:#fff; }
+  .templates-list .row-item { background:#0f172a; border-color:#0f172a; }
+  .templates-list .item-button { color:#fff; }
+  .templates-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
+  .templates-list .activeitem .item-button { color:#0f172a; }
 
   .main { min-width:0; }
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; }
@@ -566,6 +570,7 @@
   .danger.icon-btn { border-color:transparent; background:transparent; color:#b91c1c; }
   .tables-list .icon-btn { color:#fff; }
   .activeitem .icon-btn { color:#fff; }
+  .templates-list .activeitem .icon-btn { color:#b91c1c; }
   .refresh-btn { color:#16a34a; }
 
   .hint { margin:10px 0 0; color:#64748b; font-size:13px; }
