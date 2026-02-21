@@ -308,7 +308,7 @@
       authRawError = '';
       err = '';
     } catch {
-      authRawError = 'Некорректный JSON';
+      authRawError = 'Некорректный JSON. Проверь скобки и кавычки.';
     } finally {
       authSyncLock = null;
     }
@@ -364,6 +364,47 @@
     syncAuthLeftToRawAndSource();
   }
 
+  function setAuthTemplatePlacement(type: string) {
+    mutateSelected((s) => {
+      s.authTemplate.type = type === 'query' ? 'query' : 'header';
+    });
+    syncAuthLeftToRawAndSource();
+  }
+
+  function authPlacementText(type: string) {
+    return type === 'query' ? 'Данные пойдут в URL' : 'Данные пойдут в заголовок';
+  }
+
+  function authTypeLabel(type: string) {
+    return type === 'query' ? 'URL' : 'Заголовок';
+  }
+
+  function applyAuthPreset(kind: 'bearer' | 'api_header' | 'api_query') {
+    if (!selected) return;
+    if (kind === 'bearer') {
+      authTemplateRows = [{ id: uid(), key: 'Authorization', value: 'Bearer YOUR_TOKEN' }];
+      mutateSelected((s) => {
+        if (!String(s.authTemplate.name || '').trim()) s.authTemplate.name = 'Bearer токен';
+        s.authTemplate.type = 'header';
+      });
+    }
+    if (kind === 'api_header') {
+      authTemplateRows = [{ id: uid(), key: 'X-API-Key', value: 'YOUR_API_KEY' }];
+      mutateSelected((s) => {
+        if (!String(s.authTemplate.name || '').trim()) s.authTemplate.name = 'API ключ в заголовке';
+        s.authTemplate.type = 'header';
+      });
+    }
+    if (kind === 'api_query') {
+      authTemplateRows = [{ id: uid(), key: 'api_key', value: 'YOUR_API_KEY' }];
+      mutateSelected((s) => {
+        if (!String(s.authTemplate.name || '').trim()) s.authTemplate.name = 'API ключ в URL';
+        s.authTemplate.type = 'query';
+      });
+    }
+    syncAuthLeftToRawAndSource();
+  }
+
   function loadAuthTemplates() {
     try {
       const raw = JSON.parse(localStorage.getItem(AUTH_TEMPLATES_KEY) || '[]');
@@ -414,7 +455,7 @@
     try {
       JSON.parse(JSON.stringify(t));
     } catch {
-      err = 'Некорректный JSON';
+      err = 'Некорректный JSON. Проверь скобки и кавычки.';
       return;
     }
     const idx = authTemplates.findIndex((x) => x.name === t.name);
@@ -1265,16 +1306,9 @@
                     <select class="quarter" value={selectedAuthTemplateId} on:change={(e) => applySelectedAuthTemplate(e.currentTarget.value)}>
                       <option value="">Шаблон типа подключения</option>
                       {#each authTemplates as t}
-                        <option value={t.id}>{t.name} ({t.type})</option>
+                        <option value={t.id}>{t.name} ({authTypeLabel(t.type)})</option>
                       {/each}
                     </select>
-                    <input
-                      class="auth-name-input"
-                      placeholder="Название шаблона типа подключения (например: WB Token)"
-                      value={selected.authTemplate?.name || ''}
-                      on:input={(e) => setAuthTemplateName(e.currentTarget.value)}
-                    />
-                    <button class="quarter" on:click={saveCurrentAuthTemplate}>Сохранить шаблон</button>
                   </div>
                   <div class="auth-fields">
                     <div class="auth-rows">
@@ -1300,6 +1334,29 @@
                   </div>
                 </div>
                 <div class="auth-right">
+                  <div class="auth-right-top">
+                    <input
+                      class="auth-name-input"
+                      placeholder="Название шаблона типа подключения (например: WB Token)"
+                      value={selected.authTemplate?.name || ''}
+                      on:input={(e) => setAuthTemplateName(e.currentTarget.value)}
+                    />
+                    <button class="quarter" on:click={saveCurrentAuthTemplate}>Сохранить шаблон</button>
+                  </div>
+                  <div class="auth-right-controls">
+                    <select
+                      value={(selected.authTemplate?.type || 'header') === 'query' ? 'query' : 'header'}
+                      on:change={(e) => setAuthTemplatePlacement(e.currentTarget.value)}
+                    >
+                      <option value="header">Куда подставлять данные: В заголовок</option>
+                      <option value="query">Куда подставлять данные: В URL</option>
+                    </select>
+                    <div class="inline-actions">
+                      <button on:click={() => applyAuthPreset('bearer')}>Bearer токен</button>
+                      <button on:click={() => applyAuthPreset('api_header')}>API ключ в заголовке</button>
+                      <button on:click={() => applyAuthPreset('api_query')}>API ключ в URL</button>
+                    </div>
+                  </div>
                   <textarea
                     class:invalid={!!authRawError}
                     bind:this={authRawEl}
@@ -1308,6 +1365,7 @@
                     on:input={() => { authRawTouched = true; scheduleParseAuthRaw(); }}
                     on:blur={parseAuthRaw}
                   ></textarea>
+                  <p class="hint">{authPlacementText(selected.authTemplate?.type || 'header')}</p>
                   {#if authRawError}
                     <p class="error">{authRawError}</p>
                   {/if}
@@ -1698,8 +1756,11 @@
   @media (max-width: 1100px) { .method-url { grid-template-columns: 1fr; } }
   .auth-split { display:grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap:12px; align-items:start; }
   .auth-left, .auth-right { min-width: 0; }
-  .auth-top { display:grid; grid-template-columns: minmax(160px, 28%) 1fr minmax(180px, 28%); gap:10px; align-items:center; }
+  .auth-top { height: 42px; display:flex; align-items:stretch; justify-content:flex-start; }
   .auth-top .quarter { width:100%; min-width:0; max-width:none; }
+  .auth-top select { width:100%; }
+  .auth-right-top { display:grid; grid-template-columns: 1fr minmax(180px, 34%); gap:10px; align-items:center; margin-bottom:10px; }
+  .auth-right-controls { display:flex; flex-direction:column; gap:8px; margin-bottom:10px; }
   .auth-name-input { min-width:0; }
   .auth-fields { display:flex; flex-direction:column; gap:10px; margin-top:10px; }
   .auth-fields input, .auth-right textarea { width:100%; }
@@ -1709,7 +1770,7 @@
   .auth-row .val-col { min-width:0; }
   .auth-right textarea { resize:none; overflow:hidden; max-width:100%; }
   .auth-right textarea.invalid { border-color:#ef4444; background:#fff5f5; }
-  @media (max-width: 1400px) { .auth-top { grid-template-columns: 1fr; } }
+  @media (max-width: 1400px) { .auth-right-top { grid-template-columns: 1fr; } }
   @media (max-width: 1100px) { .auth-split { grid-template-columns: 1fr; } }
 
   label { display:flex; flex-direction:column; gap:6px; font-size:13px; }
