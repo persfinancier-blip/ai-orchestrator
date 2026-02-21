@@ -165,6 +165,47 @@ async function markContractsDeletedByTableDrop(client, schema, table) {
   );
 }
 
+async function getLatestContractMeta(client, schema, table) {
+  await ensureContractsTable(client);
+  const r = await client.query(
+    `
+    SELECT contract_name, version
+    FROM ${CONTRACTS_QNAME}
+    WHERE schema_name = $1
+      AND table_name = $2
+      AND lifecycle_state <> 'deleted_by_user'
+    ORDER BY version DESC
+    LIMIT 1
+    `,
+    [schema, table]
+  );
+  const row = r.rows?.[0] || null;
+  if (!row) return null;
+  return {
+    contract_name: String(row.contract_name || defaultContractName(schema, table)),
+    version: Number(row.version || 1)
+  };
+}
+
+async function enrichRowWithContractFields(client, schema, table, sourceRow) {
+  const row = sourceRow && typeof sourceRow === 'object' && !Array.isArray(sourceRow) ? { ...sourceRow } : {};
+  const cols = await getTableColumnsSnapshot(client, schema, table);
+  const colSet = new Set(cols.map((c) => String(c.field_name || '').toLowerCase()));
+  const meta = await getLatestContractMeta(client, schema, table);
+  if (!meta) return row;
+
+  if (colSet.has('ao_contract_schema') && row.ao_contract_schema == null) {
+    row.ao_contract_schema = CONTRACTS_SCHEMA;
+  }
+  if (colSet.has('ao_contract_name') && row.ao_contract_name == null) {
+    row.ao_contract_name = meta.contract_name;
+  }
+  if (colSet.has('ao_contract_version') && row.ao_contract_version == null) {
+    row.ao_contract_version = Number.isFinite(meta.version) ? Math.trunc(meta.version) : 1;
+  }
+  return row;
+}
+
 function normalizeColumns(columns) {
   const cols = Array.isArray(columns) ? columns : [];
   const out = [];
@@ -460,11 +501,12 @@ tableBuilderRouter.post('/tables/create', requireDataAdmin, async (req, res) => 
 
     // optional: insert test row
     if (test_row && typeof test_row === 'object' && !Array.isArray(test_row)) {
-      const keys = Object.keys(test_row).filter((k) => isIdent(k));
+      const enrichedTestRow = await enrichRowWithContractFields(client, schema_name, table_name, test_row);
+      const keys = Object.keys(enrichedTestRow).filter((k) => isIdent(k));
       if (keys.length) {
         const cols = keys.map((k) => qi(k)).join(', ');
         const vals = keys.map((_, i) => `$${i + 1}`).join(', ');
-        const params = keys.map((k) => test_row[k]);
+        const params = keys.map((k) => enrichedTestRow[k]);
         await client.query(`INSERT INTO ${qname(schema_name, table_name)} (${cols}) VALUES (${vals})`, params);
       }
     }
@@ -619,17 +661,17 @@ tableBuilderRouter.post('/rows/add', requireDataAdmin, async (req, res) => {
     return res.status(400).json({ error: 'bad_request', details: 'invalid row payload' });
   }
 
-  const keys = Object.keys(row).filter((k) => isIdent(k));
-  if (!keys.length) {
-    return res.status(400).json({ error: 'bad_request', details: 'no valid row fields' });
-  }
-
-  const cols = keys.map((k) => qi(k)).join(', ');
-  const vals = keys.map((_, i) => `$${i + 1}`).join(', ');
-  const params = keys.map((k) => row[k]);
-
   const client = await pool.connect();
   try {
+    const enrichedRow = await enrichRowWithContractFields(client, schema, table, row);
+    const keys = Object.keys(enrichedRow).filter((k) => isIdent(k));
+    if (!keys.length) {
+      return res.status(400).json({ error: 'bad_request', details: 'no valid row fields' });
+    }
+    const cols = keys.map((k) => qi(k)).join(', ');
+    const vals = keys.map((_, i) => `$${i + 1}`).join(', ');
+    const params = keys.map((k) => enrichedRow[k]);
+
     await client.query(
       `INSERT INTO ${qname(schema, table)} (${cols}) VALUES (${vals})`,
       params

@@ -44,7 +44,7 @@
   const TABLE_TEMPLATES_STORAGE_KEY = 'ao_create_table_templates_storage_v1'; // legacy fallback
   const STORAGE_DEFAULT_SCHEMA = 'ao_system';
   const STORAGE_DEFAULT_TABLE = 'table_templates_store';
-  const STORAGE_CONTRACT_NAME = 'System: Хранилище шаблонов таблиц';
+  const STORAGE_CONTRACT_NAME = 'Хранилище шаблонов таблиц';
   const REQUIRED_TABLE_FIELDS: ColumnDef[] = [
     { field_name: 'ao_source', field_type: 'text', description: 'источник данных (техническое поле)' },
     { field_name: 'ao_run_id', field_type: 'text', description: 'идентификатор запуска (техническое поле)' },
@@ -156,7 +156,7 @@
       id: 'builtin_bronze',
       name: 'Bronze',
       schema_name: 'bronze',
-      table_name: 'wb_ads_raw1',
+      table_name: 'wb_ads_raw',
       table_class: 'bronze_raw',
       description: 'Сырые ответы API (append-only JSON)',
       columns: withRequiredTableFields([
@@ -227,7 +227,7 @@
   function contractsSystemTemplate(): DataContract {
     return {
       id: 'builtin_data_contracts_table',
-      name: 'System: Хранилище контрактов данных',
+      name: 'Хранилище контрактов данных',
       schema_name: 'ao_system',
       table_name: 'table_data_contract_versions',
       table_class: 'custom',
