@@ -944,7 +944,10 @@
   .danger { border-color:#f3c0c0; color:#b91c1c; }
   .danger.icon-btn { border-color:transparent; background:transparent; color:#b91c1c; }
   .tables-list .icon-btn { color:#fff; }
-  .contracts-list .danger.icon-btn { color:#fff; }
+  .tables-list .row-item:not(.activeitem) .danger.icon-btn { color:#fff !important; }
+  .tables-list .activeitem .danger.icon-btn { color:#b91c1c !important; }
+  .contracts-list .row-item:not(.activeitem) .danger.icon-btn { color:#fff !important; }
+  .contracts-list .activeitem .danger.icon-btn { color:#b91c1c !important; }
   .tables-list .activeitem .icon-btn { color:#b91c1c; }
   .primary { background:#0f172a; color:#fff; border-color:#0f172a; }
 
