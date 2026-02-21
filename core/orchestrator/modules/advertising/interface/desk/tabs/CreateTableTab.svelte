@@ -562,8 +562,10 @@
   button:disabled { opacity:.6; cursor:not-allowed; }
   .primary { background:#0f172a; color:#fff; border-color:#0f172a; }
   .danger { border-color:#f3c0c0; color:#b91c1c; }
-  .icon-btn { width:44px; min-width:44px; padding:10px 0; text-transform:uppercase; border-color:transparent; background:transparent; color:#fca5a5; }
-  .danger.icon-btn { border-color:transparent; background:transparent; color:#fca5a5; }
+  .icon-btn { width:44px; min-width:44px; padding:10px 0; text-transform:uppercase; border-color:transparent; background:transparent; color:#b91c1c; }
+  .danger.icon-btn { border-color:transparent; background:transparent; color:#b91c1c; }
+  .tables-list .icon-btn { color:#fff; }
+  .activeitem .icon-btn { color:#fff; }
   .refresh-btn { color:#16a34a; }
 
   .hint { margin:10px 0 0; color:#64748b; font-size:13px; }
