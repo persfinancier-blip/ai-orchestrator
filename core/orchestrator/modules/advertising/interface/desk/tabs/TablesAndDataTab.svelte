@@ -54,6 +54,7 @@
   let contracts_loading = false;
   let contracts_error = '';
   let contractVersions: ContractVersion[] = [];
+  let selectedContractId = '';
   let contracts_storage_schema = 'ao_system';
   let contracts_storage_table = 'table_data_contract_versions';
   let contracts_storage_picker_open = false;
@@ -238,12 +239,20 @@
           created_at: String(r?.created_at || '')
         }))
         .sort((a, b) => b.version - a.version);
+      if (selectedContractId && !contractVersions.some((x) => String(x.id || '') === selectedContractId)) {
+        selectedContractId = '';
+      }
     } catch (e: any) {
       contracts_error = e?.message ?? String(e);
       contractVersions = [];
+      selectedContractId = '';
     } finally {
       contracts_loading = false;
     }
+  }
+
+  function applySelectedContract(id: string) {
+    selectedContractId = id;
   }
 
   async function deleteContractVersion(contract: ContractVersion) {
@@ -748,11 +757,11 @@
       {:else}
         <div class="list contracts-list">
           {#each contractVersions as c (c.id)}
-            <div class="row-item">
-              <div class="item-button">
+            <div class="row-item" class:activeitem={selectedContractId === c.id}>
+              <button class="item-button" type="button" on:click={() => applySelectedContract(String(c.id || ''))}>
                 v{c.version}
                 {#if c.lifecycle_state === 'table_deleted'} · таблица удалена{/if}
-              </div>
+              </button>
               <div class="row-actions">
                 <button
                   class="danger icon-btn"
@@ -890,9 +899,12 @@
   .contracts-list .row-item { background:#0f172a; border-color:#0f172a; }
   .contracts-list .item-button { color:#fff; }
   .contracts-list .icon-btn { color:#fff; }
-  .contracts-list .danger.icon-btn { color:#fff; }
   .tables-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
   .tables-list .activeitem .item-button { color:#0f172a; }
+  .contracts-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
+  .contracts-list .activeitem .item-button { color:#0f172a; font-weight:600; }
+  .contracts-list .activeitem .item-button::before { content:'●'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
+  .contracts-list .activeitem .icon-btn { color:#b91c1c; }
 
   .main { min-width:0; }
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; }
@@ -932,6 +944,7 @@
   .danger { border-color:#f3c0c0; color:#b91c1c; }
   .danger.icon-btn { border-color:transparent; background:transparent; color:#b91c1c; }
   .tables-list .icon-btn { color:#fff; }
+  .contracts-list .danger.icon-btn { color:#fff; }
   .tables-list .activeitem .icon-btn { color:#b91c1c; }
   .primary { background:#0f172a; color:#fff; border-color:#0f172a; }
 
