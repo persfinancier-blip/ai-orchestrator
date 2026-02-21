@@ -144,14 +144,20 @@
       field_type: String(c?.field_type || 'text').trim(),
       description: String(c?.description || '').trim()
     }));
-    const existing = new Set(base.map((c) => c.field_name.toLowerCase()));
-    const merged = [...base];
-    for (const sys of REQUIRED_TABLE_FIELDS) {
-      if (!existing.has(sys.field_name.toLowerCase())) {
-        merged.push({ ...sys });
-      }
-    }
-    return merged;
+    const byName = new Map(base.map((c) => [c.field_name.toLowerCase(), c]));
+
+    // Keep system fields first (and preserve user overrides if they exist),
+    // then append non-system fields in their original order.
+    const requiredFirst = REQUIRED_TABLE_FIELDS.map((sys) => {
+      const hit = byName.get(sys.field_name.toLowerCase());
+      return hit ? { ...sys, ...hit } : { ...sys };
+    });
+
+    const nonSystem = base.filter(
+      (c) => !REQUIRED_TABLE_FIELDS.some((f) => f.field_name.toLowerCase() === c.field_name.toLowerCase())
+    );
+
+    return [...requiredFirst, ...nonSystem];
   }
 
   function bronzeTemplate(): DataContract {
