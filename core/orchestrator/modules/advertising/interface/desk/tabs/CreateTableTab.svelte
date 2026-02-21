@@ -541,36 +541,65 @@
     applyTemplate(t);
   }
 
-  async function startNewTemplate() {
+  function validateTemplateDraftForSave() {
     const name = String(templateNameDraft || '').trim();
+    const nextSchema = schema_name.trim();
+    const nextTable = table_name.trim();
+    const nextClass = table_class.trim() || 'custom';
+    const nextDescription = description.trim();
     const cols = withRequiredTableFields(normalizeColumns(columns));
+
     if (!name) throw new Error('Укажи название шаблона');
+    if (!nextSchema) throw new Error('Для шаблона заполни поле «Схема»');
+    if (!IDENT_RE.test(nextSchema)) throw new Error('Для шаблона схема должна содержать только латиницу, цифры и "_"');
+    if (!nextTable) throw new Error('Для шаблона заполни поле «Название таблицы»');
+    if (!IDENT_RE.test(nextTable))
+      throw new Error('Для шаблона имя таблицы должно содержать только латиницу, цифры и "_"');
+    if (!nextClass) throw new Error('Для шаблона заполни поле «Класс»');
     if (!cols.length) throw new Error('Добавь хотя бы одно поле');
+    if (partition_enabled && !partition_column.trim()) {
+      throw new Error('Укажи поле партиционирования для шаблона');
+    }
+    if (partition_enabled && partition_interval !== 'day' && partition_interval !== 'month') {
+      throw new Error('Интервал партиционирования должен быть day или month');
+    }
+
+    return {
+      name,
+      schema_name: nextSchema,
+      table_name: nextTable,
+      table_class: nextClass,
+      description: nextDescription,
+      columns: cols,
+      partition_enabled,
+      partition_column: partition_column.trim(),
+      partition_interval
+    };
+  }
+
+  async function startNewTemplate() {
+    const draft = validateTemplateDraftForSave();
     if (storage_status !== 'ok') throw new Error(storage_status_message || 'Сначала подключи таблицу хранения шаблонов');
-    if (tableTemplates.some((t) => !t.id.startsWith('builtin_') && t.name.trim().toLowerCase() === name.toLowerCase())) {
+    if (
+      tableTemplates.some(
+        (t) => !t.id.startsWith('builtin_') && t.name.trim().toLowerCase() === draft.name.toLowerCase()
+      )
+    ) {
       throw new Error('Шаблон с таким названием уже существует');
     }
 
     const newTemplate: DataContract = {
       id: uid(),
-      name,
-      schema_name: schema_name.trim(),
-      table_name: table_name.trim(),
-      table_class: table_class.trim() || 'custom',
-      description: description.trim(),
-      columns: cols,
-      partition_enabled,
-      partition_column: partition_column.trim(),
-      partition_interval,
+      ...draft,
       contract_version: 1,
       contract_mode: 'safe_add_only'
     };
 
     await saveTemplateToStorage(newTemplate);
     await loadTemplatesFromStorage();
-    const actual = tableTemplates.find((x) => x.name.trim().toLowerCase() === name.toLowerCase());
+    const actual = tableTemplates.find((x) => x.name.trim().toLowerCase() === draft.name.toLowerCase());
     selectedTemplateId = actual?.id || '';
-    templateNameDraft = actual?.name || name;
+    templateNameDraft = actual?.name || draft.name;
     error = '';
   }
 
@@ -584,35 +613,24 @@
     if (idx < 0) throw new Error('Активный шаблон не найден');
     if (storage_status !== 'ok') throw new Error(storage_status_message || 'Сначала подключи таблицу хранения шаблонов');
 
-    const name = String(templateNameDraft || '').trim();
-    const cols = withRequiredTableFields(normalizeColumns(columns));
-    if (!name) throw new Error('Укажи название шаблона');
-    if (!cols.length) throw new Error('Добавь хотя бы одно поле');
+    const draft = validateTemplateDraftForSave();
 
     const updated = {
       ...tableTemplates[idx],
-      name,
-      schema_name: schema_name.trim(),
-      table_name: table_name.trim(),
-      table_class: table_class.trim() || 'custom',
-      description: description.trim(),
-      columns: cols,
-      partition_enabled,
-      partition_column: partition_column.trim(),
-      partition_interval,
+      ...draft,
       contract_version: Number(tableTemplates[idx].contract_version || 1),
       contract_mode: tableTemplates[idx].contract_mode || 'safe_add_only'
     } as DataContract;
 
     const previousName = String(tableTemplates[idx].name || '').trim();
-    if (previousName && previousName.toLowerCase() !== name.toLowerCase()) {
+    if (previousName && previousName.toLowerCase() !== draft.name.toLowerCase()) {
       await deleteTemplateFromStorage(previousName);
     }
     await saveTemplateToStorage(updated);
     await loadTemplatesFromStorage();
-    const actual = tableTemplates.find((x) => x.name.trim().toLowerCase() === name.toLowerCase());
+    const actual = tableTemplates.find((x) => x.name.trim().toLowerCase() === draft.name.toLowerCase());
     selectedTemplateId = actual?.id || '';
-    templateNameDraft = actual?.name || name;
+    templateNameDraft = actual?.name || draft.name;
     error = '';
   }
 
