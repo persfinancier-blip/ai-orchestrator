@@ -688,6 +688,10 @@
         <div class="aside-title">Текущие таблицы</div>
         <button class="icon-btn refresh-btn" on:click={forceRefreshTables} disabled={loading || refreshingTables} title="Обновить список">↻</button>
       </div>
+      <div class="storage-meta">
+        <span>Подключено к базе:</span>
+        <span class="plain-value">{apiBase}</span>
+      </div>
       {#if existingTables.length === 0}
         <div class="hint">Пока нет данных.</div>
       {:else}
@@ -931,6 +935,7 @@
   .inline-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .storage-meta { margin-top:-2px; margin-bottom:8px; display:flex; align-items:center; gap:6px; font-size:12px; color:#64748b; }
   .link-btn { border:0; background:transparent; color:#0f172a; padding:0; text-decoration:underline; font-size:12px; font-weight:500; }
+  .plain-value { color:#0f172a; font-size:12px; font-weight:500; }
   .storage-picker { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
   .storage-picker select { flex:1; min-width:0; }
 
