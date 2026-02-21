@@ -37,7 +37,6 @@
   const CREATE_TIMEOUT_MS = 30000;
   const CREATE_BUTTON_LABEL = 'Создать таблицу';
   const CREATE_WAIT_LABEL = 'Запрос создания отправлен. Ожидаем ответ сервера...';
-  const DEFAULT_DB_STATUS_LABEL = 'Статус подключения к базе: нет данных.';
   const TABLE_TEMPLATES_KEY = 'ao_create_table_templates_v1';
   const TABLE_TEMPLATES_STORAGE_KEY = 'ao_create_table_templates_storage_v1';
   const STORAGE_DEFAULT_SCHEMA = 'ao_system';
@@ -79,6 +78,12 @@
 
   function canWrite(): boolean {
     return role === 'data_admin';
+  }
+
+  function dbConnectionLabel() {
+    const dbPart = dbStatus === 'ok' ? 'OK' : dbStatus === 'checking' ? 'Проверка...' : 'Ошибка';
+    const extra = dbStatusMessage && dbStatus !== 'ok' ? ` ${dbStatusMessage}` : '';
+    return `Подключение к базе: ${dbPart}. Таблиц доступно: ${existingTables.length}.${extra}`;
   }
 
   function normalizeColumns(cols: ColumnDef[]) {
@@ -660,7 +665,6 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Создание таблиц</h2>
-    <div class="muted">{dbStatusMessage || DEFAULT_DB_STATUS_LABEL}</div>
   </div>
 
   <div class="layout">
@@ -668,6 +672,9 @@
       <div class="aside-head">
         <div class="aside-title">Текущие таблицы</div>
         <button class="icon-btn refresh-btn" on:click={refreshTables} disabled={loading} title="Обновить список">↻</button>
+      </div>
+      <div class="storage-status" class:bad={dbStatus !== 'ok'}>
+        {dbConnectionLabel()}
       </div>
       {#if existingTables.length === 0}
         <div class="hint">Пока нет данных.</div>
@@ -848,8 +855,6 @@
   .panel { background:#fff; border:1px solid #e6eaf2; border-radius:18px; padding:14px; box-shadow:0 6px 20px rgba(15,23,42,.05); margin-top:12px; }
   .panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
   .panel-head h2 { margin:0; font-size:18px; }
-  .muted { color:#64748b; font-size:13px; }
-
   .layout { display:grid; grid-template-columns: 320px 1fr 360px; gap:12px; margin-top:12px; align-items:start; }
   @media (max-width: 1300px) { .layout { grid-template-columns: 320px 1fr; } }
   @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
