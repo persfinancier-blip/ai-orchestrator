@@ -502,6 +502,23 @@ async function enrichRowWithContractFields(client, schema, table, sourceRow) {
   const cols = await getTableColumnsSnapshot(client, schema, table);
   const colSet = new Set(cols.map((c) => String(c.field_name || '').toLowerCase()));
   const meta = await getLatestContractMeta(client, schema, table);
+  const nowIso = new Date().toISOString();
+  const autoRunId = `run_${Date.now()}`;
+
+  // Always populate technical lineage fields when such columns exist.
+  if (colSet.has('ao_source') && row.ao_source == null) {
+    row.ao_source = 'table_builder';
+  }
+  if (colSet.has('ao_run_id') && row.ao_run_id == null) {
+    row.ao_run_id = autoRunId;
+  }
+  if (colSet.has('ao_created_at') && row.ao_created_at == null) {
+    row.ao_created_at = nowIso;
+  }
+  if (colSet.has('ao_updated_at') && row.ao_updated_at == null) {
+    row.ao_updated_at = nowIso;
+  }
+
   if (!meta) return row;
 
   if (colSet.has('ao_contract_schema') && row.ao_contract_schema == null) {
