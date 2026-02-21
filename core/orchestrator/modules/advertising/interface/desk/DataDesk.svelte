@@ -22,6 +22,7 @@
   let existingTables: ExistingTable[] = [];
   let dbStatus: 'checking' | 'ok' | 'error' = 'checking';
   let dbStatusMessage = 'Проверка подключения к базе...';
+  const TABLES_TIMEOUT_MS = 15000;
 
   async function apiJson<T = any>(url: string, init?: RequestInit): Promise<T> {
     const res = await fetch(url, init);
@@ -48,32 +49,62 @@
     };
   }
 
+  async function fetchTablesFromServer(currentRole: Role): Promise<ExistingTable[]> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), TABLES_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${API_BASE}/tables`, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          'X-AO-ROLE': currentRole
+        },
+        signal: controller.signal
+      });
+
+      const raw = await res.text();
+      let payload: any = null;
+      try {
+        payload = raw ? JSON.parse(raw) : {};
+      } catch {
+        throw new Error('Сервер вернул некорректный JSON при загрузке таблиц.');
+      }
+
+      if (!res.ok) {
+        const msg = payload?.details || payload?.error || `${res.status} ${res.statusText}`;
+        throw new Error(msg);
+      }
+
+      if (!Array.isArray(payload?.existing_tables)) {
+        throw new Error('Сервер вернул неожиданный формат списка таблиц.');
+      }
+
+      return payload.existing_tables as ExistingTable[];
+    } catch (e: any) {
+      if (e?.name === 'AbortError') {
+        throw new Error('Таймаут проверки подключения к базе.');
+      }
+      throw new Error(e?.message ?? String(e));
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
   async function refreshTables(): Promise<void> {
     loading = true;
     error = '';
     dbStatus = 'checking';
-    dbStatusMessage = 'Проверка подключения к базе...';
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000);
-
+    dbStatusMessage = 'Проверяем подключение к базе...';
     try {
-      const j = await apiJson<{ existing_tables: ExistingTable[] }>(`${API_BASE}/tables`, {
-        headers: { 'X-AO-ROLE': role },
-        signal: controller.signal
-      });
-
-      existingTables = j.existing_tables || [];
+      const tables = await fetchTablesFromServer(role);
+      existingTables = tables;
       dbStatus = 'ok';
-      dbStatusMessage = `Подключение к базе: OK. Таблиц доступно: ${existingTables.length}.`;
+      dbStatusMessage = `Подключение к базе: OK. Таблиц доступно: ${tables.length}.`;
     } catch (e: any) {
-      error = e?.name === 'AbortError'
-        ? 'Таймаут проверки подключения к базе.'
-        : (e?.message ?? String(e));
+      error = e?.message ?? String(e);
       dbStatus = 'error';
       dbStatusMessage = `Подключение к базе: ошибка. ${error}`;
     } finally {
-      clearTimeout(timeoutId);
       loading = false;
     }
   }

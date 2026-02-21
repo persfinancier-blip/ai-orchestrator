@@ -81,10 +81,13 @@
   }
 
   function dbConnectionLabel() {
-    const hasTables = existingTables.length > 0;
-    const dbPart = hasTables ? 'OK' : dbStatus === 'error' ? 'Ошибка' : loading ? 'Проверка...' : dbStatus === 'ok' ? 'OK' : 'Проверка...';
-    const extra = dbStatus === 'error' && dbStatusMessage ? ` ${dbStatusMessage}` : '';
-    return `Подключение к базе: ${dbPart}. Таблиц доступно: ${existingTables.length}.${extra}`;
+    if (dbStatus === 'ok') {
+      return `Подключение к базе: OK. Таблиц доступно: ${existingTables.length}.`;
+    }
+    if (dbStatus === 'error') {
+      return dbStatusMessage || 'Подключение к базе: ошибка.';
+    }
+    return 'Проверяем подключение к базе...';
   }
 
   function normalizeColumns(cols: ColumnDef[]) {
