@@ -703,6 +703,12 @@
     if (!schema_name.trim()) throw new Error('Укажи схему');
     if (!table_name.trim()) throw new Error('Укажи имя таблицы');
     if (!table_class.trim()) throw new Error('Укажи класс');
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(schema_name.trim())) {
+      throw new Error('Схема: только латиница, цифры и _, первый символ — буква или _');
+    }
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(table_name.trim())) {
+      throw new Error('Имя таблицы: только латиница, цифры и _, первый символ — буква или _');
+    }
 
     const cols = normalizeColumns(columns);
     if (cols.length === 0) throw new Error('Добавь хотя бы одно поле');
@@ -727,7 +733,7 @@
       validate();
       const cols = withRequiredTableFields(normalizeColumns(columns));
 
-      const response = await apiJson(`${apiBase}/tables/create`, {
+      const request = apiJson(`${apiBase}/tables/create`, {
         method: 'POST',
         headers: headers(),
         signal: controller.signal,
@@ -742,6 +748,10 @@
             : { enabled: false }
         })
       });
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Сервер не ответил вовремя. Проверьте логи API и БД.')), CREATE_TIMEOUT_MS)
+      );
+      const response = await Promise.race([request, timeoutPromise]) as any;
 
       result_created_schema = schema_name.trim();
       result_created_table = table_name.trim();
