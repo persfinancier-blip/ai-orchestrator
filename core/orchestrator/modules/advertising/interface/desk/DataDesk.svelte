@@ -81,7 +81,7 @@
         throw new Error('Сервер вернул неожиданный формат списка таблиц.');
       }
 
-      return payload.existing_tables as ExistingTable[];
+      return [...(payload.existing_tables as ExistingTable[])];
     } catch (e: any) {
       if (e?.name === 'AbortError') {
         throw new Error('Таймаут проверки подключения к базе.');

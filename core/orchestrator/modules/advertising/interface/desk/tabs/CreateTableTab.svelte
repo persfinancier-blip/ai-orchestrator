@@ -71,6 +71,8 @@
   let result_created_table = '';
   let result_is_success = false;
   let creating = false;
+  let refreshingTables = false;
+  let tablesSignature = '';
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -78,6 +80,21 @@
 
   function canWrite(): boolean {
     return role === 'data_admin';
+  }
+
+  function sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function forceRefreshTables() {
+    refreshingTables = true;
+    try {
+      await refreshTables();
+      await sleep(450);
+      await refreshTables();
+    } finally {
+      refreshingTables = false;
+    }
   }
 
   function dbConnectionLabel() {
@@ -603,7 +620,7 @@
       result_modal_text = response ? JSON.stringify(response, null, 2) : 'Операция выполнена успешно.';
       result_modal_open = true;
 
-      refreshTables().catch(() => {
+      forceRefreshTables().catch(() => {
         // Ошибка обновления списка не должна блокировать результат создания
       });
     } catch (e: any) {
@@ -632,7 +649,7 @@
         headers: headers(),
         body: JSON.stringify({ schema, table })
       });
-      await refreshTables();
+      await forceRefreshTables();
     } catch (e: any) {
       error = e?.message ?? String(e);
     }
@@ -657,6 +674,7 @@
   }
 
   $: description, tick().then(syncDescriptionHeight);
+  $: tablesSignature = existingTables.map((t) => `${t.schema_name}.${t.table_name}`).join('|');
 </script>
 
 {#if error}
@@ -675,7 +693,7 @@
     <aside class="aside">
       <div class="aside-head">
         <div class="aside-title">Текущие таблицы</div>
-        <button class="icon-btn refresh-btn" on:click={refreshTables} disabled={loading} title="Обновить список">↻</button>
+        <button class="icon-btn refresh-btn" on:click={forceRefreshTables} disabled={loading || refreshingTables} title="Обновить список">↻</button>
       </div>
       <div class="storage-status" class:bad={dbStatus !== 'ok'}>
         {dbConnectionLabel()}
@@ -683,14 +701,16 @@
       {#if existingTables.length === 0}
         <div class="hint">Пока нет данных.</div>
       {:else}
-        <div class="list tables-list">
-          {#each existingTables as t}
-            <div class="row-item">
-              <div class="row-name">{t.schema_name}.{t.table_name}</div>
-              <button class="danger icon-btn" on:click={() => deleteTableNow(t.schema_name, t.table_name)} title="Удалить таблицу">x</button>
-            </div>
-          {/each}
-        </div>
+        {#key tablesSignature}
+          <div class="list tables-list">
+            {#each existingTables as t}
+              <div class="row-item">
+                <div class="row-name">{t.schema_name}.{t.table_name}</div>
+                <button class="danger icon-btn" on:click={() => deleteTableNow(t.schema_name, t.table_name)} title="Удалить таблицу">x</button>
+              </div>
+            {/each}
+          </div>
+        {/key}
       {/if}
     </aside>
 
