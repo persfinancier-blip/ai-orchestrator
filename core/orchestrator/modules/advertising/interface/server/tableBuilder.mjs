@@ -188,6 +188,33 @@ async function ensureContractsTable(client, config) {
   return contractsQn;
 }
 
+async function ensureTemplatesStorageTable(client, config) {
+  const templatesSchema = normalizeSettingIdent(config?.templates_schema, DEFAULT_CONFIG.templates_schema);
+  const templatesTable = normalizeSettingIdent(config?.templates_table, DEFAULT_CONFIG.templates_table);
+  const templatesQn = `${qi(templatesSchema)}.${qi(templatesTable)}`;
+
+  await client.query(`CREATE SCHEMA IF NOT EXISTS ${qi(templatesSchema)}`);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ${templatesQn} (
+      id bigserial PRIMARY KEY,
+      template_name text NOT NULL,
+      schema_name text NOT NULL,
+      table_name text NOT NULL,
+      table_class text NOT NULL DEFAULT 'custom',
+      description text NOT NULL DEFAULT '',
+      columns jsonb NOT NULL DEFAULT '[]'::jsonb,
+      partition_enabled boolean NOT NULL DEFAULT false,
+      partition_column text NOT NULL DEFAULT '',
+      partition_interval text NOT NULL DEFAULT 'day'
+    )
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_table_templates_store_name_idx
+    ON ${templatesQn} (template_name)
+  `);
+  return templatesQn;
+}
+
 function defaultContractName(schema, table) {
   return `${schema}.${table}`;
 }
@@ -448,6 +475,7 @@ tableBuilderRouter.post('/settings/upsert', requireDataAdmin, async (req, res) =
 
     const effective = await loadRuntimeConfig(client, { force: true });
     await ensureContractsTable(client, effective);
+    await ensureTemplatesStorageTable(client, effective);
     return res.json({ ok: true, setting_key, effective });
   } catch (e) {
     return res.status(500).json({ error: 'settings_upsert_failed', details: String(e?.message || e) });
@@ -461,6 +489,7 @@ tableBuilderRouter.post('/settings/reload', requireDataAdmin, async (_req, res) 
   try {
     const effective = await loadRuntimeConfig(client, { force: true });
     await ensureContractsTable(client, effective);
+    await ensureTemplatesStorageTable(client, effective);
     return res.json({ ok: true, effective });
   } catch (e) {
     return res.status(500).json({ error: 'settings_reload_failed', details: String(e?.message || e) });
@@ -942,6 +971,7 @@ export async function bootstrapTableBuilder() {
     const effective = await loadRuntimeConfig(client, { force: true });
     await ensureSettingsTable(client);
     await ensureContractsTable(client, effective);
+    await ensureTemplatesStorageTable(client, effective);
     return { ok: true, effective };
   } finally {
     client.release();
