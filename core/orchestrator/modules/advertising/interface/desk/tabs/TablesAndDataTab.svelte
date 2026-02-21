@@ -758,10 +758,10 @@
   .aside-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
   .aside-title { font-weight:700; font-size:14px; line-height:1.3; margin-bottom:0; }
   .list { display:flex; flex-direction:column; gap:8px; overflow:visible; max-height:none; }
-  .row-item { display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; border:1px solid #e6eaf2; border-radius:14px; background:#fff; padding:8px 10px; }
-  .row-actions { display:flex; align-items:center; justify-content:flex-end; min-width:54px; }
+  .row-item { display:grid; grid-template-columns: minmax(0, 1fr) auto; gap:8px; align-items:center; border:1px solid #e6eaf2; border-radius:14px; background:#fff; padding:8px 10px; }
+  .row-actions { display:flex; align-items:center; justify-content:flex-end; min-width:54px; flex-shrink:0; }
   .system-badge { font-size:11px; line-height:1; padding:4px 8px; border-radius:999px; border:1px solid #cbd5e1; color:#334155; background:#f8fafc; font-weight:600; }
-  .item-button { text-align:left; border:0; background:transparent; padding:0; font-weight:400; font-size:14px; line-height:1.3; color:inherit; }
+  .item-button { text-align:left; border:0; background:transparent; padding:0; font-weight:400; font-size:14px; line-height:1.3; color:inherit; min-width:0; width:100%; overflow-wrap:anywhere; word-break:break-word; }
   .activeitem { border-color:#e6eaf2; background:#fff; color:#0f172a; }
   .activeitem .item-button { color:#0f172a; font-weight:600; }
   .activeitem .item-button::before { content:'●'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
