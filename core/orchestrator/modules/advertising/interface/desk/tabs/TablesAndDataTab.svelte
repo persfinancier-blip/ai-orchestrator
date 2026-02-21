@@ -75,6 +75,11 @@
     }
   }
 
+  async function refreshPreviewAll() {
+    await loadColumns();
+    await loadPreview();
+  }
+
   function openAddColumnModal() {
     modal_error = '';
     new_col_name = '';
@@ -263,9 +268,8 @@
           </div>
 
           <div class="quick">
-            <button on:click={loadColumns} disabled={!preview_schema || !preview_table}>Колонки</button>
-            <button on:click={loadPreview} disabled={preview_loading || !preview_schema || !preview_table}>
-              {preview_loading ? 'Загрузка…' : 'Обновить 5 строк'}
+            <button on:click={refreshPreviewAll} disabled={preview_loading || !preview_schema || !preview_table}>
+              {preview_loading ? 'Загрузка…' : 'Обновить предпросмотр'}
             </button>
             <button class="danger" on:click={confirmDropTable} disabled={!canWrite() || !preview_schema || !preview_table}>
               Удалить таблицу
@@ -283,7 +287,7 @@
         {#if !preview_schema || !preview_table}
           <p class="hint">Выбери таблицу слева.</p>
         {:else if preview_columns.length === 0}
-          <p class="hint">Колонки не загружены. Нажми «Колонки».</p>
+          <p class="hint">Колонки не загружены. Нажми «Обновить предпросмотр».</p>
         {:else}
           <div class="preview">
             <table>
