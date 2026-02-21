@@ -440,11 +440,14 @@
           <label class="w60">
             Название таблицы
             <input bind:value={table_name} placeholder="например: advertising" />
-            <span class="inline-check">
+          </label>
+
+          <div class="w100 partition-toggle">
+            <label class="inline-check">
               <input type="checkbox" bind:checked={partition_enabled} />
               <span>Партиционирование</span>
-            </span>
-          </label>
+            </label>
+          </div>
 
           <label class="w100">
             Описание таблицы
@@ -456,25 +459,6 @@
               on:input={syncDescriptionHeight}
             ></textarea>
           </label>
-        </div>
-
-        <div class="subcard">
-          <h3>Поля</h3>
-          {#each columns as c, ix}
-            <div class="field-row">
-              <input placeholder="имя поля" bind:value={c.field_name} />
-              <select bind:value={c.field_type}>
-                {#each typeOptions as t}
-                  <option value={t}>{t}</option>
-                {/each}
-              </select>
-              <input placeholder="описание" bind:value={c.description} />
-              <button class="danger icon-btn" on:click={() => removeField(ix)} title="Удалить поле">x</button>
-            </div>
-          {/each}
-          <div class="fields-footer">
-            <button on:click={addField}>+ Добавить поле</button>
-          </div>
         </div>
 
         {#if partition_enabled}
@@ -495,6 +479,25 @@
             </div>
           </div>
         {/if}
+
+        <div class="subcard">
+          <h3>Поля</h3>
+          {#each columns as c, ix}
+            <div class="field-row">
+              <input placeholder="имя поля" bind:value={c.field_name} />
+              <select bind:value={c.field_type}>
+                {#each typeOptions as t}
+                  <option value={t}>{t}</option>
+                {/each}
+              </select>
+              <input placeholder="описание" bind:value={c.description} />
+              <button class="danger icon-btn" on:click={() => removeField(ix)} title="Удалить поле">x</button>
+            </div>
+          {/each}
+          <div class="fields-footer">
+            <button on:click={addField}>+ Добавить поле</button>
+          </div>
+        </div>
 
         <div class="actions">
           <button class="primary" on:click={createTableNow} disabled={loading || creating || !canWrite()}>
@@ -596,8 +599,8 @@
   @media (max-width: 1100px) { .field-row { grid-template-columns: 1fr; } }
   .fields-footer { margin-top:12px; }
 
-  .row { display:flex; align-items:center; gap:10px; }
-  .inline-check { display:flex; align-items:center; gap:8px; margin-top:8px; font-size:13px; color:#334155; }
+  .partition-toggle { display:flex; align-items:flex-start; justify-content:flex-start; }
+  .inline-check { display:flex; align-items:center; gap:8px; font-size:13px; color:#334155; margin:0; }
   .actions { margin-top:14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
   .template-controls { display:flex; flex-direction:column; gap:8px; margin-bottom:8px; }
   .inline-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
