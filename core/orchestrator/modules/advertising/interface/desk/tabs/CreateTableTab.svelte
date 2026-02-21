@@ -30,6 +30,7 @@
     partition_enabled: boolean;
     partition_column: string;
     partition_interval: 'day' | 'month';
+    storage_ctids?: string[];
   };
 
   const typeOptions = ['text', 'int', 'bigint', 'numeric', 'boolean', 'date', 'timestamptz', 'jsonb', 'uuid'];
@@ -38,6 +39,10 @@
   const CREATE_WAIT_LABEL = 'Запрос создания отправлен. Ожидаем ответ сервера...';
   const DEFAULT_DB_STATUS_LABEL = 'Статус подключения к базе: нет данных.';
   const TABLE_TEMPLATES_KEY = 'ao_create_table_templates_v1';
+  const TABLE_TEMPLATES_STORAGE_KEY = 'ao_create_table_templates_storage_v1';
+  const STORAGE_DEFAULT_SCHEMA = 'ao_system';
+  const STORAGE_DEFAULT_TABLE = 'table_templates_store';
+  const STORAGE_TEMPLATE_NAME = 'System: Хранилище шаблонов таблиц';
 
   let error = '';
   let schema_name = '';
@@ -53,6 +58,12 @@
   let tableTemplates: TableTemplate[] = [];
   let selectedTemplateId = '';
   let templateNameDraft = '';
+  let storage_schema = STORAGE_DEFAULT_SCHEMA;
+  let storage_table = STORAGE_DEFAULT_TABLE;
+  let storage_picker_open = false;
+  let storage_pick_value = '';
+  let storage_status: 'checking' | 'ok' | 'invalid' | 'missing' | 'error' = 'checking';
+  let storage_status_message = '';
 
   let result_modal_open = false;
   let result_modal_title = '';
@@ -122,28 +133,161 @@
     };
   }
 
-  function applyTemplate(t: TableTemplate) {
-    schema_name = t.schema_name;
-    table_name = t.table_name;
-    table_class = t.table_class;
-    description = t.description;
-    columns = (t.columns || []).map((c) => ({ ...c }));
-    partition_enabled = !!t.partition_enabled;
-    partition_column = t.partition_column || 'event_date';
-    partition_interval = t.partition_interval || 'day';
-    selectedTemplateId = t.id;
-    templateNameDraft = t.name;
+  function storageSystemTemplate(): TableTemplate {
+    return {
+      id: 'builtin_storage_templates',
+      name: STORAGE_TEMPLATE_NAME,
+      schema_name: STORAGE_DEFAULT_SCHEMA,
+      table_name: STORAGE_DEFAULT_TABLE,
+      table_class: 'custom',
+      description: 'Служебная таблица для хранения шаблонов блока «Создание таблиц»',
+      columns: [
+        { field_name: 'template_name', field_type: 'text', description: 'имя шаблона' },
+        { field_name: 'schema_name', field_type: 'text', description: 'схема таблицы' },
+        { field_name: 'table_name', field_type: 'text', description: 'имя таблицы' },
+        { field_name: 'table_class', field_type: 'text', description: 'класс таблицы' },
+        { field_name: 'description', field_type: 'text', description: 'описание' },
+        { field_name: 'columns', field_type: 'jsonb', description: 'json список полей' },
+        { field_name: 'partition_enabled', field_type: 'boolean', description: 'включено ли партиционирование' },
+        { field_name: 'partition_column', field_type: 'text', description: 'колонка партиционирования' },
+        { field_name: 'partition_interval', field_type: 'text', description: 'интервал партиционирования' }
+      ],
+      partition_enabled: false,
+      partition_column: '',
+      partition_interval: 'day'
+    };
   }
 
-  function pickTemplateBronze() {
-    applyTemplate(bronzeTemplate());
+  const STORAGE_REQUIRED_COLUMNS = [
+    { name: 'template_name', types: ['text', 'character varying', 'varchar'] },
+    { name: 'schema_name', types: ['text', 'character varying', 'varchar'] },
+    { name: 'table_name', types: ['text', 'character varying', 'varchar'] },
+    { name: 'table_class', types: ['text', 'character varying', 'varchar'] },
+    { name: 'description', types: ['text', 'character varying', 'varchar'] },
+    { name: 'columns', types: ['jsonb', 'json'] },
+    { name: 'partition_enabled', types: ['boolean', 'bool'] },
+    { name: 'partition_column', types: ['text', 'character varying', 'varchar'] },
+    { name: 'partition_interval', types: ['text', 'character varying', 'varchar'] }
+  ];
+
+  function normalizeTypeName(type: string) {
+    return String(type || '').toLowerCase().trim();
   }
 
-  function pickTemplateSilver() {
-    applyTemplate(silverTemplate());
+  function storageInstruction(prefix: string) {
+    return `${prefix} Выберите системный шаблон «${STORAGE_TEMPLATE_NAME}», создайте таблицу и подключите ее здесь.`;
   }
 
-  function loadTableTemplates() {
+  function parseStorageTableConfig() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(TABLE_TEMPLATES_STORAGE_KEY) || '{}');
+      if (raw && typeof raw.schema === 'string' && typeof raw.table === 'string') {
+        storage_schema = raw.schema.trim() || STORAGE_DEFAULT_SCHEMA;
+        storage_table = raw.table.trim() || STORAGE_DEFAULT_TABLE;
+      }
+    } catch {
+      storage_schema = STORAGE_DEFAULT_SCHEMA;
+      storage_table = STORAGE_DEFAULT_TABLE;
+    }
+  }
+
+  function saveStorageTableConfig() {
+    localStorage.setItem(TABLE_TEMPLATES_STORAGE_KEY, JSON.stringify({ schema: storage_schema, table: storage_table }));
+  }
+
+  async function checkStorageTable(schema: string, table: string) {
+    storage_status = 'checking';
+    storage_status_message = 'Проверяем таблицу хранения...';
+    try {
+      const res = await apiJson<{ columns: Array<{ name: string; type: string }> }>(
+        `${apiBase}/columns?schema=${encodeURIComponent(schema)}&table=${encodeURIComponent(table)}`
+      );
+      const cols = Array.isArray(res?.columns) ? res.columns : [];
+      if (!cols.length) {
+        storage_status = 'missing';
+        storage_status_message = storageInstruction('Таблица хранения не найдена или пуста.');
+        return false;
+      }
+
+      const map = new Map(cols.map((c) => [String(c.name || '').toLowerCase(), normalizeTypeName(c.type)]));
+      for (const need of STORAGE_REQUIRED_COLUMNS) {
+        const actual = map.get(need.name);
+        if (!actual || !need.types.some((t) => actual.includes(t))) {
+          storage_status = 'invalid';
+          storage_status_message = storageInstruction(
+            `Структура ${schema}.${table} не подходит: колонка ${need.name} отсутствует или имеет неверный тип.`
+          );
+          return false;
+        }
+      }
+
+      storage_status = 'ok';
+      storage_status_message = `Хранилище подключено: ${schema}.${table}`;
+      return true;
+    } catch (e: any) {
+      const msg = String(e?.message || '');
+      storage_status = msg.includes('404') ? 'missing' : 'error';
+      storage_status_message = msg.includes('404')
+        ? storageInstruction(`Таблица ${schema}.${table} не найдена.`)
+        : storageInstruction(`Не удалось проверить ${schema}.${table}.`);
+      return false;
+    }
+  }
+
+  async function loadTemplatesFromStorage() {
+    const isValid = await checkStorageTable(storage_schema, storage_table);
+    if (!isValid) {
+      loadTableTemplatesLocalOnly();
+      return;
+    }
+    try {
+      const j = await apiJson<{ rows: any[] }>(
+        `${apiBase}/preview?schema=${encodeURIComponent(storage_schema)}&table=${encodeURIComponent(storage_table)}&limit=5000`
+      );
+      const rows = Array.isArray(j?.rows) ? j.rows : [];
+      const custom: TableTemplate[] = [];
+      for (const r of rows) {
+        const parsedColumns = Array.isArray(r?.columns)
+          ? r.columns
+          : (() => {
+              try {
+                const x = JSON.parse(String(r?.columns || '[]'));
+                return Array.isArray(x) ? x : [];
+              } catch {
+                return [];
+              }
+            })();
+        const name = String(r?.template_name || '').trim();
+        if (!name) continue;
+        custom.push({
+          id: uid(),
+          name,
+          schema_name: String(r?.schema_name || ''),
+          table_name: String(r?.table_name || ''),
+          table_class: String(r?.table_class || 'custom'),
+          description: String(r?.description || ''),
+          columns: parsedColumns.map((c: any) => ({
+            field_name: String(c?.field_name || ''),
+            field_type: String(c?.field_type || 'text'),
+            description: String(c?.description || '')
+          })),
+          partition_enabled: Boolean(r?.partition_enabled),
+          partition_column: String(r?.partition_column || 'event_date'),
+          partition_interval: String(r?.partition_interval || 'day') === 'month' ? 'month' : 'day',
+          storage_ctids: r?.ctid ? [String(r.ctid)] : []
+        });
+      }
+      tableTemplates = [bronzeTemplate(), silverTemplate(), storageSystemTemplate(), ...custom];
+      error = '';
+    } catch (e: any) {
+      storage_status = 'error';
+      storage_status_message = storageInstruction('Ошибка загрузки шаблонов из таблицы.');
+      loadTableTemplatesLocalOnly();
+      error = e?.message || String(e);
+    }
+  }
+
+  function loadTableTemplatesLocalOnly() {
     try {
       const raw = JSON.parse(localStorage.getItem(TABLE_TEMPLATES_KEY) || '[]');
       const custom = Array.isArray(raw)
@@ -166,15 +310,100 @@
             partition_interval: x?.partition_interval === 'month' ? 'month' : 'day'
           }))
         : [];
-      tableTemplates = [bronzeTemplate(), silverTemplate(), ...custom];
+      tableTemplates = [bronzeTemplate(), silverTemplate(), storageSystemTemplate(), ...custom];
     } catch {
-      tableTemplates = [bronzeTemplate(), silverTemplate()];
+      tableTemplates = [bronzeTemplate(), silverTemplate(), storageSystemTemplate()];
     }
   }
 
-  function saveTableTemplates() {
+  function applyTemplate(t: TableTemplate) {
+    schema_name = t.schema_name;
+    table_name = t.table_name;
+    table_class = t.table_class;
+    description = t.description;
+    columns = (t.columns || []).map((c) => ({ ...c }));
+    partition_enabled = !!t.partition_enabled;
+    partition_column = t.partition_column || 'event_date';
+    partition_interval = t.partition_interval || 'day';
+    selectedTemplateId = t.id;
+    templateNameDraft = t.name;
+  }
+
+  function pickTemplateBronze() {
+    applyTemplate(bronzeTemplate());
+  }
+
+  function pickTemplateSilver() {
+    applyTemplate(silverTemplate());
+  }
+
+  async function loadTableTemplates() {
+    parseStorageTableConfig();
+    await loadTemplatesFromStorage();
+  }
+
+  function saveTableTemplatesLocal() {
     const custom = tableTemplates.filter((t) => !t.id.startsWith('builtin_'));
     localStorage.setItem(TABLE_TEMPLATES_KEY, JSON.stringify(custom.slice(0, 300)));
+  }
+
+  async function saveTemplateToStorage(t: TableTemplate) {
+    const isValid = await checkStorageTable(storage_schema, storage_table);
+    if (!isValid) throw new Error(storage_status_message || 'Таблица хранения недоступна');
+    const rows = await apiJson<{ rows: any[] }>(
+      `${apiBase}/preview?schema=${encodeURIComponent(storage_schema)}&table=${encodeURIComponent(storage_table)}&limit=5000`
+    );
+    const found = (Array.isArray(rows?.rows) ? rows.rows : []).filter(
+      (r) => String(r?.template_name || '').trim().toLowerCase() === t.name.toLowerCase()
+    );
+    for (const r of found) {
+      if (r?.ctid) {
+        await apiJson(`${apiBase}/rows/delete`, {
+          method: 'POST',
+          headers: headers(),
+          body: JSON.stringify({ schema: storage_schema, table: storage_table, ctid: String(r.ctid) })
+        });
+      }
+    }
+    await apiJson(`${apiBase}/rows/add`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({
+        schema: storage_schema,
+        table: storage_table,
+        row: {
+          template_name: t.name,
+          schema_name: t.schema_name,
+          table_name: t.table_name,
+          table_class: t.table_class,
+          description: t.description,
+          columns: JSON.stringify(t.columns || []),
+          partition_enabled: !!t.partition_enabled,
+          partition_column: t.partition_column || '',
+          partition_interval: t.partition_interval || 'day'
+        }
+      })
+    });
+  }
+
+  async function deleteTemplateFromStorage(templateName: string) {
+    const isValid = await checkStorageTable(storage_schema, storage_table);
+    if (!isValid) throw new Error(storage_status_message || 'Таблица хранения недоступна');
+    const rows = await apiJson<{ rows: any[] }>(
+      `${apiBase}/preview?schema=${encodeURIComponent(storage_schema)}&table=${encodeURIComponent(storage_table)}&limit=5000`
+    );
+    const found = (Array.isArray(rows?.rows) ? rows.rows : []).filter(
+      (r) => String(r?.template_name || '').trim().toLowerCase() === templateName.toLowerCase()
+    );
+    for (const r of found) {
+      if (r?.ctid) {
+        await apiJson(`${apiBase}/rows/delete`, {
+          method: 'POST',
+          headers: headers(),
+          body: JSON.stringify({ schema: storage_schema, table: storage_table, ctid: String(r.ctid) })
+        });
+      }
+    }
   }
 
   function applySelectedTemplate(id: string) {
@@ -184,11 +413,15 @@
     applyTemplate(t);
   }
 
-  function startNewTemplate() {
+  async function startNewTemplate() {
     const name = String(templateNameDraft || '').trim();
     const cols = normalizeColumns(columns);
     if (!name) throw new Error('Укажи название шаблона');
     if (!cols.length) throw new Error('Добавь хотя бы одно поле');
+    if (storage_status !== 'ok') throw new Error(storage_status_message || 'Сначала подключи таблицу хранения шаблонов');
+    if (tableTemplates.some((t) => !t.id.startsWith('builtin_') && t.name.trim().toLowerCase() === name.toLowerCase())) {
+      throw new Error('Шаблон с таким названием уже существует');
+    }
 
     const newTemplate: TableTemplate = {
       id: uid(),
@@ -203,14 +436,15 @@
       partition_interval
     };
 
-    tableTemplates = [newTemplate, ...tableTemplates];
-    selectedTemplateId = newTemplate.id;
-    templateNameDraft = newTemplate.name;
-    saveTableTemplates();
+    await saveTemplateToStorage(newTemplate);
+    await loadTemplatesFromStorage();
+    const actual = tableTemplates.find((x) => x.name.trim().toLowerCase() === name.toLowerCase());
+    selectedTemplateId = actual?.id || '';
+    templateNameDraft = actual?.name || name;
     error = '';
   }
 
-  function saveCurrentTemplate() {
+  async function saveCurrentTemplate() {
     if (!selectedTemplateId) throw new Error('Сначала добавь или выбери шаблон');
     if (selectedTemplateId.startsWith('builtin_')) {
       throw new Error('Встроенный шаблон нельзя сохранить. Нажми «Добавить шаблон»');
@@ -218,13 +452,14 @@
 
     const idx = tableTemplates.findIndex((x) => x.id === selectedTemplateId);
     if (idx < 0) throw new Error('Активный шаблон не найден');
+    if (storage_status !== 'ok') throw new Error(storage_status_message || 'Сначала подключи таблицу хранения шаблонов');
 
     const name = String(templateNameDraft || '').trim();
     const cols = normalizeColumns(columns);
     if (!name) throw new Error('Укажи название шаблона');
     if (!cols.length) throw new Error('Добавь хотя бы одно поле');
 
-    tableTemplates[idx] = {
+    const updated = {
       ...tableTemplates[idx],
       name,
       schema_name: schema_name.trim(),
@@ -235,39 +470,68 @@
       partition_enabled,
       partition_column: partition_column.trim(),
       partition_interval
-    };
+    } as TableTemplate;
 
-    saveTableTemplates();
+    await saveTemplateToStorage(updated);
+    await loadTemplatesFromStorage();
+    const actual = tableTemplates.find((x) => x.name.trim().toLowerCase() === name.toLowerCase());
+    selectedTemplateId = actual?.id || '';
+    templateNameDraft = actual?.name || name;
     error = '';
   }
 
-  function deleteTemplateById(id: string) {
+  async function deleteTemplateById(id: string) {
     if (!id) throw new Error('Сначала выбери шаблон');
     if (id.startsWith('builtin_')) throw new Error('Встроенный шаблон удалить нельзя');
+    if (storage_status !== 'ok') throw new Error(storage_status_message || 'Сначала подключи таблицу хранения шаблонов');
 
-    tableTemplates = tableTemplates.filter((x) => x.id !== id);
+    const t = tableTemplates.find((x) => x.id === id);
+    if (t) {
+      await deleteTemplateFromStorage(t.name);
+      await loadTemplatesFromStorage();
+    }
     if (selectedTemplateId === id) {
       selectedTemplateId = '';
       templateNameDraft = '';
     }
-    saveTableTemplates();
     error = '';
   }
 
-  function onSaveTemplateClick() {
+  async function onSaveTemplateClick() {
     try {
-      saveCurrentTemplate();
+      await saveCurrentTemplate();
     } catch (e: any) {
       error = e?.message || String(e);
     }
   }
 
-  function onDeleteTemplateClick(id: string) {
+  async function onDeleteTemplateClick(id: string) {
     try {
-      deleteTemplateById(id);
+      await deleteTemplateById(id);
     } catch (e: any) {
       error = e?.message || String(e);
     }
+  }
+
+  async function onAddTemplateClick() {
+    try {
+      await startNewTemplate();
+    } catch (e: any) {
+      error = e?.message || String(e);
+    }
+  }
+
+  async function applyStorageTableChoice() {
+    if (!storage_pick_value) return;
+    const [schema, table] = storage_pick_value.split('.');
+    if (!schema || !table) return;
+    const ok = await checkStorageTable(schema, table);
+    if (!ok) return;
+    storage_schema = schema;
+    storage_table = table;
+    saveStorageTableConfig();
+    storage_picker_open = false;
+    await loadTemplatesFromStorage();
   }
 
   function addField() {
@@ -523,10 +787,29 @@
 
     <aside class="aside">
       <div class="aside-title">Шаблоны таблиц</div>
+      <div class="storage-meta">
+        <span>Хранятся в таблице:</span>
+        <button class="link-btn" on:click={() => { storage_picker_open = !storage_picker_open; storage_pick_value = `${storage_schema}.${storage_table}`; }}>
+          {storage_schema}.{storage_table}
+        </button>
+      </div>
+      {#if storage_picker_open}
+        <div class="storage-picker">
+          <select bind:value={storage_pick_value}>
+            {#each existingTables as t}
+              <option value={`${t.schema_name}.${t.table_name}`}>{t.schema_name}.{t.table_name}</option>
+            {/each}
+          </select>
+          <button on:click={applyStorageTableChoice} disabled={!storage_pick_value}>Подключить</button>
+        </div>
+      {/if}
+      <div class="storage-status" class:bad={storage_status !== 'ok'}>
+        {storage_status_message}
+      </div>
       <div class="template-controls">
         <input class="template-name" bind:value={templateNameDraft} placeholder="Название шаблона" />
         <div class="inline-actions">
-          <button on:click={startNewTemplate}>Добавить шаблон</button>
+          <button on:click={onAddTemplateClick}>Добавить шаблон</button>
           <button on:click={onSaveTemplateClick}>Сохранить шаблон</button>
         </div>
       </div>
@@ -629,6 +912,12 @@
   .actions { margin-top:14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
   .template-controls { display:flex; flex-direction:column; gap:8px; margin-bottom:8px; }
   .inline-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .storage-meta { margin-top:-2px; margin-bottom:8px; display:flex; align-items:center; gap:6px; font-size:12px; color:#64748b; }
+  .link-btn { border:0; background:transparent; color:#0f172a; padding:0; text-decoration:underline; font-size:12px; font-weight:500; }
+  .storage-picker { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+  .storage-picker select { flex:1; min-width:0; }
+  .storage-status { font-size:12px; color:#16a34a; margin:0 0 8px 0; line-height:1.35; }
+  .storage-status.bad { color:#b45309; }
 
   button { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; background:#fff; cursor:pointer; }
   button:disabled { opacity:.6; cursor:not-allowed; }
