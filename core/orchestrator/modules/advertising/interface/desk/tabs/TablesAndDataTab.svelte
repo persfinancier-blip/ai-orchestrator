@@ -519,9 +519,9 @@
   .list { display:flex; flex-direction:column; gap:8px; overflow:visible; max-height:none; }
   .row-item { display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; border:1px solid #e6eaf2; border-radius:14px; background:#fff; padding:8px 10px; }
   .item-button { text-align:left; border:0; background:transparent; padding:0; font-weight:400; font-size:14px; line-height:1.3; color:inherit; }
-  .activeitem { border-color:#0f172a; background:#0f172a; color:#fff; }
-  .activeitem .item-button { color:#fff; }
-  .activeitem .item-button::before { content:'●'; margin-right:8px; font-size:11px; color:#fff; vertical-align:middle; }
+  .activeitem { border-color:#e6eaf2; background:#fff; color:#0f172a; }
+  .activeitem .item-button { color:#0f172a; font-weight:600; }
+  .activeitem .item-button::before { content:'●'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
   .tables-list .row-item { background:#0f172a; border-color:#0f172a; }
   .tables-list .item-button { color:#fff; }
 
@@ -558,6 +558,7 @@
   .danger { border-color:#f3c0c0; color:#b91c1c; }
   .danger.icon-btn { border-color:transparent; background:transparent; color:#b91c1c; }
   .tables-list .icon-btn { color:#fff; }
+  .tables-list .activeitem .icon-btn { color:#b91c1c; }
   .primary { background:#0f172a; color:#fff; border-color:#0f172a; }
 
   .alert { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #f3c0c0; background: #fff5f5; }
