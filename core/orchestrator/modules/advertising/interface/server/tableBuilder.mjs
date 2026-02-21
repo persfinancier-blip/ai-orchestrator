@@ -135,10 +135,6 @@ async function ensureSettingsTable(client) {
       updated_by text NOT NULL DEFAULT 'system'
     )
   `);
-  await client.query(`
-    CREATE INDEX IF NOT EXISTS ao_table_settings_store_active_idx
-    ON ${SETTINGS_QNAME} (is_active, setting_key)
-  `);
 
   const ok = await hasRequiredColumns(client, SETTINGS_SCHEMA, SETTINGS_TABLE, SETTINGS_REQUIRED_COLUMNS);
   if (!ok) {
@@ -161,6 +157,10 @@ async function ensureSettingsTable(client) {
       ON ${SETTINGS_QNAME} (is_active, setting_key)
     `);
   }
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_table_settings_store_active_idx
+    ON ${SETTINGS_QNAME} (is_active, setting_key)
+  `);
 }
 
 async function ensureDefaultSettingsRows(client) {
