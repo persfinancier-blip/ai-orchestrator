@@ -132,6 +132,39 @@ function normalizeTypeName(type) {
   return String(type || '').toLowerCase().trim();
 }
 
+function normalizeContractFieldType(type) {
+  const t = normalizeTypeName(type);
+  if (!t) return '';
+  if (t === 'text' || t.includes('character varying') || t === 'varchar') return 'text';
+  if (t === 'int' || t === 'integer' || t === 'int4') return 'integer';
+  if (t === 'bigint' || t === 'int8') return 'bigint';
+  if (t.startsWith('numeric') || t.startsWith('decimal')) return 'numeric';
+  if (t === 'boolean' || t === 'bool') return 'boolean';
+  if (t === 'date') return 'date';
+  if (t === 'timestamptz' || t.includes('timestamp with time zone')) return 'timestamptz';
+  if (t === 'jsonb' || t === 'json') return 'jsonb';
+  if (t === 'uuid') return 'uuid';
+  return '';
+}
+
+function normalizeContractColumnsPayload(columns) {
+  const list = Array.isArray(columns) ? columns : [];
+  const out = [];
+  const seen = new Set();
+  for (const raw of list) {
+    const field_name = String(raw?.field_name || raw?.name || '').trim();
+    const field_type = normalizeContractFieldType(raw?.field_type || raw?.type || '');
+    const description = String(raw?.description || '').trim();
+    if (!isIdent(field_name)) continue;
+    if (!field_type) continue;
+    const key = field_name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ field_name, field_type, description });
+  }
+  return out;
+}
+
 function parseStorageSettingValue(value) {
   if (typeof value === 'string') {
     const raw = value.trim();
@@ -1073,6 +1106,119 @@ tableBuilderRouter.post('/contracts/version/delete', requireDataAdmin, async (re
     return res.json({ ok: true, schema, table, version: Math.trunc(version), affected: r.rowCount || 0 });
   } catch (e) {
     return res.status(500).json({ error: 'contract_delete_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+tableBuilderRouter.post('/contracts/apply-version', requireDataAdmin, async (req, res) => {
+  const schema = String(req.body?.schema || '').trim();
+  const table = String(req.body?.table || '').trim();
+  const targetVersion = Number(req.body?.target_version || 0);
+  if (!isIdent(schema) || !isIdent(table) || !Number.isFinite(targetVersion) || targetVersion <= 0) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid schema/table/target_version' });
+  }
+  if (isProtectedSystemTable(schema, table)) {
+    return res.status(403).json({ error: 'forbidden', details: 'protected_system_table' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const config = await loadRuntimeConfig(client);
+    const contractsQn = await ensureContractsTable(client, config);
+
+    const targetRes = await client.query(
+      `
+      SELECT version, description, columns
+      FROM ${contractsQn}
+      WHERE schema_name = $1
+        AND table_name = $2
+        AND version = $3
+        AND lifecycle_state <> 'deleted_by_user'
+      LIMIT 1
+      `,
+      [schema, table, Math.trunc(targetVersion)]
+    );
+    const target = targetRes.rows?.[0] || null;
+    if (!target) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'contract_not_found', details: 'target contract version not found' });
+    }
+
+    const targetColumns = normalizeContractColumnsPayload(target.columns);
+    const currentColumns = await getTableColumnsSnapshot(client, schema, table);
+
+    const currentMap = new Map(currentColumns.map((c) => [String(c.field_name || '').toLowerCase(), c]));
+    const targetMap = new Map(targetColumns.map((c) => [String(c.field_name || '').toLowerCase(), c]));
+
+    const toAdd = [];
+    const toDrop = [];
+    const toDescribe = [];
+
+    for (const tc of targetColumns) {
+      const key = tc.field_name.toLowerCase();
+      const cc = currentMap.get(key);
+      if (!cc) {
+        toAdd.push(tc);
+        continue;
+      }
+      const currDesc = String(cc.description || '').trim();
+      const nextDesc = String(tc.description || '').trim();
+      if (currDesc !== nextDesc) {
+        toDescribe.push({ name: tc.field_name, description: nextDesc });
+      }
+    }
+
+    for (const cc of currentColumns) {
+      const key = String(cc.field_name || '').toLowerCase();
+      if (!targetMap.has(key)) {
+        toDrop.push(cc.field_name);
+      }
+    }
+
+    for (const c of toAdd) {
+      await client.query(`ALTER TABLE ${qname(schema, table)} ADD COLUMN IF NOT EXISTS ${qi(c.field_name)} ${c.field_type}`);
+      await client.query(`COMMENT ON COLUMN ${qname(schema, table)}.${qi(c.field_name)} IS ${qlit(c.description)}`);
+    }
+
+    for (const name of toDrop) {
+      await client.query(`ALTER TABLE ${qname(schema, table)} DROP COLUMN IF EXISTS ${qi(name)}`);
+    }
+
+    for (const d of toDescribe) {
+      await client.query(`COMMENT ON COLUMN ${qname(schema, table)}.${qi(d.name)} IS ${qlit(d.description)}`);
+    }
+
+    const mark = `aligned_to_contract:v${Math.trunc(targetVersion)}`;
+    const baseDescription = String(target.description || '').trim();
+    const nextTableDescription = baseDescription ? `${baseDescription} | ${mark}` : mark;
+    await client.query(`COMMENT ON TABLE ${qname(schema, table)} IS ${qlit(nextTableDescription)}`);
+
+    const newVersion = await createContractVersionFromTable(
+      client,
+      schema,
+      table,
+      mark,
+      req.header('X-AO-ROLE') || 'ui'
+    );
+
+    await client.query('COMMIT');
+    return res.json({
+      ok: true,
+      schema,
+      table,
+      target_version: Math.trunc(targetVersion),
+      new_version: Number(newVersion || 0),
+      added_columns: toAdd.map((x) => x.field_name),
+      dropped_columns: toDrop,
+      described_columns: toDescribe.map((x) => x.name)
+    });
+  } catch (e) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {}
+    return res.status(500).json({ error: 'apply_contract_version_failed', details: String(e?.message || e) });
   } finally {
     client.release();
   }

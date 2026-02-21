@@ -16,7 +16,11 @@
     deleted_at?: string | null;
     description?: string;
     created_at?: string;
+    columns?: Array<{ field_name: string; field_type: string; description?: string }>;
+    change_reason?: string;
+    changed_by?: string;
   };
+  type ContractColumn = { field_name: string; field_type: string; description: string };
 
   export let apiBase: string;
   export let role: Role;
@@ -35,7 +39,7 @@
   let preview_loading = false;
   let preview_error = '';
 
-  let modal = '' as '' | 'addColumn' | 'confirmDropColumn' | 'confirmDeleteRow';
+  let modal = '' as '' | 'addColumn' | 'confirmDropColumn' | 'confirmDeleteRow' | 'confirmApplyContractVersion';
   let modal_error = '';
 
   let new_col_name = '';
@@ -55,6 +59,18 @@
   let contracts_error = '';
   let contractVersions: ContractVersion[] = [];
   let selectedContractId = '';
+  let compare_versions_open = false;
+  let compare_top_id = '';
+  let compare_bottom_id = '';
+  let compareTop: ContractVersion | null = null;
+  let compareBottom: ContractVersion | null = null;
+  let compareRows: Array<{ key: string; top: ContractColumn | null; bottom: ContractColumn | null }> = [];
+  let applyTargetContract: ContractVersion | null = null;
+  let applyPlan: { toAdd: ContractColumn[]; toDrop: Array<{ field_name: string }>; toDescribe: ContractColumn[] } = {
+    toAdd: [],
+    toDrop: [],
+    toDescribe: []
+  };
   let contracts_storage_schema = 'ao_system';
   let contracts_storage_table = 'table_data_contract_versions';
   let contracts_storage_picker_open = false;
@@ -213,10 +229,10 @@
         contractVersions = [];
         return;
       }
-      const j = await apiJson<{ rows: any[] }>(
-        `${apiBase}/preview?schema=${encodeURIComponent(contracts_storage_schema)}&table=${encodeURIComponent(contracts_storage_table)}&limit=5000`
+      const j = await apiJson<{ contracts: any[] }>(
+        `${apiBase}/contracts?schema=${encodeURIComponent(preview_schema)}&table=${encodeURIComponent(preview_table)}`
       );
-      const rows = Array.isArray(j?.rows) ? j.rows : [];
+      const rows = Array.isArray(j?.contracts) ? j.contracts : [];
       contractVersions = rows
         .filter((r: any) =>
           String(r?.schema_name || '').trim() === preview_schema &&
@@ -224,11 +240,8 @@
           String(r?.lifecycle_state || '').trim() !== 'deleted_by_user'
         )
         .map((r: any, idx: number) => ({
-          id: String(
-            r?.__ctid ||
-              `${preview_schema}.${preview_table}.v${Number(r?.version || 0)}.${String(r?.created_at || '')}.${idx}`
-          ),
-          __ctid: String(r?.__ctid || ''),
+          id: String(`${preview_schema}.${preview_table}.v${Number(r?.version || 0)}.${String(r?.created_at || '')}.${idx}`),
+          __ctid: '',
           schema_name: String(r?.schema_name || ''),
           table_name: String(r?.table_name || ''),
           contract_name: String(r?.contract_name || ''),
@@ -236,16 +249,27 @@
           lifecycle_state: String(r?.lifecycle_state || ''),
           deleted_at: r?.deleted_at || null,
           description: String(r?.description || ''),
-          created_at: String(r?.created_at || '')
+          created_at: String(r?.created_at || ''),
+          columns: normalizeContractColumns(r?.columns),
+          change_reason: String(r?.change_reason || ''),
+          changed_by: String(r?.changed_by || '')
         }))
         .sort((a, b) => b.version - a.version);
       if (selectedContractId && !contractVersions.some((x) => String(x.id || '') === selectedContractId)) {
         selectedContractId = '';
       }
+      if (compare_top_id && !contractVersions.some((x) => String(x.id || '') === compare_top_id)) {
+        compare_top_id = '';
+      }
+      if (compare_bottom_id && !contractVersions.some((x) => String(x.id || '') === compare_bottom_id)) {
+        compare_bottom_id = '';
+      }
     } catch (e: any) {
       contracts_error = e?.message ?? String(e);
       contractVersions = [];
       selectedContractId = '';
+      compare_top_id = '';
+      compare_bottom_id = '';
     } finally {
       contracts_loading = false;
     }
@@ -253,6 +277,113 @@
 
   function applySelectedContract(id: string) {
     selectedContractId = id;
+  }
+
+  function normalizeContractColumns(columns: any): ContractColumn[] {
+    const src = Array.isArray(columns) ? columns : [];
+    const out: ContractColumn[] = [];
+    const seen = new Set<string>();
+    for (const row of src) {
+      const field_name = String(row?.field_name || row?.name || '').trim();
+      const field_type = String(row?.field_type || row?.type || '').trim();
+      const description = String(row?.description || '').trim();
+      if (!field_name || !field_type) continue;
+      const key = field_name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ field_name, field_type, description });
+    }
+    return out;
+  }
+
+  function getContractById(id: string): ContractVersion | null {
+    if (!id) return null;
+    return contractVersions.find((x) => String(x.id || '') === id) || null;
+  }
+
+  function getActiveContract(): ContractVersion | null {
+    return contractVersions.find((x) => isActiveContract(x)) || contractVersions[0] || null;
+  }
+
+  function getDefaultCompareBottomId(topId: string) {
+    const top = getContractById(topId);
+    if (!top) return '';
+    const candidates = contractVersions.filter((c) => String(c.id || '') !== String(top.id || ''));
+    if (!candidates.length) return '';
+    return String(candidates[0].id || '');
+  }
+
+  function openCompareVersions() {
+    if (!contractVersions.length) return;
+    const active = getActiveContract();
+    compare_top_id = String(active?.id || contractVersions[0]?.id || '');
+    compare_bottom_id = getDefaultCompareBottomId(compare_top_id);
+    compare_versions_open = true;
+  }
+
+  function buildApplyPlan(target: ContractVersion | null) {
+    const targetCols = normalizeContractColumns(target?.columns);
+    const currCols = preview_columns.map((c) => ({
+      field_name: String(c.name || '').trim(),
+      field_type: String(c.type || '').trim(),
+      description: String(c.description || '').trim()
+    }));
+    const currMap = new Map(currCols.map((c) => [c.field_name.toLowerCase(), c]));
+    const targetMap = new Map(targetCols.map((c) => [c.field_name.toLowerCase(), c]));
+    const toAdd = targetCols.filter((c) => !currMap.has(c.field_name.toLowerCase()));
+    const toDrop = currCols.filter((c) => !targetMap.has(c.field_name.toLowerCase()));
+    const toDescribe = targetCols.filter((c) => {
+      const cur = currMap.get(c.field_name.toLowerCase());
+      return !!cur && String(cur.description || '').trim() !== String(c.description || '').trim();
+    });
+    return { toAdd, toDrop, toDescribe };
+  }
+
+  function openApplySelectedVersion() {
+    if (!preview_schema || !preview_table) {
+      preview_error = 'Таблица не выбрана';
+      return;
+    }
+    if (!selectedContractId) {
+      contracts_error = 'Выбери версию контракта справа';
+      return;
+    }
+    const target = getContractById(selectedContractId);
+    if (!target) {
+      contracts_error = 'Выбранная версия контракта не найдена';
+      return;
+    }
+    modal_error = '';
+    modal = 'confirmApplyContractVersion';
+  }
+
+  async function applySelectedContractVersionNow() {
+    modal_error = '';
+    try {
+      if (!canEditSelectedTable()) throw new Error('Системную таблицу нельзя редактировать');
+      if (!preview_schema || !preview_table) throw new Error('Таблица не выбрана');
+      const target = getContractById(selectedContractId);
+      if (!target) throw new Error('Выбери версию контракта для применения');
+      const version = Number(target.version || 0);
+      if (!Number.isFinite(version) || version <= 0) throw new Error('Некорректная версия контракта');
+
+      await apiJson(`${apiBase}/contracts/apply-version`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({
+          schema: preview_schema,
+          table: preview_table,
+          target_version: Math.trunc(version)
+        })
+      });
+
+      modal = '';
+      await refreshPreviewAll();
+      await loadContractsPanel();
+      await refreshTables();
+    } catch (e: any) {
+      modal_error = e?.message ?? String(e);
+    }
   }
 
   function isActiveContract(c: ContractVersion) {
@@ -266,13 +397,11 @@
       const version = Number(contract?.version || 0);
       const ok = confirm(`Удалить версию контракта v${version}?`);
       if (!ok) return;
-      const ctid = String(contract?.__ctid || '');
-      if (!ctid) throw new Error('Не найден CTID версии контракта для удаления');
-
-      await apiJson(`${apiBase}/rows/delete`, {
+      if (!Number.isFinite(version) || version <= 0) throw new Error('Некорректная версия контракта');
+      await apiJson(`${apiBase}/contracts/version/delete`, {
         method: 'POST',
         headers: headers(),
-        body: JSON.stringify({ schema: contracts_storage_schema, table: contracts_storage_table, ctid })
+        body: JSON.stringify({ schema: preview_schema, table: preview_table, version: Math.trunc(version) })
       });
       await loadContractsPanel();
     } catch (e: any) {
@@ -525,6 +654,38 @@
     tableDescriptionEl.style.height = `${Math.max(tableDescriptionEl.scrollHeight, 56)}px`;
   }
 
+  function buildCompareRows(top: ContractVersion | null, bottom: ContractVersion | null) {
+    const topCols = normalizeContractColumns(top?.columns);
+    const bottomCols = normalizeContractColumns(bottom?.columns);
+    const order: string[] = [];
+    const seen = new Set<string>();
+    for (const c of topCols) {
+      const k = c.field_name.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      order.push(k);
+    }
+    for (const c of bottomCols) {
+      const k = c.field_name.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      order.push(k);
+    }
+    const topMap = new Map(topCols.map((c) => [c.field_name.toLowerCase(), c]));
+    const bottomMap = new Map(bottomCols.map((c) => [c.field_name.toLowerCase(), c]));
+    return order.map((k) => ({
+      key: k,
+      top: topMap.get(k) || null,
+      bottom: bottomMap.get(k) || null
+    }));
+  }
+
+  $: compareTop = getContractById(compare_top_id);
+  $: compareBottom = getContractById(compare_bottom_id);
+  $: compareRows = buildCompareRows(compareTop, compareBottom);
+  $: applyTargetContract = getContractById(selectedContractId);
+  $: applyPlan = buildApplyPlan(applyTargetContract);
+
   $: table_description, tick().then(syncTableDescriptionHeight);
 </script>
 
@@ -621,6 +782,66 @@
             disabled={!canEditSelectedTable()}
             on:input={syncTableDescriptionHeight}
           ></textarea>
+        {/if}
+        {#if compare_versions_open}
+          <div class="compare-card">
+            <div class="compare-head">
+              <h4>Сравнение версий контракта</h4>
+              <button class="icon-btn" title="Закрыть сравнение" on:click={() => (compare_versions_open = false)}>x</button>
+            </div>
+            <div class="compare-selectors">
+              <select bind:value={compare_top_id}>
+                {#each contractVersions as c}
+                  <option value={String(c.id || '')}>Версия v{c.version}</option>
+                {/each}
+              </select>
+              <select bind:value={compare_bottom_id}>
+                {#each contractVersions as c}
+                  <option value={String(c.id || '')}>Версия v{c.version}</option>
+                {/each}
+              </select>
+            </div>
+            {#if compareRows.length === 0}
+              <p class="hint">Для сравнения выбери две версии контракта.</p>
+            {:else}
+              <div class="compare-stack">
+                <div class="compare-version">
+                  <div class="hint">Верхняя версия: v{compareTop?.version ?? '-'}</div>
+                  <table class="compare-table">
+                    <thead>
+                      <tr><th>Колонка</th><th>Тип</th><th>Описание</th></tr>
+                    </thead>
+                    <tbody>
+                      {#each compareRows as row}
+                        <tr class:missing-row={!row.top}>
+                          <td>{row.top?.field_name || ''}</td>
+                          <td>{row.top?.field_type || ''}</td>
+                          <td>{row.top?.description || ''}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+                <div class="compare-version">
+                  <div class="hint">Нижняя версия: v{compareBottom?.version ?? '-'}</div>
+                  <table class="compare-table">
+                    <thead>
+                      <tr><th>Колонка</th><th>Тип</th><th>Описание</th></tr>
+                    </thead>
+                    <tbody>
+                      {#each compareRows as row}
+                        <tr class:missing-row={!row.bottom}>
+                          <td>{row.bottom?.field_name || ''}</td>
+                          <td>{row.bottom?.field_type || ''}</td>
+                          <td>{row.bottom?.description || ''}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            {/if}
+          </div>
         {/if}
 
         {#if preview_error}
@@ -747,6 +968,14 @@
           Выбери таблицу слева
         {/if}
       </p>
+      <div class="contract-actions">
+        <button on:click={openCompareVersions} disabled={!preview_schema || !preview_table || contractVersions.length < 2}>
+          Сравнить версии
+        </button>
+        <button on:click={openApplySelectedVersion} disabled={!preview_schema || !preview_table || !selectedContractId || !canEditSelectedTable()}>
+          Привести к выбранной версии
+        </button>
+      </div>
       {#if contractVersions.length === 0}
         <p class="hint">Версии контракта не найдены.</p>
       {:else}
@@ -861,6 +1090,33 @@
           <button class="danger" on:click={deleteRowNow} disabled={!canEditSelectedTable()}>Удалить</button>
           <button on:click={() => (modal = '')}>Отмена</button>
         </div>
+      {:else if modal === 'confirmApplyContractVersion'}
+        <h3 style="margin-top:0;">Привести таблицу к версии v{applyTargetContract?.version ?? '-'}</h3>
+        <p class="hint">Будет применено к таблице {preview_schema}.{preview_table}</p>
+        <div class="hint" style="margin-top:8px;">
+          Добавить столбцы: {applyPlan.toAdd.length} · Удалить столбцы: {applyPlan.toDrop.length} · Обновить описания: {applyPlan.toDescribe.length}
+        </div>
+        {#if applyPlan.toAdd.length > 0}
+          <p class="hint">Добавятся: {applyPlan.toAdd.map((x) => x.field_name).join(', ')}</p>
+        {/if}
+        {#if applyPlan.toDrop.length > 0}
+          <p class="hint">Удалятся: {applyPlan.toDrop.map((x) => x.field_name).join(', ')}</p>
+        {/if}
+        {#if applyPlan.toDescribe.length > 0}
+          <p class="hint">Обновятся описания: {applyPlan.toDescribe.map((x) => x.field_name).join(', ')}</p>
+        {/if}
+
+        {#if modal_error}
+          <div class="alert" style="margin-top:12px;">
+            <div class="alert-title">Ошибка</div>
+            <pre>{modal_error}</pre>
+          </div>
+        {/if}
+
+        <div class="modal-actions">
+          <button class="primary" on:click={applySelectedContractVersionNow} disabled={!canEditSelectedTable()}>Подтвердить</button>
+          <button on:click={() => (modal = '')}>Отмена</button>
+        </div>
       {/if}
     </div>
   </div>
@@ -914,6 +1170,19 @@
 
   .hint { margin:10px 0 0; color:#64748b; font-size:13px; }
   .muted { color:#64748b; font-size:13px; }
+  .contract-actions { margin-top:10px; display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+
+  .compare-card { margin-top:10px; border:1px solid #e6eaf2; border-radius:14px; padding:10px; background:#fff; }
+  .compare-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .compare-head h4 { margin:0; font-size:14px; }
+  .compare-selectors { margin-top:8px; display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .compare-selectors select { width:100%; min-width:0; }
+  .compare-stack { margin-top:10px; display:grid; grid-template-columns:1fr; gap:10px; }
+  .compare-version { border:1px solid #eef2f7; border-radius:12px; padding:8px; }
+  .compare-table { width:100%; border-collapse:collapse; min-width:0; }
+  .compare-table th, .compare-table td { border-bottom:1px solid #eef2f7; padding:8px; font-size:12px; }
+  .compare-table th { position:static; background:transparent; }
+  .missing-row td { background:#f1f5f9; color:#94a3b8; }
 
   .preview { margin-top: 10px; overflow:auto; border:1px solid #e6eaf2; border-radius:16px; }
   table { width:100%; border-collapse:collapse; min-width: 740px; }
@@ -958,6 +1227,8 @@
 
   .form { display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:12px; }
   @media (max-width: 900px) { .form { grid-template-columns: 1fr; } }
+  @media (max-width: 900px) { .contract-actions { grid-template-columns:1fr; } }
+  @media (max-width: 900px) { .compare-selectors { grid-template-columns:1fr; } }
   @media (max-width: 900px) { .rename-row { grid-template-columns: 1fr; } }
   .form label { display:flex; flex-direction:column; gap:6px; font-size:13px; }
   .form input, .form select { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; }
