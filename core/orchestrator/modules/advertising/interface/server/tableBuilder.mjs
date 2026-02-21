@@ -305,6 +305,33 @@ tableBuilderRouter.post('/tables/drop', requireDataAdmin, async (req, res) => {
   }
 });
 
+tableBuilderRouter.post('/tables/rename', requireDataAdmin, async (req, res) => {
+  const schema = String(req.body?.schema || '').trim();
+  const table = String(req.body?.table || '').trim();
+  const new_table = String(req.body?.new_table || '').trim();
+
+  if (!isIdent(schema) || !isIdent(table) || !isIdent(new_table)) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid schema/table/new_table' });
+  }
+  if (table === new_table) {
+    return res.json({ ok: true, schema, table, new_table, renamed: false });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query(`ALTER TABLE ${qname(schema, table)} RENAME TO ${qi(new_table)}`);
+    return res.json({ ok: true, schema, table, new_table, renamed: true });
+  } catch (e) {
+    const code = e?.code ? String(e.code) : '';
+    if (code === '42P07') {
+      return res.status(409).json({ error: 'rename_failed', details: 'table_with_new_name_already_exists' });
+    }
+    return res.status(500).json({ error: 'rename_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
 tableBuilderRouter.post('/columns/drop', requireDataAdmin, async (req, res) => {
   const schema = String(req.body?.schema || '').trim();
   const table = String(req.body?.table || '').trim();

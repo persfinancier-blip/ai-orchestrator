@@ -32,6 +32,7 @@
   let pending_delete_row_ctid = '';
 
   let newRow: Record<string, string> = {};
+  let rename_table_name = '';
 
   function canWrite(): boolean {
     return role === 'data_admin';
@@ -40,6 +41,7 @@
   function pickExisting(t: ExistingTable) {
     preview_schema = t.schema_name;
     preview_table = t.table_name;
+    rename_table_name = t.table_name;
     loadColumns();
     loadPreview();
   }
@@ -190,6 +192,34 @@
     }
   }
 
+  async function saveTableName() {
+    preview_error = '';
+    try {
+      if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
+      if (!preview_schema || !preview_table) throw new Error('Таблица не выбрана');
+      const nextName = rename_table_name.trim();
+      if (!nextName) throw new Error('Укажи новое название таблицы');
+
+      await apiJson(`${apiBase}/tables/rename`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({
+          schema: preview_schema,
+          table: preview_table,
+          new_table: nextName
+        })
+      });
+
+      preview_table = nextName;
+      rename_table_name = nextName;
+      await refreshTables();
+      await loadColumns();
+      await loadPreview();
+    } catch (e: any) {
+      preview_error = e?.message ?? String(e);
+    }
+  }
+
   function confirmDeleteRow(ctid: string) {
     modal_error = '';
     pending_delete_row_ctid = ctid;
@@ -278,6 +308,18 @@
             >↻</button>
           </div>
         </div>
+
+        {#if preview_schema && preview_table}
+          <div class="rename-row">
+            <input
+              class="rename-input"
+              bind:value={rename_table_name}
+              placeholder="Название таблицы"
+              disabled={!canWrite()}
+            />
+            <button class="primary" on:click={saveTableName} disabled={!canWrite()}>Сохранить</button>
+          </div>
+        {/if}
 
         {#if preview_error}
           <div class="alert">
@@ -462,6 +504,8 @@
   .panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
   .panel-head h2 { margin:0; font-size:18px; }
   .quick { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .rename-row { margin-top:10px; display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; }
+  .rename-input { width:100%; box-sizing:border-box; border-radius:12px; border:1px solid #e6eaf2; padding:10px 12px; }
 
   .layout { display:grid; grid-template-columns: 320px 1fr 360px; gap:12px; margin-top:12px; align-items:start; }
   @media (max-width: 1300px) { .layout { grid-template-columns: 320px 1fr; } }
