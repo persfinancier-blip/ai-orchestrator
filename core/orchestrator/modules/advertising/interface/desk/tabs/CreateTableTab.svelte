@@ -374,12 +374,12 @@
     <aside class="aside">
       <div class="aside-head">
         <div class="aside-title">Текущие таблицы</div>
-        <button class="icon-btn" on:click={refreshTables} disabled={loading} title="Обновить список">↻</button>
+        <button class="icon-btn refresh-btn" on:click={refreshTables} disabled={loading} title="Обновить список">↻</button>
       </div>
       {#if existingTables.length === 0}
         <div class="hint">Пока нет данных.</div>
       {:else}
-        <div class="list">
+        <div class="list tables-list">
           {#each existingTables as t}
             <div class="row-item">
               <div class="row-name">{t.schema_name}.{t.table_name}</div>
@@ -486,7 +486,7 @@
           <button on:click={onSaveTemplateClick}>Сохранить шаблон</button>
         </div>
       </div>
-      <div class="list">
+      <div class="list templates-list">
         {#each tableTemplates as t}
           <div class="row-item" class:activeitem={selectedTemplateId === t.id}>
             <button class="item-button" on:click={() => applySelectedTemplate(t.id)}>{t.name}</button>
@@ -536,6 +536,8 @@
   .item-button { text-align:left; border:0; background:transparent; padding:2px 4px; }
   .activeitem { border-color:#0f172a; background:#0f172a; color:#fff; }
   .activeitem .item-button { color:#fff; }
+  .tables-list .row-item { background:#0f172a; border-color:#0f172a; }
+  .tables-list .row-name { color:#fff; }
 
   .main { min-width:0; }
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; }
@@ -562,6 +564,7 @@
   .danger { border-color:#f3c0c0; color:#b91c1c; }
   .icon-btn { width:44px; min-width:44px; padding:10px 0; text-transform:uppercase; border-color:transparent; background:transparent; color:#b91c1c; }
   .danger.icon-btn { border-color:transparent; background:transparent; color:#b91c1c; }
+  .refresh-btn { color:#16a34a; }
 
   .hint { margin:10px 0 0; color:#64748b; font-size:13px; }
   .alert { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #f3c0c0; background: #fff5f5; }
