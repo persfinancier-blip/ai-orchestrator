@@ -6,6 +6,7 @@
   export type ExistingTable = { schema_name: string; table_name: string };
   export type ColumnMeta = { name: string; type: string; description?: string; is_nullable?: boolean };
   export type ContractVersion = {
+    __ctid?: string;
     schema_name: string;
     table_name: string;
     contract_name: string;
@@ -48,9 +49,37 @@
   let contracts_loading = false;
   let contracts_error = '';
   let contractVersions: ContractVersion[] = [];
+  let contracts_storage_schema = 'ao_system';
+  let contracts_storage_table = 'table_data_contract_versions';
+  let contracts_storage_picker_open = false;
+  let contracts_storage_pick_value = '';
+
+  const CONTRACTS_STORAGE_KEY = 'ao_data_contracts_storage_table_v1';
 
   function canWrite(): boolean {
     return role === 'data_admin';
+  }
+
+  function parseContractsStorageConfig() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(CONTRACTS_STORAGE_KEY) || '{}');
+      const schema = String(raw?.schema || '').trim();
+      const table = String(raw?.table || '').trim();
+      if (schema && table) {
+        contracts_storage_schema = schema;
+        contracts_storage_table = table;
+      }
+    } catch {
+      // ignore
+    }
+    contracts_storage_pick_value = `${contracts_storage_schema}.${contracts_storage_table}`;
+  }
+
+  function saveContractsStorageConfig() {
+    localStorage.setItem(
+      CONTRACTS_STORAGE_KEY,
+      JSON.stringify({ schema: contracts_storage_schema, table: contracts_storage_table })
+    );
   }
 
   function pickExisting(t: ExistingTable) {
@@ -106,11 +135,28 @@
         contractVersions = [];
         return;
       }
-      const j = await apiJson<{ contracts: ContractVersion[] }>(
-        `${apiBase}/contracts?schema=${encodeURIComponent(preview_schema)}&table=${encodeURIComponent(preview_table)}`,
-        { headers: { 'X-AO-ROLE': role } }
+      const j = await apiJson<{ rows: any[] }>(
+        `${apiBase}/preview?schema=${encodeURIComponent(contracts_storage_schema)}&table=${encodeURIComponent(contracts_storage_table)}&limit=5000`
       );
-      contractVersions = (j.contracts || []).filter((x) => x.lifecycle_state !== 'deleted_by_user');
+      const rows = Array.isArray(j?.rows) ? j.rows : [];
+      contractVersions = rows
+        .filter((r: any) =>
+          String(r?.schema_name || '').trim() === preview_schema &&
+          String(r?.table_name || '').trim() === preview_table &&
+          String(r?.lifecycle_state || '').trim() !== 'deleted_by_user'
+        )
+        .map((r: any) => ({
+          __ctid: String(r?.__ctid || ''),
+          schema_name: String(r?.schema_name || ''),
+          table_name: String(r?.table_name || ''),
+          contract_name: String(r?.contract_name || ''),
+          version: Number(r?.version || 0),
+          lifecycle_state: String(r?.lifecycle_state || ''),
+          deleted_at: r?.deleted_at || null,
+          description: String(r?.description || ''),
+          created_at: String(r?.created_at || '')
+        }))
+        .sort((a, b) => b.version - a.version);
     } catch (e: any) {
       contracts_error = e?.message ?? String(e);
       contractVersions = [];
@@ -125,10 +171,14 @@
       if (!preview_schema || !preview_table) throw new Error('Таблица не выбрана');
       const ok = confirm(`Удалить версию контракта v${version}?`);
       if (!ok) return;
-      await apiJson(`${apiBase}/contracts/version/delete`, {
+      const hit = contractVersions.find((x) => Number(x.version) === Number(version));
+      const ctid = String(hit?.__ctid || '');
+      if (!ctid) throw new Error('Не найден CTID версии контракта для удаления');
+
+      await apiJson(`${apiBase}/rows/delete`, {
         method: 'POST',
         headers: headers(),
-        body: JSON.stringify({ schema: preview_schema, table: preview_table, version })
+        body: JSON.stringify({ schema: contracts_storage_schema, table: contracts_storage_table, ctid })
       });
       await loadContractsPanel();
     } catch (e: any) {
@@ -305,8 +355,20 @@
   }
 
   onMount(() => {
+    parseContractsStorageConfig();
     loadContractsPanel();
   });
+
+  async function applyContractsStorageChoice() {
+    if (!contracts_storage_pick_value) return;
+    const [schema, table] = contracts_storage_pick_value.split('.');
+    if (!schema || !table) return;
+    contracts_storage_schema = schema;
+    contracts_storage_table = table;
+    saveContractsStorageConfig();
+    contracts_storage_picker_open = false;
+    await loadContractsPanel();
+  }
 </script>
 
 <section class="panel">
@@ -473,8 +535,26 @@
       </div>
       <div class="storage-meta">
         <span>Хранятся в таблице:</span>
-        <span class="plain-value">ao_system.table_data_contract_versions</span>
+        <button
+          class="link-btn"
+          on:click={() => {
+            contracts_storage_picker_open = !contracts_storage_picker_open;
+            contracts_storage_pick_value = `${contracts_storage_schema}.${contracts_storage_table}`;
+          }}
+        >
+          {contracts_storage_schema}.{contracts_storage_table}
+        </button>
       </div>
+      {#if contracts_storage_picker_open}
+        <div class="storage-picker">
+          <select bind:value={contracts_storage_pick_value}>
+            {#each existingTables as t}
+              <option value={`${t.schema_name}.${t.table_name}`}>{t.schema_name}.{t.table_name}</option>
+            {/each}
+          </select>
+          <button on:click={applyContractsStorageChoice} disabled={!contracts_storage_pick_value}>Подключить</button>
+        </div>
+      {/if}
       <p class="hint">
         {#if preview_schema && preview_table}
           Для таблицы: {preview_schema}.{preview_table}
@@ -628,6 +708,9 @@
 
   .storage-meta { margin-top:0; margin-bottom:8px; display:flex; align-items:center; gap:6px; font-size:12px; color:#64748b; }
   .plain-value { color:#0f172a; font-size:12px; font-weight:500; }
+  .link-btn { border:0; background:transparent; color:#0f172a; padding:0; text-decoration:underline; font-size:12px; font-weight:500; }
+  .storage-picker { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+  .storage-picker select { flex:1; min-width:0; }
 
   .hint { margin:10px 0 0; color:#64748b; font-size:13px; }
   .muted { color:#64748b; font-size:13px; }
