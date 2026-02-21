@@ -255,6 +255,10 @@
     selectedContractId = id;
   }
 
+  function isActiveContract(c: ContractVersion) {
+    return String(c?.lifecycle_state || '').trim() === 'active';
+  }
+
   async function deleteContractVersion(contract: ContractVersion) {
     try {
       if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
@@ -754,7 +758,7 @@
                 {#if c.lifecycle_state === 'table_deleted'} · таблица удалена{/if}
               </button>
               <div class="row-actions">
-                {#if selectedContractId === c.id}
+                {#if isActiveContract(c)}
                   <span class="system-badge">Active</span>
                 {/if}
                 <button
