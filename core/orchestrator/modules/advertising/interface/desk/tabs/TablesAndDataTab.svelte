@@ -53,6 +53,11 @@
   let contracts_storage_table = 'table_data_contract_versions';
   let contracts_storage_picker_open = false;
   let contracts_storage_pick_value = '';
+  const SYSTEM_TABLES = new Set([
+    'ao_system.table_settings_store',
+    'ao_system.table_templates_store',
+    'ao_system.table_data_contract_versions'
+  ]);
 
   const CONTRACTS_REQUIRED_COLUMNS = [
     { name: 'schema_name', types: ['text', 'character varying', 'varchar'] },
@@ -70,6 +75,10 @@
 
   function canWrite(): boolean {
     return role === 'data_admin';
+  }
+
+  function isSystemTable(schema: string, table: string): boolean {
+    return SYSTEM_TABLES.has(`${String(schema || '').trim()}.${String(table || '').trim()}`);
   }
 
   async function parseContractsStorageConfig() {
@@ -453,12 +462,17 @@
               <button class="item-button" on:click={() => pickExisting(t)}>
                 {t.schema_name}.{t.table_name}
               </button>
-              <button
-                class="danger icon-btn"
-                on:click={() => dropTableFromList(t.schema_name, t.table_name)}
-                disabled={!canWrite()}
-                title="Удалить таблицу"
-              >x</button>
+              <div class="row-actions">
+                {#if isSystemTable(t.schema_name, t.table_name)}
+                  <span class="system-badge">System</span>
+                {/if}
+                <button
+                  class="danger icon-btn"
+                  on:click={() => dropTableFromList(t.schema_name, t.table_name)}
+                  disabled={!canWrite()}
+                  title="Удалить таблицу"
+                >x</button>
+              </div>
             </div>
           {/each}
         </div>
@@ -748,12 +762,15 @@
   .aside-title { font-weight:700; font-size:14px; line-height:1.3; margin-bottom:0; }
   .list { display:flex; flex-direction:column; gap:8px; overflow:visible; max-height:none; }
   .row-item { display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; border:1px solid #e6eaf2; border-radius:14px; background:#fff; padding:8px 10px; }
+  .row-actions { display:flex; align-items:center; justify-content:flex-end; min-width:54px; }
+  .system-badge { font-size:11px; line-height:1; padding:4px 8px; border-radius:999px; border:1px solid #cbd5e1; color:#334155; background:#f8fafc; font-weight:600; }
   .item-button { text-align:left; border:0; background:transparent; padding:0; font-weight:400; font-size:14px; line-height:1.3; color:inherit; }
   .activeitem { border-color:#e6eaf2; background:#fff; color:#0f172a; }
   .activeitem .item-button { color:#0f172a; font-weight:600; }
   .activeitem .item-button::before { content:'●'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
   .tables-list .row-item { background:#0f172a; border-color:#0f172a; }
   .tables-list .item-button { color:#fff; }
+  .tables-list .system-badge { border-color:#334155; color:#e2e8f0; background:#1e293b; }
   .templates-list .row-item { background:#0f172a; border-color:#0f172a; }
   .templates-list .item-button { color:#fff; }
   .tables-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }

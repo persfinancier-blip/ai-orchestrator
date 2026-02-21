@@ -45,6 +45,11 @@
   const STORAGE_DEFAULT_SCHEMA = 'ao_system';
   const STORAGE_DEFAULT_TABLE = 'table_templates_store';
   const STORAGE_CONTRACT_NAME = 'Хранилище шаблонов таблиц';
+  const SYSTEM_TABLES = new Set([
+    'ao_system.table_settings_store',
+    'ao_system.table_templates_store',
+    'ao_system.table_data_contract_versions'
+  ]);
   const REQUIRED_TABLE_FIELDS: ColumnDef[] = [
     { field_name: 'ao_source', field_type: 'text', description: 'источник данных (техническое поле)' },
     { field_name: 'ao_run_id', field_type: 'text', description: 'идентификатор запуска (техническое поле)' },
@@ -93,6 +98,10 @@
 
   function canWrite(): boolean {
     return role === 'data_admin';
+  }
+
+  function isSystemTable(schema: string, table: string): boolean {
+    return SYSTEM_TABLES.has(`${String(schema || '').trim()}.${String(table || '').trim()}`);
   }
 
   function sleep(ms: number) {
@@ -822,7 +831,12 @@
             {#each existingTables as t}
               <div class="row-item">
                 <div class="row-name">{t.schema_name}.{t.table_name}</div>
-                <button class="danger icon-btn" on:click={() => deleteTableNow(t.schema_name, t.table_name)} title="Удалить таблицу">x</button>
+                <div class="row-actions">
+                  {#if isSystemTable(t.schema_name, t.table_name)}
+                    <span class="system-badge">System</span>
+                  {/if}
+                  <button class="danger icon-btn" on:click={() => deleteTableNow(t.schema_name, t.table_name)} title="Удалить таблицу">x</button>
+                </div>
               </div>
             {/each}
           </div>
@@ -1033,6 +1047,7 @@
   .tables-list .row-name { color:#fff; }
   .templates-list .row-item { background:#0f172a; border-color:#0f172a; }
   .templates-list .item-button { color:#fff; }
+  .tables-list .system-badge { border-color:#334155; color:#e2e8f0; background:#1e293b; }
   .templates-list .system-badge { border-color:#334155; color:#e2e8f0; background:#1e293b; }
   .templates-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
   .templates-list .activeitem .system-badge { border-color:#cbd5e1; color:#334155; background:#f8fafc; }
