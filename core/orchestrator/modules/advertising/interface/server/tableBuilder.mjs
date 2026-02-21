@@ -67,6 +67,17 @@ const CONTRACTS_REQUIRED_COLUMNS = [
   { name: 'changed_by', types: ['text', 'character varying', 'varchar'] },
   { name: 'created_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] }
 ];
+const TEMPLATES_REQUIRED_COLUMNS = [
+  { name: 'template_name', types: ['text', 'character varying', 'varchar'] },
+  { name: 'schema_name', types: ['text', 'character varying', 'varchar'] },
+  { name: 'table_name', types: ['text', 'character varying', 'varchar'] },
+  { name: 'table_class', types: ['text', 'character varying', 'varchar'] },
+  { name: 'description', types: ['text', 'character varying', 'varchar'] },
+  { name: 'columns', types: ['jsonb', 'json'] },
+  { name: 'partition_enabled', types: ['boolean'] },
+  { name: 'partition_column', types: ['text', 'character varying', 'varchar'] },
+  { name: 'partition_interval', types: ['text', 'character varying', 'varchar'] }
+];
 const SYSTEM_CONTRACT_COLUMNS = [
   { name: 'ao_source', type: 'text' },
   { name: 'ao_run_id', type: 'text' },
@@ -251,6 +262,28 @@ async function loadRuntimeConfig(client, { force = false } = {}) {
     const settingKey = String(row?.setting_key || '').trim();
     if (!settingKey) continue;
     applySettingValue(next, settingKey, row?.setting_value);
+  }
+
+  const contractsOk = await hasRequiredColumns(
+    client,
+    next.contracts_schema,
+    next.contracts_table,
+    CONTRACTS_REQUIRED_COLUMNS
+  );
+  if (!contractsOk) {
+    next.contracts_schema = DEFAULT_CONFIG.contracts_schema;
+    next.contracts_table = DEFAULT_CONFIG.contracts_table;
+  }
+
+  const templatesOk = await hasRequiredColumns(
+    client,
+    next.templates_schema,
+    next.templates_table,
+    TEMPLATES_REQUIRED_COLUMNS
+  );
+  if (!templatesOk) {
+    next.templates_schema = DEFAULT_CONFIG.templates_schema;
+    next.templates_table = DEFAULT_CONFIG.templates_table;
   }
 
   settingsCache = { at: now, value: next };
