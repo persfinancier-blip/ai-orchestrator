@@ -812,7 +812,7 @@
 
     <aside class="aside">
       <div class="aside-title">Шаблоны таблиц</div>
-      <div class="storage-meta">
+      <div class="storage-meta templates-meta">
         <span>Хранятся в таблице:</span>
         <button class="link-btn" on:click={() => { storage_picker_open = !storage_picker_open; storage_pick_value = `${storage_schema}.${storage_table}`; }}>
           {storage_schema}.{storage_table}
@@ -934,6 +934,7 @@
   .template-controls { display:flex; flex-direction:column; gap:8px; margin-bottom:8px; }
   .inline-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .storage-meta { margin-top:-2px; margin-bottom:8px; display:flex; align-items:center; gap:6px; font-size:12px; color:#64748b; }
+  .templates-meta { margin-top:6px; }
   .link-btn { border:0; background:transparent; color:#0f172a; padding:0; text-decoration:underline; font-size:12px; font-weight:500; }
   .plain-value { color:#0f172a; font-size:12px; font-weight:500; }
   .storage-picker { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
