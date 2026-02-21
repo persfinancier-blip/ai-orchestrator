@@ -172,6 +172,32 @@
     }
   }
 
+  async function dropTableFromList(schema: string, table: string) {
+    try {
+      if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
+      const ok = confirm(`Удалить таблицу ${schema}.${table}?`);
+      if (!ok) return;
+
+      await apiJson(`${apiBase}/tables/drop`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ schema, table })
+      });
+
+      if (preview_schema === schema && preview_table === table) {
+        preview_schema = '';
+        preview_table = '';
+        preview_columns = [];
+        preview_rows = [];
+        newRow = {};
+      }
+
+      await refreshTables();
+    } catch (e: any) {
+      preview_error = e?.message ?? String(e);
+    }
+  }
+
   async function addRowNow() {
     preview_error = '';
     try {
@@ -247,6 +273,12 @@
               <button class="item-button" on:click={() => pickExisting(t)}>
                 {t.schema_name}.{t.table_name}
               </button>
+              <button
+                class="danger icon-btn"
+                on:click={() => dropTableFromList(t.schema_name, t.table_name)}
+                disabled={!canWrite()}
+                title="Удалить таблицу"
+              >x</button>
             </div>
           {/each}
         </div>
@@ -485,10 +517,11 @@
   .aside-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
   .aside-title { font-weight:700; font-size:14px; line-height:1.3; margin-bottom:0; }
   .list { display:flex; flex-direction:column; gap:8px; overflow:visible; max-height:none; }
-  .row-item { display:grid; grid-template-columns: 1fr; gap:8px; align-items:center; border:1px solid #e6eaf2; border-radius:14px; background:#fff; padding:10px 12px; }
+  .row-item { display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; border:1px solid #e6eaf2; border-radius:14px; background:#fff; padding:8px 10px; }
   .item-button { text-align:left; border:0; background:transparent; padding:0; font-weight:400; font-size:14px; line-height:1.3; color:inherit; }
   .activeitem { border-color:#0f172a; background:#0f172a; color:#fff; }
   .activeitem .item-button { color:#fff; }
+  .activeitem .item-button::before { content:'●'; margin-right:8px; font-size:11px; color:#fff; vertical-align:middle; }
   .tables-list .row-item { background:#0f172a; border-color:#0f172a; }
   .tables-list .item-button { color:#fff; }
 
@@ -520,9 +553,11 @@
 
   button { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; background:#fff; cursor:pointer; }
   button:disabled { opacity:.6; cursor:not-allowed; }
-  .icon-btn { width:44px; min-width:44px; padding:10px 0; text-transform:uppercase; border-color:transparent; background:transparent; }
+  .icon-btn { width:34px; min-width:34px; padding:6px 0; text-transform:uppercase; border-color:transparent; background:transparent; }
   .refresh-btn { color:#16a34a; }
   .danger { border-color:#f3c0c0; color:#b91c1c; }
+  .danger.icon-btn { border-color:transparent; background:transparent; color:#b91c1c; }
+  .tables-list .icon-btn { color:#fff; }
   .primary { background:#0f172a; color:#fff; border-color:#0f172a; }
 
   .alert { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #f3c0c0; background: #fff5f5; }
