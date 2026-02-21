@@ -54,7 +54,6 @@
   let contracts_loading = false;
   let contracts_error = '';
   let contractVersions: ContractVersion[] = [];
-  let selectedContractId = '';
   let contracts_storage_schema = 'ao_system';
   let contracts_storage_table = 'table_data_contract_versions';
   let contracts_storage_picker_open = false;
@@ -239,20 +238,12 @@
           created_at: String(r?.created_at || '')
         }))
         .sort((a, b) => b.version - a.version);
-      if (!selectedContractId || !contractVersions.some((x) => contractRowId(x) === selectedContractId)) {
-        selectedContractId = contractRowId(contractVersions[0]);
-      }
     } catch (e: any) {
       contracts_error = e?.message ?? String(e);
       contractVersions = [];
-      selectedContractId = '';
     } finally {
       contracts_loading = false;
     }
-  }
-
-  function isSelectedContract(c: ContractVersion) {
-    return contractRowId(c) === selectedContractId;
   }
 
   async function deleteContractVersion(contract: ContractVersion) {
@@ -276,13 +267,6 @@
     }
   }
 
-  function pickContractVersion(contract: ContractVersion) {
-    selectedContractId = contractRowId(contract);
-  }
-
-  function contractRowId(c: ContractVersion | null | undefined) {
-    return String(c?.id || c?.__ctid || `v:${Number(c?.version || 0)}`);
-  }
 
   function openAddColumnModal() {
     if (!canEditSelectedTable()) return;
@@ -763,12 +747,12 @@
         <p class="hint">Версии контракта не найдены.</p>
       {:else}
         <div class="list contracts-list">
-          {#each contractVersions as c (contractRowId(c))}
-            <div class={`row-item ${isSelectedContract(c) ? 'activeitem contract-selected' : ''}`}>
-              <button class="item-button" type="button" on:click={() => pickContractVersion(c)}>
+          {#each contractVersions as c (c.id)}
+            <div class="row-item">
+              <div class="item-button">
                 v{c.version}
                 {#if c.lifecycle_state === 'table_deleted'} · таблица удалена{/if}
-              </button>
+              </div>
               <div class="row-actions">
                 <button
                   class="danger icon-btn"
@@ -909,14 +893,6 @@
   .contracts-list .danger.icon-btn { color:#fff; }
   .tables-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
   .tables-list .activeitem .item-button { color:#0f172a; }
-  .contracts-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
-  .contracts-list .contract-selected { background:#fff !important; border-color:#e6eaf2 !important; color:#0f172a !important; }
-  .contracts-list .activeitem .item-button { color:#0f172a; font-weight:600; }
-  .contracts-list .contract-selected .item-button { color:#0f172a !important; font-weight:600; }
-  .contracts-list .activeitem .item-button::before { content:'●'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
-  .contracts-list .contract-selected .item-button::before { content:'●'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
-  .contracts-list .activeitem .icon-btn { color:#b91c1c; }
-  .contracts-list .contract-selected .danger.icon-btn { color:#b91c1c; }
 
   .main { min-width:0; }
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; }
