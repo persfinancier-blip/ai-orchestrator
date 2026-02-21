@@ -1397,7 +1397,7 @@
                             value={r.value}
                             on:input={(e) => { r.value = e.currentTarget.value; authTemplateRows = [...authTemplateRows]; syncAuthLeftToRawAndSource(); }}
                           />
-                          <button class="danger" on:click={() => removeAuthTemplateRow(r.id)}>x</button>
+                          <button class="danger icon-btn" on:click={() => removeAuthTemplateRow(r.id)}>x</button>
                         </div>
                       {/each}
                     </div>
@@ -1464,7 +1464,7 @@
                             value={r.value}
                             on:input={(e) => { r.value = e.currentTarget.value; headerRows = [...headerRows]; syncHeadersRowsToRaw(); }}
                           />
-                          <button class="danger" on:click={() => { headerRows = headerRows.filter((x) => x.id !== r.id); syncHeadersRowsToRaw(); }}>x</button>
+                          <button class="danger icon-btn" on:click={() => { headerRows = headerRows.filter((x) => x.id !== r.id); syncHeadersRowsToRaw(); }}>x</button>
                         </div>
                       {/each}
                     </div>
@@ -1771,7 +1771,8 @@
   .auth-top select { width:100%; }
   .auth-right-top { display:grid; grid-template-columns: 1fr minmax(170px, 26%) 44px; gap:10px; align-items:center; margin-bottom:10px; }
   .auth-right-controls { display:flex; flex-direction:column; gap:8px; margin-bottom:10px; }
-  .icon-btn { width:44px; min-width:44px; padding:10px 0; text-transform:uppercase; }
+  .icon-btn { width:44px; min-width:44px; padding:10px 0; text-transform:uppercase; border-color:transparent; background:transparent; color:#b91c1c; }
+  .danger.icon-btn { border-color:transparent; background:transparent; color:#b91c1c; }
   .auth-name-input { min-width:0; }
   .auth-fields { display:flex; flex-direction:column; gap:10px; margin-top:10px; }
   .auth-fields input, .auth-right textarea { width:100%; }

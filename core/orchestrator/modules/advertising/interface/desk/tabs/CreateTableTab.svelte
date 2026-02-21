@@ -372,9 +372,9 @@
 
   <div class="layout">
     <aside class="aside">
-      <div class="aside-title">Текущие таблицы</div>
-      <div class="quick" style="margin-bottom:8px;">
-        <button on:click={refreshTables} disabled={loading}>{loading ? 'Загрузка…' : 'Обновить список'}</button>
+      <div class="aside-head">
+        <div class="aside-title">Текущие таблицы</div>
+        <button class="icon-btn" on:click={refreshTables} disabled={loading} title="Обновить список">↻</button>
       </div>
       {#if existingTables.length === 0}
         <div class="hint">Пока нет данных.</div>
@@ -528,12 +528,14 @@
   @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
 
   .aside { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#f8fafc; }
+  .aside-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
   .aside-title { font-weight:700; margin-bottom:8px; }
-  .list { display:flex; flex-direction:column; gap:8px; }
+  .list { display:flex; flex-direction:column; gap:8px; overflow:visible; max-height:none; }
   .row-item { display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; border:1px solid #e6eaf2; border-radius:14px; background:#fff; padding:8px; }
   .row-name { font-size:13px; word-break:break-word; }
   .item-button { text-align:left; border:0; background:transparent; padding:2px 4px; }
-  .activeitem { border-color:#0f172a; background:#f1f5f9; }
+  .activeitem { border-color:#0f172a; background:#0f172a; color:#fff; }
+  .activeitem .item-button { color:#fff; }
 
   .main { min-width:0; }
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; }
@@ -551,7 +553,6 @@
 
   .row { display:flex; align-items:center; gap:10px; }
   .actions { margin-top:14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-  .quick { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .template-controls { display:flex; flex-direction:column; gap:8px; margin-bottom:8px; }
   .inline-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
 
@@ -559,7 +560,8 @@
   button:disabled { opacity:.6; cursor:not-allowed; }
   .primary { background:#0f172a; color:#fff; border-color:#0f172a; }
   .danger { border-color:#f3c0c0; color:#b91c1c; }
-  .icon-btn { width:44px; min-width:44px; padding:10px 0; text-transform:uppercase; }
+  .icon-btn { width:44px; min-width:44px; padding:10px 0; text-transform:uppercase; border-color:transparent; background:transparent; color:#b91c1c; }
+  .danger.icon-btn { border-color:transparent; background:transparent; color:#b91c1c; }
 
   .hint { margin:10px 0 0; color:#64748b; font-size:13px; }
   .alert { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #f3c0c0; background: #fff5f5; }
