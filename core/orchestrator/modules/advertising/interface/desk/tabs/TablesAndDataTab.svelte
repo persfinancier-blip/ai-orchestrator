@@ -231,6 +231,7 @@
         <span>Подключено к базе:</span>
         <span class="plain-value">{apiBase}</span>
       </div>
+      <p class="hint">Создание таблиц выполняется на вкладке «Создание».</p>
 
       {#if existingTables.length === 0}
         <p class="hint">Таблиц нет.</p>
