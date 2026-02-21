@@ -6,6 +6,7 @@
   export type ExistingTable = { schema_name: string; table_name: string };
   export type ColumnMeta = { name: string; type: string; description?: string; is_nullable?: boolean };
   export type ContractVersion = {
+    id?: string;
     __ctid?: string;
     schema_name: string;
     table_name: string;
@@ -53,8 +54,7 @@
   let contracts_loading = false;
   let contracts_error = '';
   let contractVersions: ContractVersion[] = [];
-  let selectedContractVersion = 0;
-  let selectedContractCtid = '';
+  let selectedContractId = '';
   let activeContractVersion = 0;
   let contracts_storage_schema = 'ao_system';
   let contracts_storage_table = 'table_data_contract_versions';
@@ -225,6 +225,7 @@
           String(r?.lifecycle_state || '').trim() !== 'deleted_by_user'
         )
         .map((r: any) => ({
+          id: String(r?.__ctid || `${preview_schema}.${preview_table}.v${Number(r?.version || 0)}.${String(r?.created_at || '')}`),
           __ctid: String(r?.__ctid || ''),
           schema_name: String(r?.schema_name || ''),
           table_name: String(r?.table_name || ''),
@@ -238,18 +239,15 @@
         .sort((a, b) => b.version - a.version);
       const active = contractVersions.find((x) => String(x.lifecycle_state || '').trim() === 'active');
       activeContractVersion = Number(active?.version || contractVersions[0]?.version || 0);
-      if (
-        !selectedContractCtid ||
-        !contractVersions.some((x) => String(x.__ctid || `v:${x.version}`) === selectedContractCtid)
-      ) {
-        selectedContractVersion = activeContractVersion;
-        selectedContractCtid = String(active?.__ctid || `v:${activeContractVersion}`);
+      if (!selectedContractId || !contractVersions.some((x) => String(x.id || '') === selectedContractId)) {
+        selectedContractId = String(
+          active?.id || contractVersions[0]?.id || `${preview_schema}.${preview_table}.v${activeContractVersion}`
+        );
       }
     } catch (e: any) {
       contracts_error = e?.message ?? String(e);
       contractVersions = [];
-      selectedContractVersion = 0;
-      selectedContractCtid = '';
+      selectedContractId = '';
       activeContractVersion = 0;
     } finally {
       contracts_loading = false;
@@ -257,7 +255,7 @@
   }
 
   function isSelectedContract(c: ContractVersion) {
-    return String(c?.__ctid || `v:${c?.version || 0}`) === selectedContractCtid;
+    return String(c?.id || '') === selectedContractId;
   }
 
   function isActiveContractVersion(version: number) {
@@ -291,8 +289,7 @@
   }
 
   function pickContractVersion(contract: ContractVersion) {
-    selectedContractVersion = Number(contract?.version || 0);
-    selectedContractCtid = String(contract?.__ctid || `v:${contract?.version || 0}`);
+    selectedContractId = String(contract?.id || '');
   }
 
   function openAddColumnModal() {
@@ -774,7 +771,7 @@
         <p class="hint">Версии контракта не найдены.</p>
       {:else}
         <div class="list contracts-list">
-          {#each contractVersions as c}
+          {#each contractVersions as c (c.id)}
             <div class="row-item" class:activeitem={isSelectedContract(c)} class:contract-selected={isSelectedContract(c)}>
               <button class="item-button" type="button" on:click={() => pickContractVersion(c)}>
                 v{c.version}
