@@ -892,9 +892,9 @@
   .aside-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
   .aside-title { font-weight:700; font-size:14px; line-height:1.3; margin-bottom:0; }
   .list { display:flex; flex-direction:column; gap:8px; overflow:visible; max-height:none; }
-  .row-item { display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; border:1px solid #e6eaf2; border-radius:14px; background:#fff; padding:10px 12px; }
-  .row-name { font-weight:400; font-size:14px; line-height:1.3; word-break:break-word; }
-  .item-button { text-align:left; border:0; background:transparent; padding:0; font-weight:400; font-size:14px; line-height:1.3; color:inherit; }
+  .row-item { display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; border:1px solid #e6eaf2; border-radius:14px; background:#fff; padding:8px 10px; }
+  .row-name { font-weight:400; font-size:13px; line-height:1.25; word-break:break-word; }
+  .item-button { text-align:left; border:0; background:transparent; padding:0; font-weight:400; font-size:13px; line-height:1.25; color:inherit; }
   .activeitem { border-color:#0f172a; background:#0f172a; color:#fff; }
   .activeitem .item-button { color:#fff; }
   .tables-list .row-item { background:#0f172a; border-color:#0f172a; }
@@ -962,6 +962,7 @@
   .danger.icon-btn { border-color:transparent; background:transparent; color:#b91c1c; }
   .tables-list .icon-btn { color:#fff; }
   .templates-list .icon-btn { color:#fff; }
+  .tables-list .icon-btn, .templates-list .icon-btn { width:34px; min-width:34px; padding:6px 0; font-size:14px; }
   .activeitem .icon-btn { color:#fff; }
   .templates-list .activeitem .icon-btn { color:#b91c1c; }
   .refresh-btn { color:#16a34a; }
