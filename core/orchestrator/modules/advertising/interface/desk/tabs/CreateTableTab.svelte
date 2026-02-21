@@ -231,7 +231,7 @@
             {/each}
           </select>
           <input placeholder="описание" bind:value={c.description} />
-          <button class="danger" on:click={() => removeField(ix)} title="Удалить поле">Удалить</button>
+          <button class="danger icon-btn" on:click={() => removeField(ix)} title="Удалить поле">x</button>
         </div>
       {/each}
 
@@ -333,6 +333,7 @@
   button:disabled { opacity:.6; cursor:not-allowed; }
   .primary { background:#0f172a; color:#fff; border-color:#0f172a; }
   .danger { border-color:#f3c0c0; color:#b91c1c; }
+  .icon-btn { width:44px; min-width:44px; padding:10px 0; text-transform:uppercase; }
 
   .hint { margin:10px 0 0; color:#64748b; font-size:13px; }
   .statusline { margin-top:12px; border:1px solid #e6eaf2; border-radius:12px; padding:10px 12px; background:#f8fafc; color:#334155; font-size:13px; }
