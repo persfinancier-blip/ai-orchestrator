@@ -227,6 +227,10 @@
         <div class="aside-title">Текущие таблицы</div>
         <button class="icon-btn refresh-btn" on:click={refreshTables} disabled={loading} title="Обновить список">↻</button>
       </div>
+      <div class="storage-meta">
+        <span>Подключено к базе:</span>
+        <span class="plain-value">{apiBase}</span>
+      </div>
 
       {#if existingTables.length === 0}
         <p class="hint">Таблиц нет.</p>
