@@ -239,10 +239,8 @@
         .sort((a, b) => b.version - a.version);
       const active = contractVersions.find((x) => String(x.lifecycle_state || '').trim() === 'active');
       activeContractVersion = Number(active?.version || contractVersions[0]?.version || 0);
-      if (!selectedContractId || !contractVersions.some((x) => String(x.id || '') === selectedContractId)) {
-        selectedContractId = String(
-          active?.id || contractVersions[0]?.id || `${preview_schema}.${preview_table}.v${activeContractVersion}`
-        );
+      if (!selectedContractId || !contractVersions.some((x) => contractRowId(x) === selectedContractId)) {
+        selectedContractId = contractRowId(active || contractVersions[0]);
       }
     } catch (e: any) {
       contracts_error = e?.message ?? String(e);
@@ -255,7 +253,7 @@
   }
 
   function isSelectedContract(c: ContractVersion) {
-    return String(c?.id || '') === selectedContractId;
+    return contractRowId(c) === selectedContractId;
   }
 
   function isActiveContractVersion(version: number) {
@@ -289,7 +287,11 @@
   }
 
   function pickContractVersion(contract: ContractVersion) {
-    selectedContractId = String(contract?.id || '');
+    selectedContractId = contractRowId(contract);
+  }
+
+  function contractRowId(c: ContractVersion | null | undefined) {
+    return String(c?.id || c?.__ctid || `v:${Number(c?.version || 0)}`);
   }
 
   function openAddColumnModal() {
@@ -771,8 +773,8 @@
         <p class="hint">Версии контракта не найдены.</p>
       {:else}
         <div class="list contracts-list">
-          {#each contractVersions as c (c.id)}
-            <div class="row-item" class:activeitem={isSelectedContract(c)} class:contract-selected={isSelectedContract(c)}>
+          {#each contractVersions as c (contractRowId(c))}
+            <div class={`row-item ${isSelectedContract(c) ? 'activeitem contract-selected' : ''}`}>
               <button class="item-button" type="button" on:click={() => pickContractVersion(c)}>
                 v{c.version}
                 {#if c.lifecycle_state === 'table_deleted'} · таблица удалена{/if}
