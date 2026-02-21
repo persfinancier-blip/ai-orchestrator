@@ -75,8 +75,6 @@
   let storage_pick_value = '';
   let storage_status: 'checking' | 'ok' | 'invalid' | 'missing' | 'error' = 'checking';
   let storage_status_message = '';
-  let storage_has_contract_name = false;
-  let storage_has_template_name = false;
 
   let result_modal_open = false;
   let result_modal_title = '';
@@ -254,20 +252,27 @@
     };
   }
 
-  const STORAGE_REQUIRED_COLUMNS = [
-    { name: 'template_name', types: ['text', 'character varying', 'varchar'] },
-    { name: 'schema_name', types: ['text', 'character varying', 'varchar'] },
-    { name: 'table_name', types: ['text', 'character varying', 'varchar'] },
-    { name: 'table_class', types: ['text', 'character varying', 'varchar'] },
-    { name: 'description', types: ['text', 'character varying', 'varchar'] },
-    { name: 'columns', types: ['jsonb', 'json'] },
-    { name: 'partition_enabled', types: ['boolean', 'bool'] },
-    { name: 'partition_column', types: ['text', 'character varying', 'varchar'] },
-    { name: 'partition_interval', types: ['text', 'character varying', 'varchar'] }
-  ];
+  const FIELD_TYPE_TO_DB_TYPES: Record<string, string[]> = {
+    text: ['text', 'character varying', 'varchar'],
+    int: ['integer', 'int4', 'int'],
+    bigint: ['bigint', 'int8'],
+    numeric: ['numeric', 'decimal'],
+    boolean: ['boolean', 'bool'],
+    date: ['date'],
+    timestamptz: ['timestamp with time zone', 'timestamptz'],
+    jsonb: ['jsonb', 'json'],
+    uuid: ['uuid']
+  };
 
   function normalizeTypeName(type: string) {
     return String(type || '').toLowerCase().trim();
+  }
+
+  function storageRequiredColumnsFromSystemTemplate() {
+    return storageSystemTemplate().columns.map((c) => ({
+      name: String(c.field_name || '').trim().toLowerCase(),
+      types: FIELD_TYPE_TO_DB_TYPES[String(c.field_type || '').trim()] || [normalizeTypeName(c.field_type || '')]
+    }));
   }
 
   function storageInstruction(prefix: string) {
@@ -309,21 +314,12 @@
       }
 
       const map = new Map(cols.map((c) => [String(c.name || '').toLowerCase(), normalizeTypeName(c.type)]));
-      storage_has_template_name = map.has('template_name');
-      if (!storage_has_template_name) {
-        storage_status = 'invalid';
-        storage_status_message = storageInstruction(
-          `Структура ${schema}.${table} не подходит: колонка template_name отсутствует или имеет неверный тип.`
-        );
-        return false;
-      }
-      for (const need of STORAGE_REQUIRED_COLUMNS) {
+      const required = storageRequiredColumnsFromSystemTemplate();
+      for (const need of required) {
         const actual = map.get(need.name);
         if (!actual || !need.types.some((t) => actual.includes(t))) {
           storage_status = 'invalid';
-          storage_status_message = storageInstruction(
-            `Структура ${schema}.${table} не подходит: колонка ${need.name} отсутствует или имеет неверный тип.`
-          );
+          storage_status_message = `Структура ${schema}.${table} не подходит: колонка ${need.name} отсутствует или имеет неверный тип.`;
           return false;
         }
       }
@@ -364,7 +360,7 @@
                 return [];
               }
             })();
-        const name = String(r?.contract_name || r?.template_name || '').trim();
+        const name = String(r?.template_name || '').trim();
         if (!name) continue;
         const rawMode = String(r?.contract_mode || 'safe_add_only').trim();
         custom.push({
@@ -468,7 +464,7 @@
       `${apiBase}/preview?schema=${encodeURIComponent(storage_schema)}&table=${encodeURIComponent(storage_table)}&limit=5000`
     );
     const found = (Array.isArray(rows?.rows) ? rows.rows : []).filter(
-      (r) => String(r?.contract_name || r?.template_name || '').trim().toLowerCase() === t.name.toLowerCase()
+      (r) => String(r?.template_name || '').trim().toLowerCase() === t.name.toLowerCase()
     );
     for (const r of found) {
       if (r?.__ctid) {
@@ -489,8 +485,7 @@
       partition_column: t.partition_column || '',
       partition_interval: t.partition_interval || 'day'
     };
-    if (storage_has_template_name) row.template_name = t.name;
-    if (!storage_has_template_name && storage_has_contract_name) row.contract_name = t.name;
+    row.template_name = t.name;
 
     await apiJson(`${apiBase}/rows/add`, {
       method: 'POST',
@@ -510,7 +505,7 @@
       `${apiBase}/preview?schema=${encodeURIComponent(storage_schema)}&table=${encodeURIComponent(storage_table)}&limit=5000`
     );
     const found = (Array.isArray(rows?.rows) ? rows.rows : []).filter(
-      (r) => String(r?.contract_name || r?.template_name || '').trim().toLowerCase() === templateName.toLowerCase()
+      (r) => String(r?.template_name || '').trim().toLowerCase() === templateName.toLowerCase()
     );
     for (const r of found) {
       if (r?.__ctid) {
@@ -949,6 +944,9 @@
           </select>
           <button on:click={applyStorageTableChoice} disabled={!storage_pick_value}>Подключить</button>
         </div>
+      {/if}
+      {#if storage_status !== 'ok' && storage_status_message}
+        <p class="hint">{storage_status_message}</p>
       {/if}
       <div class="template-controls">
         <input class="template-name" bind:value={templateNameDraft} placeholder="Название шаблона" />
