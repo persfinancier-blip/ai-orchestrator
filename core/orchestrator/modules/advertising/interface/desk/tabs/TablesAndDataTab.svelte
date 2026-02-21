@@ -659,19 +659,14 @@
                         </button>
                       </div>
                       <div class="thdesc-edit">
-                        <input
+                        <textarea
                           class="thdesc-input"
                           bind:value={columnDescriptionDrafts[c.name]}
                           placeholder="Описание поля"
                           disabled={!canEditSelectedTable()}
+                          rows="3"
                           on:blur={() => saveColumnDescription(c.name)}
-                        />
-                        <button
-                          class="icon-btn save-mini-btn"
-                          on:click={() => saveColumnDescription(c.name)}
-                          disabled={!canEditSelectedTable()}
-                          title="Сохранить описание поля"
-                        >✓</button>
+                        ></textarea>
                       </div>
                     </th>
                   {/each}
@@ -773,7 +768,7 @@
       {:else}
         <div class="list contracts-list">
           {#each contractVersions as c}
-            <div class="row-item" class:activeitem={isSelectedContractVersion(c.version)}>
+            <div class="row-item" class:activeitem={isSelectedContractVersion(c.version)} class:contract-selected={isSelectedContractVersion(c.version)}>
               <button class="item-button" on:click={() => pickContractVersion(c.version)}>
                 v{c.version}
                 {#if c.lifecycle_state === 'table_deleted'} · таблица удалена{/if}
@@ -922,8 +917,11 @@
   .tables-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
   .tables-list .activeitem .item-button { color:#0f172a; }
   .contracts-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
+  .contracts-list .contract-selected { background:#fff !important; border-color:#e6eaf2 !important; color:#0f172a !important; }
   .contracts-list .activeitem .item-button { color:#0f172a; font-weight:600; }
+  .contracts-list .contract-selected .item-button { color:#0f172a !important; font-weight:600; }
   .contracts-list .activeitem .item-button::before { content:'●'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
+  .contracts-list .contract-selected .item-button::before { content:'●'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
   .contracts-list .activeitem .icon-btn { color:#b91c1c; }
 
   .main { min-width:0; }
@@ -945,8 +943,8 @@
 
   .thwrap { display:flex; align-items:center; justify-content:space-between; gap:10px; }
   .thname { font-weight:700; }
-  .thdesc-edit { margin-top:6px; display:grid; grid-template-columns: 1fr auto; gap:6px; align-items:center; }
-  .thdesc-input { width:100%; box-sizing:border-box; border-radius:10px; border:1px solid #e6eaf2; padding:6px 8px; font-size:12px; line-height:1.25; color:#334155; }
+  .thdesc-edit { margin-top:6px; display:block; }
+  .thdesc-input { width:100%; box-sizing:border-box; border-radius:10px; border:1px solid #e6eaf2; padding:6px 8px; font-size:11px; line-height:1.25; font-weight:400; color:#334155; resize:vertical; min-height:54px; }
   .xbtn { border-color:transparent; background:transparent; color:#b91c1c; border-radius:10px; width:34px; min-width:34px; padding:6px 0; cursor:pointer; text-transform:lowercase; font-size:14px; font-weight:400; line-height:1; }
   .thadd { width: 1%; white-space: nowrap; }
   .plusbtn { border-radius:12px; border-color:transparent; background:transparent; width:34px; min-width:34px; padding:6px 0; font-size:20px; line-height:1; font-weight:400; cursor:pointer; }
@@ -954,7 +952,6 @@
   .rowactions { width:44px; min-width:44px; white-space: nowrap; text-align:center; }
   .trash { border-color:transparent; background:transparent; color:#b91c1c; border-radius:12px; padding:6px 10px; cursor:pointer; }
   .addrow-icon { border-radius:12px; border-color:transparent; background:transparent; width:34px; min-width:34px; padding:6px 0; font-size:20px; line-height:1; font-weight:400; cursor:pointer; }
-  .save-mini-btn { width:34px; min-width:34px; padding:6px 0; color:#16a34a; border-color:transparent; background:transparent; }
 
   .cellinput { display:block; width:100%; min-width:120px; box-sizing:border-box; border-radius:12px; border:1px solid #e6eaf2; padding:8px 10px; }
 
