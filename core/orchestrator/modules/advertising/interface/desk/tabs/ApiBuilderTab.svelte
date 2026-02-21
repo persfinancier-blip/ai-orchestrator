@@ -364,13 +364,6 @@
     syncAuthLeftToRawAndSource();
   }
 
-  function setAuthTemplateType(type: string) {
-    mutateSelected((s) => {
-      s.authTemplate.type = type;
-    });
-    syncAuthLeftToRawAndSource();
-  }
-
   function loadAuthTemplates() {
     try {
       const raw = JSON.parse(localStorage.getItem(AUTH_TEMPLATES_KEY) || '[]');
@@ -411,7 +404,7 @@
     }
     const t = canonicalAuthTemplateFromLeft(selected);
     if (!t.name.trim()) {
-      err = 'Введите название шаблона авторизации';
+      err = 'Введите название шаблона типа подключения';
       return;
     }
     if (t.fields.some((f) => !f.key.trim())) {
@@ -1270,23 +1263,20 @@
                 <div class="auth-left" bind:this={authFieldsEl}>
                   <div class="auth-top">
                     <select class="quarter" value={selectedAuthTemplateId} on:change={(e) => applySelectedAuthTemplate(e.currentTarget.value)}>
-                      <option value="">Шаблон авторизации</option>
+                      <option value="">Шаблон типа подключения</option>
                       {#each authTemplates as t}
-                        <option value={t.id}>{t.name}</option>
+                        <option value={t.id}>{t.name} ({t.type})</option>
                       {/each}
                     </select>
-                  </div>
-                  <div class="auth-fields">
                     <input
-                      placeholder="Название шаблона авторизации (например: WB Token)"
+                      class="auth-name-input"
+                      placeholder="Название шаблона типа подключения (например: WB Token)"
                       value={selected.authTemplate?.name || ''}
                       on:input={(e) => setAuthTemplateName(e.currentTarget.value)}
                     />
-                    <select value={selected.authTemplate?.type || 'custom'} on:change={(e) => setAuthTemplateType(e.currentTarget.value)}>
-                      <option value="custom">Тип: custom</option>
-                      <option value="header">Тип: header</option>
-                      <option value="query">Тип: query</option>
-                    </select>
+                    <button class="quarter" on:click={saveCurrentAuthTemplate}>Сохранить шаблон</button>
+                  </div>
+                  <div class="auth-fields">
                     <div class="auth-rows">
                       {#each authTemplateRows as r (r.id)}
                         <div class="auth-row">
@@ -1310,9 +1300,6 @@
                   </div>
                 </div>
                 <div class="auth-right">
-                  <div class="auth-top">
-                    <button class="quarter" on:click={saveCurrentAuthTemplate}>Сохранить шаблон</button>
-                  </div>
                   <textarea
                     class:invalid={!!authRawError}
                     bind:this={authRawEl}
@@ -1711,16 +1698,18 @@
   @media (max-width: 1100px) { .method-url { grid-template-columns: 1fr; } }
   .auth-split { display:grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap:12px; align-items:start; }
   .auth-left, .auth-right { min-width: 0; }
-  .auth-top { height: 42px; display:flex; align-items:stretch; justify-content:flex-start; }
-  .auth-top .quarter { width:50%; min-width:0; max-width:none; }
+  .auth-top { display:grid; grid-template-columns: minmax(160px, 28%) 1fr minmax(180px, 28%); gap:10px; align-items:center; }
+  .auth-top .quarter { width:100%; min-width:0; max-width:none; }
+  .auth-name-input { min-width:0; }
   .auth-fields { display:flex; flex-direction:column; gap:10px; margin-top:10px; }
-  .auth-fields input, .auth-fields select, .auth-right textarea { width:100%; }
+  .auth-fields input, .auth-right textarea { width:100%; }
   .auth-rows { display:flex; flex-direction:column; gap:8px; }
   .auth-row { display:grid; grid-template-columns: 25% 1fr auto; gap:8px; align-items:center; }
   .auth-row .key-col { min-width:0; }
   .auth-row .val-col { min-width:0; }
-  .auth-right textarea { margin-top:10px; resize:none; overflow:hidden; max-width:100%; }
+  .auth-right textarea { resize:none; overflow:hidden; max-width:100%; }
   .auth-right textarea.invalid { border-color:#ef4444; background:#fff5f5; }
+  @media (max-width: 1400px) { .auth-top { grid-template-columns: 1fr; } }
   @media (max-width: 1100px) { .auth-split { grid-template-columns: 1fr; } }
 
   label { display:flex; flex-direction:column; gap:6px; font-size:13px; }
