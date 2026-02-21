@@ -53,11 +53,7 @@
   let contracts_storage_table = 'table_data_contract_versions';
   let contracts_storage_picker_open = false;
   let contracts_storage_pick_value = '';
-  const SYSTEM_TABLES = new Set([
-    'ao_system.table_settings_store',
-    'ao_system.table_templates_store',
-    'ao_system.table_data_contract_versions'
-  ]);
+  const SETTINGS_SYSTEM_TABLE = 'ao_system.table_settings_store';
 
   const CONTRACTS_REQUIRED_COLUMNS = [
     { name: 'schema_name', types: ['text', 'character varying', 'varchar'] },
@@ -77,8 +73,8 @@
     return role === 'data_admin';
   }
 
-  function isSystemTable(schema: string, table: string): boolean {
-    return SYSTEM_TABLES.has(`${String(schema || '').trim()}.${String(table || '').trim()}`);
+  function isSettingsSystemTable(schema: string, table: string): boolean {
+    return `${String(schema || '').trim()}.${String(table || '').trim()}` === SETTINGS_SYSTEM_TABLE;
   }
 
   async function parseContractsStorageConfig() {
@@ -463,15 +459,16 @@
                 {t.schema_name}.{t.table_name}
               </button>
               <div class="row-actions">
-                {#if isSystemTable(t.schema_name, t.table_name)}
+                {#if isSettingsSystemTable(t.schema_name, t.table_name)}
                   <span class="system-badge">System</span>
+                {:else}
+                  <button
+                    class="danger icon-btn"
+                    on:click={() => dropTableFromList(t.schema_name, t.table_name)}
+                    disabled={!canWrite()}
+                    title="Удалить таблицу"
+                  >x</button>
                 {/if}
-                <button
-                  class="danger icon-btn"
-                  on:click={() => dropTableFromList(t.schema_name, t.table_name)}
-                  disabled={!canWrite()}
-                  title="Удалить таблицу"
-                >x</button>
               </div>
             </div>
           {/each}

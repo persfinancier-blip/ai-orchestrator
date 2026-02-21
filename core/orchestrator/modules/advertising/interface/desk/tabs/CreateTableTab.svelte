@@ -45,11 +45,7 @@
   const STORAGE_DEFAULT_SCHEMA = 'ao_system';
   const STORAGE_DEFAULT_TABLE = 'table_templates_store';
   const STORAGE_CONTRACT_NAME = 'Хранилище шаблонов таблиц';
-  const SYSTEM_TABLES = new Set([
-    'ao_system.table_settings_store',
-    'ao_system.table_templates_store',
-    'ao_system.table_data_contract_versions'
-  ]);
+  const SETTINGS_SYSTEM_TABLE = 'ao_system.table_settings_store';
   const REQUIRED_TABLE_FIELDS: ColumnDef[] = [
     { field_name: 'ao_source', field_type: 'text', description: 'источник данных (техническое поле)' },
     { field_name: 'ao_run_id', field_type: 'text', description: 'идентификатор запуска (техническое поле)' },
@@ -100,8 +96,8 @@
     return role === 'data_admin';
   }
 
-  function isSystemTable(schema: string, table: string): boolean {
-    return SYSTEM_TABLES.has(`${String(schema || '').trim()}.${String(table || '').trim()}`);
+  function isSettingsSystemTable(schema: string, table: string): boolean {
+    return `${String(schema || '').trim()}.${String(table || '').trim()}` === SETTINGS_SYSTEM_TABLE;
   }
 
   function sleep(ms: number) {
@@ -832,10 +828,11 @@
               <div class="row-item">
                 <div class="row-name">{t.schema_name}.{t.table_name}</div>
                 <div class="row-actions">
-                  {#if isSystemTable(t.schema_name, t.table_name)}
+                  {#if isSettingsSystemTable(t.schema_name, t.table_name)}
                     <span class="system-badge">System</span>
+                  {:else}
+                    <button class="danger icon-btn" on:click={() => deleteTableNow(t.schema_name, t.table_name)} title="Удалить таблицу">x</button>
                   {/if}
-                  <button class="danger icon-btn" on:click={() => deleteTableNow(t.schema_name, t.table_name)} title="Удалить таблицу">x</button>
                 </div>
               </div>
             {/each}
