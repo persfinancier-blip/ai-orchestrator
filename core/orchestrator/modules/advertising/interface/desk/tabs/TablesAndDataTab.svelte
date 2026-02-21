@@ -524,6 +524,8 @@
   .activeitem .item-button::before { content:'●'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
   .tables-list .row-item { background:#0f172a; border-color:#0f172a; }
   .tables-list .item-button { color:#fff; }
+  .tables-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
+  .tables-list .activeitem .item-button { color:#0f172a; }
 
   .main { min-width:0; }
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; }
