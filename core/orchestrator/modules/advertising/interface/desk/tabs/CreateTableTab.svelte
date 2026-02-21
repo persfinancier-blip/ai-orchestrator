@@ -695,6 +695,21 @@
     storage_schema = schema;
     storage_table = table;
     saveStorageTableConfig();
+    try {
+      await apiJson(`${apiBase}/settings/upsert`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({
+          setting_key: 'templates_storage',
+          setting_value: { schema, table },
+          description: 'Хранилище шаблонов таблиц',
+          scope: 'global',
+          is_active: true
+        })
+      });
+    } catch (e: any) {
+      error = e?.message ?? String(e);
+    }
     storage_picker_open = false;
     await loadTemplatesFromStorage();
   }

@@ -74,6 +74,34 @@ async function ensureSettingsTable(client) {
   `);
 }
 
+async function ensureDefaultSettingsRows(client) {
+  const defaults = [
+    {
+      key: 'contracts_storage',
+      value: { schema: DEFAULT_CONFIG.contracts_schema, table: DEFAULT_CONFIG.contracts_table },
+      description: 'Хранилище версий контрактов данных'
+    },
+    {
+      key: 'templates_storage',
+      value: { schema: DEFAULT_CONFIG.templates_schema, table: DEFAULT_CONFIG.templates_table },
+      description: 'Хранилище шаблонов таблиц'
+    }
+  ];
+
+  for (const row of defaults) {
+    await client.query(
+      `
+      INSERT INTO ${SETTINGS_QNAME}
+        (setting_key, setting_value, scope, description, is_active, updated_at, updated_by)
+      VALUES
+        ($1, $2::jsonb, 'global', $3, true, now(), 'system_bootstrap')
+      ON CONFLICT (setting_key) DO NOTHING
+      `,
+      [row.key, JSON.stringify(row.value), row.description]
+    );
+  }
+}
+
 function applySettingValue(target, key, value) {
   if (key === 'contracts_storage') {
     const obj = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -111,6 +139,7 @@ async function loadRuntimeConfig(client, { force = false } = {}) {
   }
 
   await ensureSettingsTable(client);
+  await ensureDefaultSettingsRows(client);
   const next = { ...DEFAULT_CONFIG };
   const r = await client.query(
     `

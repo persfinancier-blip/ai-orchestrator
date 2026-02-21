@@ -415,6 +415,21 @@
     contracts_storage_schema = schema;
     contracts_storage_table = table;
     saveContractsStorageConfig();
+    try {
+      await apiJson(`${apiBase}/settings/upsert`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({
+          setting_key: 'contracts_storage',
+          setting_value: { schema, table },
+          description: 'Хранилище версий контрактов данных',
+          scope: 'global',
+          is_active: true
+        })
+      });
+    } catch (e: any) {
+      contracts_error = e?.message ?? String(e);
+    }
     contracts_storage_picker_open = false;
     await loadContractsPanel();
   }
