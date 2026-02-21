@@ -1,4 +1,4 @@
-<!-- File: core/orchestrator/modules/advertising/interface/desk/tabs/TablesAndDataTab.svelte -->
+﻿<!-- File: core/orchestrator/modules/advertising/interface/desk/tabs/TablesAndDataTab.svelte -->
 <script lang="ts">
   export type Role = 'viewer' | 'operator' | 'data_admin';
   export type ExistingTable = { schema_name: string; table_name: string };
@@ -103,6 +103,7 @@
       modal = '';
       await loadColumns();
       await loadPreview();
+      await refreshTables();
     } catch (e: any) {
       modal_error = e?.message ?? String(e);
     }
@@ -130,6 +131,7 @@
       modal = '';
       await loadColumns();
       await loadPreview();
+      await refreshTables();
     } catch (e: any) {
       modal_error = e?.message ?? String(e);
     }
@@ -217,132 +219,144 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Таблицы и данные</h2>
-    <div class="quick">
-      <button on:click={refreshTables} disabled={loading}>{loading ? 'Загрузка…' : 'Обновить список'}</button>
-    </div>
   </div>
 
-  <div class="two">
-    <div class="left">
-      <h3>Текущие таблицы</h3>
+  <div class="layout">
+    <aside class="aside">
+      <div class="aside-head">
+        <div class="aside-title">Текущие таблицы</div>
+        <button class="icon-btn refresh-btn" on:click={refreshTables} disabled={loading} title="Обновить список">↻</button>
+      </div>
 
       {#if existingTables.length === 0}
         <p class="hint">Таблиц нет.</p>
       {:else}
-        <div class="tables-list">
+        <div class="list tables-list">
           {#each existingTables as t}
-            <button
-              class="chip"
-              class:activechip={t.schema_name === preview_schema && t.table_name === preview_table}
-              on:click={() => pickExisting(t)}
-            >
-              {t.schema_name}.{t.table_name}
-            </button>
+            <div class="row-item" class:activeitem={t.schema_name === preview_schema && t.table_name === preview_table}>
+              <button class="item-button" on:click={() => pickExisting(t)}>
+                {t.schema_name}.{t.table_name}
+              </button>
+            </div>
           {/each}
         </div>
       {/if}
-    </div>
+    </aside>
 
-    <div class="right">
-      <div class="panel-head" style="margin-top:0;">
-        <div>
-          <h3 style="margin:0;">Предпросмотр (5 строк)</h3>
-          <div class="hint" style="margin:4px 0 0;">
-            {#if preview_schema && preview_table}
-              {preview_schema}.{preview_table}
-            {:else}
-              Выбери таблицу слева
-            {/if}
+    <div class="main">
+      <div class="card">
+        <div class="panel-head" style="margin-top:0;">
+          <div>
+            <h3 style="margin:0;">Предпросмотр (5 строк)</h3>
+            <div class="hint" style="margin:4px 0 0;">
+              {#if preview_schema && preview_table}
+                {preview_schema}.{preview_table}
+              {:else}
+                Выбери таблицу слева
+              {/if}
+            </div>
+          </div>
+
+          <div class="quick">
+            <button on:click={loadColumns} disabled={!preview_schema || !preview_table}>Колонки</button>
+            <button on:click={loadPreview} disabled={preview_loading || !preview_schema || !preview_table}>
+              {preview_loading ? 'Загрузка…' : 'Обновить 5 строк'}
+            </button>
+            <button class="danger" on:click={confirmDropTable} disabled={!canWrite() || !preview_schema || !preview_table}>
+              Удалить таблицу
+            </button>
           </div>
         </div>
 
-        <div class="quick">
-          <button on:click={loadColumns} disabled={!preview_schema || !preview_table}>Колонки</button>
-          <button on:click={loadPreview} disabled={preview_loading || !preview_schema || !preview_table}>
-            {preview_loading ? 'Загрузка…' : 'Обновить 5 строк'}
-          </button>
-          <button class="danger" on:click={confirmDropTable} disabled={!canWrite() || !preview_schema || !preview_table}>
-            Удалить таблицу
-          </button>
-        </div>
-      </div>
-
-      {#if preview_error}
-        <div class="alert">
-          <div class="alert-title">Ошибка</div>
-          <pre>{preview_error}</pre>
-        </div>
-      {/if}
-
-      {#if !preview_schema || !preview_table}
-        <p class="hint">Выбери таблицу слева.</p>
-      {:else if preview_columns.length === 0}
-        <p class="hint">Колонки не загружены. Нажми “Колонки”.</p>
-      {:else}
-        <div class="preview">
-          <table>
-            <thead>
-              <tr>
-                {#each preview_columns as c}
-                  <th>
-                    <div class="thwrap">
-                      <span class="thname" title={c.description || ''}>{c.name}</span>
-                      <button
-                        class="xbtn"
-                        on:click={() => confirmDropColumn(c.name)}
-                        disabled={!canWrite()}
-                        title="Удалить столбец"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  </th>
-                {/each}
-                <th class="thadd">
-                  <button class="plusbtn" on:click={openAddColumnModal} disabled={!canWrite()} title="Добавить столбец">+</button>
-                </th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {#if preview_rows.length === 0}
-                <tr>
-                  <td colspan={preview_columns.length + 1} class="muted">Нет строк (таблица может быть пустой).</td>
-                </tr>
-              {:else}
-                {#each preview_rows as r}
-                  <tr>
-                    {#each preview_columns as c}
-                      <td>{typeof r[c.name] === 'object' ? JSON.stringify(r[c.name]) : String(r[c.name] ?? '')}</td>
-                    {/each}
-                    <td class="rowactions">
-                      <button class="trash" on:click={() => confirmDeleteRow(r.__ctid)} disabled={!canWrite()} title="Удалить строку">🗑</button>
-                    </td>
-                  </tr>
-                {/each}
-              {/if}
-            </tbody>
-
-            <tfoot>
-              <tr>
-                {#each preview_columns as c}
-                  <td>
-                    <input class="cellinput" bind:value={newRow[c.name]} placeholder={c.type} disabled={!canWrite()} />
-                  </td>
-                {/each}
-                <td class="rowactions">
-                  <button class="addrow" on:click={addRowNow} disabled={!canWrite()} title="Добавить строку">Добавить</button>
-                </td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-
-        {#if !canWrite()}
-          <p class="hint">Редактирование доступно только при роли <b>data_admin</b>.</p>
+        {#if preview_error}
+          <div class="alert">
+            <div class="alert-title">Ошибка</div>
+            <pre>{preview_error}</pre>
+          </div>
         {/if}
-      {/if}
+
+        {#if !preview_schema || !preview_table}
+          <p class="hint">Выбери таблицу слева.</p>
+        {:else if preview_columns.length === 0}
+          <p class="hint">Колонки не загружены. Нажми «Колонки».</p>
+        {:else}
+          <div class="preview">
+            <table>
+              <thead>
+                <tr>
+                  {#each preview_columns as c}
+                    <th>
+                      <div class="thwrap">
+                        <span class="thname" title={c.description || ''}>{c.name}</span>
+                        <button
+                          class="xbtn"
+                          on:click={() => confirmDropColumn(c.name)}
+                          disabled={!canWrite()}
+                          title="Удалить столбец"
+                        >
+                          x
+                        </button>
+                      </div>
+                    </th>
+                  {/each}
+                  <th class="thadd">
+                    <button class="plusbtn" on:click={openAddColumnModal} disabled={!canWrite()} title="Добавить столбец">+</button>
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {#if preview_rows.length === 0}
+                  <tr>
+                    <td colspan={preview_columns.length + 1} class="muted">Нет строк (таблица может быть пустой).</td>
+                  </tr>
+                {:else}
+                  {#each preview_rows as r}
+                    <tr>
+                      {#each preview_columns as c}
+                        <td>{typeof r[c.name] === 'object' ? JSON.stringify(r[c.name]) : String(r[c.name] ?? '')}</td>
+                      {/each}
+                      <td class="rowactions">
+                        <button class="trash" on:click={() => confirmDeleteRow(r.__ctid)} disabled={!canWrite()} title="Удалить строку">🗑</button>
+                      </td>
+                    </tr>
+                  {/each}
+                {/if}
+              </tbody>
+
+              <tfoot>
+                <tr>
+                  {#each preview_columns as c}
+                    <td>
+                      <input class="cellinput" bind:value={newRow[c.name]} placeholder={c.type} disabled={!canWrite()} />
+                    </td>
+                  {/each}
+                  <td class="rowactions">
+                    <button class="addrow" on:click={addRowNow} disabled={!canWrite()} title="Добавить строку">Добавить</button>
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+
+          {#if !canWrite()}
+            <p class="hint">Редактирование доступно только при роли <b>data_admin</b>.</p>
+          {/if}
+        {/if}
+      </div>
     </div>
+
+    <aside class="aside">
+      <div class="aside-head">
+        <div class="aside-title">Шаблоны таблиц</div>
+        <button class="icon-btn refresh-btn" on:click={refreshTables} disabled={loading} title="Обновить список">↻</button>
+      </div>
+      <div class="storage-meta">
+        <span>Хранятся в таблице:</span>
+        <span class="plain-value">ao_system.table_templates_store</span>
+      </div>
+      <p class="hint">Управление шаблонами выполняется на вкладке «Создание».</p>
+    </aside>
   </div>
 </section>
 
@@ -397,7 +411,7 @@
         </div>
 
       {:else if modal === 'confirmDropColumn'}
-        <h3 style="margin-top:0;">Удалить столбец “{pending_drop_column}”?</h3>
+        <h3 style="margin-top:0;">Удалить столбец «{pending_drop_column}»?</h3>
         <p class="hint">Данные в столбце будут потеряны.</p>
 
         {#if modal_error}
@@ -454,12 +468,26 @@
   .panel-head h2 { margin:0; font-size:18px; }
   .quick { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
 
-  .two { display:grid; grid-template-columns: 340px 1fr; gap:12px; margin-top:12px; }
-  @media (max-width: 1100px) { .two { grid-template-columns: 1fr; } }
+  .layout { display:grid; grid-template-columns: 320px 1fr 360px; gap:12px; margin-top:12px; align-items:start; }
+  @media (max-width: 1300px) { .layout { grid-template-columns: 320px 1fr; } }
+  @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
 
-  .tables-list { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
-  .chip { padding:8px 10px; border-radius:999px; border:1px solid #e6eaf2; background:#fff; cursor:pointer; }
-  .activechip { background:#0f172a; color:#fff; border-color:#0f172a; }
+  .aside { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#f8fafc; }
+  .aside-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+  .aside-title { font-weight:700; font-size:14px; line-height:1.3; margin-bottom:0; }
+  .list { display:flex; flex-direction:column; gap:8px; overflow:visible; max-height:none; }
+  .row-item { display:grid; grid-template-columns: 1fr; gap:8px; align-items:center; border:1px solid #e6eaf2; border-radius:14px; background:#fff; padding:10px 12px; }
+  .item-button { text-align:left; border:0; background:transparent; padding:0; font-weight:400; font-size:14px; line-height:1.3; color:inherit; }
+  .activeitem { border-color:#0f172a; background:#0f172a; color:#fff; }
+  .activeitem .item-button { color:#fff; }
+  .tables-list .row-item { background:#0f172a; border-color:#0f172a; }
+  .tables-list .item-button { color:#fff; }
+
+  .main { min-width:0; }
+  .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; }
+
+  .storage-meta { margin-top:0; margin-bottom:8px; display:flex; align-items:center; gap:6px; font-size:12px; color:#64748b; }
+  .plain-value { color:#0f172a; font-size:12px; font-weight:500; }
 
   .hint { margin:10px 0 0; color:#64748b; font-size:13px; }
   .muted { color:#64748b; font-size:13px; }
@@ -471,18 +499,20 @@
 
   .thwrap { display:flex; align-items:center; justify-content:space-between; gap:10px; }
   .thname { font-weight:700; }
-  .xbtn { border:1px solid #f3c0c0; color:#b91c1c; background:#fff; border-radius:10px; padding:2px 8px; cursor:pointer; }
+  .xbtn { border-color:transparent; background:transparent; color:#b91c1c; border-radius:10px; padding:2px 8px; cursor:pointer; text-transform:lowercase; }
   .thadd { width: 1%; white-space: nowrap; }
   .plusbtn { border-radius:12px; border:1px solid #e6eaf2; padding:6px 10px; background:#fff; cursor:pointer; }
 
   .rowactions { width: 1%; white-space: nowrap; }
-  .trash { border:1px solid #f3c0c0; color:#b91c1c; background:#fff; border-radius:12px; padding:6px 10px; cursor:pointer; }
+  .trash { border-color:transparent; background:transparent; color:#b91c1c; border-radius:12px; padding:6px 10px; cursor:pointer; }
   .addrow { border-radius:12px; border:1px solid #0f172a; padding:8px 10px; background:#0f172a; color:#fff; cursor:pointer; }
 
   .cellinput { width: 100%; border-radius: 12px; border:1px solid #e6eaf2; padding:8px 10px; }
 
   button { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; background:#fff; cursor:pointer; }
   button:disabled { opacity:.6; cursor:not-allowed; }
+  .icon-btn { width:44px; min-width:44px; padding:10px 0; text-transform:uppercase; border-color:transparent; background:transparent; }
+  .refresh-btn { color:#16a34a; }
   .danger { border-color:#f3c0c0; color:#b91c1c; }
   .primary { background:#0f172a; color:#fff; border-color:#0f172a; }
 
