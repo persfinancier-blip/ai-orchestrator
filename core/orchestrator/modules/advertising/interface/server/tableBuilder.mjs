@@ -33,14 +33,110 @@ function qlit(v) {
 }
 
 const KNOWN_TYPES = new Set(['text', 'int', 'bigint', 'numeric', 'boolean', 'date', 'timestamptz', 'jsonb', 'uuid']);
-const CONTRACTS_SCHEMA = 'ao_system';
-const CONTRACTS_TABLE = 'table_data_contract_versions';
-const CONTRACTS_QNAME = `${qi(CONTRACTS_SCHEMA)}.${qi(CONTRACTS_TABLE)}`;
+const SETTINGS_SCHEMA = 'ao_system';
+const SETTINGS_TABLE = 'table_settings_store';
+const SETTINGS_QNAME = `${qi(SETTINGS_SCHEMA)}.${qi(SETTINGS_TABLE)}`;
+const DEFAULT_CONFIG = Object.freeze({
+  contracts_schema: 'ao_system',
+  contracts_table: 'table_data_contract_versions',
+  templates_schema: 'ao_system',
+  templates_table: 'table_templates_store'
+});
+const SETTINGS_CACHE_MS = Number(process.env.AO_SETTINGS_CACHE_MS || 5000);
+let settingsCache = { at: 0, value: { ...DEFAULT_CONFIG } };
 
-async function ensureContractsTable(client) {
-  await client.query(`CREATE SCHEMA IF NOT EXISTS ${qi(CONTRACTS_SCHEMA)}`);
+function normalizeSettingIdent(value, fallback) {
+  const v = String(value || '').trim();
+  return isIdent(v) ? v : fallback;
+}
+
+function contractsQname(config) {
+  return `${qi(config.contracts_schema)}.${qi(config.contracts_table)}`;
+}
+
+async function ensureSettingsTable(client) {
+  await client.query(`CREATE SCHEMA IF NOT EXISTS ${qi(SETTINGS_SCHEMA)}`);
   await client.query(`
-    CREATE TABLE IF NOT EXISTS ${CONTRACTS_QNAME} (
+    CREATE TABLE IF NOT EXISTS ${SETTINGS_QNAME} (
+      id bigserial PRIMARY KEY,
+      setting_key text NOT NULL UNIQUE,
+      setting_value jsonb NOT NULL,
+      scope text NOT NULL DEFAULT 'global',
+      description text NOT NULL DEFAULT '',
+      is_active boolean NOT NULL DEFAULT true,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      updated_by text NOT NULL DEFAULT 'system'
+    )
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_table_settings_store_active_idx
+    ON ${SETTINGS_QNAME} (is_active, setting_key)
+  `);
+}
+
+function applySettingValue(target, key, value) {
+  if (key === 'contracts_storage') {
+    const obj = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    target.contracts_schema = normalizeSettingIdent(obj.schema, target.contracts_schema);
+    target.contracts_table = normalizeSettingIdent(obj.table, target.contracts_table);
+    return;
+  }
+  if (key === 'contracts_storage_schema') {
+    target.contracts_schema = normalizeSettingIdent(value, target.contracts_schema);
+    return;
+  }
+  if (key === 'contracts_storage_table') {
+    target.contracts_table = normalizeSettingIdent(value, target.contracts_table);
+    return;
+  }
+  if (key === 'templates_storage') {
+    const obj = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    target.templates_schema = normalizeSettingIdent(obj.schema, target.templates_schema);
+    target.templates_table = normalizeSettingIdent(obj.table, target.templates_table);
+    return;
+  }
+  if (key === 'templates_storage_schema') {
+    target.templates_schema = normalizeSettingIdent(value, target.templates_schema);
+    return;
+  }
+  if (key === 'templates_storage_table') {
+    target.templates_table = normalizeSettingIdent(value, target.templates_table);
+  }
+}
+
+async function loadRuntimeConfig(client, { force = false } = {}) {
+  const now = Date.now();
+  if (!force && now - settingsCache.at < SETTINGS_CACHE_MS) {
+    return settingsCache.value;
+  }
+
+  await ensureSettingsTable(client);
+  const next = { ...DEFAULT_CONFIG };
+  const r = await client.query(
+    `
+    SELECT setting_key, setting_value
+    FROM ${SETTINGS_QNAME}
+    WHERE is_active = true
+    `
+  );
+  for (const row of r.rows || []) {
+    const settingKey = String(row?.setting_key || '').trim();
+    if (!settingKey) continue;
+    applySettingValue(next, settingKey, row?.setting_value);
+  }
+
+  settingsCache = { at: now, value: next };
+  return next;
+}
+
+async function ensureContractsTable(client, config) {
+  const contractsSchema = normalizeSettingIdent(config?.contracts_schema, DEFAULT_CONFIG.contracts_schema);
+  const contractsTable = normalizeSettingIdent(config?.contracts_table, DEFAULT_CONFIG.contracts_table);
+  const contractsQn = `${qi(contractsSchema)}.${qi(contractsTable)}`;
+
+  await client.query(`CREATE SCHEMA IF NOT EXISTS ${qi(contractsSchema)}`);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ${contractsQn} (
       id bigserial PRIMARY KEY,
       schema_name text NOT NULL,
       table_name text NOT NULL,
@@ -58,8 +154,9 @@ async function ensureContractsTable(client) {
   `);
   await client.query(`
     CREATE INDEX IF NOT EXISTS ao_table_data_contract_versions_lookup_idx
-    ON ${CONTRACTS_QNAME} (schema_name, table_name, version DESC)
+    ON ${contractsQn} (schema_name, table_name, version DESC)
   `);
+  return contractsQn;
 }
 
 function defaultContractName(schema, table) {
@@ -113,9 +210,10 @@ async function getTableDescription(client, schema, table) {
 }
 
 async function getNextContractVersion(client, schema, table) {
-  await ensureContractsTable(client);
+  const config = await loadRuntimeConfig(client);
+  const contractsQn = await ensureContractsTable(client, config);
   const r = await client.query(
-    `SELECT COALESCE(MAX(version), 0) AS max_v FROM ${CONTRACTS_QNAME} WHERE schema_name = $1 AND table_name = $2`,
+    `SELECT COALESCE(MAX(version), 0) AS max_v FROM ${contractsQn} WHERE schema_name = $1 AND table_name = $2`,
     [schema, table]
   );
   const maxV = Number(r.rows?.[0]?.max_v || 0);
@@ -123,10 +221,12 @@ async function getNextContractVersion(client, schema, table) {
 }
 
 async function createContractVersion(client, { schema, table, description, columns, reason, by }) {
+  const config = await loadRuntimeConfig(client);
+  const contractsQn = await ensureContractsTable(client, config);
   const version = await getNextContractVersion(client, schema, table);
   await client.query(
     `
-    INSERT INTO ${CONTRACTS_QNAME}
+    INSERT INTO ${contractsQn}
       (schema_name, table_name, contract_name, version, lifecycle_state, deleted_at, description, columns, change_reason, changed_by)
     VALUES
       ($1, $2, $3, $4, 'active', NULL, $5, $6::jsonb, $7, $8)
@@ -152,10 +252,11 @@ async function createContractVersionFromTable(client, schema, table, reason, by)
 }
 
 async function markContractsDeletedByTableDrop(client, schema, table) {
-  await ensureContractsTable(client);
+  const config = await loadRuntimeConfig(client);
+  const contractsQn = await ensureContractsTable(client, config);
   await client.query(
     `
-    UPDATE ${CONTRACTS_QNAME}
+    UPDATE ${contractsQn}
     SET lifecycle_state = 'table_deleted', deleted_at = now()
     WHERE schema_name = $1
       AND table_name = $2
@@ -166,11 +267,12 @@ async function markContractsDeletedByTableDrop(client, schema, table) {
 }
 
 async function getLatestContractMeta(client, schema, table) {
-  await ensureContractsTable(client);
+  const config = await loadRuntimeConfig(client);
+  const contractsQn = await ensureContractsTable(client, config);
   const r = await client.query(
     `
     SELECT contract_name, version
-    FROM ${CONTRACTS_QNAME}
+    FROM ${contractsQn}
     WHERE schema_name = $1
       AND table_name = $2
       AND lifecycle_state <> 'deleted_by_user'
@@ -183,7 +285,8 @@ async function getLatestContractMeta(client, schema, table) {
   if (!row) return null;
   return {
     contract_name: String(row.contract_name || defaultContractName(schema, table)),
-    version: Number(row.version || 1)
+    version: Number(row.version || 1),
+    contracts_schema: config.contracts_schema
   };
 }
 
@@ -195,7 +298,7 @@ async function enrichRowWithContractFields(client, schema, table, sourceRow) {
   if (!meta) return row;
 
   if (colSet.has('ao_contract_schema') && row.ao_contract_schema == null) {
-    row.ao_contract_schema = CONTRACTS_SCHEMA;
+    row.ao_contract_schema = meta.contracts_schema || DEFAULT_CONFIG.contracts_schema;
   }
   if (colSet.has('ao_contract_name') && row.ao_contract_name == null) {
     row.ao_contract_name = meta.contract_name;
@@ -246,6 +349,85 @@ tableBuilderRouter.get('/tables', async (_req, res) => {
   }
 });
 
+tableBuilderRouter.get('/settings', requireDataAdmin, async (_req, res) => {
+  const client = await pool.connect();
+  try {
+    await ensureSettingsTable(client);
+    const rows = await client.query(
+      `
+      SELECT setting_key, setting_value, scope, description, is_active, updated_at, updated_by
+      FROM ${SETTINGS_QNAME}
+      ORDER BY setting_key
+      `
+    );
+    const effective = await loadRuntimeConfig(client, { force: true });
+    return res.json({ ok: true, defaults: DEFAULT_CONFIG, effective, rows: rows.rows || [] });
+  } catch (e) {
+    return res.status(500).json({ error: 'settings_list_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+tableBuilderRouter.post('/settings/upsert', requireDataAdmin, async (req, res) => {
+  const setting_key = String(req.body?.setting_key || '').trim();
+  const scope = String(req.body?.scope || 'global').trim() || 'global';
+  const description = String(req.body?.description || '').trim();
+  const updated_by = String(req.body?.updated_by || req.header('X-AO-ROLE') || 'ui').trim();
+  const is_active = req.body?.is_active === undefined ? true : Boolean(req.body?.is_active);
+  const setting_value = req.body?.setting_value;
+
+  if (!setting_key) {
+    return res.status(400).json({ error: 'bad_request', details: 'setting_key is required' });
+  }
+  if (setting_value === undefined) {
+    return res.status(400).json({ error: 'bad_request', details: 'setting_value is required' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await ensureSettingsTable(client);
+    await client.query(
+      `
+      INSERT INTO ${SETTINGS_QNAME}
+        (setting_key, setting_value, scope, description, is_active, updated_by, updated_at)
+      VALUES
+        ($1, $2::jsonb, $3, $4, $5, $6, now())
+      ON CONFLICT (setting_key)
+      DO UPDATE SET
+        setting_value = EXCLUDED.setting_value,
+        scope = EXCLUDED.scope,
+        description = EXCLUDED.description,
+        is_active = EXCLUDED.is_active,
+        updated_by = EXCLUDED.updated_by,
+        updated_at = now()
+      `,
+      [setting_key, JSON.stringify(setting_value), scope, description, is_active, updated_by]
+    );
+
+    const effective = await loadRuntimeConfig(client, { force: true });
+    await ensureContractsTable(client, effective);
+    return res.json({ ok: true, setting_key, effective });
+  } catch (e) {
+    return res.status(500).json({ error: 'settings_upsert_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+tableBuilderRouter.post('/settings/reload', requireDataAdmin, async (_req, res) => {
+  const client = await pool.connect();
+  try {
+    const effective = await loadRuntimeConfig(client, { force: true });
+    await ensureContractsTable(client, effective);
+    return res.json({ ok: true, effective });
+  } catch (e) {
+    return res.status(500).json({ error: 'settings_reload_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
 tableBuilderRouter.get('/contracts', requireDataAdmin, async (req, res) => {
   const schema = String(req.query.schema || '').trim();
   const table = String(req.query.table || '').trim();
@@ -255,7 +437,8 @@ tableBuilderRouter.get('/contracts', requireDataAdmin, async (req, res) => {
 
   const client = await pool.connect();
   try {
-    await ensureContractsTable(client);
+    const config = await loadRuntimeConfig(client);
+    const contractsQn = await ensureContractsTable(client, config);
     const r = await client.query(
       `
       SELECT
@@ -270,7 +453,7 @@ tableBuilderRouter.get('/contracts', requireDataAdmin, async (req, res) => {
         change_reason,
         changed_by,
         created_at
-      FROM ${CONTRACTS_QNAME}
+      FROM ${contractsQn}
       WHERE schema_name = $1 AND table_name = $2
       ORDER BY version DESC
       `,
@@ -294,10 +477,11 @@ tableBuilderRouter.post('/contracts/version/delete', requireDataAdmin, async (re
 
   const client = await pool.connect();
   try {
-    await ensureContractsTable(client);
+    const config = await loadRuntimeConfig(client);
+    const contractsQn = await ensureContractsTable(client, config);
     const r = await client.query(
       `
-      UPDATE ${CONTRACTS_QNAME}
+      UPDATE ${contractsQn}
       SET lifecycle_state = 'deleted_by_user', deleted_at = now()
       WHERE schema_name = $1 AND table_name = $2 AND version = $3
       `,
@@ -569,10 +753,11 @@ tableBuilderRouter.post('/tables/rename', requireDataAdmin, async (req, res) => 
   try {
     await client.query('BEGIN');
     await client.query(`ALTER TABLE ${qname(schema, table)} RENAME TO ${qi(new_table)}`);
-    await ensureContractsTable(client);
+    const config = await loadRuntimeConfig(client);
+    const contractsQn = await ensureContractsTable(client, config);
     await client.query(
       `
-      UPDATE ${CONTRACTS_QNAME}
+      UPDATE ${contractsQn}
       SET table_name = $3, contract_name = $4
       WHERE schema_name = $1 AND table_name = $2
       `,
@@ -709,3 +894,15 @@ tableBuilderRouter.post('/rows/delete', requireDataAdmin, async (req, res) => {
     client.release();
   }
 });
+
+export async function bootstrapTableBuilder() {
+  const client = await pool.connect();
+  try {
+    const effective = await loadRuntimeConfig(client, { force: true });
+    await ensureSettingsTable(client);
+    await ensureContractsTable(client, effective);
+    return { ok: true, effective };
+  } finally {
+    client.release();
+  }
+}

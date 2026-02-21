@@ -2,7 +2,7 @@
 
 import express from 'express';
 import { pool } from './db.mjs';
-import { tableBuilderRouter } from './tableBuilder.mjs';
+import { bootstrapTableBuilder, tableBuilderRouter } from './tableBuilder.mjs';
 
 const app = express();
 const port = Number(process.env.SPACE_API_PORT || 8787);
@@ -52,6 +52,15 @@ app.get('/ai-orchestrator/api/space/', handleSpace);
 app.get('/ai-orchestrator/api/health', (_req, res) => {
   res.json({ ok: true, port });
 });
+
+try {
+  const boot = await bootstrapTableBuilder();
+  // eslint-disable-next-line no-console
+  console.log('Table Builder bootstrap:', boot);
+} catch (e) {
+  // eslint-disable-next-line no-console
+  console.error('Table Builder bootstrap failed:', e);
+}
 
 app.listen(port, () => {
   // eslint-disable-next-line no-console
