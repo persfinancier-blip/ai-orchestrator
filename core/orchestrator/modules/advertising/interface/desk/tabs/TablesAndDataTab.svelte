@@ -632,6 +632,21 @@
                           x
                         </button>
                       </div>
+                      <div class="thdesc-edit">
+                        <input
+                          class="thdesc-input"
+                          bind:value={columnDescriptionDrafts[c.name]}
+                          placeholder="Описание поля"
+                          disabled={!canEditSelectedTable()}
+                          on:blur={() => saveColumnDescription(c.name)}
+                        />
+                        <button
+                          class="icon-btn save-mini-btn"
+                          on:click={() => saveColumnDescription(c.name)}
+                          disabled={!canEditSelectedTable()}
+                          title="Сохранить описание поля"
+                        >✓</button>
+                      </div>
                     </th>
                   {/each}
                   <th class="thadd">
@@ -672,26 +687,6 @@
                 </tr>
               </tfoot>
             </table>
-            </div>
-
-            <div class="column-descriptions">
-              {#each preview_columns as c}
-                <div class="desc-row">
-                  <div class="desc-name">{c.name}</div>
-                  <input
-                    class="desc-input"
-                    bind:value={columnDescriptionDrafts[c.name]}
-                    placeholder="Описание поля"
-                    disabled={!canEditSelectedTable()}
-                  />
-                  <button
-                    class="icon-btn save-mini-btn"
-                    on:click={() => saveColumnDescription(c.name)}
-                    disabled={!canEditSelectedTable()}
-                    title="Сохранить описание поля"
-                  >✓</button>
-                </div>
-              {/each}
             </div>
 
             {#if !canEditSelectedTable()}
@@ -913,6 +908,8 @@
 
   .thwrap { display:flex; align-items:center; justify-content:space-between; gap:10px; }
   .thname { font-weight:700; }
+  .thdesc-edit { margin-top:6px; display:grid; grid-template-columns: 1fr auto; gap:6px; align-items:center; }
+  .thdesc-input { width:100%; box-sizing:border-box; border-radius:10px; border:1px solid #e6eaf2; padding:6px 8px; font-size:12px; line-height:1.25; color:#334155; }
   .xbtn { border-color:transparent; background:transparent; color:#b91c1c; border-radius:10px; width:34px; min-width:34px; padding:6px 0; cursor:pointer; text-transform:lowercase; font-size:14px; font-weight:400; line-height:1; }
   .thadd { width: 1%; white-space: nowrap; }
   .plusbtn { border-radius:12px; border-color:transparent; background:transparent; width:34px; min-width:34px; padding:6px 0; font-size:20px; line-height:1; font-weight:400; cursor:pointer; }
@@ -920,10 +917,6 @@
   .rowactions { width:44px; min-width:44px; white-space: nowrap; text-align:center; }
   .trash { border-color:transparent; background:transparent; color:#b91c1c; border-radius:12px; padding:6px 10px; cursor:pointer; }
   .addrow-icon { border-radius:12px; border-color:transparent; background:transparent; width:34px; min-width:34px; padding:6px 0; font-size:20px; line-height:1; font-weight:400; cursor:pointer; }
-  .column-descriptions { margin-top:10px; display:flex; flex-direction:column; gap:8px; }
-  .desc-row { display:grid; grid-template-columns: minmax(140px, 1fr) minmax(0, 3fr) auto; gap:8px; align-items:center; }
-  .desc-name { font-size:12px; color:#334155; font-weight:600; }
-  .desc-input { width:100%; box-sizing:border-box; border-radius:12px; border:1px solid #e6eaf2; padding:8px 10px; }
   .save-mini-btn { width:34px; min-width:34px; padding:6px 0; color:#16a34a; border-color:transparent; background:transparent; }
 
   .cellinput { display:block; width:100%; min-width:120px; box-sizing:border-box; border-radius:12px; border:1px solid #e6eaf2; padding:8px 10px; }
