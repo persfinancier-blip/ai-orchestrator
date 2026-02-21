@@ -270,9 +270,12 @@
           </div>
 
           <div class="quick">
-            <button on:click={refreshPreviewAll} disabled={preview_loading || !preview_schema || !preview_table}>
-              {preview_loading ? 'Загрузка…' : 'Обновить предпросмотр'}
-            </button>
+            <button
+              class="icon-btn refresh-btn"
+              on:click={refreshPreviewAll}
+              disabled={preview_loading || !preview_schema || !preview_table}
+              title="Обновить предпросмотр"
+            >↻</button>
           </div>
         </div>
 
