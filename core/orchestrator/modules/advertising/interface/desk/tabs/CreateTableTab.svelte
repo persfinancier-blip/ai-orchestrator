@@ -542,6 +542,7 @@
   .templates-list .item-button { color:#fff; }
   .templates-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
   .templates-list .activeitem .item-button { color:#0f172a; font-size:15px; font-weight:600; letter-spacing:.01em; }
+  .templates-list .activeitem .item-button::before { content:'●'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
 
   .main { min-width:0; }
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; }
