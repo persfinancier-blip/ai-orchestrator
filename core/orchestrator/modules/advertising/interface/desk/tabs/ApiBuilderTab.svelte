@@ -1010,6 +1010,9 @@
     selectedId = draft.id;
     apiNameDraft = draft.name;
   }
+  $: if (!selected && sources.length > 0) {
+    selectedId = sources[0].id;
+  }
   $: if (selected && selected.id !== lastNameDraftSourceId) {
     apiNameDraft = selected.name;
     lastNameDraftSourceId = selected.id;
@@ -1710,10 +1713,7 @@
     </aside>
 
     <div class="main">
-      {#if !selected}
-        <div class="hint">Создай или выбери API слева.</div>
-      {:else}
-        {#key selectedId}
+      {#key selectedId}
           <div class="card">
             <div class="grid">
               <div class="request-top">
@@ -2039,8 +2039,7 @@
               </div>
             {/if}
           </div>
-        {/key}
-      {/if}
+      {/key}
     </div>
 
     <aside class="aside compare-aside">
