@@ -997,17 +997,34 @@
 
   async function onSaveSourceClick() {
     err = '';
-    if (!selectedId) {
+    const current = getSelected();
+    if (!selectedId || !current) {
       err = 'Выбери API для сохранения';
       return;
     }
-    const name = String(apiNameDraft || '').trim();
+    const name = String(apiNameDraft || current.name || '').trim();
     if (!name) {
       err = 'Укажи название API';
       return;
     }
+
+    // Сначала применяем URL/cURL из поля строки подключения,
+    // чтобы в БД ушли актуальные base_url/path/query_json.
+    applyUrlInputRaw(urlInput);
+
     mutateSelected((s) => (s.name = name));
     await persistSelectedNow();
+
+    // Перечитываем из БД и сохраняем выбор того же API по storeId.
+    const savedStoreId = getSelected()?.storeId || current.storeId;
+    await loadAll();
+    if (savedStoreId) {
+      const match = sources.find((s) => Number(s.storeId || 0) === Number(savedStoreId));
+      if (match) {
+        selectedId = match.id;
+        apiNameDraft = match.name;
+      }
+    }
   }
 
   function saveSources() {
