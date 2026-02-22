@@ -147,6 +147,8 @@
   let headerRows: KvRow[] = [];
   let bodyRows: BodyRow[] = [];
   let lastEditorSourceId = '';
+  let apiNameDraft = '';
+  let lastNameDraftSourceId = '';
   const API_STORAGE_REQUIRED_COLUMNS: Array<{ name: string; types: string[] }> = [
     { name: 'api_name', types: ['text', 'character varying', 'varchar'] },
     { name: 'method', types: ['text', 'character varying', 'varchar'] },
@@ -844,6 +846,41 @@
     }
   }
 
+  function applySelectedSource(id: string) {
+    selectedId = id;
+    const src = sources.find((s) => s.id === id);
+    apiNameDraft = String(src?.name || '');
+  }
+
+  async function onAddSourceClick() {
+    err = '';
+    const name = String(apiNameDraft || '').trim();
+    if (!name) {
+      err = 'Укажи название API';
+      return;
+    }
+    const s = defaultSource();
+    s.name = name;
+    sources = [s, ...sources];
+    selectedId = s.id;
+    await persistSelectedNow();
+  }
+
+  async function onSaveSourceClick() {
+    err = '';
+    if (!selectedId) {
+      err = 'Выбери API для сохранения';
+      return;
+    }
+    const name = String(apiNameDraft || '').trim();
+    if (!name) {
+      err = 'Укажи название API';
+      return;
+    }
+    mutateSelected((s) => (s.name = name));
+    await persistSelectedNow();
+  }
+
   function saveSources() {
     if (saveSourceDebounce) clearTimeout(saveSourceDebounce);
     saveSourceDebounce = setTimeout(() => {
@@ -860,6 +897,10 @@
   }
 
   $: selected = getSelected();
+  $: if (selected && selected.id !== lastNameDraftSourceId) {
+    apiNameDraft = selected.name;
+    lastNameDraftSourceId = selected.id;
+  }
 
   function mutateSelected(mutator: (next: ApiSource) => void) {
     if (!selectedId) return;
@@ -945,6 +986,7 @@
     const s = defaultSource();
     sources = [s, ...sources];
     selectedId = s.id;
+    apiNameDraft = s.name;
     saveSources();
   }
 
@@ -1518,16 +1560,19 @@
           <button on:click={applyApiStorageChoice} disabled={!api_storage_pick_value}>Подключить</button>
         </div>
       {/if}
-      <div class="saved-actions">
-        <button on:click={newSource}>Добавить</button>
-        <button on:click={persistSelectedNow} disabled={!selectedId}>Сохранить</button>
+      <div class="template-controls">
+        <input class="template-name" bind:value={apiNameDraft} placeholder="Название API" />
+        <div class="inline-actions">
+          <button on:click={onAddSourceClick}>Добавить</button>
+          <button on:click={onSaveSourceClick} disabled={!selectedId}>Сохранить</button>
+        </div>
       </div>
       {#if sources.length === 0}
         <div class="hint">Пока нет ни одного.</div>
       {:else}
         <div class="list">
           {#each sources as s (s.id)}
-            <button class="item" class:activeitem={s.id === selectedId} on:click={() => (selectedId = s.id)}>
+            <button class="item" class:activeitem={s.id === selectedId} on:click={() => applySelectedSource(s.id)}>
               <div class="name">{s.name}</div>
               <div class="meta">{s.method} {s.baseUrl}{s.path}</div>
             </button>
@@ -1949,7 +1994,8 @@
   .link-btn { border:0; background:transparent; color:#0f172a; padding:0; text-decoration:underline; font-size:12px; font-weight:500; }
   .storage-picker { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
   .storage-picker select { flex:1; min-width:0; }
-  .saved-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px; }
+  .template-controls { margin-bottom:8px; display:flex; flex-direction:column; gap:8px; }
+  .template-name { width:100%; box-sizing:border-box; }
   .compare-fields { display:flex; flex-direction:column; gap:10px; }
   .compare-fields textarea { overflow:hidden; resize:none; }
   .list { display:flex; flex-direction:column; gap:8px; }
