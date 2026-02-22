@@ -73,6 +73,18 @@
   let myPreviewJson: any = null;
   let myPreviewIsJson = false;
   let myPreviewViewMode: 'tree' | 'raw' = 'tree';
+  let authJsonTree: any = null;
+  let authJsonValid = false;
+  let authViewMode: 'tree' | 'raw' = 'raw';
+  let headersJsonTree: any = null;
+  let headersJsonValid = false;
+  let headersViewMode: 'tree' | 'raw' = 'raw';
+  let queryJsonTree: any = null;
+  let queryJsonValid = false;
+  let queryViewMode: 'tree' | 'raw' = 'raw';
+  let bodyJsonTree: any = null;
+  let bodyJsonValid = false;
+  let bodyViewMode: 'tree' | 'raw' = 'raw';
   let selected: ApiDraft | null = null;
   let myApiPreview = '';
   let lastSelectedRef = '';
@@ -946,6 +958,66 @@
       }
     }
   }
+  $: {
+    const txt = String(selected?.authJson || '').trim();
+    if (!txt) {
+      authJsonValid = false;
+      authJsonTree = null;
+    } else {
+      try {
+        authJsonTree = parseJsonObjectField('Авторизация', txt);
+        authJsonValid = true;
+      } catch {
+        authJsonTree = null;
+        authJsonValid = false;
+      }
+    }
+  }
+  $: {
+    const txt = String(selected?.headersJson || '').trim();
+    if (!txt) {
+      headersJsonValid = false;
+      headersJsonTree = null;
+    } else {
+      try {
+        headersJsonTree = parseJsonObjectField('Headers JSON', txt);
+        headersJsonValid = true;
+      } catch {
+        headersJsonTree = null;
+        headersJsonValid = false;
+      }
+    }
+  }
+  $: {
+    const txt = String(selected?.queryJson || '').trim();
+    if (!txt) {
+      queryJsonValid = false;
+      queryJsonTree = null;
+    } else {
+      try {
+        queryJsonTree = parseJsonObjectField('Query JSON', txt);
+        queryJsonValid = true;
+      } catch {
+        queryJsonTree = null;
+        queryJsonValid = false;
+      }
+    }
+  }
+  $: {
+    const txt = String(selected?.bodyJson || '').trim();
+    if (!txt) {
+      bodyJsonValid = false;
+      bodyJsonTree = null;
+    } else {
+      try {
+        bodyJsonTree = parseJsonAnyField('Body JSON', txt);
+        bodyJsonValid = true;
+      } catch {
+        bodyJsonTree = null;
+        bodyJsonValid = false;
+      }
+    }
+  }
   $: responseText, tick().then(syncLeftTextareasHeight);
   $: selected?.exampleRequest, tick().then(syncLeftTextareasHeight);
   $: myApiPreview, tick().then(syncLeftTextareasHeight);
@@ -1102,40 +1174,84 @@
         ></textarea>
 
         <label>
-          Авторизация
-          <textarea
-            bind:this={authEl}
-            value={selected?.authJson || ''}
-            on:input={(e) => mutateSelected((d) => (d.authJson = e.currentTarget.value))}
-          ></textarea>
+          <div class="response-head">
+            <span>Авторизация</span>
+            {#if authJsonValid}
+              <button type="button" class="view-toggle" on:click={() => (authViewMode = authViewMode === 'tree' ? 'raw' : 'tree')}>
+                {authViewMode === 'tree' ? 'RAW' : 'Дерево'}
+              </button>
+            {/if}
+          </div>
+          {#if authJsonValid && authViewMode === 'tree'}
+            <div class="response-tree-wrap"><JsonTreeView node={authJsonTree} name="auth" level={0} /></div>
+          {:else}
+            <textarea
+              bind:this={authEl}
+              value={selected?.authJson || ''}
+              on:input={(e) => mutateSelected((d) => (d.authJson = e.currentTarget.value))}
+            ></textarea>
+          {/if}
         </label>
 
         <div class="raw-grid">
           <label>
-            Headers JSON
-            <textarea
-              bind:this={headersEl}
-              value={selected?.headersJson || ''}
-              on:input={(e) => mutateSelected((d) => (d.headersJson = e.currentTarget.value))}
-            ></textarea>
+            <div class="response-head">
+              <span>Headers JSON</span>
+              {#if headersJsonValid}
+                <button type="button" class="view-toggle" on:click={() => (headersViewMode = headersViewMode === 'tree' ? 'raw' : 'tree')}>
+                  {headersViewMode === 'tree' ? 'RAW' : 'Дерево'}
+                </button>
+              {/if}
+            </div>
+            {#if headersJsonValid && headersViewMode === 'tree'}
+              <div class="response-tree-wrap"><JsonTreeView node={headersJsonTree} name="headers" level={0} /></div>
+            {:else}
+              <textarea
+                bind:this={headersEl}
+                value={selected?.headersJson || ''}
+                on:input={(e) => mutateSelected((d) => (d.headersJson = e.currentTarget.value))}
+              ></textarea>
+            {/if}
           </label>
           <label>
-            Query JSON
-            <textarea
-              bind:this={queryEl}
-              value={selected?.queryJson || ''}
-              on:input={(e) => mutateSelected((d) => (d.queryJson = e.currentTarget.value))}
-            ></textarea>
+            <div class="response-head">
+              <span>Query JSON</span>
+              {#if queryJsonValid}
+                <button type="button" class="view-toggle" on:click={() => (queryViewMode = queryViewMode === 'tree' ? 'raw' : 'tree')}>
+                  {queryViewMode === 'tree' ? 'RAW' : 'Дерево'}
+                </button>
+              {/if}
+            </div>
+            {#if queryJsonValid && queryViewMode === 'tree'}
+              <div class="response-tree-wrap"><JsonTreeView node={queryJsonTree} name="query" level={0} /></div>
+            {:else}
+              <textarea
+                bind:this={queryEl}
+                value={selected?.queryJson || ''}
+                on:input={(e) => mutateSelected((d) => (d.queryJson = e.currentTarget.value))}
+              ></textarea>
+            {/if}
           </label>
         </div>
 
         <label>
-          Body JSON
-          <textarea
-            bind:this={bodyEl}
-            value={selected?.bodyJson || ''}
-            on:input={(e) => mutateSelected((d) => (d.bodyJson = e.currentTarget.value))}
-          ></textarea>
+          <div class="response-head">
+            <span>Body JSON</span>
+            {#if bodyJsonValid}
+              <button type="button" class="view-toggle" on:click={() => (bodyViewMode = bodyViewMode === 'tree' ? 'raw' : 'tree')}>
+                {bodyViewMode === 'tree' ? 'RAW' : 'Дерево'}
+              </button>
+            {/if}
+          </div>
+          {#if bodyJsonValid && bodyViewMode === 'tree'}
+            <div class="response-tree-wrap"><JsonTreeView node={bodyJsonTree} name="body" level={0} /></div>
+          {:else}
+            <textarea
+              bind:this={bodyEl}
+              value={selected?.bodyJson || ''}
+              on:input={(e) => mutateSelected((d) => (d.bodyJson = e.currentTarget.value))}
+            ></textarea>
+          {/if}
         </label>
 
         <div class="targets-wrap">
