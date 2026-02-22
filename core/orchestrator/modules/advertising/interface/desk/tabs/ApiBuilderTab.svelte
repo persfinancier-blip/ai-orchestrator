@@ -110,6 +110,16 @@
     return JSON.parse(s);
   }
 
+  function safePreviewObj(text: string): any {
+    const src = String(text || '').trim();
+    if (!src) return {};
+    try {
+      return JSON.parse(src);
+    } catch {
+      return { __raw: src, __error: 'Некорректный JSON' };
+    }
+  }
+
   function refOf(d: ApiDraft): string {
     return d.storeId ? `db:${d.storeId}` : `tmp:${d.localId}`;
   }
@@ -296,6 +306,29 @@
     const q = parseObj(d.queryJson);
     for (const [k, v] of Object.entries(q || {})) u.searchParams.set(k, String(v));
     return u.toString();
+  }
+
+  function previewUrlFromInput(selectedDraft: ApiDraft | null): string {
+    if (!selectedDraft) return '';
+    const raw = String(requestInput || '').trim();
+    if (!raw) {
+      try {
+        return fullUrl(selectedDraft);
+      } catch {
+        return `${selectedDraft.baseUrl}${selectedDraft.path}`;
+      }
+    }
+    const curlMatch = raw.match(/curl\s+(?:-X\s+(GET|POST|PUT|PATCH|DELETE)\s+)?['\"]([^'\"]+)['\"]/i);
+    const source = curlMatch ? curlMatch[2] : raw;
+    try {
+      return new URL(source).toString();
+    } catch {
+      try {
+        return fullUrl(selectedDraft);
+      } catch {
+        return `${selectedDraft.baseUrl}${selectedDraft.path}`;
+      }
+    }
   }
 
   function applyUrlInput(raw: string) {
@@ -778,16 +811,11 @@
     ? JSON.stringify(
         {
           method: selected.method,
-          url: (() => {
-            try {
-              return fullUrl(selected);
-            } catch {
-              return `${selected.baseUrl}${selected.path}`;
-            }
-          })(),
-          auth: tryObj(selected.authJson),
-          headers: tryObj(selected.headersJson),
-          body: selected.method === 'GET' || selected.method === 'DELETE' ? undefined : tryObj(selected.bodyJson)
+          url: previewUrlFromInput(selected),
+          auth: safePreviewObj(selected.authJson),
+          headers: safePreviewObj(selected.headersJson),
+          query: safePreviewObj(selected.queryJson),
+          body: selected.method === 'GET' || selected.method === 'DELETE' ? undefined : safePreviewObj(selected.bodyJson)
         },
         null,
         2
@@ -796,6 +824,7 @@
   $: responseText, tick().then(syncLeftTextareasHeight);
   $: selected?.exampleRequest, tick().then(syncLeftTextareasHeight);
   $: myApiPreview, tick().then(syncLeftTextareasHeight);
+  $: requestInput, tick().then(syncLeftTextareasHeight);
   $: selected?.description, tick().then(syncMainTextareasHeight);
   $: selected?.authJson, tick().then(syncMainTextareasHeight);
   $: selected?.headersJson, tick().then(syncMainTextareasHeight);
