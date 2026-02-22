@@ -2430,13 +2430,6 @@
   .auth-mode-btn:focus-visible {
     outline:2px solid #93c5fd;
   }
-  .auth-indicator {
-    width:8px;
-    height:8px;
-    border-radius:50%;
-    background:#10b981;
-    box-shadow:0 0 0 2px rgba(16,185,129,0.4);
-  }
   .oauth-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:8px; }
   .oauth-grid input { margin:0; }
   .auth-mode-buttons + .oauth-grid + .hint { margin-top:0; }
