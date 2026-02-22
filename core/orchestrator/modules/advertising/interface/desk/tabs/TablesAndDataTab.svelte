@@ -316,6 +316,10 @@
 
   function openCompareVersions() {
     if (!contractVersions.length) return;
+    if (compare_versions_open) {
+      compare_versions_open = false;
+      return;
+    }
     const active = getActiveContract();
     compare_top_id = String(active?.id || contractVersions[0]?.id || '');
     compare_bottom_id = getDefaultCompareBottomId(compare_top_id);
@@ -805,42 +809,30 @@
             {#if compareRows.length === 0}
               <p class="hint">Для сравнения выбери две версии контракта.</p>
             {:else}
-              <div class="compare-stack">
-                <div class="compare-version">
-                  <div class="hint">Верхняя версия: v{compareTop?.version ?? '-'}</div>
-                  <table class="compare-table">
-                    <thead>
-                      <tr><th>Колонка</th><th>Тип</th><th>Описание</th></tr>
-                    </thead>
-                    <tbody>
-                      {#each compareRows as row}
-                        <tr class:missing-row={!row.top}>
-                          <td>{row.top?.field_name || ''}</td>
-                          <td>{row.top?.field_type || ''}</td>
-                          <td>{row.top?.description || ''}</td>
-                        </tr>
-                      {/each}
-                    </tbody>
-                  </table>
-                </div>
-                <div class="compare-version">
-                  <div class="hint">Нижняя версия: v{compareBottom?.version ?? '-'}</div>
-                  <table class="compare-table">
-                    <thead>
-                      <tr><th>Колонка</th><th>Тип</th><th>Описание</th></tr>
-                    </thead>
-                    <tbody>
-                      {#each compareRows as row}
-                        <tr class:missing-row={!row.bottom}>
-                          <td>{row.bottom?.field_name || ''}</td>
-                          <td>{row.bottom?.field_type || ''}</td>
-                          <td>{row.bottom?.description || ''}</td>
-                        </tr>
-                      {/each}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+              <table class="compare-table">
+                <thead>
+                  <tr>
+                    <th colspan="3">Левая версия: v{compareTop?.version ?? '-'}</th>
+                    <th colspan="3">Правая версия: v{compareBottom?.version ?? '-'}</th>
+                  </tr>
+                  <tr>
+                    <th>Колонка</th><th>Тип</th><th>Описание</th>
+                    <th>Колонка</th><th>Тип</th><th>Описание</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each compareRows as row}
+                    <tr>
+                      <td class:missing-cell={!row.top}>{row.top?.field_name || ''}</td>
+                      <td class:missing-cell={!row.top}>{row.top?.field_type || ''}</td>
+                      <td class:missing-cell={!row.top}>{row.top?.description || ''}</td>
+                      <td class:missing-cell={!row.bottom}>{row.bottom?.field_name || ''}</td>
+                      <td class:missing-cell={!row.bottom}>{row.bottom?.field_type || ''}</td>
+                      <td class:missing-cell={!row.bottom}>{row.bottom?.description || ''}</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
             {/if}
           </div>
         {/if}
@@ -970,11 +962,16 @@
         {/if}
       </p>
       <div class="contract-actions">
-        <button on:click={openCompareVersions} disabled={!preview_schema || !preview_table || contractVersions.length < 2}>
-          Сравнить версии
+        <button
+          class="compare-toggle"
+          class:active={compare_versions_open}
+          on:click={openCompareVersions}
+          disabled={!preview_schema || !preview_table || contractVersions.length < 2}
+        >
+          {#if compare_versions_open}● {/if}Сравнение версий
         </button>
         <button on:click={openApplySelectedVersion} disabled={!preview_schema || !preview_table || !selectedContractId || !canEditSelectedTable()}>
-          Привести к выбранной версии
+          Применить версию
         </button>
       </div>
       {#if contractVersions.length === 0}
@@ -1172,18 +1169,17 @@
   .hint { margin:10px 0 0; color:#64748b; font-size:13px; }
   .muted { color:#64748b; font-size:13px; }
   .contract-actions { margin-top:10px; display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .compare-toggle.active { background:#fff; color:#0f172a; border-color:#cbd5e1; font-weight:600; }
 
   .compare-card { margin-top:10px; border:1px solid #e6eaf2; border-radius:14px; padding:10px; background:#fff; }
   .compare-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
   .compare-head h4 { margin:0; font-size:14px; }
   .compare-selectors { margin-top:8px; display:grid; grid-template-columns:1fr 1fr; gap:8px; }
   .compare-selectors select { width:100%; min-width:0; }
-  .compare-stack { margin-top:10px; display:grid; grid-template-columns:1fr; gap:10px; }
-  .compare-version { border:1px solid #eef2f7; border-radius:12px; padding:8px; }
-  .compare-table { width:100%; border-collapse:collapse; min-width:0; }
+  .compare-table { margin-top:10px; width:100%; border-collapse:collapse; min-width:0; table-layout:fixed; }
   .compare-table th, .compare-table td { border-bottom:1px solid #eef2f7; padding:8px; font-size:12px; }
   .compare-table th { position:static; background:transparent; }
-  .missing-row td { background:#f1f5f9; color:#94a3b8; }
+  .missing-cell { background:#f1f5f9; color:#94a3b8; }
 
   .preview { margin-top: 10px; overflow:auto; border:1px solid #e6eaf2; border-radius:16px; }
   table { width:100%; border-collapse:collapse; min-width: 740px; }
