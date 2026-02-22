@@ -502,12 +502,17 @@
   }
 
   function parseTemplateNow(force = false) {
-    if (!selected) return;
-    const src = String(selected.exampleRequest || '').trim();
+    if (!selected) {
+      templateParseMessage = 'Выбери API в правом блоке';
+      return;
+    }
+    const srcRaw = exampleApiEl ? String(exampleApiEl.value || '') : String(selected.exampleRequest || '');
+    const src = srcRaw.trim();
     if (!src) {
       templateParseMessage = '';
       return;
     }
+    mutateSelected((d) => (d.exampleRequest = srcRaw));
     if (!force && src.length < 8) return;
     const parsed = parseTemplateToPatch(src);
     if (!parsed.ok) {
@@ -519,9 +524,18 @@
   }
 
   function clearTemplateField() {
+    if (exampleApiEl) exampleApiEl.value = '';
     mutateSelected((d) => (d.exampleRequest = ''));
     templateParseMessage = '';
     syncLeftTextareasHeight();
+  }
+
+  function onTemplateParseClick() {
+    parseTemplateNow(true);
+  }
+
+  function onTemplateClearClick() {
+    clearTemplateField();
   }
 
   function scheduleTemplateParse() {
@@ -813,8 +827,8 @@
         <div class="subttl template-head">
           <span>Шаблон API</span>
           <span class="template-head-actions">
-            <button class="icon-btn template-action" type="button" title="Разобрать в настройки" on:click={() => parseTemplateNow(true)}>+</button>
-            <button class="icon-btn danger template-action" type="button" title="Очистить поле" on:click={clearTemplateField}>x</button>
+            <button class="icon-btn template-action" type="button" title="Разобрать в настройки" on:click|preventDefault|stopPropagation={onTemplateParseClick}>+</button>
+            <button class="icon-btn danger template-action" type="button" title="Очистить поле" on:click|preventDefault|stopPropagation={onTemplateClearClick}>x</button>
           </span>
         </div>
         <textarea
