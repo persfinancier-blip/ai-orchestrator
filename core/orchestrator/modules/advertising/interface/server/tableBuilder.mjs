@@ -1399,12 +1399,11 @@ tableBuilderRouter.post('/api-configs/delete', requireDataAdmin, async (req, res
     await ensureApiConfigsTable(client, config);
     const r = await client.query(
       `
-      UPDATE ${qn}
-      SET is_active = false, updated_at = now(), updated_by = $2, ao_updated_at = now()
+      DELETE FROM ${qn}
       WHERE id = $1
       RETURNING id
       `,
-      [Math.trunc(id), String(req.header('X-AO-ROLE') || 'ui')]
+      [Math.trunc(id)]
     );
     if (!r.rows?.length) return res.status(404).json({ error: 'not_found', details: 'api_config id not found' });
     return res.json({ ok: true, id: Number(r.rows[0].id || 0), deleted: true });

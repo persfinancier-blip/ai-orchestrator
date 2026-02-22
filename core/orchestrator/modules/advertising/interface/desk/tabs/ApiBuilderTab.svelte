@@ -662,6 +662,8 @@
 
   function fromDbConfigRow(row: any): ApiSource {
     const base = defaultSource();
+    const storeIdRaw = row?.id ?? row?.api_config_id ?? row?.config_id ?? null;
+    const storeIdNum = Number(String(storeIdRaw ?? '').trim());
     const mapping = row?.mapping_json && typeof row.mapping_json === 'object' ? row.mapping_json : {};
     const auth = mapping?.auth && typeof mapping.auth === 'object' ? mapping.auth : {};
     const db = mapping?.db && typeof mapping.db === 'object' ? mapping.db : {};
@@ -669,7 +671,7 @@
     return normalizeSource({
       ...base,
       id: uid(),
-      storeId: Number(row?.id || 0) || undefined,
+      storeId: Number.isFinite(storeIdNum) && storeIdNum > 0 ? Math.trunc(storeIdNum) : undefined,
       name: String(row?.api_name || 'API'),
       method: toHttpMethod(String(row?.method || 'GET').toUpperCase()),
       baseUrl: String(row?.base_url || ''),
