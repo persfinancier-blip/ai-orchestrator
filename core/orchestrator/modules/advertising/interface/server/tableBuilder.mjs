@@ -41,6 +41,8 @@ const DEFAULT_CONFIG = Object.freeze({
   contracts_table: 'table_data_contract_versions',
   templates_schema: 'ao_system',
   templates_table: 'table_templates_store',
+  api_configs_schema: 'ao_system',
+  api_configs_table: 'api_configs_store',
   server_writes_schema: 'ao_system',
   server_writes_table: 'table_server_writes_store'
 });
@@ -95,6 +97,23 @@ const SERVER_WRITES_REQUIRED_COLUMNS = [
   { name: 'updated_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] },
   { name: 'updated_by', types: ['text', 'character varying', 'varchar'] }
 ];
+const API_CONFIGS_REQUIRED_COLUMNS = [
+  { name: 'api_name', types: ['text', 'character varying', 'varchar'] },
+  { name: 'method', types: ['text', 'character varying', 'varchar'] },
+  { name: 'base_url', types: ['text', 'character varying', 'varchar'] },
+  { name: 'path', types: ['text', 'character varying', 'varchar'] },
+  { name: 'headers_json', types: ['jsonb', 'json'] },
+  { name: 'query_json', types: ['jsonb', 'json'] },
+  { name: 'body_json', types: ['jsonb', 'json'] },
+  { name: 'pagination_json', types: ['jsonb', 'json'] },
+  { name: 'target_schema', types: ['text', 'character varying', 'varchar'] },
+  { name: 'target_table', types: ['text', 'character varying', 'varchar'] },
+  { name: 'mapping_json', types: ['jsonb', 'json'] },
+  { name: 'description', types: ['text', 'character varying', 'varchar'] },
+  { name: 'is_active', types: ['boolean'] },
+  { name: 'updated_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] },
+  { name: 'updated_by', types: ['text', 'character varying', 'varchar'] }
+];
 const SYSTEM_CONTRACT_COLUMNS = [
   { name: 'ao_source', type: 'text' },
   { name: 'ao_run_id', type: 'text' },
@@ -116,6 +135,11 @@ function contractsQname(config) {
 
 function syncProtectedSystemTables(config) {
   const next = new Set([`${SETTINGS_SCHEMA}.${SETTINGS_TABLE}`]);
+  if (config?.api_configs_schema && config?.api_configs_table) {
+    next.add(`${config.api_configs_schema}.${config.api_configs_table}`);
+  } else {
+    next.add(`${DEFAULT_CONFIG.api_configs_schema}.${DEFAULT_CONFIG.api_configs_table}`);
+  }
   if (config?.server_writes_schema && config?.server_writes_table) {
     next.add(`${config.server_writes_schema}.${config.server_writes_table}`);
   } else {
@@ -260,6 +284,11 @@ async function ensureDefaultSettingsRows(client) {
       key: 'server_writes_storage',
       value: { schema: DEFAULT_CONFIG.server_writes_schema, table: DEFAULT_CONFIG.server_writes_table },
       description: 'Хранилище правил серверных записей'
+    },
+    {
+      key: 'api_configs_storage',
+      value: { schema: DEFAULT_CONFIG.api_configs_schema, table: DEFAULT_CONFIG.api_configs_table },
+      description: 'Хранилище преднастроенных API'
     }
   ];
 
@@ -326,6 +355,20 @@ function applySettingValue(target, key, value) {
   }
   if (key === 'server_writes_storage_table') {
     target.server_writes_table = normalizeSettingIdent(value, target.server_writes_table);
+    return;
+  }
+  if (key === 'api_configs_storage') {
+    const parsed = parseStorageSettingValue(value);
+    target.api_configs_schema = normalizeSettingIdent(parsed.schema, target.api_configs_schema);
+    target.api_configs_table = normalizeSettingIdent(parsed.table, target.api_configs_table);
+    return;
+  }
+  if (key === 'api_configs_storage_schema') {
+    target.api_configs_schema = normalizeSettingIdent(value, target.api_configs_schema);
+    return;
+  }
+  if (key === 'api_configs_storage_table') {
+    target.api_configs_table = normalizeSettingIdent(value, target.api_configs_table);
   }
 }
 
@@ -384,8 +427,20 @@ async function loadRuntimeConfig(client, { force = false } = {}) {
     next.server_writes_table = DEFAULT_CONFIG.server_writes_table;
   }
 
+  const apiConfigsOk = await hasRequiredColumns(
+    client,
+    next.api_configs_schema,
+    next.api_configs_table,
+    API_CONFIGS_REQUIRED_COLUMNS
+  );
+  if (!apiConfigsOk) {
+    next.api_configs_schema = DEFAULT_CONFIG.api_configs_schema;
+    next.api_configs_table = DEFAULT_CONFIG.api_configs_table;
+  }
+
   const contractsQn = await ensureContractsTable(client, next);
   const templatesQn = await ensureTemplatesStorageTable(client, next);
+  await ensureApiConfigsTable(client, next);
   const serverWritesQn = await ensureServerWritesTable(client, next);
   await ensureDefaultServerWriteRules(client, next, serverWritesQn);
 
@@ -422,6 +477,15 @@ async function loadRuntimeConfig(client, { force = false } = {}) {
     next.server_writes_schema,
     next.server_writes_table,
     'system_bootstrap:server_writes_storage',
+    'system_bootstrap',
+    next.contracts_schema
+  );
+  await ensureContractVersionForTable(
+    client,
+    contractsQn,
+    next.api_configs_schema,
+    next.api_configs_table,
+    'system_bootstrap:api_configs_storage',
     'system_bootstrap',
     next.contracts_schema
   );
@@ -524,6 +588,44 @@ async function ensureTemplatesStorageTable(client, config) {
   return templatesQn;
 }
 
+async function ensureApiConfigsTable(client, config) {
+  const schema = normalizeSettingIdent(config?.api_configs_schema, DEFAULT_CONFIG.api_configs_schema);
+  const table = normalizeSettingIdent(config?.api_configs_table, DEFAULT_CONFIG.api_configs_table);
+  const qn = `${qi(schema)}.${qi(table)}`;
+
+  await client.query(`CREATE SCHEMA IF NOT EXISTS ${qi(schema)}`);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ${qn} (
+      id bigserial PRIMARY KEY,
+      api_name text NOT NULL,
+      method text NOT NULL DEFAULT 'GET',
+      base_url text NOT NULL DEFAULT '',
+      path text NOT NULL DEFAULT '',
+      headers_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      query_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      body_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      pagination_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      target_schema text NOT NULL DEFAULT '',
+      target_table text NOT NULL DEFAULT '',
+      mapping_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      description text NOT NULL DEFAULT '',
+      is_active boolean NOT NULL DEFAULT true,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      updated_by text NOT NULL DEFAULT 'system'
+    )
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_api_configs_store_name_idx
+    ON ${qn} (api_name)
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_api_configs_store_active_idx
+    ON ${qn} (is_active, api_name)
+  `);
+  await ensureSystemContractColumns(client, qn);
+  return qn;
+}
+
 async function ensureServerWritesTable(client, config) {
   const schema = normalizeSettingIdent(config?.server_writes_schema, DEFAULT_CONFIG.server_writes_schema);
   const table = normalizeSettingIdent(config?.server_writes_table, DEFAULT_CONFIG.server_writes_table);
@@ -558,6 +660,8 @@ async function ensureDefaultServerWriteRules(client, config, serverWritesQn) {
   const contractsTable = normalizeSettingIdent(config?.contracts_table, DEFAULT_CONFIG.contracts_table);
   const templatesSchema = normalizeSettingIdent(config?.templates_schema, DEFAULT_CONFIG.templates_schema);
   const templatesTable = normalizeSettingIdent(config?.templates_table, DEFAULT_CONFIG.templates_table);
+  const apiSchema = normalizeSettingIdent(config?.api_configs_schema, DEFAULT_CONFIG.api_configs_schema);
+  const apiTable = normalizeSettingIdent(config?.api_configs_table, DEFAULT_CONFIG.api_configs_table);
   const writesSchema = normalizeSettingIdent(config?.server_writes_schema, DEFAULT_CONFIG.server_writes_schema);
   const writesTable = normalizeSettingIdent(config?.server_writes_table, DEFAULT_CONFIG.server_writes_table);
   const contractName = defaultContractName(writesSchema, writesTable);
@@ -568,7 +672,7 @@ async function ensureDefaultServerWriteRules(client, config, serverWritesQn) {
       target_schema: SETTINGS_SCHEMA,
       target_table: SETTINGS_TABLE,
       operation: 'upsert_settings_defaults',
-      payload: { setting_keys: ['contracts_storage', 'templates_storage', 'server_writes_storage'] },
+      payload: { setting_keys: ['contracts_storage', 'templates_storage', 'api_configs_storage', 'server_writes_storage'] },
       description: 'Сервер поддерживает обязательные ключи в таблице настроек'
     },
     {
@@ -586,6 +690,14 @@ async function ensureDefaultServerWriteRules(client, config, serverWritesQn) {
       operation: 'upsert_template',
       payload: { trigger: ['template_add', 'template_save', 'template_delete'] },
       description: 'Сервер сохраняет шаблоны таблиц в подключенное хранилище'
+    },
+    {
+      rule_key: 'api_configs_storage_sync',
+      target_schema: apiSchema,
+      target_table: apiTable,
+      operation: 'upsert_api_config',
+      payload: { trigger: ['api_add', 'api_save', 'api_delete'] },
+      description: 'Сервер сохраняет преднастроенные API в подключенное хранилище'
     },
     {
       rule_key: 'server_writes_rules_self',
@@ -1020,6 +1132,7 @@ tableBuilderRouter.post('/settings/upsert', requireDataAdmin, async (req, res) =
     const effective = await loadRuntimeConfig(client, { force: true });
     await ensureContractsTable(client, effective);
     await ensureTemplatesStorageTable(client, effective);
+    await ensureApiConfigsTable(client, effective);
     await ensureServerWritesTable(client, effective);
     return res.json({ ok: true, setting_key, effective });
   } catch (e) {
@@ -1035,6 +1148,7 @@ tableBuilderRouter.post('/settings/reload', requireDataAdmin, async (_req, res) 
     const effective = await loadRuntimeConfig(client, { force: true });
     await ensureContractsTable(client, effective);
     await ensureTemplatesStorageTable(client, effective);
+    await ensureApiConfigsTable(client, effective);
     await ensureServerWritesTable(client, effective);
     return res.json({ ok: true, effective });
   } catch (e) {
@@ -1770,6 +1884,7 @@ export async function bootstrapTableBuilder() {
     await ensureSettingsTable(client);
     await ensureContractsTable(client, effective);
     await ensureTemplatesStorageTable(client, effective);
+    await ensureApiConfigsTable(client, effective);
     await ensureServerWritesTable(client, effective);
     return { ok: true, effective };
   } finally {

@@ -47,6 +47,7 @@
   const STORAGE_DEFAULT_TABLE = 'table_templates_store';
   const STORAGE_CONTRACT_NAME = 'Хранилище шаблонов таблиц';
   const SETTINGS_SYSTEM_TABLE = 'ao_system.table_settings_store';
+  const API_CONFIGS_SYSTEM_TABLE = 'ao_system.api_configs_store';
   const SERVER_WRITES_SYSTEM_TABLE = 'ao_system.table_server_writes_store';
   const REQUIRED_TABLE_FIELDS: ColumnDef[] = [
     { field_name: 'ao_source', field_type: 'text', description: 'источник данных (техническое поле)' },
@@ -100,7 +101,7 @@
 
   function isSystemTable(schema: string, table: string): boolean {
     const qn = `${String(schema || '').trim()}.${String(table || '').trim()}`;
-    return qn === SETTINGS_SYSTEM_TABLE || qn === SERVER_WRITES_SYSTEM_TABLE;
+    return qn === SETTINGS_SYSTEM_TABLE || qn === API_CONFIGS_SYSTEM_TABLE || qn === SERVER_WRITES_SYSTEM_TABLE;
   }
 
   function sleep(ms: number) {
@@ -319,6 +320,39 @@
     };
   }
 
+  function apiConfigsSystemTemplate(): DataContract {
+    return {
+      id: 'builtin_api_configs_table',
+      name: 'Хранилище API',
+      schema_name: 'ao_system',
+      table_name: 'api_configs_store',
+      table_class: 'custom',
+      description: 'Системная таблица преднастроенных API для workflow',
+      columns: withRequiredTableFields([
+        { field_name: 'api_name', field_type: 'text', description: 'имя API-конфига' },
+        { field_name: 'method', field_type: 'text', description: 'HTTP-метод' },
+        { field_name: 'base_url', field_type: 'text', description: 'базовый URL API' },
+        { field_name: 'path', field_type: 'text', description: 'путь запроса' },
+        { field_name: 'headers_json', field_type: 'jsonb', description: 'заголовки (json)' },
+        { field_name: 'query_json', field_type: 'jsonb', description: 'query-параметры (json)' },
+        { field_name: 'body_json', field_type: 'jsonb', description: 'тело запроса (json)' },
+        { field_name: 'pagination_json', field_type: 'jsonb', description: 'настройки пагинации (json)' },
+        { field_name: 'target_schema', field_type: 'text', description: 'схема таблицы назначения' },
+        { field_name: 'target_table', field_type: 'text', description: 'таблица назначения' },
+        { field_name: 'mapping_json', field_type: 'jsonb', description: 'маппинг полей (json)' },
+        { field_name: 'description', field_type: 'text', description: 'описание конфига' },
+        { field_name: 'is_active', field_type: 'boolean', description: 'активен ли API-конфиг' },
+        { field_name: 'updated_at', field_type: 'timestamptz', description: 'время обновления' },
+        { field_name: 'updated_by', field_type: 'text', description: 'кто обновил' }
+      ]),
+      partition_enabled: false,
+      partition_column: '',
+      partition_interval: 'day',
+      contract_version: 1,
+      contract_mode: 'safe_add_only'
+    };
+  }
+
   const FIELD_TYPE_TO_DB_TYPES: Record<string, string[]> = {
     text: ['text', 'character varying', 'varchar'],
     int: ['integer', 'int4', 'int'],
@@ -452,6 +486,7 @@
         storageSystemTemplate(),
         contractsSystemTemplate(),
         settingsSystemTemplate(),
+        apiConfigsSystemTemplate(),
         serverWritesSystemTemplate(),
         ...custom
       ];
@@ -471,6 +506,7 @@
       storageSystemTemplate(),
       contractsSystemTemplate(),
       settingsSystemTemplate(),
+      apiConfigsSystemTemplate(),
       serverWritesSystemTemplate()
     ];
   }
