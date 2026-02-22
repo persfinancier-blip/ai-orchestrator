@@ -19,7 +19,7 @@
     path: string;
     headersJson: string;
     authJson: string;
-    authMode: 'manual' | 'oauth2_client_credentials';
+    authMode: 'manual' | 'oauth2_client_credentials' | 'custom';
     oauth2TokenUrl: string;
     oauth2ClientId: string;
     oauth2ClientSecret: string;
@@ -30,13 +30,14 @@
     queryJson: string;
     bodyJson: string;
     paginationEnabled: boolean;
-    paginationStrategy: 'none' | 'cursor_fields' | 'page_number' | 'offset_limit' | 'next_url';
+    paginationStrategy: 'none' | 'cursor_fields' | 'page_number' | 'offset_limit' | 'next_url' | 'custom';
     paginationTarget: 'query' | 'body';
     paginationDataPath: string;
     paginationPageParam: string;
     paginationStartPage: number;
     paginationLimitParam: string;
     paginationLimitValue: number;
+    paginationCustomStrategy: string;
     paginationCursorReqPath1: string;
     paginationCursorReqPath2: string;
     paginationCursorResPath1: string;
@@ -54,6 +55,26 @@
     description: string;
     exampleRequest: string;
   };
+
+  const AUTH_OPTIONS = [
+    { value: 'manual', label: 'Ручная авторизация' },
+    { value: 'oauth2_client_credentials', label: 'OAuth2 (client_credentials)' },
+    { value: 'custom', label: 'Своя схема' }
+  ];
+
+  const PAGINATION_STRATEGIES = [
+    { value: 'none', label: 'Не использовать' },
+    { value: 'page_number', label: 'Номер страницы' },
+    { value: 'offset_limit', label: 'Смещение + лимит' },
+    { value: 'cursor_fields', label: 'Курсоры (две метки)' },
+    { value: 'next_url', label: 'Ссылка next' },
+    { value: 'custom', label: 'Своя логика' }
+  ];
+
+  const PAGINATION_TARGETS = [
+    { value: 'query', label: 'query (параметры URL)' },
+    { value: 'body', label: 'body (тело запроса)' }
+  ];
 
   const API_STORAGE_REQUIRED_COLUMNS: Array<{ name: string; types: string[] }> = [
     { name: 'api_name', types: ['text', 'character varying', 'varchar'] },
@@ -280,6 +301,7 @@
       paginationNextUrlPath: 'next',
       paginationMaxPages: 3,
       paginationDelayMs: 0,
+      paginationCustomStrategy: '',
       pickedPaths: [],
       responseTargets: [],
       description: '',
@@ -361,6 +383,7 @@
       paginationNextUrlPath: String(pagination?.next_url_path || 'next'),
       paginationMaxPages: Number(pagination?.max_pages || 3),
       paginationDelayMs: Number(pagination?.delay_ms || 0),
+      paginationCustomStrategy: String(pagination?.custom_strategy || ''),
       pickedPaths: Array.isArray(mapping?.picked_paths) ? mapping.picked_paths.map((x: any) => String(x || '').trim()).filter(Boolean) : [],
       responseTargets: normalizedTargets,
       description: String(row?.description || legacy?.description || ''),
@@ -397,7 +420,8 @@
         cursor_res_path_2: d.paginationCursorResPath2,
         next_url_path: d.paginationNextUrlPath,
         max_pages: d.paginationMaxPages,
-        delay_ms: d.paginationDelayMs
+        delay_ms: d.paginationDelayMs,
+        custom_strategy: d.paginationCustomStrategy
       },
       target_schema: firstTarget?.schema || '',
       target_table: firstTarget?.table || '',
@@ -1180,6 +1204,15 @@
     });
   }
 
+  function handlePaginationStrategyChange(value: string) {
+    const normalized = PAGINATION_STRATEGIES.some((s) => s.value === value) ? value : 'none';
+    mutateSelected((d) => (d.paginationStrategy = normalized as ApiDraft['paginationStrategy']));
+  }
+
+  function handlePaginationTargetChange(value: string) {
+    mutateSelected((d) => (d.paginationTarget = String(value) === 'query' ? 'query' : 'body'));
+  }
+
   async function checkStorageTable(schema: string, table: string) {
     try {
       const j = await apiJson<{ columns: Array<{ name: string; type: string }> }>(
@@ -1472,6 +1505,8 @@
           const n = s.paginationNextUrlPath ? getByPath(parsed, s.paginationNextUrlPath) : undefined;
           if (!n || typeof n !== 'string') break;
           nextUrlOverride = n;
+        } else if (s.paginationStrategy === 'custom') {
+          break;
         } else {
           break;
         }
@@ -1844,6 +1879,62 @@
               </button>
             {/if}
           </div>
+          <div class="auth-mode-panel">
+            <div class="auth-mode-row">
+              {#each AUTH_OPTIONS as option}
+                <button
+                  type="button"
+                  class="mode-pill"
+                  class:active={selected?.authMode === option.value}
+                  on:click={() => mutateSelected((d) => (d.authMode = option.value))}
+                >
+                  {option.label}
+                </button>
+              {/each}
+            </div>
+            {#if selected?.authMode === 'oauth2_client_credentials'}
+              <div class="oauth-grid">
+                <input
+                  placeholder="Token URL"
+                  value={selected?.oauth2TokenUrl || ''}
+                  on:input={(e) => mutateSelected((d) => (d.oauth2TokenUrl = e.currentTarget.value))}
+                />
+                <input
+                  placeholder="Client ID"
+                  value={selected?.oauth2ClientId || ''}
+                  on:input={(e) => mutateSelected((d) => (d.oauth2ClientId = e.currentTarget.value))}
+                />
+                <input
+                  placeholder="Client Secret"
+                  value={selected?.oauth2ClientSecret || ''}
+                  on:input={(e) => mutateSelected((d) => (d.oauth2ClientSecret = e.currentTarget.value))}
+                />
+                <input
+                  placeholder="Grant type"
+                  value={selected?.oauth2GrantType || ''}
+                  on:input={(e) => mutateSelected((d) => (d.oauth2GrantType = e.currentTarget.value))}
+                />
+                <input
+                  placeholder="Поле токена"
+                  value={selected?.oauth2TokenField || ''}
+                  on:input={(e) => mutateSelected((d) => (d.oauth2TokenField = e.currentTarget.value))}
+                />
+                <input
+                  placeholder="Поле expires_in"
+                  value={selected?.oauth2ExpiresField || ''}
+                  on:input={(e) => mutateSelected((d) => (d.oauth2ExpiresField = e.currentTarget.value))}
+                />
+                <input
+                  placeholder="Поле token_type"
+                  value={selected?.oauth2TokenTypeField || ''}
+                  on:input={(e) => mutateSelected((d) => (d.oauth2TokenTypeField = e.currentTarget.value))}
+                />
+              </div>
+              <p class="hint">OAuth2: конструктор автоматически получает токен и подставляет заголовок Authorization.</p>
+            {:else if selected?.authMode === 'custom'}
+              <p class="hint">Свой способ: вставь любой JSON в поле ниже и используй его как основную авторизацию.</p>
+            {/if}
+          </div>
           {#if authJsonValid && authViewMode === 'tree'}
             <div class="response-tree-wrap"><JsonTreeView node={authJsonTree} name="auth" level={0} /></div>
           {:else}
@@ -1915,6 +2006,174 @@
             ></textarea>
           {/if}
         </label>
+
+        <div class="pagination-box">
+          <div class="response-head field-head">
+            <span>Пагинация</span>
+            <label class="pagination-toggle">
+              <input
+                type="checkbox"
+                checked={selected?.paginationEnabled}
+                on:change={(e) => mutateSelected((d) => (d.paginationEnabled = e.currentTarget.checked))}
+              />
+              <span>Включить</span>
+            </label>
+          </div>
+          {#if selected?.paginationEnabled}
+            <div class="pagination-grid">
+              <div class="pagination-field">
+                <small>Стратегия</small>
+                <select
+                  value={selected?.paginationStrategy || 'none'}
+                  on:change={(e) => handlePaginationStrategyChange(e.currentTarget.value)}
+                >
+                  {#each PAGINATION_STRATEGIES as strat}
+                    <option value={strat.value}>{strat.label}</option>
+                  {/each}
+                </select>
+              </div>
+              <div class="pagination-field">
+                <small>Куда писать</small>
+                <select
+                  value={selected?.paginationTarget || 'body'}
+                  on:change={(e) => handlePaginationTargetChange(e.currentTarget.value)}
+                >
+                  {#each PAGINATION_TARGETS as target}
+                    <option value={target.value}>{target.label}</option>
+                  {/each}
+                </select>
+              </div>
+            </div>
+            {#if selected?.paginationStrategy === 'custom'}
+              <div class="pagination-grid">
+                <div class="pagination-field">
+                  <small>Своя инструкция</small>
+                  <input
+                    placeholder="Например: cursor_name + limit"
+                    value={selected?.paginationCustomStrategy || ''}
+                    on:input={(e) => mutateSelected((d) => (d.paginationCustomStrategy = e.currentTarget.value))}
+                  />
+                </div>
+              </div>
+            {/if}
+
+            <div class="pagination-grid">
+              <div class="pagination-field">
+                <small>Путь к данным (массив)</small>
+                <input
+                  placeholder="Например: settings.cursor.items"
+                  value={selected?.paginationDataPath || ''}
+                  on:input={(e) => mutateSelected((d) => (d.paginationDataPath = e.currentTarget.value))}
+                />
+              </div>
+              <div class="pagination-field">
+                <small>Макс. страниц</small>
+                <input
+                  type="number"
+                  min="1"
+                  value={selected?.paginationMaxPages || 1}
+                  on:input={(e) => mutateSelected((d) => (d.paginationMaxPages = Number(e.currentTarget.value) || 1))}
+                />
+              </div>
+            </div>
+
+            <div class="pagination-grid">
+              <div class="pagination-field">
+                <small>Параметр страницы</small>
+                <input
+                  placeholder="page"
+                  value={selected?.paginationPageParam || ''}
+                  on:input={(e) => mutateSelected((d) => (d.paginationPageParam = e.currentTarget.value))}
+                />
+              </div>
+              <div class="pagination-field">
+                <small>Стартовая страница / смещение</small>
+                <input
+                  type="number"
+                  value={selected?.paginationStartPage || 1}
+                  on:input={(e) => mutateSelected((d) => (d.paginationStartPage = Number(e.currentTarget.value) || 1))}
+                />
+              </div>
+            </div>
+
+            <div class="pagination-grid">
+              <div class="pagination-field">
+                <small>Limit параметр</small>
+                <input
+                  placeholder="limit"
+                  value={selected?.paginationLimitParam || ''}
+                  on:input={(e) => mutateSelected((d) => (d.paginationLimitParam = e.currentTarget.value))}
+                />
+              </div>
+              <div class="pagination-field">
+                <small>Limit значение</small>
+                <input
+                  type="number"
+                  min="1"
+                  value={selected?.paginationLimitValue || 1}
+                  on:input={(e) => mutateSelected((d) => (d.paginationLimitValue = Number(e.currentTarget.value) || 1))}
+                />
+              </div>
+            </div>
+
+            <div class="pagination-grid">
+              <div class="pagination-field">
+                <small>Cursor request path 1</small>
+                <input
+                  placeholder="cursor.after"
+                  value={selected?.paginationCursorReqPath1 || ''}
+                  on:input={(e) => mutateSelected((d) => (d.paginationCursorReqPath1 = e.currentTarget.value))}
+                />
+              </div>
+              <div class="pagination-field">
+                <small>Cursor request path 2</small>
+                <input
+                  placeholder="cursor.before"
+                  value={selected?.paginationCursorReqPath2 || ''}
+                  on:input={(e) => mutateSelected((d) => (d.paginationCursorReqPath2 = e.currentTarget.value))}
+                />
+              </div>
+            </div>
+
+            <div class="pagination-grid">
+              <div class="pagination-field">
+                <small>Cursor response path 1</small>
+                <input
+                  value={selected?.paginationCursorResPath1 || ''}
+                  on:input={(e) => mutateSelected((d) => (d.paginationCursorResPath1 = e.currentTarget.value))}
+                />
+              </div>
+              <div class="pagination-field">
+                <small>Cursor response path 2</small>
+                <input
+                  value={selected?.paginationCursorResPath2 || ''}
+                  on:input={(e) => mutateSelected((d) => (d.paginationCursorResPath2 = e.currentTarget.value))}
+                />
+              </div>
+            </div>
+
+            <div class="pagination-grid">
+              <div class="pagination-field">
+                <small>Next URL path</small>
+                <input
+                  placeholder="links.next"
+                  value={selected?.paginationNextUrlPath || ''}
+                  on:input={(e) => mutateSelected((d) => (d.paginationNextUrlPath = e.currentTarget.value))}
+                />
+              </div>
+              <div class="pagination-field">
+                <small>Delay между запросами (мс)</small>
+                <input
+                  type="number"
+                  min="0"
+                  value={selected?.paginationDelayMs || 0}
+                  on:input={(e) => mutateSelected((d) => (d.paginationDelayMs = Number(e.currentTarget.value) || 0))}
+                />
+              </div>
+            </div>
+            <p class="hint">Запросы автоматически повторяются по стратегии в пределах {selected?.paginationMaxPages || 1} страниц.</p>
+          {/if}
+        </div>
 
         <div class="targets-wrap">
           <div class="targets-head">
@@ -2152,6 +2411,20 @@
   .alert-title { font-weight: 700; margin-bottom: 6px; }
   .okbox { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #bbf7d0; background: #f0fdf4; color:#166534; }
   pre { margin:0; white-space: pre-wrap; word-break: break-word; }
+
+  .auth-mode-panel { margin-bottom: 10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#f8fafc; }
+  .auth-mode-row { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px; }
+  .mode-pill { border:1px solid #e2e8f0; background:#fff; color:#0f172a; padding:6px 12px; border-radius:999px; cursor:pointer; font-size:12px; font-weight:500; }
+  .mode-pill.active { background:#0f172a; color:#fff; border-color:#0f172a; }
+  .oauth-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:8px; }
+  .oauth-grid input { margin:0; }
+  .auth-mode-panel .hint { margin:0; }
+
+  .pagination-box { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#f8fafc; }
+  .pagination-toggle { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#475569; cursor:pointer; }
+  .pagination-toggle input { width:auto; }
+  .pagination-grid { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
+  .pagination-field small { display:block; margin-bottom:4px; font-size:11px; color:#64748b; }
 </style>
 
 
