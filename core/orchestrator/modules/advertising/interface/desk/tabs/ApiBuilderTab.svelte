@@ -2016,109 +2016,6 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
               <p class="hint">Параметры пока не созданы.</p>
             {/if}
           </div>
-        </div>
-      </div>
-      <div class="subsec">
-        <div class="subttl response-head">
-          <span>Предпросмотр твоего API</span>
-          <span class="inline-actions">
-            <button type="button" class="view-toggle" on:click={applyMyPreviewToFields}>Сохранить</button>
-            {#if myPreviewIsJson}
-              <button type="button" class="view-toggle" on:click={() => (myPreviewViewMode = myPreviewViewMode === 'tree' ? 'raw' : 'tree')}>
-                {myPreviewViewMode === 'tree' ? 'RAW' : 'Дерево'}
-              </button>
-            {/if}
-          </span>
-        </div>
-        {#if myPreviewIsJson && myPreviewViewMode === 'tree'}
-          <div class="response-tree-wrap">
-            <JsonTreeView node={myPreviewJson} name="request" level={0} />
-          </div>
-        {:else}
-          <textarea
-            bind:this={myPreviewEl}
-            value={myApiPreviewDraft}
-            on:input={(e) => {
-              myApiPreviewDraft = e.currentTarget.value;
-              myPreviewDirty = true;
-            }}
-          ></textarea>
-        {/if}
-        {#if myPreviewApplyMessage}
-          <div class="template-parse-note">{myPreviewApplyMessage}</div>
-        {/if}
-      </div>
-    </aside>
-
-    <div class="main">
-      <div class="card">
-        <h3 style="margin:0;">Настройка API</h3>
-
-        <div class="connect-row">
-          <select
-            value={selected?.method || 'GET'}
-            on:change={(e) => mutateSelected((d) => (d.method = toHttpMethod(e.currentTarget.value)))}
-          >
-            <option value="GET">GET</option>
-            <option value="POST">POST</option>
-            <option value="PUT">PUT</option>
-            <option value="PATCH">PATCH</option>
-            <option value="DELETE">DELETE</option>
-          </select>
-          <input
-            value={requestInput}
-            on:input={(e) => (requestInput = e.currentTarget.value)}
-            on:blur={() => applyUrlInput(requestInput)}
-            placeholder="Строка подключения (URL или curl)"
-          />
-          <button class="primary" on:click={checkApiNow} disabled={checking}>{checking ? 'Проверка...' : 'Проверить'}</button>
-        </div>
-
-        <textarea
-          bind:this={descriptionEl}
-          class="desc"
-          placeholder="Описание API"
-          value={selected?.description || ''}
-          on:input={(e) => mutateSelected((d) => (d.description = e.currentTarget.value))}
-        ></textarea>
-
-        <div class="parameter-connect-block">
-          <div class="param-connections-row">
-            <span>Подключенные таблицы</span>
-            <div class="param-connection-actions">
-              <select
-                value={tableConnectValue}
-                on:change={(e) => (tableConnectValue = e.currentTarget.value)}
-              >
-                {#each existingTables as tbl}
-                  <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
-                {/each}
-              </select>
-              <button
-                class="icon-btn plus-dark"
-                type="button"
-                title="Подключить таблицу"
-                on:click={() => addParameterConnectionByValue(tableConnectValue)}
-              >
-                +
-              </button>
-            </div>
-          </div>
-          <div class="param-connection-crumbs">
-            {#if !(selected?.parameterConnections?.length)}
-              <p class="hint">Подключи таблицу, чтобы использовать её поля в параметрах.</p>
-            {:else}
-              <div class="table-crumbs">
-                {#each selected.parameterConnections as conn (connectionKey(conn))}
-                  <div class="table-chip">
-                    <span>{conn.schema}.{conn.table}</span>
-                    <button type="button" class="chip-remove" on:click={() => removeParameterConnection(conn.schema, conn.table)}>x</button>
-                  </div>
-                {/each}
-              </div>
-            {/if}
-          </div>
-
           <div class="parameter-grid">
             <div class="parameter-section parameter-ready">
               <div class="parameter-section-head">
@@ -2291,6 +2188,109 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
               </div>
             </div>
           </div>
+        </div>
+      </div>
+      <div class="subsec">
+        <div class="subttl response-head">
+          <span>Предпросмотр твоего API</span>
+          <span class="inline-actions">
+            <button type="button" class="view-toggle" on:click={applyMyPreviewToFields}>Сохранить</button>
+            {#if myPreviewIsJson}
+              <button type="button" class="view-toggle" on:click={() => (myPreviewViewMode = myPreviewViewMode === 'tree' ? 'raw' : 'tree')}>
+                {myPreviewViewMode === 'tree' ? 'RAW' : 'Дерево'}
+              </button>
+            {/if}
+          </span>
+        </div>
+        {#if myPreviewIsJson && myPreviewViewMode === 'tree'}
+          <div class="response-tree-wrap">
+            <JsonTreeView node={myPreviewJson} name="request" level={0} />
+          </div>
+        {:else}
+          <textarea
+            bind:this={myPreviewEl}
+            value={myApiPreviewDraft}
+            on:input={(e) => {
+              myApiPreviewDraft = e.currentTarget.value;
+              myPreviewDirty = true;
+            }}
+          ></textarea>
+        {/if}
+        {#if myPreviewApplyMessage}
+          <div class="template-parse-note">{myPreviewApplyMessage}</div>
+        {/if}
+      </div>
+    </aside>
+
+    <div class="main">
+      <div class="card">
+        <h3 style="margin:0;">Настройка API</h3>
+
+        <div class="connect-row">
+          <select
+            value={selected?.method || 'GET'}
+            on:change={(e) => mutateSelected((d) => (d.method = toHttpMethod(e.currentTarget.value)))}
+          >
+            <option value="GET">GET</option>
+            <option value="POST">POST</option>
+            <option value="PUT">PUT</option>
+            <option value="PATCH">PATCH</option>
+            <option value="DELETE">DELETE</option>
+          </select>
+          <input
+            value={requestInput}
+            on:input={(e) => (requestInput = e.currentTarget.value)}
+            on:blur={() => applyUrlInput(requestInput)}
+            placeholder="Строка подключения (URL или curl)"
+          />
+          <button class="primary" on:click={checkApiNow} disabled={checking}>{checking ? 'Проверка...' : 'Проверить'}</button>
+        </div>
+
+        <textarea
+          bind:this={descriptionEl}
+          class="desc"
+          placeholder="Описание API"
+          value={selected?.description || ''}
+          on:input={(e) => mutateSelected((d) => (d.description = e.currentTarget.value))}
+        ></textarea>
+
+        <div class="parameter-connect-block">
+          <div class="param-connections-row">
+            <span>Подключенные таблицы</span>
+            <div class="param-connection-actions">
+              <select
+                value={tableConnectValue}
+                on:change={(e) => (tableConnectValue = e.currentTarget.value)}
+              >
+                {#each existingTables as tbl}
+                  <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
+                {/each}
+              </select>
+              <button
+                class="icon-btn plus-dark"
+                type="button"
+                title="Подключить таблицу"
+                on:click={() => addParameterConnectionByValue(tableConnectValue)}
+              >
+                +
+              </button>
+            </div>
+          </div>
+          <div class="param-connection-crumbs">
+            {#if !(selected?.parameterConnections?.length)}
+              <p class="hint">Подключи таблицу, чтобы использовать её поля в параметрах.</p>
+            {:else}
+              <div class="table-crumbs">
+                {#each selected.parameterConnections as conn (connectionKey(conn))}
+                  <div class="table-chip">
+                    <span>{conn.schema}.{conn.table}</span>
+                    <button type="button" class="chip-remove" on:click={() => removeParameterConnection(conn.schema, conn.table)}>x</button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+
         </div>
 
         <label>
