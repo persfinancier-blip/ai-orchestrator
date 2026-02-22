@@ -17,6 +17,7 @@
     baseUrl: string;
     path: string;
     headersJson: string;
+    authJson: string;
     queryJson: string;
     bodyJson: string;
     responseTargets: Array<{
@@ -128,6 +129,7 @@
       baseUrl: '',
       path: '/',
       headersJson: '',
+      authJson: '',
       queryJson: '',
       bodyJson: '',
       responseTargets: [],
@@ -180,6 +182,7 @@
       baseUrl: String(row?.base_url || legacy?.base_url || legacy?.baseUrl || ''),
       path: String(row?.path || legacy?.path || '/'),
       headersJson: toPrettyJson(tryObj(row?.headers_json || legacy?.headers_json || legacy?.headersJson || legacy?.headers)),
+      authJson: toPrettyJson(tryObj(mapping?.auth_json || legacy?.auth_json || legacy?.authJson)),
       queryJson: toPrettyJson(tryObj(row?.query_json || legacy?.query_json || legacy?.queryJson || legacy?.query || legacy?.params)),
       bodyJson: toPrettyJson(tryObj(row?.body_json || legacy?.body_json || legacy?.bodyJson || legacy?.body || legacy?.data)),
       responseTargets: normalizedTargets,
@@ -202,7 +205,7 @@
       pagination_json: {},
       target_schema: firstTarget?.schema || '',
       target_table: firstTarget?.table || '',
-      mapping_json: { exampleRequest: d.exampleRequest, response_targets: d.responseTargets },
+      mapping_json: { exampleRequest: d.exampleRequest, response_targets: d.responseTargets, auth_json: tryObj(d.authJson) },
       description: d.description,
       is_active: true
     };
@@ -505,10 +508,11 @@
       applyUrlInput(requestInput);
       const s = byRef(selectedRef) || selected;
       const url = fullUrl(s);
+      const authHdr = parseObj(s.authJson);
       const hdr = parseObj(s.headersJson);
       const init: RequestInit = {
         method: s.method,
-        headers: { 'Content-Type': 'application/json', ...hdr }
+        headers: { 'Content-Type': 'application/json', ...authHdr, ...hdr }
       };
       if (s.method !== 'GET' && s.method !== 'DELETE') {
         const b = String(s.bodyJson || '').trim();
@@ -544,6 +548,7 @@
               return `${selected.baseUrl}${selected.path}`;
             }
           })(),
+          auth: tryObj(selected.authJson),
           headers: tryObj(selected.headersJson),
           body: selected.method === 'GET' || selected.method === 'DELETE' ? undefined : tryObj(selected.bodyJson)
         },
@@ -642,19 +647,27 @@
           on:input={(e) => mutateSelected((d) => (d.description = e.currentTarget.value))}
         ></textarea>
 
+        <label>
+          Авторизация
+          <textarea
+            value={selected?.authJson || ''}
+            on:input={(e) => mutateSelected((d) => (d.authJson = e.currentTarget.value))}
+          ></textarea>
+        </label>
+
         <div class="raw-grid">
-          <label>
-            Query JSON
-            <textarea
-              value={selected?.queryJson || ''}
-              on:input={(e) => mutateSelected((d) => (d.queryJson = e.currentTarget.value))}
-            ></textarea>
-          </label>
           <label>
             Headers JSON
             <textarea
               value={selected?.headersJson || ''}
               on:input={(e) => mutateSelected((d) => (d.headersJson = e.currentTarget.value))}
+            ></textarea>
+          </label>
+          <label>
+            Query JSON
+            <textarea
+              value={selected?.queryJson || ''}
+              on:input={(e) => mutateSelected((d) => (d.queryJson = e.currentTarget.value))}
             ></textarea>
           </label>
         </div>
