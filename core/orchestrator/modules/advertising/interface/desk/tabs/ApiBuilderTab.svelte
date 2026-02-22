@@ -56,10 +56,7 @@
     exampleRequest: string;
   };
 
-  const AUTH_OPTIONS = [
-    { value: 'manual', label: 'Ручная авторизация' },
-    { value: 'oauth2_client_credentials', label: 'OAuth2 (client_credentials)' }
-  ];
+  const AUTH_MODE_OAUTH2 = 'oauth2_client_credentials';
 
   const PAGINATION_STRATEGIES = [
     { value: 'none', label: 'Не использовать' },
@@ -1889,16 +1886,21 @@
           {/if}
         </label>
         <div class="auth-mode-buttons">
-          {#each AUTH_OPTIONS as option}
-            <button
-              type="button"
-              class="view-toggle auth-mode-btn"
-              class:active={selected?.authMode === option.value}
-              on:click={() => mutateSelected((d) => (d.authMode = option.value))}
-            >
-              {option.label}
-            </button>
-          {/each}
+          <button
+            type="button"
+            class="view-toggle auth-mode-btn"
+            class:active={selected?.authMode === AUTH_MODE_OAUTH2}
+            on:click={() =>
+              mutateSelected((d) =>
+                (d.authMode = d.authMode === AUTH_MODE_OAUTH2 ? 'manual' : AUTH_MODE_OAUTH2)
+              )
+            }
+          >
+            OAuth2 (client_credentials)
+            {#if selected?.authMode === AUTH_MODE_OAUTH2}
+              <span class="auth-indicator"></span>
+            {/if}
+          </button>
         </div>
         {#if selected?.authMode === 'oauth2_client_credentials'}
           <div class="oauth-grid">
@@ -2407,10 +2409,37 @@
   .okbox { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #bbf7d0; background: #f0fdf4; color:#166534; }
   pre { margin:0; white-space: pre-wrap; word-break: break-word; }
 
-  .auth-mode-buttons { margin:12px 0 10px; display:flex; flex-wrap:wrap; gap:8px; }
-  .auth-mode-btn { border-color:#0f172a; background:#0f172a; color:#fff; padding:6px 12px; font-size:12px; font-weight:500; }
-  .auth-mode-btn.active { background:#fff; color:#0f172a; }
-  .auth-mode-btn:focus-visible { outline:2px solid #0f172a; }
+  .auth-mode-buttons { margin:12px 0 10px; display:flex; gap:8px; }
+  .auth-mode-btn {
+    border:0;
+    background:#0f172a;
+    color:#fff;
+    padding:8px 16px;
+    border-radius:999px;
+    font-size:12px;
+    font-weight:600;
+    display:inline-flex;
+    gap:6px;
+    align-items:center;
+    min-height:34px;
+    cursor:pointer;
+  }
+  .auth-mode-btn.active {
+    background:#fff;
+    color:#0f172a;
+    border:1px solid transparent;
+    box-shadow:0 0 0 2px rgba(15,23,42,0.1);
+  }
+  .auth-mode-btn:focus-visible {
+    outline:2px solid #93c5fd;
+  }
+  .auth-indicator {
+    width:8px;
+    height:8px;
+    border-radius:50%;
+    background:#10b981;
+    box-shadow:0 0 0 2px rgba(16,185,129,0.4);
+  }
   .oauth-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:8px; }
   .oauth-grid input { margin:0; }
   .auth-mode-buttons + .oauth-grid + .hint { margin-top:0; }
