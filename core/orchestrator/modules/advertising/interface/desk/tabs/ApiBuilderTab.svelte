@@ -374,6 +374,18 @@
     return columnsCache[tableCacheKey(schema, table)] || [];
   }
 
+  function responsePathOptionsFor(current: string) {
+    const base = (selected?.pickedPaths || []).filter(Boolean);
+    const all = current && !base.includes(current) ? [current, ...base] : base;
+    return [...new Set(all)];
+  }
+
+  function tableFieldOptionsFor(schema: string, table: string, current: string) {
+    const cols = columnOptionsFor(schema, table).filter(Boolean);
+    const all = current && !cols.includes(current) ? [current, ...cols] : cols;
+    return [...new Set(all)];
+  }
+
   function addMappingRow() {
     mutateSelected((d) => {
       const firstTable = existingTables[0];
@@ -1514,7 +1526,7 @@
         ></textarea>
 
         <label>
-          <div class="response-head">
+          <div class="response-head field-head">
             <span>Авторизация</span>
             {#if authJsonValid}
               <button type="button" class="view-toggle" on:click={() => (authViewMode = authViewMode === 'tree' ? 'raw' : 'tree')}>
@@ -1535,7 +1547,7 @@
 
         <div class="raw-grid">
           <label>
-            <div class="response-head">
+            <div class="response-head field-head">
               <span>Headers JSON</span>
               {#if headersJsonValid}
                 <button type="button" class="view-toggle" on:click={() => (headersViewMode = headersViewMode === 'tree' ? 'raw' : 'tree')}>
@@ -1554,7 +1566,7 @@
             {/if}
           </label>
           <label>
-            <div class="response-head">
+            <div class="response-head field-head">
               <span>Query JSON</span>
               {#if queryJsonValid}
                 <button type="button" class="view-toggle" on:click={() => (queryViewMode = queryViewMode === 'tree' ? 'raw' : 'tree')}>
@@ -1575,7 +1587,7 @@
         </div>
 
         <label>
-          <div class="response-head">
+          <div class="response-head field-head">
             <span>Body JSON</span>
             {#if bodyJsonValid}
               <button type="button" class="view-toggle" on:click={() => (bodyViewMode = bodyViewMode === 'tree' ? 'raw' : 'tree')}>
@@ -1630,7 +1642,7 @@
           <div class="mapping-panel">
             <div class="mapping-head">
               <span>Сопоставление</span>
-              <span class="mapping-head-right">Ответ API | Таблица | Колонка</span>
+              <span class="mapping-head-right">Ответ API | Таблица | Поле таблицы</span>
             </div>
             {#if !mappingRowsOf(selected).length}
               <p class="hint">Добавь сопоставление и укажи куда писать данные.</p>
@@ -1638,15 +1650,19 @@
               <div class="mapping-list">
                 {#each mappingRowsOf(selected) as m (`${m.targetId}:${m.fieldId}`)}
                   <div class="map-row" class:active-map={isActiveResponseField(m.targetId, m.fieldId)}>
-                    <input
-                      placeholder="Ответ API (путь)"
+                    <select
                       value={m.responsePath}
                       on:focus={() => setActiveResponseField(m.targetId, m.fieldId)}
                       on:click={() => setActiveResponseField(m.targetId, m.fieldId)}
                       on:dragover|preventDefault
                       on:drop={(e) => dropPathToMapping(e, m.targetId, m.fieldId)}
-                      on:input={(e) => setMappingRowResponsePath(m.targetId, m.fieldId, e.currentTarget.value)}
-                    />
+                      on:change={(e) => setMappingRowResponsePath(m.targetId, m.fieldId, e.currentTarget.value)}
+                    >
+                      <option value="">Ответ API</option>
+                      {#each responsePathOptionsFor(m.responsePath) as pathOpt}
+                        <option value={pathOpt}>{pathOpt}</option>
+                      {/each}
+                    </select>
                     <select
                       value={formatQualifiedTable(m.schema, m.table)}
                       on:change={(e) => setMappingRowTable(m.targetId, e.currentTarget.value)}
@@ -1656,19 +1672,17 @@
                         <option value={`${et.schema_name}.${et.table_name}`}>{et.schema_name}.{et.table_name}</option>
                       {/each}
                     </select>
-                    <input
-                      list={`cols_${m.targetId}_${m.fieldId}`}
-                      placeholder="Колонка"
+                    <select
                       value={m.targetField}
                       on:focus={() => setActiveResponseField(m.targetId, m.fieldId)}
                       on:click={() => setActiveResponseField(m.targetId, m.fieldId)}
-                      on:input={(e) => setMappingRowColumn(m.targetId, m.fieldId, e.currentTarget.value)}
-                    />
-                    <datalist id={`cols_${m.targetId}_${m.fieldId}`}>
-                      {#each columnOptionsFor(m.schema, m.table) as col}
-                        <option value={col}></option>
+                      on:change={(e) => setMappingRowColumn(m.targetId, m.fieldId, e.currentTarget.value)}
+                    >
+                      <option value="">Поле таблицы</option>
+                      {#each tableFieldOptionsFor(m.schema, m.table, m.targetField) as col}
+                        <option value={col}>{col}</option>
                       {/each}
-                    </datalist>
+                    </select>
                     <button class="icon-btn danger" type="button" on:click={() => removeMappingRow(m.targetId, m.fieldId)} title="Удалить сопоставление">x</button>
                   </div>
                 {/each}
@@ -1756,6 +1770,7 @@
   .subttl { font-size:12px; color:#475569; margin-bottom:6px; }
   .response-head { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:nowrap; }
   .response-head > span:first-child { white-space:nowrap; }
+  .field-head { justify-content:flex-start; }
   .inline-actions { display:inline-flex; align-items:center; gap:6px; flex-wrap:nowrap; }
   .view-toggle { border-radius:10px; border:1px solid #e2e8f0; background:#fff; color:#0f172a; padding:4px 8px; font-size:11px; line-height:1.2; }
   .response-tree-wrap { border:1px solid #e6eaf2; border-radius:12px; background:#fff; padding:8px; min-height:78px; overflow:visible; }
