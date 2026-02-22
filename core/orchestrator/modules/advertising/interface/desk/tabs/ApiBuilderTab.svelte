@@ -202,6 +202,7 @@
 let parameterMode: 'table' | 'date' | 'formula' = 'table';
 let selectedParameterId: string | null = null;
 let parameterBuilderOpen = true;
+let parameterSettingsOpen = true;
 
 function setActiveParameter(id: string) {
   selectedParameterId = selectedParameterId === id ? null : id;
@@ -1988,87 +1989,78 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
       <div class="subsec">
         <div class="subttl">Витрина параметров</div>
         <div class="parameter-vitrina-block">
-          <div class="parameter-breadcrumbs">
-            {#if selected?.parameterSources?.length}
-              <div class="parameter-crumbs">
-                {#each selected.parameterSources as src (src.id)}
-                  <div
-                    class="parameter-crumb"
-                    class:active={selectedParameterId === src.id}
-                    on:click={() => setActiveParameter(src.id)}
-                  >
-                    <span>{src.alias || `${src.table}.${src.field}`}</span>
-                    <button class="chip-remove" type="button" on:click|stopPropagation={() => removeParameterSource(src.id)}>x</button>
-                  </div>
-                {/each}
-              </div>
-            {:else}
-              <p class="hint">Параметры пока не созданы.</p>
-            {/if}
-          </div>
           <div class="parameter-grid">
-            <div class="parameter-section parameter-ready">
-              <div class="parameter-vitrina">
-                {#if selected?.parameterSources?.length}
-                  <div class="parameter-list">
-                    {#each selected.parameterSources as src (src.id)}
-                      <div
-                        class="parameter-chip"
-                        class:active={selectedParameterId === src.id}
-                        on:click={() => setActiveParameter(src.id)}
-                      >
-                        <div>
-                          <div class="param-chip-title">{src.alias || `${src.table}.${src.field}`}</div>
-                          <div class="param-chip-sub">{describeFilter(src.filter)}</div>
-                        </div>
-                        <button class="chip-remove" type="button" on:click|stopPropagation={() => removeParameterSource(src.id)}>x</button>
+            <div class="parameter-vitrina">
+              {#if selected?.parameterSources?.length}
+                <div class="parameter-list">
+                  {#each selected.parameterSources as src (src.id)}
+                    <div
+                      class="parameter-chip"
+                      class:active={selectedParameterId === src.id}
+                      on:click={() => setActiveParameter(src.id)}
+                    >
+                      <div>
+                        <div class="param-chip-title">{src.alias || `${src.table}.${src.field}`}</div>
+                        <div class="param-chip-sub">{describeFilter(src.filter)}</div>
                       </div>
-                    {/each}
+                      <button class="chip-remove" type="button" on:click|stopPropagation={() => removeParameterSource(src.id)}>x</button>
+                    </div>
+                  {/each}
+                </div>
+              {:else}
+                <p class="hint">Добавь параметр, чтобы он появился в витрине.</p>
+              {/if}
+            </div>
+
+            <div class="parameter-settings">
+              <div class="parameter-settings-head">
+                <button
+                  class="parameter-toggle-btn settings-toggle"
+                  type="button"
+                  aria-label="Свернуть настройки параметра"
+                  aria-expanded={parameterSettingsOpen}
+                  on:click={() => (parameterSettingsOpen = !parameterSettingsOpen)}
+                >
+                  <span aria-hidden>{parameterSettingsOpen ? '−' : '+'}</span>
+                </button>
+                <span class="parameter-settings-title">Настройки параметра</span>
+              </div>
+              <div class="parameter-settings-body" class:collapsed={!parameterSettingsOpen}>
+                {#if selectedParameter}
+                  <div class="parameter-detail-row">
+                    <label>Название</label>
+                    <input
+                      value={selectedParameter.alias}
+                      on:input={(e) => updateSelectedParameter({ alias: e.currentTarget.value })}
+                    />
+                  </div>
+                  <div class="parameter-detail-row">
+                    <label>Поле</label>
+                    <p>{selectedParameter.schema}.{selectedParameter.table}.{selectedParameter.field}</p>
+                  </div>
+                  <div class="parameter-detail-row">
+                    <label>Фильтр</label>
+                    <p>{describeFilter(selectedParameter.filter)}</p>
                   </div>
                 {:else}
-                  <p class="hint">Добавь параметр, чтобы он появился в витрине.</p>
+                  <p class="hint">Выбери параметр в списке, чтобы увидеть его настройки.</p>
                 {/if}
               </div>
             </div>
 
-            <div class="parameter-section parameter-detail">
-              <div class="parameter-section-head">
-                <span>Настройки параметра</span>
+            <div class="parameter-creator">
+              <div class="parameter-creator-head">
+                <button
+                  class="parameter-toggle-btn"
+                  type="button"
+                  aria-label="Развернуть параметр"
+                  aria-expanded={parameterBuilderOpen}
+                  on:click={() => (parameterBuilderOpen = !parameterBuilderOpen)}
+                >
+                  <span aria-hidden>{parameterBuilderOpen ? '−' : '+'}</span>
+                </button>
+                <span class="parameter-creator-title">Добавить параметр</span>
               </div>
-              {#if selectedParameter}
-                <div class="parameter-detail-row">
-                  <label>Название</label>
-                  <input
-                    value={selectedParameter.alias}
-                    on:input={(e) => updateSelectedParameter({ alias: e.currentTarget.value })}
-                  />
-                </div>
-                <div class="parameter-detail-row">
-                  <label>Поле</label>
-                  <p>{selectedParameter.schema}.{selectedParameter.table}.{selectedParameter.field}</p>
-                </div>
-                <div class="parameter-detail-row">
-                  <label>Фильтр</label>
-                  <p>{describeFilter(selectedParameter.filter)}</p>
-                </div>
-              {:else}
-                <p class="hint">Выбери параметр в списке, чтобы увидеть его настройки.</p>
-              {/if}
-            </div>
-
-            <div class="parameter-section parameter-creator">
-            <div class="parameter-creator-head">
-              <button
-                class="parameter-toggle-btn"
-                type="button"
-                aria-label="Развернуть параметр"
-                aria-expanded={parameterBuilderOpen}
-                on:click={() => (parameterBuilderOpen = !parameterBuilderOpen)}
-              >
-                <span aria-hidden>{parameterBuilderOpen ? '−' : '+'}</span>
-              </button>
-              <span class="parameter-creator-title">Добавить параметр</span>
-            </div>
               <div class="parameter-creator-body" class:collapsed={!parameterBuilderOpen}>
                 <div class="param-mode-row param-mode-row--creator">
                   <button
@@ -2961,9 +2953,33 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
     padding:10px;
   }
   .targets-actions { display:flex; align-items:center; }
-  .parameter-grid { margin-top:10px; display:grid; gap:10px; }
-  .parameter-section { border:1px solid #e6eaf2; border-radius:12px; background:#fff; padding:10px; }
-  .parameter-section-head { font-size:13px; font-weight:600; color:#0f172a; margin-bottom:8px; display:flex; align-items:center; justify-content:space-between; }
+  .parameter-grid { margin-top:10px; display:flex; flex-direction:column; gap:10px; }
+  .parameter-vitrina {
+    border:0;
+    background:transparent;
+    padding:0;
+    margin:0;
+  }
+  .parameter-settings {
+    border:0;
+    background:transparent;
+  }
+  .parameter-list { display:flex; flex-direction:column; gap:6px; }
+  .parameter-settings-head {
+    display:flex;
+    align-items:center;
+    gap:8px;
+    font-size:13px;
+    font-weight:600;
+    color:#0f172a;
+  }
+  .parameter-settings-body {
+    border:1px solid #e6eaf2;
+    border-radius:12px;
+    padding:10px;
+    margin-top:4px;
+    background:#fff;
+  }
   .parameter-detail-row { margin-bottom:8px; }
   .parameter-detail-row label { font-size:11px; color:#475569; }
   .parameter-detail-row p { margin:2px 0 0; font-size:13px; color:#0f172a; }
@@ -2975,9 +2991,9 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
     height:32px;
     min-width:32px;
     border-radius:50%;
-    border:1px solid #e2e8f0;
-    background:#fff;
-    color:#0f172a;
+    border:none;
+    background:#0f172a;
+    color:#fff;
     font-size:18px;
     display:flex;
     align-items:center;
