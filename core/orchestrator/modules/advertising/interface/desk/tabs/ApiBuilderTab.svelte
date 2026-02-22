@@ -69,6 +69,11 @@
   let responsePreviewEl: HTMLTextAreaElement | null = null;
   let exampleApiEl: HTMLTextAreaElement | null = null;
   let myPreviewEl: HTMLTextAreaElement | null = null;
+  let descriptionEl: HTMLTextAreaElement | null = null;
+  let authEl: HTMLTextAreaElement | null = null;
+  let headersEl: HTMLTextAreaElement | null = null;
+  let queryEl: HTMLTextAreaElement | null = null;
+  let bodyEl: HTMLTextAreaElement | null = null;
   let templateParseMessage = '';
   let templateParseTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -791,6 +796,11 @@
   $: responseText, tick().then(syncLeftTextareasHeight);
   $: selected?.exampleRequest, tick().then(syncLeftTextareasHeight);
   $: myApiPreview, tick().then(syncLeftTextareasHeight);
+  $: selected?.description, tick().then(syncMainTextareasHeight);
+  $: selected?.authJson, tick().then(syncMainTextareasHeight);
+  $: selected?.headersJson, tick().then(syncMainTextareasHeight);
+  $: selected?.queryJson, tick().then(syncMainTextareasHeight);
+  $: selected?.bodyJson, tick().then(syncMainTextareasHeight);
 
   function autosize(el: HTMLTextAreaElement | null, minPx = 78) {
     if (!el) return;
@@ -802,6 +812,14 @@
     autosize(responsePreviewEl);
     autosize(exampleApiEl);
     autosize(myPreviewEl);
+  }
+
+  function syncMainTextareasHeight() {
+    autosize(descriptionEl);
+    autosize(authEl);
+    autosize(headersEl);
+    autosize(queryEl);
+    autosize(bodyEl);
   }
 
   void loadAll();
@@ -885,6 +903,7 @@
         </div>
 
         <textarea
+          bind:this={descriptionEl}
           class="desc"
           placeholder="Описание API"
           value={selected?.description || ''}
@@ -894,6 +913,7 @@
         <label>
           Авторизация
           <textarea
+            bind:this={authEl}
             value={selected?.authJson || ''}
             on:input={(e) => mutateSelected((d) => (d.authJson = e.currentTarget.value))}
           ></textarea>
@@ -903,6 +923,7 @@
           <label>
             Headers JSON
             <textarea
+              bind:this={headersEl}
               value={selected?.headersJson || ''}
               on:input={(e) => mutateSelected((d) => (d.headersJson = e.currentTarget.value))}
             ></textarea>
@@ -910,6 +931,7 @@
           <label>
             Query JSON
             <textarea
+              bind:this={queryEl}
               value={selected?.queryJson || ''}
               on:input={(e) => mutateSelected((d) => (d.queryJson = e.currentTarget.value))}
             ></textarea>
@@ -919,6 +941,7 @@
         <label>
           Body JSON
           <textarea
+            bind:this={bodyEl}
             value={selected?.bodyJson || ''}
             on:input={(e) => mutateSelected((d) => (d.bodyJson = e.currentTarget.value))}
           ></textarea>
