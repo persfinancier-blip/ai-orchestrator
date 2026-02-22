@@ -1518,6 +1518,10 @@
           <button on:click={applyApiStorageChoice} disabled={!api_storage_pick_value}>Подключить</button>
         </div>
       {/if}
+      <div class="saved-actions">
+        <button on:click={newSource}>Добавить</button>
+        <button class="primary" on:click={persistSelectedNow} disabled={!selectedId}>Сохранить</button>
+      </div>
       {#if sources.length === 0}
         <div class="hint">Пока нет ни одного.</div>
       {:else}
@@ -1945,6 +1949,7 @@
   .link-btn { border:0; background:transparent; color:#0f172a; padding:0; text-decoration:underline; font-size:12px; font-weight:500; }
   .storage-picker { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
   .storage-picker select { flex:1; min-width:0; }
+  .saved-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px; }
   .compare-fields { display:flex; flex-direction:column; gap:10px; }
   .compare-fields textarea { overflow:hidden; resize:none; }
   .list { display:flex; flex-direction:column; gap:8px; }
