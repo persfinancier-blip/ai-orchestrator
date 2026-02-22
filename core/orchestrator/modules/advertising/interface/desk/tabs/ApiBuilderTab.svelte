@@ -200,6 +200,7 @@
   let builderFilterValueTo = '';
   let builderAlias = '';
   let parameterTablePickerOpen = false;
+  let parameterMode: 'table' | 'date' | 'formula' = 'table';
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -1964,6 +1965,32 @@
             <div class="targets-title">Витрина параметров</div>
             <button class="icon-btn plus-dark" type="button" title="Выбрать таблицу" on:click={() => (parameterTablePickerOpen = !parameterTablePickerOpen)}>+</button>
           </div>
+          <div class="param-mode-row">
+            <button
+              type="button"
+              class="view-toggle param-mode-btn"
+              class:active={parameterMode === 'table'}
+              on:click={() => (parameterMode = 'table')}
+            >
+              Таблицы
+            </button>
+            <button
+              type="button"
+              class="view-toggle param-mode-btn"
+              class:active={parameterMode === 'date'}
+              on:click={() => (parameterMode = 'date')}
+            >
+              Даты
+            </button>
+            <button
+              type="button"
+              class="view-toggle param-mode-btn"
+              class:active={parameterMode === 'formula'}
+              on:click={() => (parameterMode = 'formula')}
+            >
+              Формулы
+            </button>
+          </div>
           {#if parameterTablePickerOpen}
             <div class="parameter-table-picker">
               <select bind:value={tableConnectValue}>
@@ -2801,6 +2828,11 @@
   .param-chip-title { font-size:13px; font-weight:600; color:#0f172a; }
   .param-chip-sub { font-size:11px; color:#475569; }
   .parameter-vitrina-block { margin-top:10px; }
+  .parameter-table-picker { margin-top:8px; display:flex; gap:8px; align-items:center; }
+  .parameter-table-picker select { flex:1; }
+  .param-mode-row { display:flex; gap:8px; margin-top:8px; }
+  .param-mode-btn { border-color:#e2e8f0; color:#0f172a; background:#0f172a; }
+  .param-mode-btn.active { background:#fff; color:#0f172a; border-color:#b0c4d9; }
   .parameter-table-picker { margin-top:8px; display:flex; gap:8px; align-items:center; }
   .parameter-table-picker select { flex:1; }
   .oauth-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:8px; }
