@@ -962,9 +962,18 @@
   }
 
   async function applySelectedSource(id: string) {
+    if (!id) return;
     selectedId = id;
     const src = sources.find((s) => s.id === id);
+    if (!src) {
+      previewSyncError = '';
+      previewApplyMessage = '';
+      return;
+    }
     apiNameDraft = String(src?.name || '');
+    urlInput = `${src.baseUrl.replace(/\/$/, '')}${src.path.startsWith('/') ? src.path : `/${src.path}`}`;
+    generatedApiPreview = buildGeneratedPreview(src);
+    if (!editingPreview) previewDraft = generatedApiPreview;
     previewSyncError = '';
     previewApplyMessage = '';
     await tick();
@@ -1718,13 +1727,25 @@
       {:else}
         <div class="list api-list">
           {#each sources as s (s.id)}
-            <div class="row-item" class:activeitem={s.id === selectedId}>
-              <button class="item-button" on:click={() => applySelectedSource(s.id)}>
+            <div
+              class="row-item"
+              class:activeitem={s.id === selectedId}
+              role="button"
+              tabindex="0"
+              on:click={() => applySelectedSource(s.id)}
+              on:keydown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  applySelectedSource(s.id);
+                }
+              }}
+            >
+              <button type="button" class="item-button" on:click={() => applySelectedSource(s.id)}>
                 <div class="row-name">{s.name}</div>
                 <div class="row-meta">{s.method} {s.baseUrl}{s.path}</div>
               </button>
               <div class="row-actions">
-                <button class="danger icon-btn" on:click|stopPropagation={() => deleteSourceById(s.id)} title="Удалить API">x</button>
+                <button type="button" class="danger icon-btn" on:click|stopPropagation={() => deleteSourceById(s.id)} title="Удалить API">x</button>
               </div>
             </div>
           {/each}
@@ -1884,7 +1905,7 @@
   .list { display:flex; flex-direction:column; gap:8px; }
   .row-item { display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; border:1px solid #e6eaf2; border-radius:14px; background:#fff; padding:8px 10px; }
   .row-actions { display:flex; align-items:center; justify-content:flex-end; min-width:54px; }
-  .item-button { text-align:left; border:0; background:transparent; padding:0; color:inherit; }
+  .item-button { text-align:left; border:0; background:transparent; padding:0; color:inherit; width:100%; }
   .row-name { font-weight:400; font-size:13px; line-height:1.25; word-break:break-word; }
   .row-meta { font-size:12px; color:#64748b; margin-top:4px; word-break: break-word; }
   .api-list .row-item { background:#0f172a; border-color:#0f172a; color:#fff; }
