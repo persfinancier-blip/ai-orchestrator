@@ -664,22 +664,39 @@
     const base = defaultSource();
     const storeIdRaw = row?.id ?? row?.api_config_id ?? row?.config_id ?? null;
     const storeIdNum = Number(String(storeIdRaw ?? '').trim());
-    const mapping = row?.mapping_json && typeof row.mapping_json === 'object' ? row.mapping_json : {};
-    const auth = mapping?.auth && typeof mapping.auth === 'object' ? mapping.auth : {};
-    const db = mapping?.db && typeof mapping.db === 'object' ? mapping.db : {};
-    const authTemplate = mapping?.authTemplate && typeof mapping.authTemplate === 'object' ? mapping.authTemplate : {};
+    const toObj = (v: any): any => {
+      if (v && typeof v === 'object') return v;
+      if (typeof v === 'string') {
+        try {
+          const p = JSON.parse(v);
+          return p && typeof p === 'object' ? p : {};
+        } catch {
+          return {};
+        }
+      }
+      return {};
+    };
+    const mapping = toObj(row?.mapping_json);
+    const legacySource = toObj(mapping?.source ?? mapping?.source_json ?? mapping?.config ?? mapping?.payload);
+    const auth = toObj(mapping?.auth ?? legacySource?.auth);
+    const db = toObj(mapping?.db ?? legacySource?.db);
+    const authTemplate = toObj(mapping?.authTemplate ?? legacySource?.authTemplate);
+    const headersObj = toObj(row?.headers_json ?? legacySource?.headers_json ?? legacySource?.headersJson);
+    const queryObj = toObj(row?.query_json ?? legacySource?.query_json ?? legacySource?.queryJson);
+    const bodyObj = toObj(row?.body_json ?? legacySource?.body_json ?? legacySource?.bodyJson);
+    const paginationObj = toObj(row?.pagination_json ?? legacySource?.pagination_json ?? legacySource?.pagination);
     return normalizeSource({
       ...base,
       id: uid(),
       storeId: Number.isFinite(storeIdNum) && storeIdNum > 0 ? Math.trunc(storeIdNum) : undefined,
-      name: String(row?.api_name || 'API'),
-      method: toHttpMethod(String(row?.method || 'GET').toUpperCase()),
-      baseUrl: String(row?.base_url || ''),
-      path: String(row?.path || ''),
-      headersJson: JSON.stringify(row?.headers_json ?? {}, null, 2),
-      queryJson: JSON.stringify(row?.query_json ?? {}, null, 2),
-      bodyJson: JSON.stringify(row?.body_json ?? {}, null, 2),
-      pagination: { ...base.pagination, ...(row?.pagination_json || {}) },
+      name: String(row?.api_name || legacySource?.name || 'API'),
+      method: toHttpMethod(String(row?.method || legacySource?.method || 'GET').toUpperCase()),
+      baseUrl: String(row?.base_url || legacySource?.baseUrl || ''),
+      path: String(row?.path || legacySource?.path || ''),
+      headersJson: JSON.stringify(headersObj, null, 2),
+      queryJson: JSON.stringify(queryObj, null, 2),
+      bodyJson: JSON.stringify(bodyObj, null, 2),
+      pagination: { ...base.pagination, ...paginationObj },
       auth: { ...base.auth, ...auth, apiKeyIn: toApiKeyIn(String(auth?.apiKeyIn || base.auth.apiKeyIn)) },
       db: { ...base.db, ...db, bindings: Array.isArray(db?.bindings) ? db.bindings : [] },
       authTemplate: {
@@ -687,7 +704,7 @@
         ...authTemplate,
         fields: Array.isArray(authTemplate?.fields) ? authTemplate.fields : []
       },
-      exampleRequest: String(mapping?.exampleRequest || ''),
+      exampleRequest: String(mapping?.exampleRequest || legacySource?.exampleRequest || ''),
       createdAt: Date.parse(String(row?.updated_at || '')) || Date.now(),
       updatedAt: Date.parse(String(row?.updated_at || '')) || Date.now()
     });
