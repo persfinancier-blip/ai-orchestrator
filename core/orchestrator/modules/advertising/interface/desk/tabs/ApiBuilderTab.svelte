@@ -1786,14 +1786,6 @@
     <div class="main">
       <div class="card">
         <h3 style="margin:0;">Конструктор API</h3>
-        <div class="api-name-row">
-          <input
-            class="api-name-readonly"
-            placeholder="Название API"
-            value={selected?.name || ''}
-            readonly
-          />
-        </div>
         <div class="connect-row">
           <select
             value={selected?.method || 'GET'}
@@ -1946,9 +1938,7 @@
   .api-list .activeitem .row-meta { color:#64748b; }
 
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; margin-bottom:12px; }
-  .api-name-row { margin-top:10px; }
-  .api-name-readonly { width:100%; box-sizing:border-box; background:#f8fafc; color:#0f172a; }
-  .connect-row { margin-top:8px; display:grid; grid-template-columns: 200px 1fr 160px; gap:8px; align-items:center; }
+  .connect-row { margin-top:10px; display:grid; grid-template-columns: 200px 1fr 160px; gap:8px; align-items:center; }
   .rename-input { width:100%; box-sizing:border-box; border-radius:12px; border:1px solid #e6eaf2; padding:10px 12px; }
   .api-meta-row { margin-top:8px; display:grid; grid-template-columns: 1fr 1fr auto; gap:8px; align-items:center; }
   .api-active { display:flex; align-items:center; gap:6px; white-space:nowrap; }
