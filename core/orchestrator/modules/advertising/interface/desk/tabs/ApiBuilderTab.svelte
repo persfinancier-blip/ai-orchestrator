@@ -199,7 +199,32 @@
   let builderFilterValue = '';
   let builderFilterValueTo = '';
   let builderAlias = '';
-  let parameterMode: 'table' | 'date' | 'formula' = 'table';
+let parameterMode: 'table' | 'date' | 'formula' = 'table';
+let selectedParameterId: string | null = null;
+let parameterBuilderOpen = true;
+
+function setActiveParameter(id: string) {
+  selectedParameterId = selectedParameterId === id ? null : id;
+}
+
+function updateSelectedParameter(updates: Partial<ParameterSource>) {
+  if (!selectedParameterId) return;
+  mutateSelected((d) => {
+    d.parameterSources = d.parameterSources.map((p) => {
+      if (p.id !== selectedParameterId) return p;
+      return { ...p, ...updates };
+    });
+  });
+}
+
+$: selectedParameter =
+  selected && selectedParameterId
+    ? selected.parameterSources?.find((src) => src.id === selectedParameterId) ?? null
+    : null;
+
+$: if (selected && selectedParameterId && !selected.parameterSources?.some((src) => src.id === selectedParameterId)) {
+  selectedParameterId = null;
+}
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -656,14 +681,15 @@
     const { schema, table } = parseQualifiedTable(tableRef);
     if (!schema || !table) return;
     const needsSecond = operatorNeedsValueTo(builderFilterType, builderFilterOperator);
-    mutateSelected((d) => {
-      if (!d.parameterConnections.some((c) => c.schema === schema && c.table === table)) {
-        d.parameterConnections = [...d.parameterConnections, { schema, table }];
-      }
-      d.parameterSources = [
+  const newParamId = uid();
+  mutateSelected((d) => {
+    if (!d.parameterConnections.some((c) => c.schema === schema && c.table === table)) {
+      d.parameterConnections = [...d.parameterConnections, { schema, table }];
+    }
+    d.parameterSources = [
         ...(d.parameterSources || []),
         {
-          id: uid(),
+          id: newParamId,
           schema,
           table,
           field: builderFieldValue,
@@ -682,6 +708,7 @@
     builderFilterValue = '';
     builderFilterValueTo = '';
     builderAlias = '';
+    selectedParameterId = newParamId;
   }
 
   function removeParameterSource(id: string) {
@@ -2115,99 +2142,151 @@
             {/if}
           </div>
 
-          <div class="parameter-builder">
-            <div class="parameter-builder-row">
-              <select
-                value={builderTableValue}
-                on:change={(e) => {
-                  builderTableValue = e.currentTarget.value;
-                  builderFieldValue = '';
-                  const parsed = parseQualifiedTable(builderTableValue);
-                  ensureConnectionColumns(parsed.schema, parsed.table);
-                }}
-              >
-                <option value="">Таблица из подключенных</option>
-                {#each selected?.parameterConnections || [] as conn}
-                  <option value={`${conn.schema}.${conn.table}`}>{conn.schema}.{conn.table}</option>
-                {/each}
-              </select>
-              <select
-                value={builderFieldValue}
-                on:change={(e) => {
-                  builderFieldValue = e.currentTarget.value;
-                }}
-              >
-                <option value="">Поле таблицы</option>
-                {#if builderTableValue}
-                  {#each builderTableColumns() as field}
-                    <option value={field}>{field}</option>
-                  {/each}
-                {/if}
-              </select>
-              <select
-                value={builderFilterType}
-                on:change={(e) => handleFilterTypeSelection(e.currentTarget.value)}
-              >
-                {#each Object.keys(FILTER_OPERATORS) as type}
-                  <option value={type}>{type}</option>
-                {/each}
-              </select>
-              <select
-                value={builderFilterOperator}
-                on:change={(e) => (builderFilterOperator = e.currentTarget.value)}
-              >
-                {#each FILTER_OPERATORS[builderFilterType] as op}
-                  <option value={op.value}>{op.label}</option>
-                {/each}
-              </select>
-              <input
-                placeholder="Значение"
-                value={builderFilterValue}
-                on:input={(e) => (builderFilterValue = e.currentTarget.value)}
-              />
-              {#if operatorNeedsValueTo(builderFilterType, builderFilterOperator)}
-                <input
-                  placeholder="до"
-                  value={builderFilterValueTo}
-                  on:input={(e) => (builderFilterValueTo = e.currentTarget.value)}
-                />
-              {/if}
-              <button
-                class="icon-btn plus-green"
-                type="button"
-                title="Добавить параметр"
-                on:click={addParameterSource}
-                disabled={!builderTableValue || !builderFieldValue || !builderFilterValue}
-              >
-                +
-              </button>
-            </div>
-            <div class="parameter-builder-row">
-              <input
-                placeholder="Псевдоним параметра"
-                value={builderAlias}
-                on:input={(e) => (builderAlias = e.currentTarget.value)}
-              />
-              <p class="hint">Параметры можно использовать как токены/ID, фильтры — любые условия (текст, числа, даты).</p>
-            </div>
-          </div>
-
-          <div class="parameter-vitrina">
-            {#if selected?.parameterSources?.length}
-              <div class="parameter-list">
-                {#each selected.parameterSources as src (src.id)}
-                  <div class="parameter-chip">
-                    <div>
-                      <div class="param-chip-title">{src.alias || `${src.table}.${src.field}`}</div>
-                      <div class="param-chip-sub">{describeFilter(src.filter)}</div>
-                    </div>
-                    <button class="chip-remove" type="button" on:click={() => removeParameterSource(src.id)}>x</button>
-                  </div>
-                {/each}
+          <div class="parameter-grid">
+            <div class="parameter-section parameter-ready">
+              <div class="parameter-section-head">
+                <span>Готовые параметры</span>
               </div>
-            {:else}
-              <p class="hint">Добавь параметр, чтобы он появился в витрине.</p>
-            {/if}
+              <div class="parameter-vitrina">
+                {#if selected?.parameterSources?.length}
+                  <div class="parameter-list">
+                    {#each selected.parameterSources as src (src.id)}
+                      <div
+                        class="parameter-chip"
+                        class:active={selectedParameterId === src.id}
+                        on:click={() => setActiveParameter(src.id)}
+                      >
+                        <div>
+                          <div class="param-chip-title">{src.alias || `${src.table}.${src.field}`}</div>
+                          <div class="param-chip-sub">{describeFilter(src.filter)}</div>
+                        </div>
+                        <button class="chip-remove" type="button" on:click|stopPropagation={() => removeParameterSource(src.id)}>x</button>
+                      </div>
+                    {/each}
+                  </div>
+                {:else}
+                  <p class="hint">Добавь параметр, чтобы он появился в витрине.</p>
+                {/if}
+              </div>
+            </div>
+
+            <div class="parameter-section parameter-detail">
+              <div class="parameter-section-head">
+                <span>Настройка параметра</span>
+              </div>
+              {#if selectedParameter}
+                <div class="parameter-detail-row">
+                  <label>Название</label>
+                  <input
+                    value={selectedParameter.alias}
+                    on:input={(e) => updateSelectedParameter({ alias: e.currentTarget.value })}
+                  />
+                </div>
+                <div class="parameter-detail-row">
+                  <label>Поле</label>
+                  <p>{selectedParameter.schema}.{selectedParameter.table}.{selectedParameter.field}</p>
+                </div>
+                <div class="parameter-detail-row">
+                  <label>Фильтр</label>
+                  <p>{describeFilter(selectedParameter.filter)}</p>
+                </div>
+              {:else}
+                <p class="hint">Выбери параметр в списке, чтобы увидеть его настройки.</p>
+              {/if}
+            </div>
+
+            <div class="parameter-section parameter-creator">
+              <div class="parameter-creator-head">
+                <span>Создание параметра</span>
+                <button
+                  class="icon-btn plus-dark"
+                  type="button"
+                  aria-label="Свернуть/развернуть создание"
+                  class:active={parameterBuilderOpen}
+                  on:click={() => (parameterBuilderOpen = !parameterBuilderOpen)}
+                >
+                  +
+                </button>
+              </div>
+              <div class="parameter-creator-body" class:collapsed={!parameterBuilderOpen}>
+                <div class="parameter-builder">
+                  <div class="parameter-builder-row">
+                    <select
+                      value={builderTableValue}
+                      on:change={(e) => {
+                        builderTableValue = e.currentTarget.value;
+                        builderFieldValue = '';
+                        const parsed = parseQualifiedTable(builderTableValue);
+                        ensureConnectionColumns(parsed.schema, parsed.table);
+                      }}
+                    >
+                      <option value="">Таблица из подключенных</option>
+                      {#each selected?.parameterConnections || [] as conn}
+                        <option value={`${conn.schema}.${conn.table}`}>{conn.schema}.{conn.table}</option>
+                      {/each}
+                    </select>
+                    <select
+                      value={builderFieldValue}
+                      on:change={(e) => {
+                        builderFieldValue = e.currentTarget.value;
+                      }}
+                    >
+                      <option value="">Поле таблицы</option>
+                      {#if builderTableValue}
+                        {#each builderTableColumns() as field}
+                          <option value={field}>{field}</option>
+                        {/each}
+                      {/if}
+                    </select>
+                    <select
+                      value={builderFilterType}
+                      on:change={(e) => handleFilterTypeSelection(e.currentTarget.value)}
+                    >
+                      {#each Object.keys(FILTER_OPERATORS) as type}
+                        <option value={type}>{type}</option>
+                      {/each}
+                    </select>
+                    <select
+                      value={builderFilterOperator}
+                      on:change={(e) => (builderFilterOperator = e.currentTarget.value)}
+                    >
+                      {#each FILTER_OPERATORS[builderFilterType] as op}
+                        <option value={op.value}>{op.label}</option>
+                      {/each}
+                    </select>
+                    <input
+                      placeholder="Значение"
+                      value={builderFilterValue}
+                      on:input={(e) => (builderFilterValue = e.currentTarget.value)}
+                    />
+                    {#if operatorNeedsValueTo(builderFilterType, builderFilterOperator)}
+                      <input
+                        placeholder="до"
+                        value={builderFilterValueTo}
+                        on:input={(e) => (builderFilterValueTo = e.currentTarget.value)}
+                      />
+                    {/if}
+                    <button
+                      class="icon-btn plus-green"
+                      type="button"
+                      title="Добавить параметр"
+                      on:click={addParameterSource}
+                      disabled={!builderTableValue || !builderFieldValue || !builderFilterValue}
+                    >
+                      +
+                    </button>
+                  </div>
+                  <div class="parameter-builder-row">
+                    <input
+                      placeholder="Псевдоним параметра"
+                      value={builderAlias}
+                      on:input={(e) => (builderAlias = e.currentTarget.value)}
+                    />
+                    <p class="hint">Параметры можно использовать как токены/ID, фильтры — любые условия (текст, числа, даты).</p>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -2816,11 +2895,12 @@
   .table-crumbs { display:flex; flex-wrap:wrap; gap:6px; }
   .table-chip { display:inline-flex; align-items:center; gap:6px; border-radius:10px; background:#0f172a; color:#fff; padding:4px 10px; font-size:12px; }
   .table-chip .chip-remove { background:transparent; border:0; color:#fee2e2; padding:0 4px; font-size:12px; cursor:pointer; }
-  .parameter-builder { border:1px solid #e2e8f0; border-radius:12px; background:#fff; padding:10px; margin-bottom:10px; }
+  .parameter-builder { border:1px solid #e2e8f0; border-radius:12px; background:#fff; padding:10px; }
   .parameter-builder-row { display:grid; gap:8px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); align-items:center; }
   .parameter-vitrina { border:1px solid #e2e8f0; border-radius:12px; background:#fff; padding:10px; }
   .parameter-list { display:flex; flex-direction:column; gap:6px; }
-  .parameter-chip { display:flex; align-items:center; justify-content:space-between; gap:10px; border-radius:10px; border:1px solid #dbe3ef; padding:8px 10px; background:#f8fafc; }
+  .parameter-chip { display:flex; align-items:center; justify-content:space-between; gap:10px; border-radius:10px; border:1px solid #dbe3ef; padding:8px 10px; background:#f8fafc; cursor:pointer; }
+  .parameter-chip.active .chip-remove { color:#fee2e2; }
   .param-chip-title { font-size:13px; font-weight:600; color:#0f172a; }
   .param-chip-sub { font-size:11px; color:#475569; }
   .parameter-vitrina-block {
@@ -2833,33 +2913,16 @@
   .parameter-table-picker { margin-top:8px; display:flex; gap:8px; align-items:center; }
   .parameter-table-picker select { flex:1; }
   .targets-actions { display:flex; align-items:center; }
-  .param-mode-row { display:flex; gap:8px; }
-  .param-mode-btn {
-    border:1px solid #0f172a;
-    background:#0f172a;
-    color:#f1f5f9;
-    font-weight:600;
-    display:inline-flex;
-    align-items:center;
-    gap:4px;
-    cursor:pointer;
-    border-radius:999px;
-    padding:6px 14px;
-    font-size:12px;
-  }
-  .param-mode-btn.active {
-    background:#fff;
-    color:#0f172a;
-    border-color:#0f172a;
-  }
-  .param-mode-btn.active::before {
-    content:'●';
-    color:#0f172a;
-    font-size:10px;
-    margin-right:4px;
-  }
-  .parameter-table-picker { margin-top:8px; display:flex; gap:8px; align-items:center; }
-  .parameter-table-picker select { flex:1; }
+  .parameter-grid { margin-top:10px; display:grid; gap:10px; }
+  .parameter-section { border:1px solid #e6eaf2; border-radius:12px; background:#fff; padding:10px; }
+  .parameter-section-head { font-size:13px; font-weight:600; color:#0f172a; margin-bottom:8px; display:flex; align-items:center; justify-content:space-between; }
+  .parameter-detail-row { margin-bottom:8px; }
+  .parameter-detail-row label { font-size:11px; color:#475569; }
+  .parameter-detail-row p { margin:2px 0 0; font-size:13px; color:#0f172a; }
+  .parameter-detail-row input { font-size:13px; }
+  .parameter-creator-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+  .parameter-creator-body.collapsed { display:none; }
+  .icon-btn.plus-dark.active { background:#0f172a; border-color:#0f172a; color:#fff; }
   .oauth-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:8px; }
   .oauth-grid input { margin:0; }
   .auth-mode-buttons + .oauth-grid + .hint { margin-top:0; }
