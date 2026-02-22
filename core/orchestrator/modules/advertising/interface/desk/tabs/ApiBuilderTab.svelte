@@ -992,21 +992,31 @@
 
   async function deleteSelected() {
     if (!selectedId) return;
-    const current = getSelected();
-    if (current?.storeId) {
+    await deleteSourceById(selectedId);
+  }
+
+  async function deleteSourceById(id: string) {
+    const target = sources.find((s) => s.id === id);
+    if (!target) return;
+    if (target.storeId) {
       try {
         await apiJson(`${apiBase}/api-configs/delete`, {
           method: 'POST',
           headers: headers(),
-          body: JSON.stringify({ id: current.storeId })
+          body: JSON.stringify({ id: target.storeId })
         });
       } catch (e: any) {
         err = e?.message ?? String(e);
         return;
       }
     }
-    sources = sources.filter((s) => s.id !== selectedId);
-    selectedId = sources[0]?.id ?? null;
+    const wasSelected = selectedId === id;
+    sources = sources.filter((s) => s.id !== id);
+    if (wasSelected) {
+      selectedId = sources[0]?.id ?? null;
+    } else if (selectedId && !sources.some((s) => s.id === selectedId)) {
+      selectedId = sources[0]?.id ?? null;
+    }
   }
 
   function addBinding() {
@@ -1570,12 +1580,17 @@
       {#if sources.length === 0}
         <div class="hint">Пока нет ни одного.</div>
       {:else}
-        <div class="list">
+        <div class="list api-list">
           {#each sources as s (s.id)}
-            <button class="item" class:activeitem={s.id === selectedId} on:click={() => applySelectedSource(s.id)}>
-              <div class="name">{s.name}</div>
-              <div class="meta">{s.method} {s.baseUrl}{s.path}</div>
-            </button>
+            <div class="row-item" class:activeitem={s.id === selectedId}>
+              <button class="item-button" on:click={() => applySelectedSource(s.id)}>
+                <div class="row-name">{s.name}</div>
+                <div class="row-meta">{s.method} {s.baseUrl}{s.path}</div>
+              </button>
+              <div class="row-actions">
+                <button class="danger icon-btn" on:click|stopPropagation={() => deleteSourceById(s.id)} title="Удалить API">x</button>
+              </div>
+            </div>
           {/each}
         </div>
       {/if}
@@ -2001,11 +2016,17 @@
   .compare-fields { display:flex; flex-direction:column; gap:10px; }
   .compare-fields textarea { overflow:hidden; resize:none; }
   .list { display:flex; flex-direction:column; gap:8px; }
-  .item { text-align:left; padding:10px 12px; border-radius:14px; border:1px solid #e6eaf2; background:#fff; cursor:pointer; }
-  .activeitem { background:#0f172a; color:#fff; border-color:#0f172a; }
-  .name { font-weight:700; }
-  .meta { font-size:12px; color:#64748b; margin-top:4px; word-break: break-word; }
-  .activeitem .meta { color:#cbd5e1; }
+  .row-item { display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; border:1px solid #e6eaf2; border-radius:14px; background:#fff; padding:8px 10px; }
+  .row-actions { display:flex; align-items:center; justify-content:flex-end; min-width:54px; }
+  .item-button { text-align:left; border:0; background:transparent; padding:0; color:inherit; }
+  .row-name { font-weight:400; font-size:13px; line-height:1.25; word-break:break-word; }
+  .row-meta { font-size:12px; color:#64748b; margin-top:4px; word-break: break-word; }
+  .api-list .row-item { background:#0f172a; border-color:#0f172a; color:#fff; }
+  .api-list .row-meta { color:#cbd5e1; }
+  .api-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
+  .api-list .activeitem .row-name { font-size:15px; font-weight:600; letter-spacing:.01em; }
+  .api-list .activeitem .row-name::before { content:'●'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
+  .api-list .activeitem .row-meta { color:#64748b; }
 
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; margin-bottom:12px; }
   .subcard { margin-top:10px; border:1px dashed #e6eaf2; border-radius:14px; padding:10px; }
@@ -2026,6 +2047,8 @@
   .auth-right-controls { display:flex; flex-direction:column; gap:8px; margin-bottom:10px; }
   .icon-btn { width:44px; min-width:44px; padding:10px 0; text-transform:uppercase; border-color:transparent; background:transparent; color:#b91c1c; }
   .danger.icon-btn { border-color:transparent; background:transparent; color:#b91c1c; }
+  .api-list .icon-btn { color:#fff; width:34px; min-width:34px; padding:6px 0; font-size:14px; }
+  .api-list .activeitem .icon-btn { color:#b91c1c; }
   .auth-name-input { min-width:0; }
   .auth-fields { display:flex; flex-direction:column; gap:10px; margin-top:10px; }
   .auth-fields input, .auth-right textarea { width:100%; }
