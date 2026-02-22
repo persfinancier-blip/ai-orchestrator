@@ -1412,7 +1412,7 @@
         <div class="subttl response-head">
           <span>Предпросмотр твоего API</span>
           <span class="inline-actions">
-            <button type="button" class="view-toggle" on:click={applyMyPreviewToFields}>Применить в поля</button>
+            <button type="button" class="view-toggle" on:click={applyMyPreviewToFields}>Сохранить</button>
             {#if myPreviewIsJson}
               <button type="button" class="view-toggle" on:click={() => (myPreviewViewMode = myPreviewViewMode === 'tree' ? 'raw' : 'tree')}>
                 {myPreviewViewMode === 'tree' ? 'RAW' : 'Дерево'}
