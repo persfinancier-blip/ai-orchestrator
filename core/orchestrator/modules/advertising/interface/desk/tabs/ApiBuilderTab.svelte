@@ -1719,7 +1719,7 @@
           <input
             placeholder="Название API"
             value={selected?.name || ''}
-            on:input={(e) => mutateSelected((s) => (s.name = e.currentTarget.value))}
+            readonly
           />
           <div class="method-url">
             <select
