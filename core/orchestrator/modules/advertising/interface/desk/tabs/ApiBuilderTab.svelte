@@ -1988,35 +1988,9 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
       <div class="subsec">
         <div class="subttl">Витрина параметров</div>
         <div class="parameter-vitrina-block">
-          <div class="param-mode-row">
-            <button
-              type="button"
-              class="view-toggle param-mode-btn"
-              class:active={parameterMode === 'table'}
-              on:click={() => (parameterMode = 'table')}
-            >
-              Таблицы
-            </button>
-            <button
-              type="button"
-              class="view-toggle param-mode-btn"
-              class:active={parameterMode === 'date'}
-              on:click={() => (parameterMode = 'date')}
-            >
-              Даты
-            </button>
-            <button
-              type="button"
-              class="view-toggle param-mode-btn"
-              class:active={parameterMode === 'formula'}
-              on:click={() => (parameterMode = 'formula')}
-            >
-              Формулы
-            </button>
-          </div>
-          {#if parameterMode === 'table'}
-            <div class="parameter-table-picker">
-              <select bind:value={tableConnectValue}>
+        {#if parameterMode === 'table'}
+          <div class="parameter-table-picker">
+            <select bind:value={tableConnectValue}>
                 {#each existingTables as tbl}
                   <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
                 {/each}
@@ -2024,21 +1998,24 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
               <button class="primary" type="button" on:click={() => addParameterConnectionByValue(tableConnectValue)}>Подключить</button>
             </div>
           {/if}
-          {#if selected?.parameterSources?.length}
-            <div class="parameter-list">
-              {#each selected.parameterSources as src (src.id)}
-                <div class="parameter-chip">
-                  <div>
-                    <div class="param-chip-title">{src.alias || `${src.table}.${src.field}`}</div>
-                    <div class="param-chip-sub">{describeFilter(src.filter)}</div>
+          <div class="parameter-breadcrumbs">
+            {#if selected?.parameterSources?.length}
+              <div class="parameter-crumbs">
+                {#each selected.parameterSources as src (src.id)}
+                  <div
+                    class="parameter-crumb"
+                    class:active={selectedParameterId === src.id}
+                    on:click={() => setActiveParameter(src.id)}
+                  >
+                    <span>{src.alias || `${src.table}.${src.field}`}</span>
+                    <button class="chip-remove" type="button" on:click|stopPropagation={() => removeParameterSource(src.id)}>x</button>
                   </div>
-                  <button class="chip-remove" type="button" on:click={() => removeParameterSource(src.id)}>x</button>
-                </div>
-              {/each}
-            </div>
-          {:else}
-            <p class="hint">Параметры пока не выбраны. Добавь таблицы и поля внизу.</p>
-          {/if}
+                {/each}
+              </div>
+            {:else}
+              <p class="hint">Параметры пока не созданы.</p>
+            {/if}
+          </div>
         </div>
       </div>
       <div class="subsec">
@@ -2197,7 +2174,6 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
 
             <div class="parameter-section parameter-creator">
               <div class="parameter-creator-head">
-                <span>Создание параметра</span>
                 <button
                   class="icon-btn plus-dark"
                   type="button"
@@ -2207,8 +2183,35 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
                 >
                   +
                 </button>
+                <span class="parameter-creator-title" class:collapsed={!parameterBuilderOpen}>Добавить параметр</span>
               </div>
               <div class="parameter-creator-body" class:collapsed={!parameterBuilderOpen}>
+                <div class="param-mode-row param-mode-row--creator">
+                  <button
+                    type="button"
+                    class="view-toggle param-mode-btn"
+                    class:active={parameterMode === 'table'}
+                    on:click={() => (parameterMode = 'table')}
+                  >
+                    Таблицы
+                  </button>
+                  <button
+                    type="button"
+                    class="view-toggle param-mode-btn"
+                    class:active={parameterMode === 'date'}
+                    on:click={() => (parameterMode = 'date')}
+                  >
+                    Даты
+                  </button>
+                  <button
+                    type="button"
+                    class="view-toggle param-mode-btn"
+                    class:active={parameterMode === 'formula'}
+                    on:click={() => (parameterMode = 'formula')}
+                  >
+                    Формулы
+                  </button>
+                </div>
                 <div class="parameter-builder">
                   <div class="parameter-builder-row">
                     <select
@@ -2921,6 +2924,7 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
     font-size:10px;
     margin-right:4px;
   }
+  .param-mode-row--creator { margin-bottom:8px; }
   .parameter-builder { border:1px solid #e2e8f0; border-radius:12px; background:#fff; padding:10px; }
   .parameter-builder-row { display:grid; gap:8px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); align-items:center; }
   .parameter-vitrina { border:1px solid #e2e8f0; border-radius:12px; background:#fff; padding:10px; }
@@ -2929,6 +2933,39 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
   .parameter-chip.active .chip-remove { color:#fee2e2; }
   .param-chip-title { font-size:13px; font-weight:600; color:#0f172a; }
   .param-chip-sub { font-size:11px; color:#475569; }
+  .parameter-breadcrumbs { margin-top:8px; }
+  .parameter-crumbs { display:flex; flex-wrap:wrap; gap:6px; }
+  .parameter-crumb {
+    display:flex;
+    align-items:center;
+    gap:6px;
+    border-radius:999px;
+    border:1px solid #e2e8f0;
+    padding:4px 10px;
+    background:#f8fafc;
+    cursor:pointer;
+    font-size:12px;
+  }
+  .parameter-crumb.active {
+    background:#0f172a;
+    color:#fff;
+    border-color:#0f172a;
+  }
+  .parameter-crumb span {
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    max-width:120px;
+  }
+  .parameter-crumb .chip-remove {
+    color:#b91c1c;
+    border:0;
+    background:transparent;
+    padding:0;
+  }
+  .parameter-crumb.active .chip-remove {
+    color:#fee2e2;
+  }
   .parameter-vitrina-block {
     margin-top:10px;
     border:1px solid #e6eaf2;
@@ -2946,9 +2983,11 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
   .parameter-detail-row label { font-size:11px; color:#475569; }
   .parameter-detail-row p { margin:2px 0 0; font-size:13px; color:#0f172a; }
   .parameter-detail-row input { font-size:13px; }
-  .parameter-creator-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+  .parameter-creator-head { display:flex; align-items:center; justify-content:flex-start; gap:8px; margin-bottom:8px; }
   .parameter-creator-body.collapsed { display:none; }
   .icon-btn.plus-dark.active { background:#0f172a; border-color:#0f172a; color:#fff; }
+  .parameter-creator-title { font-size:13px; font-weight:600; color:#0f172a; }
+  .parameter-creator-title.collapsed { display:none; }
   .oauth-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:8px; }
   .oauth-grid input { margin:0; }
   .auth-mode-buttons + .oauth-grid + .hint { margin-top:0; }
