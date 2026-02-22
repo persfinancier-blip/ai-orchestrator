@@ -845,15 +845,15 @@
       applyUrlInput(requestInput);
       const s = byRef(selectedRef) || selected;
       const url = fullUrl(s);
-      const authHdr = parseObj(s.authJson);
-      const hdr = parseObj(s.headersJson);
+      const authHdr = parseJsonObjectField('Авторизация', s.authJson);
+      const hdr = parseJsonObjectField('Headers JSON', s.headersJson);
       const init: RequestInit = {
         method: s.method,
         headers: { 'Content-Type': 'application/json', ...authHdr, ...hdr }
       };
       if (s.method !== 'GET' && s.method !== 'DELETE') {
         const b = String(s.bodyJson || '').trim();
-        init.body = b ? JSON.stringify(parseObj(b)) : '';
+        init.body = b ? JSON.stringify(parseJsonAnyField('Body JSON', b)) : '';
       }
       const res = await fetch(url, init);
       responseStatus = res.status;
