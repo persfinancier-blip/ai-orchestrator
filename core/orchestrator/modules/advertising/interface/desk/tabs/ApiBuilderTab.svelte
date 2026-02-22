@@ -1,4 +1,5 @@
 ﻿<script lang="ts">
+  import { tick } from 'svelte';
   export type ExistingTable = { schema_name: string; table_name: string };
   type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -64,6 +65,9 @@
   let selected: ApiDraft | null = null;
   let myApiPreview = '';
   let lastSelectedRef = '';
+  let responsePreviewEl: HTMLTextAreaElement | null = null;
+  let exampleApiEl: HTMLTextAreaElement | null = null;
+  let myPreviewEl: HTMLTextAreaElement | null = null;
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -547,6 +551,21 @@
         2
       )
     : '';
+  $: responseText, tick().then(syncLeftTextareasHeight);
+  $: selected?.exampleRequest, tick().then(syncLeftTextareasHeight);
+  $: myApiPreview, tick().then(syncLeftTextareasHeight);
+
+  function autosize(el: HTMLTextAreaElement | null, minPx = 78) {
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.max(el.scrollHeight, minPx)}px`;
+  }
+
+  function syncLeftTextareasHeight() {
+    autosize(responsePreviewEl);
+    autosize(exampleApiEl);
+    autosize(myPreviewEl);
+  }
 
   void loadAll();
 </script>
@@ -572,19 +591,23 @@
       <div class="subsec">
         <div class="subttl">Предпросмотр ответа</div>
         <div class="statusline">status: {responseStatus || '-'}</div>
-        <textarea readonly value={responseText}></textarea>
+        <textarea bind:this={responsePreviewEl} readonly value={responseText}></textarea>
       </div>
       <div class="subsec">
         <div class="subttl">Шаблон API</div>
         <textarea
+          bind:this={exampleApiEl}
           value={selected?.exampleRequest || ''}
-          on:input={(e) => mutateSelected((d) => (d.exampleRequest = e.currentTarget.value))}
+          on:input={(e) => {
+            mutateSelected((d) => (d.exampleRequest = e.currentTarget.value));
+            syncLeftTextareasHeight();
+          }}
           placeholder="Вставьте пример API"
         ></textarea>
       </div>
       <div class="subsec">
         <div class="subttl">Предпросмотр твоего API</div>
-        <textarea readonly value={myApiPreview}></textarea>
+        <textarea bind:this={myPreviewEl} readonly value={myApiPreview}></textarea>
       </div>
     </aside>
 
@@ -611,6 +634,38 @@
           />
           <button class="primary" on:click={checkApiNow} disabled={checking}>{checking ? 'Проверка...' : 'Проверить'}</button>
         </div>
+
+        <textarea
+          class="desc"
+          placeholder="Описание API"
+          value={selected?.description || ''}
+          on:input={(e) => mutateSelected((d) => (d.description = e.currentTarget.value))}
+        ></textarea>
+
+        <div class="raw-grid">
+          <label>
+            Query JSON
+            <textarea
+              value={selected?.queryJson || ''}
+              on:input={(e) => mutateSelected((d) => (d.queryJson = e.currentTarget.value))}
+            ></textarea>
+          </label>
+          <label>
+            Headers JSON
+            <textarea
+              value={selected?.headersJson || ''}
+              on:input={(e) => mutateSelected((d) => (d.headersJson = e.currentTarget.value))}
+            ></textarea>
+          </label>
+        </div>
+
+        <label>
+          Body JSON
+          <textarea
+            value={selected?.bodyJson || ''}
+            on:input={(e) => mutateSelected((d) => (d.bodyJson = e.currentTarget.value))}
+          ></textarea>
+        </label>
 
         <div class="targets-wrap">
           <div class="targets-head">
@@ -660,38 +715,6 @@
             </div>
           {/if}
         </div>
-
-        <textarea
-          class="desc"
-          placeholder="Описание API"
-          value={selected?.description || ''}
-          on:input={(e) => mutateSelected((d) => (d.description = e.currentTarget.value))}
-        ></textarea>
-
-        <div class="raw-grid">
-          <label>
-            Query JSON
-            <textarea
-              value={selected?.queryJson || ''}
-              on:input={(e) => mutateSelected((d) => (d.queryJson = e.currentTarget.value))}
-            ></textarea>
-          </label>
-          <label>
-            Headers JSON
-            <textarea
-              value={selected?.headersJson || ''}
-              on:input={(e) => mutateSelected((d) => (d.headersJson = e.currentTarget.value))}
-            ></textarea>
-          </label>
-        </div>
-
-        <label>
-          Body JSON
-          <textarea
-            value={selected?.bodyJson || ''}
-            on:input={(e) => mutateSelected((d) => (d.bodyJson = e.currentTarget.value))}
-          ></textarea>
-        </label>
       </div>
     </div>
 
@@ -773,7 +796,7 @@
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; }
 
   .connect-row { margin-top:10px; display:grid; grid-template-columns: 180px 1fr 150px; gap:8px; align-items:center; }
-  .targets-wrap { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#f8fafc; }
+  .targets-wrap { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:transparent; }
   .targets-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; flex-wrap:wrap; }
   .targets-title { font-size:13px; font-weight:700; color:#0f172a; }
   .targets-list { display:flex; flex-direction:column; gap:10px; }
@@ -810,7 +833,7 @@
   .activeitem .icon-btn { color:#b91c1c; }
 
   input, select, textarea { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; outline:none; background:#fff; box-sizing:border-box; width:100%; }
-  textarea { min-height:90px; resize:vertical; }
+  textarea { min-height:78px; resize:none; overflow:hidden; }
 
   button { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; background:#fff; cursor:pointer; }
   button:disabled { opacity:.6; cursor:not-allowed; }
@@ -822,3 +845,6 @@
   .okbox { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #bbf7d0; background: #f0fdf4; color:#166534; }
   pre { margin:0; white-space: pre-wrap; word-break: break-word; }
 </style>
+
+
+
