@@ -1420,7 +1420,7 @@
         <div class="statusline">status: {responseStatus || '-'}</div>
         {#if responseIsJson && responseViewMode === 'tree'}
           <div class="response-tree-wrap">
-            <JsonTreeView node={responseJson} name="response" level={0} on:pickpath={(e) => applyPickedResponsePath(e.detail.path)} />
+            <JsonTreeView node={responseJson} name="response" level={0} pickEnabled={true} on:pickpath={(e) => applyPickedResponsePath(e.detail.path)} />
           </div>
         {:else}
           <textarea bind:this={responsePreviewEl} readonly value={responseText}></textarea>

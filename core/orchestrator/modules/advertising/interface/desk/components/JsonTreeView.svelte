@@ -5,6 +5,7 @@
   export let name = '';
   export let level = 0;
   export let path = '';
+  export let pickEnabled = false;
 
   const dispatch = createEventDispatcher<{ pickpath: { path: string } }>();
 
@@ -48,13 +49,13 @@
     <summary>
       <span class="key">{name || 'root'}</span>
       <span class="meta">object ({Object.keys(node).length})</span>
-      {#if path}
+      {#if pickEnabled && path}
         <button class="pick-btn" type="button" title="Добавить в поле ответа" on:click|preventDefault|stopPropagation={pickCurrentPath}>+</button>
       {/if}
     </summary>
     <div class="children">
       {#each Object.entries(node) as [k, v]}
-        <svelte:self node={v} name={k} level={level + 1} path={objectChildPath(k)} on:pickpath={forwardPickPath} />
+        <svelte:self node={v} name={k} level={level + 1} path={objectChildPath(k)} pickEnabled={pickEnabled} on:pickpath={forwardPickPath} />
       {/each}
     </div>
   </details>
@@ -63,13 +64,13 @@
     <summary>
       <span class="key">{name || 'root'}</span>
       <span class="meta">array [{node.length}]</span>
-      {#if path}
+      {#if pickEnabled && path}
         <button class="pick-btn" type="button" title="Добавить в поле ответа" on:click|preventDefault|stopPropagation={pickCurrentPath}>+</button>
       {/if}
     </summary>
     <div class="children">
       {#each node as v, i}
-        <svelte:self node={v} name={`[${i}]`} level={level + 1} path={arrayChildPath(i)} on:pickpath={forwardPickPath} />
+        <svelte:self node={v} name={`[${i}]`} level={level + 1} path={arrayChildPath(i)} pickEnabled={pickEnabled} on:pickpath={forwardPickPath} />
       {/each}
     </div>
   </details>
@@ -78,7 +79,7 @@
     <span class="key">{name}</span>
     <span class="sep">:</span>
     <span class={`val ${valueClass(node)}`}>{valueText(node)}</span>
-    {#if path}
+    {#if pickEnabled && path}
       <button class="pick-btn" type="button" title="Добавить в поле ответа" on:click|stopPropagation={pickCurrentPath}>+</button>
     {/if}
   </div>
