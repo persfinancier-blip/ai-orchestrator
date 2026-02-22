@@ -1646,7 +1646,7 @@
 
 <section class="panel">
   <div class="panel-head">
-    <h2>API (конструктор) тест?</h2>
+    <h2>API (конструктор)</h2>
   </div>
 
   {#if err}
