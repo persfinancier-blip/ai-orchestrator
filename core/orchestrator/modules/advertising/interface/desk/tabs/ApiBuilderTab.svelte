@@ -101,7 +101,6 @@
   let queryEl: HTMLTextAreaElement | null = null;
   let bodyEl: HTMLTextAreaElement | null = null;
   let templateParseMessage = '';
-  let templateParseTimer: ReturnType<typeof setTimeout> | null = null;
   let activeResponseFieldRef = '';
   let columnsCache: Record<string, string[]> = {};
   let responsePathOptions: string[] = [];
@@ -971,11 +970,6 @@
     clearTemplateField();
   }
 
-  function scheduleTemplateParse() {
-    if (templateParseTimer) clearTimeout(templateParseTimer);
-    templateParseTimer = setTimeout(() => parseTemplateNow(false), 450);
-  }
-
   function mutateSelected(mutator: (d: ApiDraft) => void) {
     if (!selectedRef) return;
     drafts = drafts.map((d) => {
@@ -1450,7 +1444,6 @@
             on:input={(e) => {
               mutateSelected((d) => (d.exampleRequest = e.currentTarget.value));
               syncLeftTextareasHeight();
-              scheduleTemplateParse();
             }}
             placeholder="Вставьте пример API"
           ></textarea>
