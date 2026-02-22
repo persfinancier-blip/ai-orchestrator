@@ -2040,8 +2040,6 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
                     <label>Фильтр</label>
                     <p>{describeFilter(selectedParameter.filter)}</p>
                   </div>
-                {:else}
-                  <p class="hint">Выбери параметр в списке, чтобы увидеть его настройки.</p>
                 {/if}
               </div>
             </div>
@@ -2970,11 +2968,9 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
     color:#0f172a;
   }
   .parameter-settings-body {
-    border:1px solid #e6eaf2;
-    border-radius:12px;
     padding:10px;
     margin-top:4px;
-    background:#fff;
+    background:transparent;
   }
   .parameter-detail-row { margin-bottom:8px; }
   .parameter-detail-row label { font-size:11px; color:#475569; }
