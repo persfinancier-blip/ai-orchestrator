@@ -1411,7 +1411,7 @@
   {/if}
 
   <div class="layout">
-    <aside class="aside">
+    <aside class="aside saved-aside">
       <div class="aside-title">Сохраненные API</div>
       {#if sources.length === 0}
         <div class="hint">Пока нет ни одного.</div>
@@ -1829,6 +1829,9 @@
   .layout { display:grid; grid-template-columns: 320px 1fr 360px; gap:12px; margin-top:12px; align-items:start; }
   @media (max-width: 1300px) { .layout { grid-template-columns: 320px 1fr; } }
   @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
+  .compare-aside { order: 1; }
+  .main { order: 2; min-width:0; }
+  .saved-aside { order: 3; }
 
   .aside { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#f8fafc; }
   .aside-title { font-weight:700; margin-bottom:8px; }
