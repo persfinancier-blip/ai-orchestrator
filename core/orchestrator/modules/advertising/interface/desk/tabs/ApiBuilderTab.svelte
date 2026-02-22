@@ -1520,7 +1520,7 @@
       {/if}
       <div class="saved-actions">
         <button on:click={newSource}>Добавить</button>
-        <button class="primary" on:click={persistSelectedNow} disabled={!selectedId}>Сохранить</button>
+        <button on:click={persistSelectedNow} disabled={!selectedId}>Сохранить</button>
       </div>
       {#if sources.length === 0}
         <div class="hint">Пока нет ни одного.</div>
