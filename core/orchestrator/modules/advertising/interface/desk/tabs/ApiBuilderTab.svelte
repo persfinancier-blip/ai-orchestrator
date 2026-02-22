@@ -110,6 +110,31 @@
     return JSON.parse(s);
   }
 
+  function parseJsonObjectField(label: string, text: string): Record<string, any> {
+    const src = String(text || '').trim();
+    if (!src) return {};
+    let parsed: any;
+    try {
+      parsed = JSON.parse(src);
+    } catch {
+      throw new Error(`${label}: некорректный JSON`);
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error(`${label}: ожидается JSON-объект`);
+    }
+    return parsed;
+  }
+
+  function parseJsonAnyField(label: string, text: string): any {
+    const src = String(text || '').trim();
+    if (!src) return {};
+    try {
+      return JSON.parse(src);
+    } catch {
+      throw new Error(`${label}: некорректный JSON`);
+    }
+  }
+
   function safePreviewObj(text: string): any {
     const src = String(text || '').trim();
     if (!src) return {};
@@ -208,7 +233,10 @@
     };
   }
 
-  function toPayload(d: ApiDraft) {
+  function toPayload(
+    d: ApiDraft,
+    parsed?: { headersJson: Record<string, any>; queryJson: Record<string, any>; bodyJson: any; authJson: Record<string, any> }
+  ) {
     const firstTarget = d.responseTargets.find((t) => t.schema && t.table);
     return {
       id: d.storeId || undefined,
@@ -216,13 +244,13 @@
       method: d.method,
       base_url: d.baseUrl,
       path: d.path,
-      headers_json: tryObj(d.headersJson),
-      query_json: tryObj(d.queryJson),
-      body_json: tryObj(d.bodyJson),
+      headers_json: parsed?.headersJson ?? tryObj(d.headersJson),
+      query_json: parsed?.queryJson ?? tryObj(d.queryJson),
+      body_json: parsed?.bodyJson ?? tryObj(d.bodyJson),
       pagination_json: {},
       target_schema: firstTarget?.schema || '',
       target_table: firstTarget?.table || '',
-      mapping_json: { exampleRequest: d.exampleRequest, response_targets: d.responseTargets, auth_json: tryObj(d.authJson) },
+      mapping_json: { exampleRequest: d.exampleRequest, response_targets: d.responseTargets, auth_json: parsed?.authJson ?? tryObj(d.authJson) },
       description: d.description,
       is_active: true
     };
@@ -704,12 +732,25 @@
       return;
     }
 
+    let parsedFields: { headersJson: Record<string, any>; queryJson: Record<string, any>; bodyJson: any; authJson: Record<string, any> };
+    try {
+      parsedFields = {
+        authJson: parseJsonObjectField('Авторизация', next.authJson),
+        headersJson: parseJsonObjectField('Headers JSON', next.headersJson),
+        queryJson: parseJsonObjectField('Query JSON', next.queryJson),
+        bodyJson: parseJsonAnyField('Body JSON', next.bodyJson)
+      };
+    } catch (e: any) {
+      err = e?.message ?? String(e);
+      return;
+    }
+
     saving = true;
     try {
       const r = await apiJson<{ id?: number }>(`${apiBase}/api-configs/upsert`, {
         method: 'POST',
         headers: headers(),
-        body: JSON.stringify(toPayload(next))
+        body: JSON.stringify(toPayload(next, parsedFields))
       });
       const id = Number(r?.id || next.storeId || 0);
       await loadAll();
