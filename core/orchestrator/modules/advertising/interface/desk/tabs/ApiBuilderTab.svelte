@@ -2013,18 +2013,16 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
             </div>
 
             <div class="parameter-settings">
-              <div class="parameter-settings-head">
-                <button
-                  class="parameter-toggle-btn settings-toggle"
-                  type="button"
-                  aria-label="Свернуть настройки параметра"
-                  aria-expanded={parameterSettingsOpen}
-                  on:click={() => (parameterSettingsOpen = !parameterSettingsOpen)}
-                >
-                  <span aria-hidden>{parameterSettingsOpen ? '−' : '+'}</span>
-                </button>
-                <span class="parameter-settings-title">Настройки параметра</span>
-              </div>
+            <div
+              class="parameter-settings-head view-toggle"
+              class:active={parameterSettingsOpen}
+              role="button"
+              tabindex="0"
+              on:click={() => (parameterSettingsOpen = !parameterSettingsOpen)}
+              on:keydown={(e) => e.key === 'Enter' && (parameterSettingsOpen = !parameterSettingsOpen)}
+            >
+              <span>Настройки параметра</span>
+            </div>
               <div class="parameter-settings-body" class:collapsed={!parameterSettingsOpen}>
                 {#if selectedParameter}
                   <div class="parameter-detail-row">
@@ -2049,18 +2047,16 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
             </div>
 
             <div class="parameter-creator">
-              <div class="parameter-creator-head">
-                <button
-                  class="parameter-toggle-btn"
-                  type="button"
-                  aria-label="Развернуть параметр"
-                  aria-expanded={parameterBuilderOpen}
-                  on:click={() => (parameterBuilderOpen = !parameterBuilderOpen)}
-                >
-                  <span aria-hidden>{parameterBuilderOpen ? '−' : '+'}</span>
-                </button>
-                <span class="parameter-creator-title">Добавить параметр</span>
-              </div>
+            <div
+              class="parameter-creator-head view-toggle"
+              class:active={parameterBuilderOpen}
+              role="button"
+              tabindex="0"
+              on:click={() => (parameterBuilderOpen = !parameterBuilderOpen)}
+              on:keydown={(e) => e.key === 'Enter' && (parameterBuilderOpen = !parameterBuilderOpen)}
+            >
+              <span>Добавить параметр</span>
+            </div>
               <div class="parameter-creator-body" class:collapsed={!parameterBuilderOpen}>
                 <div class="param-mode-row param-mode-row--creator">
                   <button
@@ -2984,27 +2980,26 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
   .parameter-detail-row label { font-size:11px; color:#475569; }
   .parameter-detail-row p { margin:2px 0 0; font-size:13px; color:#0f172a; }
   .parameter-detail-row input { font-size:13px; }
-  .parameter-creator-head { display:flex; align-items:center; justify-content:flex-start; gap:8px; margin-bottom:8px; }
-  .parameter-creator-body.collapsed { display:none; }
-  .parameter-toggle-btn {
-    width:32px;
-    height:32px;
-    min-width:32px;
-    border-radius:50%;
-    border:none;
-    background:#0f172a;
-    color:#fff;
-    font-size:18px;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    padding:0;
-    cursor:pointer;
+  .parameter-creator-head.view-toggle {
+    margin-bottom:0;
+    border:1px solid transparent;
+    border-radius:10px;
+    padding:4px 10px;
   }
-  .parameter-toggle-btn:focus-visible {
-    outline:2px solid #93c5fd;
+  .parameter-settings-head.view-toggle {
+    border:1px solid transparent;
+    border-radius:10px;
+    padding:4px 10px;
   }
-  .parameter-creator-title { font-size:13px; font-weight:600; color:#0f172a; }
+  .parameter-settings-head.view-toggle.active,
+  .parameter-creator-head.view-toggle.active {
+    border-color:#0f172a;
+    background:#fff;
+  }
+  .parameter-creator-body.collapsed,
+  .parameter-settings-body.collapsed {
+    display:none;
+  }
   .oauth-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:8px; }
   .oauth-grid input { margin:0; }
   .auth-mode-buttons + .oauth-grid + .hint { margin-top:0; }
