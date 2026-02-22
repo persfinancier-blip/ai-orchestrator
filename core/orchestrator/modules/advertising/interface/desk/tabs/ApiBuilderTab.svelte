@@ -758,7 +758,10 @@
     }
   }
 
-  $: selected = byRef(selectedRef);
+  $: {
+    drafts;
+    selected = byRef(selectedRef);
+  }
   $: if (selectedRef !== lastSelectedRef) {
     lastSelectedRef = selectedRef;
     if (selected) {
