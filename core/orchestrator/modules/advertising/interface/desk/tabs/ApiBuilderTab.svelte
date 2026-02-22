@@ -1715,7 +1715,32 @@
     <div class="main">
       <div class="card">
         <h3 style="margin:0;">Конструктор API</h3>
-        <p class="hint">Блок временно очищен. Заполним заново по новой схеме.</p>
+        <div class="request-top" style="margin-top:10px;">
+          <input
+            placeholder="Название API"
+            value={selected?.name || ''}
+            on:input={(e) => mutateSelected((s) => (s.name = e.currentTarget.value))}
+          />
+          <div class="method-url">
+            <select
+              value={selected?.method || 'GET'}
+              on:change={(e) => mutateSelected((s) => (s.method = toHttpMethod(e.currentTarget.value)))}
+            >
+              <option value="GET">Метод: GET</option>
+              <option value="POST">Метод: POST</option>
+              <option value="PUT">Метод: PUT</option>
+              <option value="PATCH">Метод: PATCH</option>
+              <option value="DELETE">Метод: DELETE</option>
+            </select>
+            <input
+              value={urlInput}
+              on:input={(e) => (urlInput = e.currentTarget.value)}
+              on:blur={() => applyUrlInputRaw(urlInput)}
+              placeholder="Строка подключения (URL / curl ...)"
+            />
+            <button on:click={() => applyUrlInputRaw(urlInput)}>Разобрать cURL</button>
+          </div>
+        </div>
       </div>
     </div>
 
