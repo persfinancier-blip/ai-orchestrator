@@ -199,6 +199,13 @@
   let builderFilterValue = '';
   let builderFilterValueTo = '';
   let builderAlias = '';
+  let activeParameterId: string | null = null;
+  let activeParameter: ParameterSource | null = null;
+  let filterEditAlias = '';
+  let filterEditType: ParameterFilterType = 'text';
+  let filterEditOperator = FILTER_OPERATORS.text[0].value;
+  let filterEditValue = '';
+  let filterEditValueTo = '';
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -621,11 +628,18 @@
     });
   }
 
-  function handleFilterTypeSelection(value: string) {
+  function handleBuilderFilterTypeSelection(value: string) {
     const normalized = (['text', 'number', 'date', 'boolean', 'custom'].includes(value) ? (value as ParameterFilterType) : 'text') as ParameterFilterType;
     builderFilterType = normalized;
     const ops = FILTER_OPERATORS[normalized];
     builderFilterOperator = ops?.[0]?.value || '';
+  }
+
+  function handleFilterEditorTypeSelection(value: string) {
+    const normalized = (['text', 'number', 'date', 'boolean', 'custom'].includes(value) ? (value as ParameterFilterType) : 'text') as ParameterFilterType;
+    filterEditType = normalized;
+    const ops = FILTER_OPERATORS[normalized];
+    filterEditOperator = ops?.[0]?.value || '';
   }
 
   function operatorNeedsValueTo(type: ParameterFilterType, operator: string) {
@@ -655,11 +669,12 @@
     const { schema, table } = parseQualifiedTable(tableRef);
     if (!schema || !table) return;
     const needsSecond = operatorNeedsValueTo(builderFilterType, builderFilterOperator);
+    let newId = '';
     mutateSelected((d) => {
       if (!d.parameterConnections.some((c) => c.schema === schema && c.table === table)) {
         d.parameterConnections = [...d.parameterConnections, { schema, table }];
       }
-      d.parameterSources = [
+      const nextSource = [
         ...(d.parameterSources || []),
         {
           id: uid(),
@@ -675,17 +690,77 @@
           }
         }
       ];
+      d.parameterSources = nextSource;
+      newId = nextSource[nextSource.length - 1].id;
     });
     ensureConnectionColumns(schema, table);
     builderFieldValue = '';
     builderFilterValue = '';
     builderFilterValueTo = '';
     builderAlias = '';
+    selectParameterSource(newId);
   }
 
   function removeParameterSource(id: string) {
     mutateSelected((d) => {
       d.parameterSources = d.parameterSources.filter((p) => p.id !== id);
+    });
+  }
+
+  function getParameterById(id: string) {
+    return selected?.parameterSources?.find((p) => p.id === id) || null;
+  }
+
+  $: activeParameter = activeParameterId ? getParameterById(activeParameterId) : null;
+
+  function setFilterEditorFromParam(param: ParameterSource | null) {
+    if (!param) {
+      filterEditAlias = '';
+      filterEditType = 'text';
+      filterEditOperator = FILTER_OPERATORS.text[0].value;
+      filterEditValue = '';
+      filterEditValueTo = '';
+      return;
+    }
+    filterEditAlias = param.alias;
+    filterEditType = param.filter.type;
+    filterEditOperator = param.filter.operator;
+    filterEditValue = param.filter.value;
+    filterEditValueTo = param.filter.valueTo || '';
+  }
+
+  function selectParameterSource(id: string) {
+    const param = getParameterById(id);
+    if (!param) {
+      clearActiveParameter();
+      return;
+    }
+    activeParameterId = id;
+    setFilterEditorFromParam(param);
+  }
+
+  function clearActiveParameter() {
+    activeParameterId = null;
+    setFilterEditorFromParam(null);
+  }
+
+  function updateActiveParameter() {
+    if (!activeParameterId) return;
+    mutateSelected((d) => {
+      d.parameterSources = (d.parameterSources || []).map((p) =>
+        p.id === activeParameterId
+          ? {
+              ...p,
+              alias: filterEditAlias || `${p.table}.${p.field}`,
+              filter: {
+                type: filterEditType,
+                operator: filterEditOperator,
+                value: filterEditValue,
+                valueTo: operatorNeedsValueTo(filterEditType, filterEditOperator) ? filterEditValueTo : undefined
+              }
+            }
+          : p
+      );
     });
   }
 
@@ -2121,10 +2196,10 @@
                   {/each}
                 {/if}
               </select>
-              <select
-                value={builderFilterType}
-                on:change={(e) => handleFilterTypeSelection(e.currentTarget.value)}
-              >
+                <select
+                  value={builderFilterType}
+                  on:change={(e) => handleBuilderFilterTypeSelection(e.currentTarget.value)}
+                >
                 {#each Object.keys(FILTER_OPERATORS) as type}
                   <option value={type}>{type}</option>
                 {/each}
@@ -2169,23 +2244,72 @@
             </div>
           </div>
 
-          <div class="parameter-vitrina">
-            {#if selected?.parameterSources?.length}
-              <div class="parameter-list">
-                {#each selected.parameterSources as src (src.id)}
-                  <div class="parameter-chip">
-                    <div>
-                      <div class="param-chip-title">{src.alias || `${src.table}.${src.field}`}</div>
-                      <div class="param-chip-sub">{describeFilter(src.filter)}</div>
-                    </div>
-                    <button class="chip-remove" type="button" on:click={() => removeParameterSource(src.id)}>x</button>
-                  </div>
-                {/each}
+        <div class="parameter-vitrina">
+          <div class="parameter-list">
+            {#each selected?.parameterSources as src (src.id)}
+              <div
+                class="parameter-chip"
+                role="button"
+                tabindex="0"
+                on:click={() => selectParameterSource(src.id)}
+                on:keydown={(e) => (e.key === 'Enter' ? selectParameterSource(src.id) : null)}
+              >
+                <div>
+                  <div class="param-chip-title">{src.alias || `${src.table}.${src.field}`}</div>
+                  <div class="param-chip-sub">{describeFilter(src.filter)}</div>
+                </div>
+                <button class="chip-remove" type="button" on:click|stopPropagation={() => removeParameterSource(src.id)}>x</button>
               </div>
-            {:else}
+            {/each}
+            {#if !selected?.parameterSources?.length}
               <p class="hint">Добавь параметр, чтобы он появился в витрине.</p>
             {/if}
           </div>
+        </div>
+        {#if activeParameter}
+          <div class="parameter-filter-panel">
+            <div class="parameter-filter-head">
+              <span>Фильтрация: {activeParameter.alias || `${activeParameter.table}.${activeParameter.field}`}</span>
+              <button type="button" class="icon-btn danger" on:click={clearActiveParameter} title="Сбросить">x</button>
+            </div>
+            <div class="parameter-filter-body">
+              <input
+                placeholder="Псевдоним параметра"
+                value={filterEditAlias}
+                on:input={(e) => (filterEditAlias = e.currentTarget.value)}
+              />
+                <select
+                  value={filterEditType}
+                  on:change={(e) => handleFilterEditorTypeSelection(e.currentTarget.value)}
+                >
+                {#each Object.keys(FILTER_OPERATORS) as type}
+                  <option value={type}>{type}</option>
+                {/each}
+              </select>
+              <select
+                value={filterEditOperator}
+                on:change={(e) => (filterEditOperator = e.currentTarget.value)}
+              >
+                {#each FILTER_OPERATORS[filterEditType] as op}
+                  <option value={op.value}>{op.label}</option>
+                {/each}
+              </select>
+              <input
+                placeholder="Значение"
+                value={filterEditValue}
+                on:input={(e) => (filterEditValue = e.currentTarget.value)}
+              />
+              {#if operatorNeedsValueTo(filterEditType, filterEditOperator)}
+                <input
+                  placeholder="До"
+                  value={filterEditValueTo}
+                  on:input={(e) => (filterEditValueTo = e.currentTarget.value)}
+                />
+              {/if}
+              <button class="primary" type="button" on:click={updateActiveParameter}>Обновить фильтр</button>
+            </div>
+          </div>
+        {/if}
         </div>
 
         <label>
@@ -2765,6 +2889,9 @@
   .parameter-chip { display:flex; align-items:center; justify-content:space-between; gap:10px; border-radius:10px; border:1px solid #dbe3ef; padding:8px 10px; background:#f8fafc; }
   .param-chip-title { font-size:13px; font-weight:600; color:#0f172a; }
   .param-chip-sub { font-size:11px; color:#475569; }
+  .parameter-filter-panel { margin-top:12px; border:1px solid #cbd5e1; border-radius:12px; background:#fff; padding:12px; }
+  .parameter-filter-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; font-weight:700; }
+  .parameter-filter-body { display:grid; gap:8px; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
   .oauth-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:8px; }
   .oauth-grid input { margin:0; }
   .auth-mode-buttons + .oauth-grid + .hint { margin-top:0; }
