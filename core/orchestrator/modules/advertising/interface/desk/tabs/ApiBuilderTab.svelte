@@ -1789,8 +1789,8 @@
         <div class="api-name-row">
           <input
             class="api-name-readonly"
-            placeholder="Название API"
-            value={selected?.name || ''}
+            placeholder="ID API"
+            value={selected?.storeId ? String(selected.storeId) : ''}
             readonly
           />
         </div>
