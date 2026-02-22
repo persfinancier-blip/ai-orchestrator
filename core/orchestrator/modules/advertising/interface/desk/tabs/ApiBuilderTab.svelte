@@ -678,23 +678,99 @@
     };
     const mapping = toObj(row?.mapping_json);
     const legacySource = toObj(mapping?.source ?? mapping?.source_json ?? mapping?.config ?? mapping?.payload);
+    const legacyRequest = toObj(mapping?.request ?? legacySource?.request ?? legacySource?.http ?? legacySource?.requestConfig);
     const auth = toObj(mapping?.auth ?? legacySource?.auth);
     const db = toObj(mapping?.db ?? legacySource?.db);
     const authTemplate = toObj(mapping?.authTemplate ?? legacySource?.authTemplate);
-    const headersObj = toObj(row?.headers_json ?? legacySource?.headers_json ?? legacySource?.headersJson);
-    const queryObj = toObj(row?.query_json ?? legacySource?.query_json ?? legacySource?.queryJson);
-    const bodyObj = toObj(row?.body_json ?? legacySource?.body_json ?? legacySource?.bodyJson);
+    const headersObj = toObj(
+      row?.headers_json ??
+      legacySource?.headers_json ??
+      legacySource?.headersJson ??
+      legacySource?.headers ??
+      legacyRequest?.headers
+    );
+    const queryObj = toObj(
+      row?.query_json ??
+      legacySource?.query_json ??
+      legacySource?.queryJson ??
+      legacySource?.query ??
+      legacySource?.params ??
+      legacyRequest?.query ??
+      legacyRequest?.params
+    );
+    const bodyObj = toObj(
+      row?.body_json ??
+      legacySource?.body_json ??
+      legacySource?.bodyJson ??
+      legacySource?.body ??
+      legacySource?.data ??
+      legacyRequest?.body ??
+      legacyRequest?.data
+    );
     const paginationObj = toObj(row?.pagination_json ?? legacySource?.pagination_json ?? legacySource?.pagination);
+    const rawUrl = String(
+      row?.url ??
+      row?.full_url ??
+      mapping?.url ??
+      mapping?.full_url ??
+      legacySource?.url ??
+      legacySource?.fullUrl ??
+      legacyRequest?.url ??
+      ''
+    ).trim();
+
+    let derivedBaseUrl = '';
+    let derivedPath = '';
+    const derivedQueryObj: Record<string, string> = {};
+    if (rawUrl) {
+      try {
+        const u = new URL(rawUrl);
+        derivedBaseUrl = u.origin;
+        derivedPath = u.pathname || '/';
+        u.searchParams.forEach((v, k) => {
+          derivedQueryObj[k] = v;
+        });
+      } catch {}
+    }
+
+    const finalQueryObj =
+      Object.keys(queryObj || {}).length > 0 ? queryObj : derivedQueryObj;
+
+    const finalMethod = String(
+      row?.method ??
+      legacySource?.method ??
+      legacyRequest?.method ??
+      'GET'
+    ).toUpperCase();
+
+    const finalBaseUrl = String(
+      row?.base_url ??
+      legacySource?.base_url ??
+      legacySource?.baseUrl ??
+      legacyRequest?.baseURL ??
+      legacyRequest?.baseUrl ??
+      derivedBaseUrl ??
+      ''
+    );
+
+    const finalPath = String(
+      row?.path ??
+      legacySource?.path ??
+      legacyRequest?.path ??
+      derivedPath ??
+      ''
+    );
+
     return normalizeSource({
       ...base,
       id: uid(),
       storeId: Number.isFinite(storeIdNum) && storeIdNum > 0 ? Math.trunc(storeIdNum) : undefined,
       name: String(row?.api_name || legacySource?.name || 'API'),
-      method: toHttpMethod(String(row?.method || legacySource?.method || 'GET').toUpperCase()),
-      baseUrl: String(row?.base_url || legacySource?.baseUrl || ''),
-      path: String(row?.path || legacySource?.path || ''),
+      method: toHttpMethod(finalMethod),
+      baseUrl: finalBaseUrl,
+      path: finalPath,
       headersJson: JSON.stringify(headersObj, null, 2),
-      queryJson: JSON.stringify(queryObj, null, 2),
+      queryJson: JSON.stringify(finalQueryObj, null, 2),
       bodyJson: JSON.stringify(bodyObj, null, 2),
       pagination: { ...base.pagination, ...paginationObj },
       auth: { ...base.auth, ...auth, apiKeyIn: toApiKeyIn(String(auth?.apiKeyIn || base.auth.apiKeyIn)) },
