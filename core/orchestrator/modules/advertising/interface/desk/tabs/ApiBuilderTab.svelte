@@ -199,7 +199,6 @@
   let builderFilterValue = '';
   let builderFilterValueTo = '';
   let builderAlias = '';
-  let parameterTablePickerOpen = false;
   let parameterMode: 'table' | 'date' | 'formula' = 'table';
 
   function uid() {
@@ -1963,7 +1962,34 @@
         <div class="targets-wrap parameter-vitrina-block">
           <div class="targets-head">
             <div class="targets-title">Витрина параметров</div>
-            <button class="icon-btn plus-dark" type="button" title="Выбрать таблицу" on:click={() => (parameterTablePickerOpen = !parameterTablePickerOpen)}>+</button>
+            <div class="targets-actions">
+              <div class="param-mode-row">
+                <button
+                  type="button"
+                  class="view-toggle param-mode-btn"
+                  class:active={parameterMode === 'table'}
+                  on:click={() => (parameterMode = 'table')}
+                >
+                  Таблицы
+                </button>
+                <button
+                  type="button"
+                  class="view-toggle param-mode-btn"
+                  class:active={parameterMode === 'date'}
+                  on:click={() => (parameterMode = 'date')}
+                >
+                  Даты
+                </button>
+                <button
+                  type="button"
+                  class="view-toggle param-mode-btn"
+                  class:active={parameterMode === 'formula'}
+                  on:click={() => (parameterMode = 'formula')}
+                >
+                  Формулы
+                </button>
+              </div>
+            </div>
           </div>
           <div class="param-mode-row">
             <button
@@ -1991,7 +2017,7 @@
               Формулы
             </button>
           </div>
-          {#if parameterTablePickerOpen}
+          {#if parameterMode === 'table'}
             <div class="parameter-table-picker">
               <select bind:value={tableConnectValue}>
                 {#each existingTables as tbl}
@@ -2830,9 +2856,29 @@
   .parameter-vitrina-block { margin-top:10px; }
   .parameter-table-picker { margin-top:8px; display:flex; gap:8px; align-items:center; }
   .parameter-table-picker select { flex:1; }
-  .param-mode-row { display:flex; gap:8px; margin-top:8px; }
-  .param-mode-btn { border-color:#e2e8f0; color:#0f172a; background:#0f172a; }
-  .param-mode-btn.active { background:#fff; color:#0f172a; border-color:#b0c4d9; }
+  .targets-actions { display:flex; align-items:center; }
+  .param-mode-row { display:flex; gap:8px; }
+  .param-mode-btn {
+    border:1px solid #0f172a;
+    background:#0f172a;
+    color:#f1f5f9;
+    font-weight:600;
+    display:inline-flex;
+    align-items:center;
+    gap:4px;
+    cursor:pointer;
+  }
+  .param-mode-btn.active {
+    background:#fff;
+    color:#0f172a;
+    border-color:#0f172a;
+  }
+  .param-mode-btn.active::before {
+    content:'●';
+    color:#0f172a;
+    font-size:10px;
+    margin-right:4px;
+  }
   .parameter-table-picker { margin-top:8px; display:flex; gap:8px; align-items:center; }
   .parameter-table-picker select { flex:1; }
   .oauth-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:8px; }
