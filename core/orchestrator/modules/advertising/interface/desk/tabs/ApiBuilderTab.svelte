@@ -101,6 +101,7 @@
   let bodyEl: HTMLTextAreaElement | null = null;
   let templateParseMessage = '';
   let templateParseTimer: ReturnType<typeof setTimeout> | null = null;
+  let activeResponseFieldRef = '';
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -378,6 +379,90 @@
           : t
       );
     });
+  }
+
+  function setActiveResponseField(targetId: string, fieldId: string) {
+    activeResponseFieldRef = `${targetId}:${fieldId}`;
+  }
+
+  function isActiveResponseField(targetId: string, fieldId: string) {
+    return activeResponseFieldRef === `${targetId}:${fieldId}`;
+  }
+
+  function applyPickedResponsePath(rawPath: string) {
+    const path = String(rawPath || '').trim();
+    if (!path || !selected) return;
+
+    const [activeTargetId, activeFieldId] = String(activeResponseFieldRef || '').split(':');
+    if (activeTargetId && activeFieldId) {
+      let found = false;
+      mutateSelected((d) => {
+        d.responseTargets = d.responseTargets.map((t) => {
+          if (t.id !== activeTargetId) return t;
+          return {
+            ...t,
+            fields: t.fields.map((f) => {
+              if (f.id !== activeFieldId) return f;
+              found = true;
+              return { ...f, responsePath: path };
+            })
+          };
+        });
+      });
+      if (found) {
+        ok = 'Путь добавлен в активное поле ответа';
+        return;
+      }
+    }
+
+    const firstTarget = selected.responseTargets[0];
+    if (firstTarget) {
+      const firstField = firstTarget.fields[0];
+      if (firstField) {
+        mutateSelected((d) => {
+          d.responseTargets = d.responseTargets.map((t) =>
+            t.id === firstTarget.id
+              ? {
+                  ...t,
+                  fields: t.fields.map((f) => (f.id === firstField.id ? { ...f, responsePath: path } : f))
+                }
+              : t
+          );
+        });
+        setActiveResponseField(firstTarget.id, firstField.id);
+        ok = 'Путь добавлен в первое поле ответа';
+        return;
+      }
+
+      const newFieldId = uid();
+      mutateSelected((d) => {
+        d.responseTargets = d.responseTargets.map((t) =>
+          t.id === firstTarget.id
+            ? { ...t, fields: [...t.fields, { id: newFieldId, responsePath: path, targetField: '' }] }
+            : t
+        );
+      });
+      setActiveResponseField(firstTarget.id, newFieldId);
+      ok = 'Путь добавлен в новое поле ответа';
+      return;
+    }
+
+    const targetId = uid();
+    const fieldId = uid();
+    const firstTable = existingTables[0];
+    mutateSelected((d) => {
+      d.responseTargets = [
+        ...d.responseTargets,
+        {
+          id: targetId,
+          schema: firstTable?.schema_name || '',
+          table: firstTable?.table_name || '',
+          fields: [{ id: fieldId, responsePath: path, targetField: '' }]
+        }
+      ];
+    });
+    setActiveResponseField(targetId, fieldId);
+    ok = 'Путь добавлен, создана новая строка маппинга';
   }
 
   function fullUrl(d: ApiDraft) {
@@ -1160,7 +1245,7 @@
         <div class="statusline">status: {responseStatus || '-'}</div>
         {#if responseIsJson && responseViewMode === 'tree'}
           <div class="response-tree-wrap">
-            <JsonTreeView node={responseJson} name="response" level={0} />
+            <JsonTreeView node={responseJson} name="response" level={0} on:pickpath={(e) => applyPickedResponsePath(e.detail.path)} />
           </div>
         {:else}
           <textarea bind:this={responsePreviewEl} readonly value={responseText}></textarea>
@@ -1369,17 +1454,21 @@
                     </select>
                     <button class="icon-btn danger" type="button" on:click={() => removeResponseTarget(t.id)} title="Удалить таблицу">x</button>
                   </div>
-                  <div class="field-rows">
-                    {#each t.fields as f (f.id)}
-                      <div class="field-row">
+                    <div class="field-rows">
+                      {#each t.fields as f (f.id)}
+                      <div class="field-row" class:active-map={isActiveResponseField(t.id, f.id)}>
                         <input
                           placeholder="Ответ (путь, например data.items[0].id)"
                           value={f.responsePath}
+                          on:focus={() => setActiveResponseField(t.id, f.id)}
+                          on:click={() => setActiveResponseField(t.id, f.id)}
                           on:input={(e) => setTargetFieldValue(t.id, f.id, 'responsePath', e.currentTarget.value)}
                         />
                         <input
                           placeholder="Поле таблицы для записи"
                           value={f.targetField}
+                          on:focus={() => setActiveResponseField(t.id, f.id)}
+                          on:click={() => setActiveResponseField(t.id, f.id)}
                           on:input={(e) => setTargetFieldValue(t.id, f.id, 'targetField', e.currentTarget.value)}
                         />
                         <button class="icon-btn danger" type="button" on:click={() => removeTargetField(t.id, f.id)} title="Удалить поле">x</button>
@@ -1502,6 +1591,12 @@
   .target-top { display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; }
   .field-rows { margin-top:8px; display:flex; flex-direction:column; gap:8px; }
   .field-row { display:grid; grid-template-columns: 1fr 1fr auto; gap:8px; align-items:center; }
+  .field-row.active-map {
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    padding: 6px;
+    background: #f8fafc;
+  }
   .target-actions { margin-top:8px; display:flex; justify-content:flex-end; }
   .desc { width:100%; box-sizing:border-box; margin-top:8px; min-height:56px; resize:vertical; }
   .raw-grid { display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:8px; }

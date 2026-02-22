@@ -1,7 +1,12 @@
 <script lang="ts">
+  import { createEventDispatcher } from 'svelte';
+
   export let node: any;
   export let name = '';
   export let level = 0;
+  export let path = '';
+
+  const dispatch = createEventDispatcher<{ pickpath: { path: string } }>();
 
   function isObject(v: any) {
     return v && typeof v === 'object' && !Array.isArray(v);
@@ -19,6 +24,23 @@
     if (v === null) return 'null';
     return String(v);
   }
+
+  function objectChildPath(key: string) {
+    return path ? `${path}.${key}` : key;
+  }
+
+  function arrayChildPath(index: number) {
+    return path ? `${path}[${index}]` : `[${index}]`;
+  }
+
+  function pickCurrentPath() {
+    if (!path) return;
+    dispatch('pickpath', { path });
+  }
+
+  function forwardPickPath(e: CustomEvent<{ path: string }>) {
+    dispatch('pickpath', e.detail);
+  }
 </script>
 
 {#if isObject(node)}
@@ -26,10 +48,13 @@
     <summary>
       <span class="key">{name || 'root'}</span>
       <span class="meta">object ({Object.keys(node).length})</span>
+      {#if path}
+        <button class="pick-btn" type="button" on:click|preventDefault|stopPropagation={pickCurrentPath}>добавить в поле ответа</button>
+      {/if}
     </summary>
     <div class="children">
       {#each Object.entries(node) as [k, v]}
-        <svelte:self node={v} name={k} level={level + 1} />
+        <svelte:self node={v} name={k} level={level + 1} path={objectChildPath(k)} on:pickpath={forwardPickPath} />
       {/each}
     </div>
   </details>
@@ -38,10 +63,13 @@
     <summary>
       <span class="key">{name || 'root'}</span>
       <span class="meta">array [{node.length}]</span>
+      {#if path}
+        <button class="pick-btn" type="button" on:click|preventDefault|stopPropagation={pickCurrentPath}>добавить в поле ответа</button>
+      {/if}
     </summary>
     <div class="children">
       {#each node as v, i}
-        <svelte:self node={v} name={`[${i}]`} level={level + 1} />
+        <svelte:self node={v} name={`[${i}]`} level={level + 1} path={arrayChildPath(i)} on:pickpath={forwardPickPath} />
       {/each}
     </div>
   </details>
@@ -50,6 +78,9 @@
     <span class="key">{name}</span>
     <span class="sep">:</span>
     <span class={`val ${valueClass(node)}`}>{valueText(node)}</span>
+    {#if path}
+      <button class="pick-btn" type="button" on:click|stopPropagation={pickCurrentPath}>добавить в поле ответа</button>
+    {/if}
   </div>
 {/if}
 
@@ -68,6 +99,7 @@
     font-size: 12px;
     line-height: 1.5;
     user-select: none;
+    flex-wrap: wrap;
   }
 
   .json-node > summary::-webkit-details-marker {
@@ -102,6 +134,17 @@
     align-items: baseline;
     gap: 6px;
     flex-wrap: wrap;
+  }
+
+  .pick-btn {
+    border: 1px solid #e2e8f0;
+    background: #fff;
+    color: #0f172a;
+    border-radius: 9px;
+    font-size: 11px;
+    line-height: 1.2;
+    padding: 2px 6px;
+    cursor: pointer;
   }
 
   .key {
