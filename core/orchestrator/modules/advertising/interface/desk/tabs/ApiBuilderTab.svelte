@@ -429,7 +429,8 @@
       const headersSrc = toObj(root?.headers);
       const authSrc = toObj(root?.auth || root?.authorization);
       const querySrc = toObj(root?.query || root?.params);
-      const bodySrc = root?.body ?? root?.data ?? {};
+      const hasExplicitBody = root && (Object.prototype.hasOwnProperty.call(root, 'body') || Object.prototype.hasOwnProperty.call(root, 'data'));
+      const bodySrc = hasExplicitBody ? root?.body ?? root?.data ?? {} : parsed;
 
       let finalBaseUrl = baseUrl;
       let finalPath = path || '/';
@@ -444,9 +445,12 @@
       const { auth, headersOut } = splitAuthHeaders(headersSrc);
       const authFinal = Object.keys(authSrc).length ? authSrc : auth;
       const queryFinal = Object.keys(querySrc).length ? querySrc : queryFromUrl;
+      const modeMessage = hasExplicitBody || urlRaw || method
+        ? 'Шаблон разобран из JSON'
+        : 'Шаблон разобран как Body JSON';
       return {
         ok: true,
-        message: 'Шаблон разобран из JSON',
+        message: modeMessage,
         patch: {
           method,
           baseUrl: finalBaseUrl,
