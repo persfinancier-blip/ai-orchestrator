@@ -69,6 +69,8 @@
   let responsePreviewEl: HTMLTextAreaElement | null = null;
   let exampleApiEl: HTMLTextAreaElement | null = null;
   let myPreviewEl: HTMLTextAreaElement | null = null;
+  let templateParseMessage = '';
+  let templateParseTimer: ReturnType<typeof setTimeout> | null = null;
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -316,6 +318,209 @@
     } catch {
       err = 'Некорректная строка подключения';
     }
+  }
+
+  function unwrapCodeFence(raw: string): string {
+    const s = String(raw || '').trim();
+    const m = s.match(/```(?:json|bash|sh)?\s*([\s\S]*?)```/i);
+    return (m?.[1] || s).trim();
+  }
+
+  function toObj(v: any): Record<string, any> {
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+  }
+
+  function fromHeaderLines(raw: string): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const line of String(raw || '').split('\n')) {
+      const s = line.trim();
+      if (!s || !s.includes(':')) continue;
+      const idx = s.indexOf(':');
+      const k = s.slice(0, idx).trim();
+      const v = s.slice(idx + 1).trim();
+      if (k) out[k] = v;
+    }
+    return out;
+  }
+
+  function splitAuthHeaders(headersObj: Record<string, any>) {
+    const auth: Record<string, string> = {};
+    const headersOut: Record<string, string> = {};
+    for (const [k, v] of Object.entries(headersObj || {})) {
+      const key = String(k || '').trim();
+      if (!key) continue;
+      const val = String(v ?? '');
+      const lk = key.toLowerCase();
+      const isAuth =
+        lk === 'authorization' ||
+        lk === 'x-api-key' ||
+        lk === 'api-key' ||
+        lk === 'apikey' ||
+        lk.includes('token');
+      if (isAuth) auth[key] = val;
+      else headersOut[key] = val;
+    }
+    return { auth, headersOut };
+  }
+
+  function parseCurlTemplate(raw: string) {
+    const src = String(raw || '');
+    if (!/\bcurl\b/i.test(src)) return null;
+
+    const methodMatch = src.match(/(?:^|\s)-X\s+(GET|POST|PUT|PATCH|DELETE)\b/i);
+    const method = methodMatch ? toHttpMethod(methodMatch[1].toUpperCase()) : undefined;
+
+    const urlQuoted = src.match(/curl(?:\s+-[A-Za-z]\s+\S+)*\s+['"]([^'"]+)['"]/i);
+    const urlBare = src.match(/(https?:\/\/[^\s"'\\]+)/i);
+    const url = (urlQuoted?.[1] || urlBare?.[1] || '').trim();
+
+    const headerRe = /(?:^|\s)-H\s+['"]([^'"]+)['"]/gi;
+    const headerLines: string[] = [];
+    let hm: RegExpExecArray | null;
+    while ((hm = headerRe.exec(src))) headerLines.push(hm[1]);
+
+    const dataMatch = src.match(/(?:^|\s)(?:--data-raw|--data|-d)\s+('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|[^\s]+)/i);
+    const bodyRaw = dataMatch ? String(dataMatch[1] || '').replace(/^['"]|['"]$/g, '') : '';
+
+    return { method, url, headerLines, bodyRaw };
+  }
+
+  function parseTemplateToPatch(raw: string) {
+    const text = unwrapCodeFence(raw);
+    if (!text) return { ok: false, message: '' as string, patch: null as any };
+
+    const curl = parseCurlTemplate(text);
+    if (curl?.url) {
+      const u = new URL(curl.url);
+      const query: Record<string, string> = {};
+      u.searchParams.forEach((v, k) => (query[k] = v));
+      const headersObj = fromHeaderLines(curl.headerLines.join('\n'));
+      const { auth, headersOut } = splitAuthHeaders(headersObj);
+      let bodyValue: any = {};
+      if (curl.bodyRaw) {
+        try {
+          bodyValue = JSON.parse(curl.bodyRaw);
+        } catch {
+          bodyValue = { raw: curl.bodyRaw };
+        }
+      }
+      return {
+        ok: true,
+        message: 'Шаблон разобран из curl',
+        patch: {
+          method: curl.method,
+          baseUrl: u.origin,
+          path: u.pathname || '/',
+          queryJson: toPrettyJson(query),
+          headersJson: toPrettyJson(headersOut),
+          authJson: toPrettyJson(auth),
+          bodyJson: toPrettyJson(bodyValue)
+        }
+      };
+    }
+
+    try {
+      const parsed = JSON.parse(text);
+      const root = toObj(parsed?.request || parsed);
+      const method = root?.method ? toHttpMethod(String(root.method).toUpperCase()) : undefined;
+      const urlRaw = String(root?.url || root?.endpoint || '').trim();
+      const baseUrl = String(root?.baseUrl || root?.base_url || '').trim();
+      const path = String(root?.path || '').trim();
+      const headersSrc = toObj(root?.headers);
+      const authSrc = toObj(root?.auth || root?.authorization);
+      const querySrc = toObj(root?.query || root?.params);
+      const bodySrc = root?.body ?? root?.data ?? {};
+
+      let finalBaseUrl = baseUrl;
+      let finalPath = path || '/';
+      let queryFromUrl: Record<string, string> = {};
+      if (urlRaw) {
+        const u = new URL(urlRaw);
+        finalBaseUrl = u.origin;
+        finalPath = u.pathname || '/';
+        u.searchParams.forEach((v, k) => (queryFromUrl[k] = v));
+      }
+
+      const { auth, headersOut } = splitAuthHeaders(headersSrc);
+      const authFinal = Object.keys(authSrc).length ? authSrc : auth;
+      const queryFinal = Object.keys(querySrc).length ? querySrc : queryFromUrl;
+      return {
+        ok: true,
+        message: 'Шаблон разобран из JSON',
+        patch: {
+          method,
+          baseUrl: finalBaseUrl,
+          path: finalPath,
+          headersJson: toPrettyJson(headersOut),
+          authJson: toPrettyJson(authFinal),
+          queryJson: toPrettyJson(queryFinal),
+          bodyJson: toPrettyJson(bodySrc)
+        }
+      };
+    } catch {
+      // ignore and try URL fallback
+    }
+
+    const urlMatch = text.match(/https?:\/\/[^\s"'\\]+/i);
+    if (urlMatch?.[0]) {
+      const u = new URL(urlMatch[0]);
+      const query: Record<string, string> = {};
+      u.searchParams.forEach((v, k) => (query[k] = v));
+      return {
+        ok: true,
+        message: 'Шаблон разобран из URL',
+        patch: {
+          baseUrl: u.origin,
+          path: u.pathname || '/',
+          queryJson: toPrettyJson(query)
+        }
+      };
+    }
+
+    return {
+      ok: false,
+      message: 'Не удалось распознать шаблон. Вставьте curl, URL или JSON.',
+      patch: null
+    };
+  }
+
+  function applyTemplatePatch(patch: any) {
+    if (!patch) return;
+    mutateSelected((d) => {
+      if (patch.method) d.method = patch.method;
+      if (typeof patch.baseUrl === 'string') d.baseUrl = patch.baseUrl;
+      if (typeof patch.path === 'string') d.path = patch.path || '/';
+      if (typeof patch.authJson === 'string') d.authJson = patch.authJson;
+      if (typeof patch.headersJson === 'string') d.headersJson = patch.headersJson;
+      if (typeof patch.queryJson === 'string') d.queryJson = patch.queryJson;
+      if (typeof patch.bodyJson === 'string') d.bodyJson = patch.bodyJson;
+    });
+    const next = byRef(selectedRef);
+    if (next) {
+      requestInput = `${next.baseUrl.replace(/\/$/, '')}${next.path.startsWith('/') ? next.path : `/${next.path}`}`;
+    }
+  }
+
+  function parseTemplateNow(force = false) {
+    if (!selected) return;
+    const src = String(selected.exampleRequest || '').trim();
+    if (!src) {
+      templateParseMessage = '';
+      return;
+    }
+    if (!force && src.length < 8) return;
+    const parsed = parseTemplateToPatch(src);
+    if (!parsed.ok) {
+      if (force) templateParseMessage = parsed.message;
+      return;
+    }
+    applyTemplatePatch(parsed.patch);
+    templateParseMessage = parsed.message;
+  }
+
+  function scheduleTemplateParse() {
+    if (templateParseTimer) clearTimeout(templateParseTimer);
+    templateParseTimer = setTimeout(() => parseTemplateNow(false), 450);
   }
 
   function mutateSelected(mutator: (d: ApiDraft) => void) {
@@ -606,9 +811,16 @@
           on:input={(e) => {
             mutateSelected((d) => (d.exampleRequest = e.currentTarget.value));
             syncLeftTextareasHeight();
+            scheduleTemplateParse();
           }}
           placeholder="Вставьте пример API"
         ></textarea>
+        <div class="template-parse-actions">
+          <button type="button" on:click={() => parseTemplateNow(true)}>Разобрать в настройки</button>
+          {#if templateParseMessage}
+            <span class="template-parse-note">{templateParseMessage}</span>
+          {/if}
+        </div>
       </div>
       <div class="subsec">
         <div class="subttl">Предпросмотр твоего API</div>
@@ -804,6 +1016,8 @@
   .subsec { margin-top:10px; }
   .subttl { font-size:12px; color:#475569; margin-bottom:6px; }
   .statusline { font-size:12px; color:#64748b; margin-bottom:6px; }
+  .template-parse-actions { margin-top:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .template-parse-note { font-size:12px; color:#64748b; }
 
   .main { min-width:0; }
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; }
