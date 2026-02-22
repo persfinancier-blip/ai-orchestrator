@@ -1222,7 +1222,7 @@
   .alert-title { font-weight: 700; margin-bottom: 6px; }
   pre { margin:0; white-space: pre-wrap; word-break: break-word; }
 
-  .modal-bg { position: fixed; inset: 0; background: rgba(15,23,42,.35); display:flex; align-items:center; justify-content:center; padding: 18px; }
+  .modal-bg { position: fixed; inset: 0; background: rgba(15,23,42,.35); display:flex; align-items:center; justify-content:center; padding: 18px; z-index: 2000; }
   .modal { width: min(560px, 100%); background:#fff; border-radius:18px; border:1px solid #e6eaf2; padding:14px; box-shadow:0 20px 60px rgba(15,23,42,.25); }
   .modal-actions { display:flex; gap:10px; justify-content:flex-end; margin-top: 12px; }
 
