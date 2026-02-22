@@ -1429,14 +1429,14 @@
       <div class="subsec">
         <div class="subttl template-head">
           <span>Шаблон API</span>
-          <span class="template-head-actions">
+          <span class="inline-actions">
+            <button type="button" class="view-toggle" on:click={onTemplateParseClick}>Сохранить</button>
+            <button type="button" class="view-toggle" on:click={onTemplateClearClick}>Очистить</button>
             {#if exampleIsJson}
               <button type="button" class="view-toggle" on:click={() => (exampleViewMode = exampleViewMode === 'tree' ? 'raw' : 'tree')}>
-                {exampleViewMode === 'tree' ? 'RAW' : 'Дерево'}
+                {exampleViewMode === 'tree' ? 'Строка' : 'Дерево'}
               </button>
             {/if}
-            <button class="icon-btn template-action" type="button" title="Разобрать в настройки" on:click|preventDefault|stopPropagation={onTemplateParseClick}>+</button>
-            <button class="icon-btn danger template-action" type="button" title="Очистить поле" on:click|preventDefault|stopPropagation={onTemplateClearClick}>x</button>
           </span>
         </div>
         {#if exampleIsJson && exampleViewMode === 'tree'}
@@ -1775,17 +1775,6 @@
   .view-toggle { border-radius:10px; border:1px solid #e2e8f0; background:#fff; color:#0f172a; padding:4px 8px; font-size:11px; line-height:1.2; }
   .response-tree-wrap { border:1px solid #e6eaf2; border-radius:12px; background:#fff; padding:8px; min-height:78px; overflow:visible; }
   .template-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-  .template-head-actions { display:flex; align-items:center; gap:4px; }
-  .template-action {
-    width:28px;
-    min-width:28px;
-    padding:4px 0;
-    font-size:16px;
-    line-height:1;
-    color:#0f172a;
-    border:1px solid #e6eaf2;
-    background:#fff;
-  }
   .statusline { font-size:12px; color:#64748b; margin-bottom:6px; }
   .template-parse-actions { margin-top:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .template-parse-note { font-size:12px; color:#64748b; }
@@ -1840,8 +1829,6 @@
   .plus-green.icon-btn { color:#16a34a; font-weight:700; }
   .map-row .icon-btn { color:#b91c1c; }
   .activeitem .icon-btn { color:#b91c1c; }
-  .template-head .icon-btn.template-action { width:28px; min-width:28px; padding:4px 0; font-size:16px; border-color:transparent; background:transparent; color:#0f172a; }
-  .template-head .icon-btn.template-action.danger { color:#b91c1c; }
 
   input, select, textarea { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; outline:none; background:#fff; box-sizing:border-box; width:100%; }
   textarea { min-height:78px; resize:none; overflow:hidden; }
