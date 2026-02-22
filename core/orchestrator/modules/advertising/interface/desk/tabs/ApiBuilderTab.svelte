@@ -1562,7 +1562,7 @@
       {/if}
       <div class="template-controls">
         <input class="template-name" bind:value={apiNameDraft} placeholder="Название API" />
-        <div class="inline-actions">
+        <div class="saved-inline-actions">
           <button on:click={onAddSourceClick}>Добавить</button>
           <button on:click={onSaveSourceClick} disabled={!selectedId}>Сохранить</button>
         </div>
@@ -1994,8 +1994,10 @@
   .link-btn { border:0; background:transparent; color:#0f172a; padding:0; text-decoration:underline; font-size:12px; font-weight:500; }
   .storage-picker { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
   .storage-picker select { flex:1; min-width:0; }
-  .template-controls { margin-bottom:8px; display:flex; flex-direction:column; gap:8px; }
+  .template-controls { margin-bottom:8px; display:grid; grid-template-columns:1fr; gap:8px; }
   .template-name { width:100%; box-sizing:border-box; }
+  .saved-inline-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .saved-inline-actions button { width:100%; }
   .compare-fields { display:flex; flex-direction:column; gap:10px; }
   .compare-fields textarea { overflow:hidden; resize:none; }
   .list { display:flex; flex-direction:column; gap:8px; }
