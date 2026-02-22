@@ -1434,7 +1434,7 @@
             <button type="button" class="view-toggle" on:click={onTemplateClearClick}>Очистить</button>
             {#if exampleIsJson}
               <button type="button" class="view-toggle" on:click={() => (exampleViewMode = exampleViewMode === 'tree' ? 'raw' : 'tree')}>
-                {exampleViewMode === 'tree' ? 'Строка' : 'Дерево'}
+                {exampleViewMode === 'tree' ? 'RAW' : 'Дерево'}
               </button>
             {/if}
           </span>
