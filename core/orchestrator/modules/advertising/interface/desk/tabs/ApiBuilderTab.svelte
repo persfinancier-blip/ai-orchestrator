@@ -1022,11 +1022,18 @@
   $: selected?.exampleRequest, tick().then(syncLeftTextareasHeight);
   $: myApiPreview, tick().then(syncLeftTextareasHeight);
   $: requestInput, tick().then(syncLeftTextareasHeight);
+  $: responseViewMode, tick().then(syncLeftTextareasHeight);
+  $: exampleViewMode, tick().then(syncLeftTextareasHeight);
+  $: myPreviewViewMode, tick().then(syncLeftTextareasHeight);
   $: selected?.description, tick().then(syncMainTextareasHeight);
   $: selected?.authJson, tick().then(syncMainTextareasHeight);
   $: selected?.headersJson, tick().then(syncMainTextareasHeight);
   $: selected?.queryJson, tick().then(syncMainTextareasHeight);
   $: selected?.bodyJson, tick().then(syncMainTextareasHeight);
+  $: authViewMode, tick().then(syncMainTextareasHeight);
+  $: headersViewMode, tick().then(syncMainTextareasHeight);
+  $: queryViewMode, tick().then(syncMainTextareasHeight);
+  $: bodyViewMode, tick().then(syncMainTextareasHeight);
 
   function autosize(el: HTMLTextAreaElement | null, minPx = 78) {
     if (!el) return;
@@ -1379,7 +1386,7 @@
   .subttl { font-size:12px; color:#475569; margin-bottom:6px; }
   .response-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
   .view-toggle { border-radius:10px; border:1px solid #e2e8f0; background:#fff; color:#0f172a; padding:4px 8px; font-size:11px; line-height:1.2; }
-  .response-tree-wrap { border:1px solid #e6eaf2; border-radius:12px; background:#fff; padding:8px; max-height:360px; overflow:auto; }
+  .response-tree-wrap { border:1px solid #e6eaf2; border-radius:12px; background:#fff; padding:8px; min-height:78px; overflow:visible; }
   .template-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
   .template-head-actions { display:flex; align-items:center; gap:4px; }
   .template-action {
