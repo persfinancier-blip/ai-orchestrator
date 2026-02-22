@@ -1028,7 +1028,16 @@
   .subttl { font-size:12px; color:#475569; margin-bottom:6px; }
   .template-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
   .template-head-actions { display:flex; align-items:center; gap:4px; }
-  .template-action { width:28px; min-width:28px; padding:4px 0; font-size:14px; line-height:1; }
+  .template-action {
+    width:28px;
+    min-width:28px;
+    padding:4px 0;
+    font-size:16px;
+    line-height:1;
+    color:#0f172a;
+    border:1px solid #e6eaf2;
+    background:#fff;
+  }
   .statusline { font-size:12px; color:#64748b; margin-bottom:6px; }
   .template-parse-actions { margin-top:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .template-parse-note { font-size:12px; color:#64748b; }
