@@ -199,6 +199,7 @@
   let builderFilterValue = '';
   let builderFilterValueTo = '';
   let builderAlias = '';
+  let parameterTablePickerOpen = false;
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -1961,8 +1962,18 @@
         <div class="targets-wrap parameter-vitrina-block">
           <div class="targets-head">
             <div class="targets-title">Витрина параметров</div>
-            <span class="mapping-head-right">Параметр | Фильтр</span>
+            <button class="icon-btn plus-dark" type="button" title="Выбрать таблицу" on:click={() => (parameterTablePickerOpen = !parameterTablePickerOpen)}>+</button>
           </div>
+          {#if parameterTablePickerOpen}
+            <div class="parameter-table-picker">
+              <select bind:value={tableConnectValue}>
+                {#each existingTables as tbl}
+                  <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
+                {/each}
+              </select>
+              <button class="primary" type="button" on:click={() => addParameterConnectionByValue(tableConnectValue)}>Подключить</button>
+            </div>
+          {/if}
           {#if selected?.parameterSources?.length}
             <div class="parameter-list">
               {#each selected.parameterSources as src (src.id)}
@@ -2790,6 +2801,8 @@
   .param-chip-title { font-size:13px; font-weight:600; color:#0f172a; }
   .param-chip-sub { font-size:11px; color:#475569; }
   .parameter-vitrina-block { margin-top:10px; }
+  .parameter-table-picker { margin-top:8px; display:flex; gap:8px; align-items:center; }
+  .parameter-table-picker select { flex:1; }
   .oauth-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:8px; }
   .oauth-grid input { margin:0; }
   .auth-mode-buttons + .oauth-grid + .hint { margin-top:0; }
