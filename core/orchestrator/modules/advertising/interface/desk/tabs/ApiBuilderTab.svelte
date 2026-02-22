@@ -59,6 +59,10 @@
     baseUrl: string;
     method: HttpMethod;
     path: string;
+    description: string;
+    targetSchema: string;
+    targetTable: string;
+    isActive: boolean;
     headersJson: string;
     queryJson: string;
     bodyJson: string;
@@ -120,6 +124,7 @@
   let previewApplyMessage = '';
   let exampleRequestEl: HTMLTextAreaElement | null = null;
   let generatedPreviewEl: HTMLTextAreaElement | null = null;
+  let apiDescriptionEl: HTMLTextAreaElement | null = null;
   let authFieldsEl: HTMLDivElement | null = null;
   let authRawEl: HTMLTextAreaElement | null = null;
   let urlInput = '';
@@ -593,6 +598,10 @@
       baseUrl: 'https://example.com',
       method: 'GET',
       path: '/endpoint',
+      description: '',
+      targetSchema: '',
+      targetTable: '',
+      isActive: true,
       headersJson: '',
       queryJson: '',
       bodyJson: '',
@@ -769,6 +778,10 @@
       method: toHttpMethod(finalMethod),
       baseUrl: finalBaseUrl,
       path: finalPath,
+      description: String(row?.description || legacySource?.description || ''),
+      targetSchema: String(row?.target_schema || legacySource?.targetSchema || ''),
+      targetTable: String(row?.target_table || legacySource?.targetTable || ''),
+      isActive: row?.is_active === undefined ? true : Boolean(row?.is_active),
       headersJson: JSON.stringify(headersObj, null, 2),
       queryJson: JSON.stringify(finalQueryObj, null, 2),
       bodyJson: JSON.stringify(bodyObj, null, 2),
@@ -807,16 +820,16 @@
       query_json: parseJsonSafeObject(source.queryJson),
       body_json: parseJsonSafeObject(source.bodyJson),
       pagination_json: source.pagination || {},
-      target_schema: '',
-      target_table: '',
+      target_schema: source.targetSchema || '',
+      target_table: source.targetTable || '',
       mapping_json: {
         auth: source.auth,
         db: source.db,
         authTemplate: source.authTemplate,
         exampleRequest: source.exampleRequest
       },
-      description: '',
-      is_active: true
+      description: source.description || '',
+      is_active: source.isActive !== false
     };
   }
 
@@ -1635,6 +1648,12 @@
     if (authRawEl.offsetHeight < min) authRawEl.style.height = `${min}px`;
   }
 
+  function syncApiDescriptionHeight() {
+    if (!apiDescriptionEl) return;
+    apiDescriptionEl.style.height = 'auto';
+    apiDescriptionEl.style.height = `${Math.max(apiDescriptionEl.scrollHeight, 56)}px`;
+  }
+
   void loadAll();
   $: syncEditorsFromSelected();
   $: if (selected) ensureTableSelection();
@@ -1645,6 +1664,7 @@
   $: previewDraft, tick().then(autosizeCompareTextareas);
   $: selected?.auth?.mode, tick().then(syncAuthRawHeight);
   $: authRawDraft, tick().then(syncAuthRawHeight);
+  $: selected?.description, tick().then(syncApiDescriptionHeight);
 </script>
 
 <section class="panel">
@@ -1715,31 +1735,63 @@
     <div class="main">
       <div class="card">
         <h3 style="margin:0;">Конструктор API</h3>
-        <div class="request-top" style="margin-top:10px;">
+        <div class="rename-row">
           <input
             placeholder="Название API"
             value={selected?.name || ''}
             readonly
           />
-          <div class="method-url">
-            <select
-              value={selected?.method || 'GET'}
-              on:change={(e) => mutateSelected((s) => (s.method = toHttpMethod(e.currentTarget.value)))}
-            >
-              <option value="GET">Метод: GET</option>
-              <option value="POST">Метод: POST</option>
-              <option value="PUT">Метод: PUT</option>
-              <option value="PATCH">Метод: PATCH</option>
-              <option value="DELETE">Метод: DELETE</option>
-            </select>
+          <input
+            class="rename-input"
+            value={urlInput}
+            on:input={(e) => (urlInput = e.currentTarget.value)}
+            on:blur={() => applyUrlInputRaw(urlInput)}
+            placeholder="Строка подключения (URL / curl ...)"
+          />
+          <button class="primary save-meta-btn" on:click={onSaveSourceClick} disabled={!selectedId}>Сохранить</button>
+        </div>
+        <div class="api-meta-row">
+          <select
+            value={selected?.method || 'GET'}
+            on:change={(e) => mutateSelected((s) => (s.method = toHttpMethod(e.currentTarget.value)))}
+          >
+            <option value="GET">Метод: GET</option>
+            <option value="POST">Метод: POST</option>
+            <option value="PUT">Метод: PUT</option>
+            <option value="PATCH">Метод: PATCH</option>
+            <option value="DELETE">Метод: DELETE</option>
+          </select>
+          <input
+            placeholder="Схема назначения"
+            value={selected?.targetSchema || ''}
+            on:input={(e) => mutateSelected((s) => (s.targetSchema = e.currentTarget.value))}
+          />
+          <input
+            placeholder="Таблица назначения"
+            value={selected?.targetTable || ''}
+            on:input={(e) => mutateSelected((s) => (s.targetTable = e.currentTarget.value))}
+          />
+          <label class="api-active">
             <input
-              value={urlInput}
-              on:input={(e) => (urlInput = e.currentTarget.value)}
-              on:blur={() => applyUrlInputRaw(urlInput)}
-              placeholder="Строка подключения (URL / curl ...)"
+              type="checkbox"
+              checked={selected?.isActive !== false}
+              on:change={(e) => mutateSelected((s) => (s.isActive = Boolean(e.currentTarget.checked)))}
             />
-            <button on:click={() => applyUrlInputRaw(urlInput)}>Разобрать cURL</button>
-          </div>
+            Активен
+          </label>
+        </div>
+        <textarea
+          class="table-desc-input"
+          bind:this={apiDescriptionEl}
+          placeholder="Описание API"
+          value={selected?.description || ''}
+          on:input={(e) => {
+            mutateSelected((s) => (s.description = e.currentTarget.value));
+            syncApiDescriptionHeight();
+          }}
+        ></textarea>
+        <div class="inline-actions">
+          <button on:click={() => applyUrlInputRaw(urlInput)}>Разобрать cURL</button>
         </div>
       </div>
     </div>
@@ -1843,6 +1895,12 @@
   .api-list .activeitem .row-meta { color:#64748b; }
 
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; margin-bottom:12px; }
+  .rename-row { margin-top:10px; display:grid; grid-template-columns: 5fr 12fr 3fr; gap:8px; align-items:center; }
+  .rename-input { width:100%; box-sizing:border-box; border-radius:12px; border:1px solid #e6eaf2; padding:10px 12px; }
+  .save-meta-btn { width:100%; }
+  .api-meta-row { margin-top:8px; display:grid; grid-template-columns: 4fr 4fr 4fr auto; gap:8px; align-items:center; }
+  .api-active { display:flex; align-items:center; gap:6px; white-space:nowrap; }
+  .table-desc-input { width:100%; box-sizing:border-box; margin-top:8px; border-radius:12px; border:1px solid #e6eaf2; padding:10px 12px; min-height:56px; resize:none; overflow:hidden; }
   .subcard { margin-top:10px; border:1px dashed #e6eaf2; border-radius:14px; padding:10px; }
   .subcard h3 { margin:0 0 8px 0; font-size:14px; }
 
@@ -1852,6 +1910,7 @@
   .method-url { display:grid; grid-template-columns: 180px 1fr 180px; gap:10px; align-items:center; }
   .method-url select, .method-url input, .method-url button { height:42px; }
   @media (max-width: 1100px) { .method-url { grid-template-columns: 1fr; } }
+  @media (max-width: 900px) { .rename-row, .api-meta-row { grid-template-columns: 1fr; } }
   .auth-split { display:grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap:12px; align-items:start; }
   .auth-left, .auth-right { min-width: 0; }
   .auth-top { display:grid; grid-template-columns: 1fr minmax(170px, 26%) 44px; gap:10px; align-items:center; }
