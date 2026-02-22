@@ -1610,7 +1610,7 @@
                     <option value={opt}>{opt}</option>
                   {/each}
                 </select>
-                <button type="button" on:click={addPickedPathFromPicker} disabled={!responsePathPick}>Добавить</button>
+                <button class="icon-btn plus-green" type="button" title="Добавить путь" on:click={addPickedPathFromPicker} disabled={!responsePathPick}>+</button>
               </div>
             {/if}
             {#if !(selected?.pickedPaths?.length)}
@@ -1822,6 +1822,7 @@
   .icon-btn { width:34px; min-width:34px; padding:6px 0; font-size:14px; text-transform:uppercase; border-color:transparent; background:transparent; color:#fff; }
   .danger.icon-btn { color:#b91c1c; }
   .plus-dark.icon-btn { color:#0f172a; font-weight:700; }
+  .plus-green.icon-btn { color:#16a34a; font-weight:700; }
   .map-row .icon-btn { color:#b91c1c; }
   .activeitem .icon-btn { color:#b91c1c; }
   .template-head .icon-btn.template-action { width:28px; min-width:28px; padding:4px 0; font-size:16px; border-color:transparent; background:transparent; color:#0f172a; }
