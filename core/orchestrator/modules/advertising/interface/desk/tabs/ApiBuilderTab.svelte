@@ -1025,6 +1025,11 @@
     return sources.find((s) => s.id === selectedId) || null;
   }
 
+  function sourceListTitle(s: ApiSource) {
+    const idPart = s.storeId ? String(s.storeId) : 'new';
+    return `${idPart} • ${s.name}`;
+  }
+
   $: selected = getSelected();
   $: if (!selected && sources.length === 0) {
     const draft = defaultSource();
@@ -1741,7 +1746,7 @@
               }}
             >
               <button type="button" class="item-button" on:click={() => applySelectedSource(s.id)}>
-                <div class="row-name">{s.name}</div>
+                <div class="row-name">{sourceListTitle(s)}</div>
                 <div class="row-meta">{s.method} {s.baseUrl}{s.path}</div>
               </button>
               <div class="row-actions">
