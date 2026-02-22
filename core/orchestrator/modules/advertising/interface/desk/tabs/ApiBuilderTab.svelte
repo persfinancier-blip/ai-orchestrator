@@ -109,6 +109,8 @@
   let dbPreviewLoading = false;
   let dbPreviewError = '';
   let dbLoadedKey = '';
+  let api_storage_schema = 'ao_system';
+  let api_storage_table = 'api_configs_store';
   let generatedApiPreview = '';
   let previewDraft = '';
   let editingPreview = false;
@@ -723,6 +725,14 @@
   async function loadAll() {
     err = '';
     try {
+      try {
+        const cfg = await apiJson<{ effective?: any }>(`${apiBase}/settings/effective`, { headers: headers() });
+        const eff = cfg?.effective || {};
+        const s = String(eff?.api_configs_schema || '').trim();
+        const t = String(eff?.api_configs_table || '').trim();
+        if (s) api_storage_schema = s;
+        if (t) api_storage_table = t;
+      } catch {}
       const j = await apiJson<{ api_configs: any[] }>(`${apiBase}/api-configs`, { headers: headers() });
       const rows = Array.isArray(j?.api_configs) ? j.api_configs : [];
       sources = rows.map((r) => fromDbConfigRow(r));
@@ -1412,7 +1422,13 @@
 
   <div class="layout">
     <aside class="aside saved-aside">
-      <div class="aside-title">Сохраненные API</div>
+      <div class="aside-head">
+        <div class="aside-title">Сохраненные API</div>
+      </div>
+      <div class="storage-meta">
+        <span>Хранятся в таблице:</span>
+        <span class="plain-value">{api_storage_schema}.{api_storage_table}</span>
+      </div>
       {#if sources.length === 0}
         <div class="hint">Пока нет ни одного.</div>
       {:else}
@@ -1834,8 +1850,11 @@
   .saved-aside { order: 3; }
 
   .aside { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#f8fafc; }
-  .aside-title { font-weight:700; margin-bottom:8px; }
+  .aside-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+  .aside-title { font-weight:700; font-size:14px; line-height:1.3; margin-bottom:0; }
   .compare-aside { position: sticky; top: 12px; }
+  .storage-meta { margin-top:0; margin-bottom:8px; display:flex; align-items:center; gap:6px; font-size:12px; color:#64748b; }
+  .plain-value { color:#0f172a; font-size:12px; font-weight:500; }
   .compare-fields { display:flex; flex-direction:column; gap:10px; }
   .compare-fields textarea { overflow:hidden; resize:none; }
   .list { display:flex; flex-direction:column; gap:8px; }
