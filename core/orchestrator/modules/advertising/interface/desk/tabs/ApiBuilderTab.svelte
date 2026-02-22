@@ -111,6 +111,8 @@
   let dbLoadedKey = '';
   let api_storage_schema = 'ao_system';
   let api_storage_table = 'api_configs_store';
+  let api_storage_picker_open = false;
+  let api_storage_pick_value = '';
   let generatedApiPreview = '';
   let previewDraft = '';
   let editingPreview = false;
@@ -145,6 +147,23 @@
   let headerRows: KvRow[] = [];
   let bodyRows: BodyRow[] = [];
   let lastEditorSourceId = '';
+  const API_STORAGE_REQUIRED_COLUMNS: Array<{ name: string; types: string[] }> = [
+    { name: 'api_name', types: ['text', 'character varying', 'varchar'] },
+    { name: 'method', types: ['text', 'character varying', 'varchar'] },
+    { name: 'base_url', types: ['text', 'character varying', 'varchar'] },
+    { name: 'path', types: ['text', 'character varying', 'varchar'] },
+    { name: 'headers_json', types: ['jsonb', 'json'] },
+    { name: 'query_json', types: ['jsonb', 'json'] },
+    { name: 'body_json', types: ['jsonb', 'json'] },
+    { name: 'pagination_json', types: ['jsonb', 'json'] },
+    { name: 'target_schema', types: ['text', 'character varying', 'varchar'] },
+    { name: 'target_table', types: ['text', 'character varying', 'varchar'] },
+    { name: 'mapping_json', types: ['jsonb', 'json'] },
+    { name: 'description', types: ['text', 'character varying', 'varchar'] },
+    { name: 'is_active', types: ['boolean'] },
+    { name: 'updated_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] },
+    { name: 'updated_by', types: ['text', 'character varying', 'varchar'] }
+  ];
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -152,6 +171,10 @@
 
   function safeJsonParse(text: string): any {
     return text.trim() ? JSON.parse(text) : {};
+  }
+
+  function normalizeTypeName(type: string) {
+    return String(type || '').toLowerCase().trim();
   }
 
   function objectToKvRows(obj: any): KvRow[] {
@@ -732,6 +755,7 @@
         const t = String(eff?.api_configs_table || '').trim();
         if (s) api_storage_schema = s;
         if (t) api_storage_table = t;
+        api_storage_pick_value = `${api_storage_schema}.${api_storage_table}`;
       } catch {}
       const j = await apiJson<{ api_configs: any[] }>(`${apiBase}/api-configs`, { headers: headers() });
       const rows = Array.isArray(j?.api_configs) ? j.api_configs : [];
@@ -746,6 +770,58 @@
       selectedId = null;
     } finally {
       // no-op
+    }
+  }
+
+  async function checkApiStorageTable(schema: string, table: string) {
+    try {
+      const j = await apiJson<{ columns: Array<{ name: string; type: string }> }>(
+        `${apiBase}/columns?schema=${encodeURIComponent(schema)}&table=${encodeURIComponent(table)}`
+      );
+      const cols = Array.isArray(j?.columns) ? j.columns : [];
+      if (!cols.length) {
+        err = `Таблица ${schema}.${table} не найдена или пуста.`;
+        return false;
+      }
+      const map = new Map(cols.map((c) => [String(c.name || '').toLowerCase(), normalizeTypeName(c.type)]));
+      for (const need of API_STORAGE_REQUIRED_COLUMNS) {
+        const actual = map.get(need.name);
+        if (!actual || !need.types.some((t) => actual.includes(t))) {
+          err = `Структура ${schema}.${table} не подходит: колонка ${need.name} отсутствует или имеет неверный тип.`;
+          return false;
+        }
+      }
+      return true;
+    } catch (e: any) {
+      err = e?.message ?? String(e);
+      return false;
+    }
+  }
+
+  async function applyApiStorageChoice() {
+    if (!api_storage_pick_value) return;
+    const [schema, table] = api_storage_pick_value.split('.');
+    if (!schema || !table) return;
+    const ok = await checkApiStorageTable(schema, table);
+    if (!ok) return;
+    try {
+      await apiJson(`${apiBase}/settings/upsert`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({
+          setting_key: 'api_configs_storage',
+          setting_value: { schema, table },
+          description: 'Хранилище преднастроенных API',
+          scope: 'global',
+          is_active: true
+        })
+      });
+      api_storage_schema = schema;
+      api_storage_table = table;
+      api_storage_picker_open = false;
+      await loadAll();
+    } catch (e: any) {
+      err = e?.message ?? String(e);
     }
   }
 
@@ -1406,11 +1482,6 @@
 <section class="panel">
   <div class="panel-head">
     <h2>API (конструктор)</h2>
-    <div class="quick">
-      <button on:click={newSource}>+ Новый</button>
-      <button class="danger" on:click={deleteSelected} disabled={!selectedId}>Удалить</button>
-      <button class="danger" on:click={clearHistory} disabled={history.length === 0}>Очистить историю</button>
-    </div>
   </div>
 
   {#if err}
@@ -1427,8 +1498,26 @@
       </div>
       <div class="storage-meta">
         <span>Хранятся в таблице:</span>
-        <span class="plain-value">{api_storage_schema}.{api_storage_table}</span>
+        <button
+          class="link-btn"
+          on:click={() => {
+            api_storage_picker_open = !api_storage_picker_open;
+            api_storage_pick_value = `${api_storage_schema}.${api_storage_table}`;
+          }}
+        >
+          {api_storage_schema}.{api_storage_table}
+        </button>
       </div>
+      {#if api_storage_picker_open}
+        <div class="storage-picker">
+          <select bind:value={api_storage_pick_value}>
+            {#each existingTables as t}
+              <option value={`${t.schema_name}.${t.table_name}`}>{t.schema_name}.{t.table_name}</option>
+            {/each}
+          </select>
+          <button on:click={applyApiStorageChoice} disabled={!api_storage_pick_value}>Подключить</button>
+        </div>
+      {/if}
       {#if sources.length === 0}
         <div class="hint">Пока нет ни одного.</div>
       {:else}
@@ -1837,7 +1926,6 @@
   .panel { background:#fff; border:1px solid #e6eaf2; border-radius:18px; padding:14px; box-shadow:0 6px 20px rgba(15,23,42,.05); margin-top:12px; }
   .panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
   .panel-head h2 { margin:0; font-size:18px; }
-  .quick { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
 
   .hint { margin:10px 0 0; color:#64748b; font-size:13px; }
   .error { margin:8px 0; color:#b91c1c; font-size:13px; }
@@ -1854,7 +1942,9 @@
   .aside-title { font-weight:700; font-size:14px; line-height:1.3; margin-bottom:0; }
   .compare-aside { position: sticky; top: 12px; }
   .storage-meta { margin-top:0; margin-bottom:8px; display:flex; align-items:center; gap:6px; font-size:12px; color:#64748b; }
-  .plain-value { color:#0f172a; font-size:12px; font-weight:500; }
+  .link-btn { border:0; background:transparent; color:#0f172a; padding:0; text-decoration:underline; font-size:12px; font-weight:500; }
+  .storage-picker { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+  .storage-picker select { flex:1; min-width:0; }
   .compare-fields { display:flex; flex-direction:column; gap:10px; }
   .compare-fields textarea { overflow:hidden; resize:none; }
   .list { display:flex; flex-direction:column; gap:8px; }
