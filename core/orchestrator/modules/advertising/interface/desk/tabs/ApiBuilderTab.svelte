@@ -19,8 +19,31 @@
     path: string;
     headersJson: string;
     authJson: string;
+    authMode: 'manual' | 'oauth2_client_credentials';
+    oauth2TokenUrl: string;
+    oauth2ClientId: string;
+    oauth2ClientSecret: string;
+    oauth2GrantType: string;
+    oauth2TokenField: string;
+    oauth2ExpiresField: string;
+    oauth2TokenTypeField: string;
     queryJson: string;
     bodyJson: string;
+    paginationEnabled: boolean;
+    paginationStrategy: 'none' | 'cursor_fields' | 'page_number' | 'offset_limit' | 'next_url';
+    paginationTarget: 'query' | 'body';
+    paginationDataPath: string;
+    paginationPageParam: string;
+    paginationStartPage: number;
+    paginationLimitParam: string;
+    paginationLimitValue: number;
+    paginationCursorReqPath1: string;
+    paginationCursorReqPath2: string;
+    paginationCursorResPath1: string;
+    paginationCursorResPath2: string;
+    paginationNextUrlPath: string;
+    paginationMaxPages: number;
+    paginationDelayMs: number;
     pickedPaths: string[];
     responseTargets: Array<{
       id: string;
@@ -106,6 +129,7 @@
   let responsePathOptions: string[] = [];
   let responsePathPickerOpen = false;
   let responsePathPick = '';
+  let oauthTokenCache: Record<string, { token: string; tokenType: string; expiresAt: number }> = {};
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -231,8 +255,31 @@
       path: '/',
       headersJson: '',
       authJson: '',
+      authMode: 'manual',
+      oauth2TokenUrl: '',
+      oauth2ClientId: '',
+      oauth2ClientSecret: '',
+      oauth2GrantType: 'client_credentials',
+      oauth2TokenField: 'access_token',
+      oauth2ExpiresField: 'expires_in',
+      oauth2TokenTypeField: 'token_type',
       queryJson: '',
       bodyJson: '',
+      paginationEnabled: false,
+      paginationStrategy: 'none',
+      paginationTarget: 'body',
+      paginationDataPath: '',
+      paginationPageParam: 'page',
+      paginationStartPage: 1,
+      paginationLimitParam: 'limit',
+      paginationLimitValue: 100,
+      paginationCursorReqPath1: '',
+      paginationCursorReqPath2: '',
+      paginationCursorResPath1: '',
+      paginationCursorResPath2: '',
+      paginationNextUrlPath: 'next',
+      paginationMaxPages: 3,
+      paginationDelayMs: 0,
       pickedPaths: [],
       responseTargets: [],
       description: '',
@@ -247,6 +294,8 @@
 
     const mapping = tryObj(row?.mapping_json);
     const legacy = tryObj(mapping?.source ?? mapping?.config ?? mapping?.payload);
+    const pagination = tryObj(row?.pagination_json || mapping?.pagination || legacy?.pagination);
+    const oauth2 = tryObj(mapping?.oauth2 || legacy?.oauth2);
     const parsedTargets = Array.isArray(mapping?.response_targets) ? mapping.response_targets : [];
     const normalizedTargets = parsedTargets
       .map((t: any) => ({
@@ -285,8 +334,33 @@
       path: String(row?.path || legacy?.path || '/'),
       headersJson: toPrettyJson(tryObj(row?.headers_json || legacy?.headers_json || legacy?.headersJson || legacy?.headers)),
       authJson: toPrettyJson(tryObj(mapping?.auth_json || legacy?.auth_json || legacy?.authJson)),
+      authMode: String(oauth2?.mode || 'manual') === 'oauth2_client_credentials' ? 'oauth2_client_credentials' : 'manual',
+      oauth2TokenUrl: String(oauth2?.token_url || ''),
+      oauth2ClientId: String(oauth2?.client_id || ''),
+      oauth2ClientSecret: String(oauth2?.client_secret || ''),
+      oauth2GrantType: String(oauth2?.grant_type || 'client_credentials'),
+      oauth2TokenField: String(oauth2?.token_field || 'access_token'),
+      oauth2ExpiresField: String(oauth2?.expires_field || 'expires_in'),
+      oauth2TokenTypeField: String(oauth2?.token_type_field || 'token_type'),
       queryJson: toPrettyJson(tryObj(row?.query_json || legacy?.query_json || legacy?.queryJson || legacy?.query || legacy?.params)),
       bodyJson: toPrettyJson(tryObj(row?.body_json || legacy?.body_json || legacy?.bodyJson || legacy?.body || legacy?.data)),
+      paginationEnabled: Boolean(pagination?.enabled),
+      paginationStrategy: (['cursor_fields', 'page_number', 'offset_limit', 'next_url'].includes(String(pagination?.strategy || ''))
+        ? String(pagination.strategy)
+        : 'none') as ApiDraft['paginationStrategy'],
+      paginationTarget: String(pagination?.target || 'body') === 'query' ? 'query' : 'body',
+      paginationDataPath: String(pagination?.data_path || ''),
+      paginationPageParam: String(pagination?.page_param || 'page'),
+      paginationStartPage: Number(pagination?.start_page || 1),
+      paginationLimitParam: String(pagination?.limit_param || 'limit'),
+      paginationLimitValue: Number(pagination?.limit_value || 100),
+      paginationCursorReqPath1: String(pagination?.cursor_req_path_1 || ''),
+      paginationCursorReqPath2: String(pagination?.cursor_req_path_2 || ''),
+      paginationCursorResPath1: String(pagination?.cursor_res_path_1 || ''),
+      paginationCursorResPath2: String(pagination?.cursor_res_path_2 || ''),
+      paginationNextUrlPath: String(pagination?.next_url_path || 'next'),
+      paginationMaxPages: Number(pagination?.max_pages || 3),
+      paginationDelayMs: Number(pagination?.delay_ms || 0),
       pickedPaths: Array.isArray(mapping?.picked_paths) ? mapping.picked_paths.map((x: any) => String(x || '').trim()).filter(Boolean) : [],
       responseTargets: normalizedTargets,
       description: String(row?.description || legacy?.description || ''),
@@ -308,13 +382,42 @@
       headers_json: parsed?.headersJson ?? tryObj(d.headersJson),
       query_json: parsed?.queryJson ?? tryObj(d.queryJson),
       body_json: parsed?.bodyJson ?? tryObj(d.bodyJson),
-      pagination_json: {},
+      pagination_json: {
+        enabled: d.paginationEnabled,
+        strategy: d.paginationStrategy,
+        target: d.paginationTarget,
+        data_path: d.paginationDataPath,
+        page_param: d.paginationPageParam,
+        start_page: d.paginationStartPage,
+        limit_param: d.paginationLimitParam,
+        limit_value: d.paginationLimitValue,
+        cursor_req_path_1: d.paginationCursorReqPath1,
+        cursor_req_path_2: d.paginationCursorReqPath2,
+        cursor_res_path_1: d.paginationCursorResPath1,
+        cursor_res_path_2: d.paginationCursorResPath2,
+        next_url_path: d.paginationNextUrlPath,
+        max_pages: d.paginationMaxPages,
+        delay_ms: d.paginationDelayMs
+      },
       target_schema: firstTarget?.schema || '',
       target_table: firstTarget?.table || '',
       mapping_json: {
         exampleRequest: d.exampleRequest,
         response_targets: d.responseTargets,
         picked_paths: d.pickedPaths,
+        oauth2:
+          d.authMode === 'oauth2_client_credentials'
+            ? {
+                mode: d.authMode,
+                token_url: d.oauth2TokenUrl,
+                client_id: d.oauth2ClientId,
+                client_secret: d.oauth2ClientSecret,
+                grant_type: d.oauth2GrantType || 'client_credentials',
+                token_field: d.oauth2TokenField || 'access_token',
+                expires_field: d.oauth2ExpiresField || 'expires_in',
+                token_type_field: d.oauth2TokenTypeField || 'token_type'
+              }
+            : { mode: 'manual' },
         auth_json: parsed?.authJson ?? tryObj(d.authJson)
       },
       description: d.description,
@@ -632,6 +735,103 @@
     const q = parseJsonObjectField('Query JSON', d.queryJson);
     for (const [k, v] of Object.entries(q || {})) u.searchParams.set(k, String(v));
     return u.toString();
+  }
+
+  function parsePathParts(path: string): Array<string | number> {
+    const raw = String(path || '').trim();
+    if (!raw) return [];
+    const out: Array<string | number> = [];
+    const dotParts = raw.split('.');
+    for (const part of dotParts) {
+      if (!part) continue;
+      const re = /([^[\]]+)|\[(\d+)\]/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(part))) {
+        if (m[1]) out.push(m[1]);
+        else if (m[2]) out.push(Number(m[2]));
+      }
+    }
+    return out;
+  }
+
+  function getByPath(obj: any, path: string): any {
+    const parts = parsePathParts(path);
+    let cur = obj;
+    for (const p of parts) {
+      if (cur == null) return undefined;
+      cur = cur[p as any];
+    }
+    return cur;
+  }
+
+  function setByPath(obj: any, path: string, value: any) {
+    const parts = parsePathParts(path);
+    if (!parts.length) return;
+    let cur = obj;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const p = parts[i];
+      const next = parts[i + 1];
+      if (cur[p as any] == null) {
+        cur[p as any] = typeof next === 'number' ? [] : {};
+      }
+      cur = cur[p as any];
+    }
+    cur[parts[parts.length - 1] as any] = value;
+  }
+
+  function resolveAbsoluteUrl(urlText: string, draft: ApiDraft) {
+    const raw = String(urlText || '').trim();
+    if (!raw) return fullUrl(draft);
+    if (/^https?:\/\//i.test(raw)) return raw;
+    const base = String(draft.baseUrl || '').replace(/\/$/, '');
+    const path = raw.startsWith('/') ? raw : `/${raw}`;
+    return `${base}${path}`;
+  }
+
+  async function getOAuthToken(d: ApiDraft): Promise<{ token: string; tokenType: string }> {
+    const cacheKey = refOf(d);
+    const cached = oauthTokenCache[cacheKey];
+    if (cached && Date.now() < cached.expiresAt - 60_000) {
+      return { token: cached.token, tokenType: cached.tokenType || 'Bearer' };
+    }
+
+    const tokenUrl = resolveAbsoluteUrl(d.oauth2TokenUrl, d);
+    const payload = {
+      client_id: d.oauth2ClientId,
+      client_secret: d.oauth2ClientSecret,
+      grant_type: d.oauth2GrantType || 'client_credentials'
+    };
+    const res = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const txt = await res.text();
+    let json: any = {};
+    try {
+      json = txt ? JSON.parse(txt) : {};
+    } catch {
+      throw new Error(`OAuth2: некорректный ответ токена (${txt.slice(0, 200)})`);
+    }
+    if (!res.ok) {
+      throw new Error(`OAuth2: ${res.status} ${JSON.stringify(json)}`);
+    }
+    const tokenField = d.oauth2TokenField || 'access_token';
+    const expiresField = d.oauth2ExpiresField || 'expires_in';
+    const typeField = d.oauth2TokenTypeField || 'token_type';
+    const token = String(json?.[tokenField] || '').trim();
+    if (!token) throw new Error(`OAuth2: поле ${tokenField} не найдено`);
+    const expiresIn = Number(json?.[expiresField] || 0);
+    const tokenType = String(json?.[typeField] || 'Bearer').trim() || 'Bearer';
+    oauthTokenCache = {
+      ...oauthTokenCache,
+      [cacheKey]: {
+        token,
+        tokenType,
+        expiresAt: Date.now() + Math.max(0, expiresIn) * 1000
+      }
+    };
+    return { token, tokenType };
   }
 
   function previewUrlFromInput(selectedDraft: ApiDraft | null): string {
@@ -1172,21 +1372,119 @@
     try {
       applyUrlInput(requestInput);
       const s = byRef(selectedRef) || selected;
-      const url = fullUrl(s);
       const authHdr = parseJsonObjectField('Авторизация', s.authJson);
       const hdr = parseJsonObjectField('Headers JSON', s.headersJson);
-      const init: RequestInit = {
-        method: s.method,
-        headers: { 'Content-Type': 'application/json', ...authHdr, ...hdr }
-      };
-      if (s.method !== 'GET' && s.method !== 'DELETE') {
-        const b = String(s.bodyJson || '').trim();
-        init.body = b ? JSON.stringify(parseJsonAnyField('Body JSON', b)) : '';
+      const queryObjBase = parseJsonObjectField('Query JSON', s.queryJson);
+      const bodyBaseRaw = parseJsonAnyField('Body JSON', s.bodyJson);
+      const bodyObjBase = bodyBaseRaw && typeof bodyBaseRaw === 'object' ? JSON.parse(JSON.stringify(bodyBaseRaw)) : {};
+
+      if (s.authMode === 'oauth2_client_credentials') {
+        if (!s.oauth2TokenUrl || !s.oauth2ClientId || !s.oauth2ClientSecret) {
+          throw new Error('OAuth2: заполни token URL, client_id и client_secret');
+        }
+        const t = await getOAuthToken(s);
+        authHdr.Authorization = `${t.tokenType} ${t.token}`;
       }
-      const res = await fetch(url, init);
-      responseStatus = res.status;
-      responseText = await res.text();
-      ok = 'Проверка выполнена';
+
+      let nextUrlOverride = '';
+      const pagesMax = s.paginationEnabled ? Math.max(1, Number(s.paginationMaxPages || 1)) : 1;
+      const pagePayloads: any[] = [];
+      let lastStatus = 0;
+      let pageCounter = 0;
+      let currentPage = Number(s.paginationStartPage || 1);
+      let currentOffset = 0;
+
+      for (let pageIdx = 0; pageIdx < pagesMax; pageIdx++) {
+        const queryObj = JSON.parse(JSON.stringify(queryObjBase || {}));
+        const bodyObj = JSON.parse(JSON.stringify(bodyObjBase || {}));
+
+        if (s.paginationEnabled) {
+          if (s.paginationStrategy === 'page_number') {
+            const p = s.paginationPageParam || 'page';
+            if (s.paginationTarget === 'query') queryObj[p] = currentPage;
+            else setByPath(bodyObj, p, currentPage);
+          } else if (s.paginationStrategy === 'offset_limit') {
+            const off = s.paginationPageParam || 'offset';
+            const lim = s.paginationLimitParam || 'limit';
+            const limVal = Number(s.paginationLimitValue || 100);
+            if (s.paginationTarget === 'query') {
+              queryObj[off] = currentOffset;
+              queryObj[lim] = limVal;
+            } else {
+              setByPath(bodyObj, off, currentOffset);
+              setByPath(bodyObj, lim, limVal);
+            }
+          }
+        }
+
+        let url = nextUrlOverride || `${s.baseUrl.replace(/\/$/, '')}${s.path.startsWith('/') ? s.path : `/${s.path}`}`;
+        const u = new URL(url);
+        for (const [k, v] of Object.entries(queryObj || {})) u.searchParams.set(k, String(v));
+        url = u.toString();
+
+        const init: RequestInit = {
+          method: s.method,
+          headers: { 'Content-Type': 'application/json', ...authHdr, ...hdr }
+        };
+        if (s.method !== 'GET' && s.method !== 'DELETE') {
+          init.body = JSON.stringify(bodyObj || {});
+        }
+
+        const res = await fetch(url, init);
+        lastStatus = res.status;
+        const txt = await res.text();
+        let parsed: any = null;
+        try {
+          parsed = txt ? JSON.parse(txt) : null;
+        } catch {
+          parsed = null;
+        }
+        pagePayloads.push(parsed ?? txt);
+        pageCounter += 1;
+        responseStatus = lastStatus;
+        responseText = txt;
+
+        if (!s.paginationEnabled) break;
+
+        const dataPath = String(s.paginationDataPath || '').trim();
+        if (dataPath && parsed) {
+          const items = getByPath(parsed, dataPath);
+          if (Array.isArray(items) && items.length === 0) break;
+        }
+
+        if (s.paginationStrategy === 'page_number') {
+          currentPage += 1;
+        } else if (s.paginationStrategy === 'offset_limit') {
+          currentOffset += Number(s.paginationLimitValue || 100);
+        } else if (s.paginationStrategy === 'cursor_fields') {
+          const v1 = s.paginationCursorResPath1 ? getByPath(parsed, s.paginationCursorResPath1) : undefined;
+          const v2 = s.paginationCursorResPath2 ? getByPath(parsed, s.paginationCursorResPath2) : undefined;
+          if (v1 == null && v2 == null) break;
+          if (s.paginationCursorReqPath1) {
+            if (s.paginationTarget === 'query') queryObjBase[s.paginationCursorReqPath1] = v1;
+            else setByPath(bodyObjBase, s.paginationCursorReqPath1, v1);
+          }
+          if (s.paginationCursorReqPath2) {
+            if (s.paginationTarget === 'query') queryObjBase[s.paginationCursorReqPath2] = v2;
+            else setByPath(bodyObjBase, s.paginationCursorReqPath2, v2);
+          }
+        } else if (s.paginationStrategy === 'next_url') {
+          const n = s.paginationNextUrlPath ? getByPath(parsed, s.paginationNextUrlPath) : undefined;
+          if (!n || typeof n !== 'string') break;
+          nextUrlOverride = n;
+        } else {
+          break;
+        }
+
+        if (Number(s.paginationDelayMs || 0) > 0) {
+          await new Promise((resolve) => setTimeout(resolve, Number(s.paginationDelayMs || 0)));
+        }
+      }
+
+      if (s.paginationEnabled && pagePayloads.length > 1) {
+        responseText = JSON.stringify({ pages: pageCounter, last_status: lastStatus, samples: pagePayloads }, null, 2);
+      }
+      ok = s.paginationEnabled ? `Проверка выполнена, страниц: ${pageCounter}` : 'Проверка выполнена';
     } catch (e: any) {
       err = e?.message ?? String(e);
     } finally {
@@ -1213,10 +1511,29 @@
         {
           method: selected.method,
           url: previewUrlFromInput(selected),
+          auth_mode: selected.authMode,
           auth: safePreviewObj(selected.authJson),
+          oauth2:
+            selected.authMode === 'oauth2_client_credentials'
+              ? {
+                  token_url: selected.oauth2TokenUrl,
+                  client_id: selected.oauth2ClientId,
+                  grant_type: selected.oauth2GrantType,
+                  token_field: selected.oauth2TokenField
+                }
+              : undefined,
           headers: safePreviewObj(selected.headersJson),
           query: safePreviewObj(selected.queryJson),
-          body: selected.method === 'GET' || selected.method === 'DELETE' ? undefined : safePreviewObj(selected.bodyJson)
+          body: selected.method === 'GET' || selected.method === 'DELETE' ? undefined : safePreviewObj(selected.bodyJson),
+          pagination:
+            selected.paginationEnabled
+              ? {
+                  strategy: selected.paginationStrategy,
+                  target: selected.paginationTarget,
+                  data_path: selected.paginationDataPath,
+                  max_pages: selected.paginationMaxPages
+                }
+              : undefined
         },
         null,
         2
