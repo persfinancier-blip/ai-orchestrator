@@ -518,6 +518,12 @@
     templateParseMessage = parsed.message;
   }
 
+  function clearTemplateField() {
+    mutateSelected((d) => (d.exampleRequest = ''));
+    templateParseMessage = '';
+    syncLeftTextareasHeight();
+  }
+
   function scheduleTemplateParse() {
     if (templateParseTimer) clearTimeout(templateParseTimer);
     templateParseTimer = setTimeout(() => parseTemplateNow(false), 450);
@@ -804,7 +810,13 @@
         <textarea bind:this={responsePreviewEl} readonly value={responseText}></textarea>
       </div>
       <div class="subsec">
-        <div class="subttl">Шаблон API</div>
+        <div class="subttl template-head">
+          <span>Шаблон API</span>
+          <span class="template-head-actions">
+            <button class="icon-btn template-action" type="button" title="Разобрать в настройки" on:click={() => parseTemplateNow(true)}>+</button>
+            <button class="icon-btn danger template-action" type="button" title="Очистить поле" on:click={clearTemplateField}>x</button>
+          </span>
+        </div>
         <textarea
           bind:this={exampleApiEl}
           value={selected?.exampleRequest || ''}
@@ -816,7 +828,6 @@
           placeholder="Вставьте пример API"
         ></textarea>
         <div class="template-parse-actions">
-          <button type="button" on:click={() => parseTemplateNow(true)}>Разобрать в настройки</button>
           {#if templateParseMessage}
             <span class="template-parse-note">{templateParseMessage}</span>
           {/if}
@@ -1015,6 +1026,9 @@
 
   .subsec { margin-top:10px; }
   .subttl { font-size:12px; color:#475569; margin-bottom:6px; }
+  .template-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .template-head-actions { display:flex; align-items:center; gap:4px; }
+  .template-action { width:28px; min-width:28px; padding:4px 0; font-size:14px; line-height:1; }
   .statusline { font-size:12px; color:#64748b; margin-bottom:6px; }
   .template-parse-actions { margin-top:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .template-parse-note { font-size:12px; color:#64748b; }
