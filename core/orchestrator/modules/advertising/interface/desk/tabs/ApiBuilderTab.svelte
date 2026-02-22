@@ -1958,40 +1958,6 @@
         {/if}
       </div>
       <div class="subsec">
-        <div class="subttl template-head">
-          <span>Шаблон API</span>
-          <span class="inline-actions">
-            <button type="button" class="view-toggle" on:click={onTemplateParseClick}>Сохранить</button>
-            <button type="button" class="view-toggle" on:click={onTemplateClearClick}>Очистить</button>
-            {#if exampleIsJson}
-              <button type="button" class="view-toggle" on:click={() => (exampleViewMode = exampleViewMode === 'tree' ? 'raw' : 'tree')}>
-                {exampleViewMode === 'tree' ? 'RAW' : 'Дерево'}
-              </button>
-            {/if}
-          </span>
-        </div>
-        {#if exampleIsJson && exampleViewMode === 'tree'}
-          <div class="response-tree-wrap">
-            <JsonTreeView node={exampleJson} name="template" level={0} />
-          </div>
-        {:else}
-          <textarea
-            bind:this={exampleApiEl}
-            value={selected?.exampleRequest || ''}
-            on:input={(e) => {
-              mutateSelected((d) => (d.exampleRequest = e.currentTarget.value));
-              syncLeftTextareasHeight();
-            }}
-            placeholder="Вставьте пример API"
-          ></textarea>
-        {/if}
-        <div class="template-parse-actions">
-          {#if templateParseMessage}
-            <span class="template-parse-note">{templateParseMessage}</span>
-          {/if}
-        </div>
-      </div>
-      <div class="subsec">
         <div class="subttl response-head">
           <span>Предпросмотр твоего API</span>
           <span class="inline-actions">
@@ -2606,6 +2572,41 @@
           <button on:click={applyStorageChoice} disabled={!api_storage_pick_value}>Подключить</button>
         </div>
       {/if}
+
+      <div class="subsec">
+        <div class="subttl template-head">
+          <span>Шаблон API</span>
+          <span class="inline-actions">
+            <button type="button" class="view-toggle" on:click={onTemplateParseClick}>Сохранить</button>
+            <button type="button" class="view-toggle" on:click={onTemplateClearClick}>Очистить</button>
+            {#if exampleIsJson}
+              <button type="button" class="view-toggle" on:click={() => (exampleViewMode = exampleViewMode === 'tree' ? 'raw' : 'tree')}>
+                {exampleViewMode === 'tree' ? 'RAW' : 'Дерево'}
+              </button>
+            {/if}
+          </span>
+        </div>
+        {#if exampleIsJson && exampleViewMode === 'tree'}
+          <div class="response-tree-wrap">
+            <JsonTreeView node={exampleJson} name="template" level={0} />
+          </div>
+        {:else}
+          <textarea
+            bind:this={exampleApiEl}
+            value={selected?.exampleRequest || ''}
+            on:input={(e) => {
+              mutateSelected((d) => (d.exampleRequest = e.currentTarget.value));
+              syncLeftTextareasHeight();
+            }}
+            placeholder="Вставьте пример API"
+          ></textarea>
+        {/if}
+        <div class="template-parse-actions">
+          {#if templateParseMessage}
+            <span class="template-parse-note">{templateParseMessage}</span>
+          {/if}
+        </div>
+      </div>
 
       <div class="template-controls">
         <input
