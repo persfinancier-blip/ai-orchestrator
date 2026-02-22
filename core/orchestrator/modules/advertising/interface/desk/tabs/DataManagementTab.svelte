@@ -35,7 +35,7 @@
     return sources.find((s) => s.id === selectedId) || null;
   }
 
-  // ✅ Svelte way вместо {#let ...}
+  // Svelte way вместо {#let ...}
   $: selected = getSelected();
 
   function parseJsonOrEmpty(s: string): any {
@@ -111,14 +111,11 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Управление данными</h2>
-    <div class="quick">
-      <button on:click={loadSources}>Обновить</button>
-    </div>
   </div>
 
   <p class="hint">
-    Эта вкладка использует <b>сохранённые конфиги</b> из “API (конструктор)” для будущего workflow.
-    Сейчас тут только “preview run” (не пишет в БД).
+    Эта вкладка использует <b>сохранённые конфиги</b> из «API (конструктор)» для будущего workflow.
+    Сейчас здесь только preview run (без записи в БД).
   </p>
 
   {#if err}
@@ -130,10 +127,13 @@
 
   <div class="layout">
     <aside class="aside">
-      <div class="aside-title">Источники</div>
+      <div class="aside-head">
+        <div class="aside-title">Источники</div>
+        <button class="icon-btn refresh-btn" on:click={loadSources} title="Обновить список">↻</button>
+      </div>
 
       {#if sources.length === 0}
-        <div class="hint">Нет сохранённых API. Создай их во вкладке “API”.</div>
+        <div class="hint">Нет сохранённых API. Создай их во вкладке «API».</div>
       {:else}
         <div class="list">
           {#each sources as s (s.id)}
@@ -165,9 +165,7 @@
             </button>
           </div>
 
-          <div class="muted" style="margin-top:8px;">
-            status: {previewStatus || '-'}
-          </div>
+          <div class="muted" style="margin-top:8px;">status: {previewStatus || '-'}</div>
 
           <div class="box">
             <pre>{previewText || ''}</pre>
@@ -186,15 +184,15 @@
   .panel { background:#fff; border:1px solid #e6eaf2; border-radius:18px; padding:14px; box-shadow:0 6px 20px rgba(15,23,42,.05); margin-top:12px; }
   .panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
   .panel-head h2 { margin:0; font-size:18px; }
-  .quick { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
 
   .hint { margin:10px 0 0; color:#64748b; font-size:13px; }
 
-  .layout { display:grid; grid-template-columns: 320px 1fr; gap:12px; margin-top:12px; }
+  .layout { display:grid; grid-template-columns: 320px 1fr; gap:12px; margin-top:12px; align-items:start; }
   @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
 
   .aside { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#f8fafc; }
-  .aside-title { font-weight:700; margin-bottom:8px; }
+  .aside-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+  .aside-title { font-weight:700; font-size:14px; line-height:1.3; margin-bottom:0; }
   .list { display:flex; flex-direction:column; gap:8px; }
   .item { text-align:left; padding:10px 12px; border-radius:14px; border:1px solid #e6eaf2; background:#fff; cursor:pointer; }
   .activeitem { background:#0f172a; color:#fff; border-color:#0f172a; }
@@ -202,6 +200,7 @@
   .meta { font-size:12px; color:#64748b; margin-top:4px; word-break: break-word; }
   .activeitem .meta { color:#cbd5e1; }
 
+  .main { min-width:0; }
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; }
   .row { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
   .title { font-weight:800; }
@@ -213,6 +212,8 @@
   button { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; background:#fff; cursor:pointer; }
   button:disabled { opacity:.6; cursor:not-allowed; }
   .primary { background:#0f172a; color:#fff; border-color:#0f172a; }
+  .icon-btn { width:34px; min-width:34px; padding:6px 0; text-transform:uppercase; border-color:transparent; background:transparent; }
+  .refresh-btn { color:#16a34a; }
 
   .alert { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #f3c0c0; background: #fff5f5; }
   .alert-title { font-weight: 700; margin-bottom: 6px; }
