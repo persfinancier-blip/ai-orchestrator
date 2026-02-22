@@ -1805,11 +1805,11 @@
   .crumb-chip { display:inline-flex; align-items:center; gap:4px; border:1px solid #e2e8f0; border-radius:999px; background:#f8fafc; padding:3px 6px; max-width:100%; }
   .chip-path { border:0; background:transparent; color:#0f172a; padding:0; font-size:11px; max-width:420px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .chip-remove { border:0; background:transparent; color:#b91c1c; padding:0 2px; font-size:12px; line-height:1; }
-  .mapping-panel { border:1px solid #e6eaf2; border-radius:12px; background:#fff; padding:8px; }
+  .mapping-panel { border:1px solid #e6eaf2; border-radius:12px; background:transparent; padding:8px; }
   .mapping-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
   .mapping-head-right { font-size:11px; color:#64748b; }
   .mapping-list { display:flex; flex-direction:column; gap:8px; }
-  .map-row { display:grid; grid-template-columns: 1.2fr 1fr 1fr auto; gap:8px; align-items:center; border:1px solid #eef2f7; border-radius:10px; padding:6px; background:#fff; }
+  .map-row { display:grid; grid-template-columns: 1.2fr 1fr 1fr auto; gap:8px; align-items:center; border:1px solid #eef2f7; border-radius:10px; padding:6px; background:transparent; }
   .map-row.active-map { border-color:#cbd5e1; background:#f8fafc; }
   .mapping-actions { margin-top:8px; display:flex; justify-content:flex-end; }
   .desc { width:100%; box-sizing:border-box; margin-top:8px; min-height:56px; resize:vertical; }
