@@ -1004,6 +1004,12 @@
   }
 
   $: selected = getSelected();
+  $: if (!selected && sources.length === 0) {
+    const draft = defaultSource();
+    sources = [draft];
+    selectedId = draft.id;
+    apiNameDraft = draft.name;
+  }
   $: if (selected && selected.id !== lastNameDraftSourceId) {
     apiNameDraft = selected.name;
     lastNameDraftSourceId = selected.id;
