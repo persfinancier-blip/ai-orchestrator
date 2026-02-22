@@ -1786,22 +1786,15 @@
     <div class="main">
       <div class="card">
         <h3 style="margin:0;">Конструктор API</h3>
-        <div class="rename-row">
+        <div class="api-name-row">
           <input
+            class="api-name-readonly"
             placeholder="Название API"
             value={selected?.name || ''}
             readonly
           />
-          <input
-            class="rename-input"
-            value={urlInput}
-            on:input={(e) => (urlInput = e.currentTarget.value)}
-            on:blur={() => applyUrlInputRaw(urlInput)}
-            placeholder="Строка подключения (URL / curl ...)"
-          />
-          <button class="primary save-meta-btn" on:click={onSaveSourceClick} disabled={!selectedId}>Сохранить</button>
         </div>
-        <div class="api-meta-row">
+        <div class="connect-row">
           <select
             value={selected?.method || 'GET'}
             on:change={(e) => mutateSelected((s) => (s.method = toHttpMethod(e.currentTarget.value)))}
@@ -1812,6 +1805,16 @@
             <option value="PATCH">Метод: PATCH</option>
             <option value="DELETE">Метод: DELETE</option>
           </select>
+          <input
+            class="rename-input"
+            value={urlInput}
+            on:input={(e) => (urlInput = e.currentTarget.value)}
+            on:blur={() => applyUrlInputRaw(urlInput)}
+            placeholder="Строка подключения (URL / curl ...)"
+          />
+          <button class="primary" on:click={() => applyUrlInputRaw(urlInput)}>Проверить</button>
+        </div>
+        <div class="api-meta-row">
           <input
             placeholder="Схема назначения"
             value={selected?.targetSchema || ''}
@@ -1841,9 +1844,6 @@
             syncApiDescriptionHeight();
           }}
         ></textarea>
-        <div class="inline-actions">
-          <button on:click={() => applyUrlInputRaw(urlInput)}>Разобрать cURL</button>
-        </div>
       </div>
     </div>
 
@@ -1946,10 +1946,11 @@
   .api-list .activeitem .row-meta { color:#64748b; }
 
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; margin-bottom:12px; }
-  .rename-row { margin-top:10px; display:grid; grid-template-columns: 5fr 12fr 3fr; gap:8px; align-items:center; }
+  .api-name-row { margin-top:10px; }
+  .api-name-readonly { width:100%; box-sizing:border-box; background:#f8fafc; color:#0f172a; }
+  .connect-row { margin-top:8px; display:grid; grid-template-columns: 200px 1fr 160px; gap:8px; align-items:center; }
   .rename-input { width:100%; box-sizing:border-box; border-radius:12px; border:1px solid #e6eaf2; padding:10px 12px; }
-  .save-meta-btn { width:100%; }
-  .api-meta-row { margin-top:8px; display:grid; grid-template-columns: 4fr 4fr 4fr auto; gap:8px; align-items:center; }
+  .api-meta-row { margin-top:8px; display:grid; grid-template-columns: 1fr 1fr auto; gap:8px; align-items:center; }
   .api-active { display:flex; align-items:center; gap:6px; white-space:nowrap; }
   .table-desc-input { width:100%; box-sizing:border-box; margin-top:8px; border-radius:12px; border:1px solid #e6eaf2; padding:10px 12px; min-height:56px; resize:none; overflow:hidden; }
   .subcard { margin-top:10px; border:1px dashed #e6eaf2; border-radius:14px; padding:10px; }
@@ -1961,7 +1962,7 @@
   .method-url { display:grid; grid-template-columns: 180px 1fr 180px; gap:10px; align-items:center; }
   .method-url select, .method-url input, .method-url button { height:42px; }
   @media (max-width: 1100px) { .method-url { grid-template-columns: 1fr; } }
-  @media (max-width: 900px) { .rename-row, .api-meta-row { grid-template-columns: 1fr; } }
+  @media (max-width: 900px) { .connect-row, .api-meta-row { grid-template-columns: 1fr; } }
   .auth-split { display:grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap:12px; align-items:start; }
   .auth-left, .auth-right { min-width: 0; }
   .auth-top { display:grid; grid-template-columns: 1fr minmax(170px, 26%) 44px; gap:10px; align-items:center; }
