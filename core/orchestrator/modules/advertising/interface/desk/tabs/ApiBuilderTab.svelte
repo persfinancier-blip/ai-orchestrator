@@ -18,10 +18,13 @@
     headersJson: string;
     queryJson: string;
     bodyJson: string;
-    targetSchema: string;
-    targetTable: string;
+    responseTargets: Array<{
+      id: string;
+      schema: string;
+      table: string;
+      fields: Array<{ id: string; responsePath: string; targetField: string }>;
+    }>;
     description: string;
-    isActive: boolean;
     exampleRequest: string;
   };
 
@@ -123,10 +126,8 @@
       headersJson: '',
       queryJson: '',
       bodyJson: '',
-      targetSchema: '',
-      targetTable: '',
+      responseTargets: [],
       description: '',
-      isActive: true,
       exampleRequest: ''
     };
   }
@@ -138,6 +139,33 @@
 
     const mapping = tryObj(row?.mapping_json);
     const legacy = tryObj(mapping?.source ?? mapping?.config ?? mapping?.payload);
+    const parsedTargets = Array.isArray(mapping?.response_targets) ? mapping.response_targets : [];
+    const normalizedTargets = parsedTargets
+      .map((t: any) => ({
+        id: uid(),
+        schema: String(t?.schema || ''),
+        table: String(t?.table || ''),
+        fields: Array.isArray(t?.fields)
+          ? t.fields.map((f: any) => ({
+              id: uid(),
+              responsePath: String(f?.responsePath || ''),
+              targetField: String(f?.targetField || '')
+            }))
+          : []
+      }))
+      .filter((t: any) => t.schema || t.table || t.fields.length);
+    if (!normalizedTargets.length) {
+      const fallbackSchema = String(row?.target_schema || legacy?.targetSchema || '');
+      const fallbackTable = String(row?.target_table || legacy?.targetTable || '');
+      if (fallbackSchema || fallbackTable) {
+        normalizedTargets.push({
+          id: uid(),
+          schema: fallbackSchema,
+          table: fallbackTable,
+          fields: [{ id: uid(), responsePath: '', targetField: '' }]
+        });
+      }
+    }
 
     return {
       ...d,
@@ -150,15 +178,14 @@
       headersJson: toPrettyJson(tryObj(row?.headers_json || legacy?.headers_json || legacy?.headersJson || legacy?.headers)),
       queryJson: toPrettyJson(tryObj(row?.query_json || legacy?.query_json || legacy?.queryJson || legacy?.query || legacy?.params)),
       bodyJson: toPrettyJson(tryObj(row?.body_json || legacy?.body_json || legacy?.bodyJson || legacy?.body || legacy?.data)),
-      targetSchema: String(row?.target_schema || legacy?.targetSchema || ''),
-      targetTable: String(row?.target_table || legacy?.targetTable || ''),
+      responseTargets: normalizedTargets,
       description: String(row?.description || legacy?.description || ''),
-      isActive: row?.is_active === undefined ? true : Boolean(row?.is_active),
       exampleRequest: String(mapping?.exampleRequest || legacy?.exampleRequest || '')
     };
   }
 
   function toPayload(d: ApiDraft) {
+    const firstTarget = d.responseTargets.find((t) => t.schema && t.table);
     return {
       id: d.storeId || undefined,
       api_name: d.name,
@@ -169,12 +196,82 @@
       query_json: tryObj(d.queryJson),
       body_json: tryObj(d.bodyJson),
       pagination_json: {},
-      target_schema: d.targetSchema,
-      target_table: d.targetTable,
-      mapping_json: { exampleRequest: d.exampleRequest },
+      target_schema: firstTarget?.schema || '',
+      target_table: firstTarget?.table || '',
+      mapping_json: { exampleRequest: d.exampleRequest, response_targets: d.responseTargets },
       description: d.description,
-      is_active: d.isActive !== false
+      is_active: true
     };
+  }
+
+  function parseQualifiedTable(value: string): { schema: string; table: string } {
+    const [schema, table] = String(value || '').split('.');
+    return { schema: schema || '', table: table || '' };
+  }
+
+  function formatQualifiedTable(schema: string, table: string): string {
+    return schema && table ? `${schema}.${table}` : '';
+  }
+
+  function addResponseTarget() {
+    mutateSelected((d) => {
+      const firstTable = existingTables[0];
+      d.responseTargets = [
+        ...d.responseTargets,
+        {
+          id: uid(),
+          schema: firstTable?.schema_name || '',
+          table: firstTable?.table_name || '',
+          fields: [{ id: uid(), responsePath: '', targetField: '' }]
+        }
+      ];
+    });
+  }
+
+  function removeResponseTarget(targetId: string) {
+    mutateSelected((d) => {
+      d.responseTargets = d.responseTargets.filter((t) => t.id !== targetId);
+    });
+  }
+
+  function setResponseTargetTable(targetId: string, value: string) {
+    const parsed = parseQualifiedTable(value);
+    mutateSelected((d) => {
+      d.responseTargets = d.responseTargets.map((t) =>
+        t.id === targetId ? { ...t, schema: parsed.schema, table: parsed.table } : t
+      );
+    });
+  }
+
+  function addTargetField(targetId: string) {
+    mutateSelected((d) => {
+      d.responseTargets = d.responseTargets.map((t) =>
+        t.id === targetId
+          ? { ...t, fields: [...t.fields, { id: uid(), responsePath: '', targetField: '' }] }
+          : t
+      );
+    });
+  }
+
+  function removeTargetField(targetId: string, fieldId: string) {
+    mutateSelected((d) => {
+      d.responseTargets = d.responseTargets.map((t) =>
+        t.id === targetId ? { ...t, fields: t.fields.filter((f) => f.id !== fieldId) } : t
+      );
+    });
+  }
+
+  function setTargetFieldValue(targetId: string, fieldId: string, key: 'responsePath' | 'targetField', value: string) {
+    mutateSelected((d) => {
+      d.responseTargets = d.responseTargets.map((t) =>
+        t.id === targetId
+          ? {
+              ...t,
+              fields: t.fields.map((f) => (f.id === fieldId ? { ...f, [key]: value } : f))
+            }
+          : t
+      );
+    });
   }
 
   function fullUrl(d: ApiDraft) {
@@ -515,25 +612,53 @@
           <button class="primary" on:click={checkApiNow} disabled={checking}>{checking ? 'Проверка...' : 'Проверить'}</button>
         </div>
 
-        <div class="api-meta-row">
-          <input
-            placeholder="Схема назначения"
-            value={selected?.targetSchema || ''}
-            on:input={(e) => mutateSelected((d) => (d.targetSchema = e.currentTarget.value))}
-          />
-          <input
-            placeholder="Таблица назначения"
-            value={selected?.targetTable || ''}
-            on:input={(e) => mutateSelected((d) => (d.targetTable = e.currentTarget.value))}
-          />
-          <label class="api-active">
-            <input
-              type="checkbox"
-              checked={selected?.isActive !== false}
-              on:change={(e) => mutateSelected((d) => (d.isActive = Boolean(e.currentTarget.checked)))}
-            />
-            Активен
-          </label>
+        <div class="targets-wrap">
+          <div class="targets-head">
+            <div class="targets-title">Куда записывать ответ</div>
+            <button type="button" on:click={addResponseTarget}>+ Добавить таблицу</button>
+          </div>
+          {#if !(selected?.responseTargets?.length)}
+            <p class="hint">Добавьте таблицу назначения и настройте поля ответа.</p>
+          {:else}
+            <div class="targets-list">
+              {#each selected?.responseTargets || [] as t (t.id)}
+                <div class="target-card">
+                  <div class="target-top">
+                    <select
+                      value={formatQualifiedTable(t.schema, t.table)}
+                      on:change={(e) => setResponseTargetTable(t.id, e.currentTarget.value)}
+                    >
+                      <option value="">Таблица назначения</option>
+                      {#each existingTables as et}
+                        <option value={`${et.schema_name}.${et.table_name}`}>{et.schema_name}.{et.table_name}</option>
+                      {/each}
+                    </select>
+                    <button class="icon-btn danger" type="button" on:click={() => removeResponseTarget(t.id)} title="Удалить таблицу">x</button>
+                  </div>
+                  <div class="field-rows">
+                    {#each t.fields as f (f.id)}
+                      <div class="field-row">
+                        <input
+                          placeholder="Ответ (путь, например data.items[0].id)"
+                          value={f.responsePath}
+                          on:input={(e) => setTargetFieldValue(t.id, f.id, 'responsePath', e.currentTarget.value)}
+                        />
+                        <input
+                          placeholder="Поле таблицы для записи"
+                          value={f.targetField}
+                          on:input={(e) => setTargetFieldValue(t.id, f.id, 'targetField', e.currentTarget.value)}
+                        />
+                        <button class="icon-btn danger" type="button" on:click={() => removeTargetField(t.id, f.id)} title="Удалить поле">x</button>
+                      </div>
+                    {/each}
+                  </div>
+                  <div class="target-actions">
+                    <button type="button" on:click={() => addTargetField(t.id)}>+ Добавить поле</button>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
         </div>
 
         <textarea
@@ -648,8 +773,15 @@
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; }
 
   .connect-row { margin-top:10px; display:grid; grid-template-columns: 180px 1fr 150px; gap:8px; align-items:center; }
-  .api-meta-row { margin-top:8px; display:grid; grid-template-columns: 1fr 1fr auto; gap:8px; align-items:center; }
-  .api-active { display:flex; align-items:center; gap:6px; white-space:nowrap; }
+  .targets-wrap { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#f8fafc; }
+  .targets-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; flex-wrap:wrap; }
+  .targets-title { font-size:13px; font-weight:700; color:#0f172a; }
+  .targets-list { display:flex; flex-direction:column; gap:10px; }
+  .target-card { border:1px solid #e6eaf2; border-radius:12px; background:#fff; padding:8px; }
+  .target-top { display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; }
+  .field-rows { margin-top:8px; display:flex; flex-direction:column; gap:8px; }
+  .field-row { display:grid; grid-template-columns: 1fr 1fr auto; gap:8px; align-items:center; }
+  .target-actions { margin-top:8px; display:flex; justify-content:flex-end; }
   .desc { width:100%; box-sizing:border-box; margin-top:8px; min-height:56px; resize:vertical; }
   .raw-grid { display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:8px; }
 
@@ -673,6 +805,8 @@
   .api-list .activeitem .row-meta { color:#64748b; }
 
   .icon-btn { width:34px; min-width:34px; padding:6px 0; font-size:14px; text-transform:uppercase; border-color:transparent; background:transparent; color:#fff; }
+  .danger.icon-btn { color:#b91c1c; }
+  .target-card .icon-btn { color:#b91c1c; }
   .activeitem .icon-btn { color:#b91c1c; }
 
   input, select, textarea { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; outline:none; background:#fff; box-sizing:border-box; width:100%; }
@@ -682,6 +816,7 @@
   button:disabled { opacity:.6; cursor:not-allowed; }
   .primary { background:#0f172a; color:#fff; border-color:#0f172a; }
 
+  .hint { margin:0; color:#64748b; font-size:13px; }
   .alert { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #f3c0c0; background: #fff5f5; }
   .alert-title { font-weight: 700; margin-bottom: 6px; }
   .okbox { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #bbf7d0; background: #f0fdf4; color:#166534; }
