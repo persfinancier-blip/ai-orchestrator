@@ -812,9 +812,9 @@
               <table class="compare-table">
                 <thead>
                   <tr>
-                    <th colspan="3">v{compareTop?.version ?? '-'}</th>
+                    <th colspan="3"></th>
                     <th class="split-cell"></th>
-                    <th colspan="3">v{compareBottom?.version ?? '-'}</th>
+                    <th colspan="3"></th>
                   </tr>
                   <tr>
                     <th>Колонка</th><th>Тип</th><th>Описание</th>
@@ -1182,7 +1182,7 @@
   .compare-table { margin-top:10px; width:100%; border-collapse:collapse; min-width:0; table-layout:fixed; }
   .compare-table th, .compare-table td { border-bottom:1px solid #eef2f7; padding:8px; font-size:12px; }
   .compare-table th { position:static; background:transparent; }
-  .missing-cell { background:#f1f5f9; color:#94a3b8; }
+  .missing-cell { color:#94a3b8; }
   .split-cell { width:14px; min-width:14px; padding:0 !important; border-bottom:0 !important; background:#fff !important; }
 
   .preview { margin-top: 10px; overflow:auto; border:1px solid #e6eaf2; border-radius:16px; }
