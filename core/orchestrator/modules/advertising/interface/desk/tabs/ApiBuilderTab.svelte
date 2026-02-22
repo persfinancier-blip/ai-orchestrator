@@ -67,6 +67,12 @@
   let responseJson: any = null;
   let responseIsJson = false;
   let responseViewMode: 'tree' | 'raw' = 'tree';
+  let exampleJson: any = null;
+  let exampleIsJson = false;
+  let exampleViewMode: 'tree' | 'raw' = 'raw';
+  let myPreviewJson: any = null;
+  let myPreviewIsJson = false;
+  let myPreviewViewMode: 'tree' | 'raw' = 'tree';
   let selected: ApiDraft | null = null;
   let myApiPreview = '';
   let lastSelectedRef = '';
@@ -910,6 +916,36 @@
       }
     }
   }
+  $: {
+    const txt = unwrapCodeFence(String(selected?.exampleRequest || '')).trim();
+    if (!txt) {
+      exampleIsJson = false;
+      exampleJson = null;
+    } else {
+      try {
+        exampleJson = JSON.parse(txt);
+        exampleIsJson = true;
+      } catch {
+        exampleJson = null;
+        exampleIsJson = false;
+      }
+    }
+  }
+  $: {
+    const txt = String(myApiPreview || '').trim();
+    if (!txt) {
+      myPreviewIsJson = false;
+      myPreviewJson = null;
+    } else {
+      try {
+        myPreviewJson = JSON.parse(txt);
+        myPreviewIsJson = true;
+      } catch {
+        myPreviewJson = null;
+        myPreviewIsJson = false;
+      }
+    }
+  }
   $: responseText, tick().then(syncLeftTextareasHeight);
   $: selected?.exampleRequest, tick().then(syncLeftTextareasHeight);
   $: myApiPreview, tick().then(syncLeftTextareasHeight);
@@ -983,20 +1019,31 @@
         <div class="subttl template-head">
           <span>Шаблон API</span>
           <span class="template-head-actions">
+            {#if exampleIsJson}
+              <button type="button" class="view-toggle" on:click={() => (exampleViewMode = exampleViewMode === 'tree' ? 'raw' : 'tree')}>
+                {exampleViewMode === 'tree' ? 'RAW' : 'Дерево'}
+              </button>
+            {/if}
             <button class="icon-btn template-action" type="button" title="Разобрать в настройки" on:click|preventDefault|stopPropagation={onTemplateParseClick}>+</button>
             <button class="icon-btn danger template-action" type="button" title="Очистить поле" on:click|preventDefault|stopPropagation={onTemplateClearClick}>x</button>
           </span>
         </div>
-        <textarea
-          bind:this={exampleApiEl}
-          value={selected?.exampleRequest || ''}
-          on:input={(e) => {
-            mutateSelected((d) => (d.exampleRequest = e.currentTarget.value));
-            syncLeftTextareasHeight();
-            scheduleTemplateParse();
-          }}
-          placeholder="Вставьте пример API"
-        ></textarea>
+        {#if exampleIsJson && exampleViewMode === 'tree'}
+          <div class="response-tree-wrap">
+            <JsonTreeView node={exampleJson} name="template" level={0} />
+          </div>
+        {:else}
+          <textarea
+            bind:this={exampleApiEl}
+            value={selected?.exampleRequest || ''}
+            on:input={(e) => {
+              mutateSelected((d) => (d.exampleRequest = e.currentTarget.value));
+              syncLeftTextareasHeight();
+              scheduleTemplateParse();
+            }}
+            placeholder="Вставьте пример API"
+          ></textarea>
+        {/if}
         <div class="template-parse-actions">
           {#if templateParseMessage}
             <span class="template-parse-note">{templateParseMessage}</span>
@@ -1004,8 +1051,21 @@
         </div>
       </div>
       <div class="subsec">
-        <div class="subttl">Предпросмотр твоего API</div>
-        <textarea bind:this={myPreviewEl} readonly value={myApiPreview}></textarea>
+        <div class="subttl response-head">
+          <span>Предпросмотр твоего API</span>
+          {#if myPreviewIsJson}
+            <button type="button" class="view-toggle" on:click={() => (myPreviewViewMode = myPreviewViewMode === 'tree' ? 'raw' : 'tree')}>
+              {myPreviewViewMode === 'tree' ? 'RAW' : 'Дерево'}
+            </button>
+          {/if}
+        </div>
+        {#if myPreviewIsJson && myPreviewViewMode === 'tree'}
+          <div class="response-tree-wrap">
+            <JsonTreeView node={myPreviewJson} name="request" level={0} />
+          </div>
+        {:else}
+          <textarea bind:this={myPreviewEl} readonly value={myApiPreview}></textarea>
+        {/if}
       </div>
     </aside>
 
