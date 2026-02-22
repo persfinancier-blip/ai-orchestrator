@@ -60,6 +60,7 @@
   let responseText = '';
   let selected: ApiDraft | null = null;
   let myApiPreview = '';
+  let lastSelectedRef = '';
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -424,11 +425,12 @@
   }
 
   $: selected = byRef(selectedRef);
-  $: if (selected && !requestInput) {
-    requestInput = `${selected.baseUrl.replace(/\/$/, '')}${selected.path.startsWith('/') ? selected.path : `/${selected.path}`}`;
-  }
-  $: if (selected) {
-    nameDraft = selected.name;
+  $: if (selectedRef !== lastSelectedRef) {
+    lastSelectedRef = selectedRef;
+    if (selected) {
+      nameDraft = selected.name;
+      requestInput = `${selected.baseUrl.replace(/\/$/, '')}${selected.path.startsWith('/') ? selected.path : `/${selected.path}`}`;
+    }
   }
   $: myApiPreview = selected
     ? JSON.stringify(
@@ -595,7 +597,15 @@
       {/if}
 
       <div class="template-controls">
-        <input class="template-name" bind:value={nameDraft} placeholder="Название API" />
+        <input
+          class="template-name"
+          value={nameDraft}
+          on:input={(e) => {
+            nameDraft = e.currentTarget.value;
+            if (selected) mutateSelected((d) => (d.name = e.currentTarget.value));
+          }}
+          placeholder="Название API"
+        />
         <div class="saved-inline-actions">
           <button on:click={addApi}>Добавить</button>
           <button on:click={saveSelected} disabled={saving || !selected}>{saving ? 'Сохранение...' : 'Сохранить'}</button>
