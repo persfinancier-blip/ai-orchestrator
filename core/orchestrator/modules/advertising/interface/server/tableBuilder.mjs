@@ -133,6 +133,10 @@ function contractsQname(config) {
   return `${qi(config.contracts_schema)}.${qi(config.contracts_table)}`;
 }
 
+function apiConfigsQname(config) {
+  return `${qi(config.api_configs_schema)}.${qi(config.api_configs_table)}`;
+}
+
 function syncProtectedSystemTables(config) {
   const next = new Set([`${SETTINGS_SCHEMA}.${SETTINGS_TABLE}`]);
   if (config?.api_configs_schema && config?.api_configs_table) {
@@ -1220,6 +1224,197 @@ tableBuilderRouter.post('/contracts/version/delete', requireDataAdmin, async (re
     return res.json({ ok: true, schema, table, version: Math.trunc(version), affected: r.rowCount || 0 });
   } catch (e) {
     return res.status(500).json({ error: 'contract_delete_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+tableBuilderRouter.get('/api-configs', requireDataAdmin, async (_req, res) => {
+  const client = await pool.connect();
+  try {
+    const config = await loadRuntimeConfig(client);
+    const qn = apiConfigsQname(config);
+    await ensureApiConfigsTable(client, config);
+    const r = await client.query(
+      `
+      SELECT
+        id,
+        api_name,
+        method,
+        base_url,
+        path,
+        headers_json,
+        query_json,
+        body_json,
+        pagination_json,
+        target_schema,
+        target_table,
+        mapping_json,
+        description,
+        is_active,
+        updated_at,
+        updated_by
+      FROM ${qn}
+      WHERE is_active = true
+      ORDER BY updated_at DESC, id DESC
+      `
+    );
+    return res.json({ api_configs: r.rows || [] });
+  } catch (e) {
+    return res.status(500).json({ error: 'api_configs_list_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+tableBuilderRouter.post('/api-configs/upsert', requireDataAdmin, async (req, res) => {
+  const idRaw = req.body?.id;
+  const id = Number(idRaw || 0);
+  const api_name = String(req.body?.api_name || '').trim();
+  const method = String(req.body?.method || 'GET').trim().toUpperCase();
+  const base_url = String(req.body?.base_url || '').trim();
+  const path = String(req.body?.path || '').trim();
+  const target_schema = String(req.body?.target_schema || '').trim();
+  const target_table = String(req.body?.target_table || '').trim();
+  const description = String(req.body?.description || '').trim();
+  const is_active = req.body?.is_active === undefined ? true : Boolean(req.body?.is_active);
+  const updated_by = String(req.body?.updated_by || req.header('X-AO-ROLE') || 'ui').trim();
+
+  if (!api_name) return res.status(400).json({ error: 'bad_request', details: 'api_name is required' });
+  if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid method' });
+  }
+
+  const toJson = (v) => (v === undefined ? {} : v);
+  const headers_json = toJson(req.body?.headers_json);
+  const query_json = toJson(req.body?.query_json);
+  const body_json = toJson(req.body?.body_json);
+  const pagination_json = toJson(req.body?.pagination_json);
+  const mapping_json = toJson(req.body?.mapping_json);
+
+  const client = await pool.connect();
+  try {
+    const config = await loadRuntimeConfig(client);
+    const qn = apiConfigsQname(config);
+    await ensureApiConfigsTable(client, config);
+    const runId = `api_config_upsert_${Date.now()}`;
+    const contractName = defaultContractName(config.api_configs_schema, config.api_configs_table);
+
+    if (Number.isFinite(id) && id > 0) {
+      const r = await client.query(
+        `
+        UPDATE ${qn}
+        SET
+          api_name = $2,
+          method = $3,
+          base_url = $4,
+          path = $5,
+          headers_json = $6::jsonb,
+          query_json = $7::jsonb,
+          body_json = $8::jsonb,
+          pagination_json = $9::jsonb,
+          target_schema = $10,
+          target_table = $11,
+          mapping_json = $12::jsonb,
+          description = $13,
+          is_active = $14,
+          updated_at = now(),
+          updated_by = $15,
+          ao_source = 'api_configs_api',
+          ao_run_id = $16,
+          ao_updated_at = now(),
+          ao_contract_schema = $17,
+          ao_contract_name = $18,
+          ao_contract_version = 1
+        WHERE id = $1
+        RETURNING id
+        `,
+        [
+          Math.trunc(id),
+          api_name,
+          method,
+          base_url,
+          path,
+          JSON.stringify(headers_json),
+          JSON.stringify(query_json),
+          JSON.stringify(body_json),
+          JSON.stringify(pagination_json),
+          target_schema,
+          target_table,
+          JSON.stringify(mapping_json),
+          description,
+          is_active,
+          updated_by,
+          runId,
+          config.contracts_schema,
+          contractName
+        ]
+      );
+      if (!r.rows?.length) return res.status(404).json({ error: 'not_found', details: 'api_config id not found' });
+      return res.json({ ok: true, id: Number(r.rows[0].id || 0), updated: true });
+    }
+
+    const r = await client.query(
+      `
+      INSERT INTO ${qn}
+        (api_name, method, base_url, path, headers_json, query_json, body_json, pagination_json, target_schema, target_table,
+         mapping_json, description, is_active, updated_at, updated_by,
+         ao_source, ao_run_id, ao_created_at, ao_updated_at, ao_contract_schema, ao_contract_name, ao_contract_version)
+      VALUES
+        ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11::jsonb, $12, $13, now(), $14,
+         'api_configs_api', $15, now(), now(), $16, $17, 1)
+      RETURNING id
+      `,
+      [
+        api_name,
+        method,
+        base_url,
+        path,
+        JSON.stringify(headers_json),
+        JSON.stringify(query_json),
+        JSON.stringify(body_json),
+        JSON.stringify(pagination_json),
+        target_schema,
+        target_table,
+        JSON.stringify(mapping_json),
+        description,
+        is_active,
+        updated_by,
+        runId,
+        config.contracts_schema,
+        contractName
+      ]
+    );
+    return res.json({ ok: true, id: Number(r.rows?.[0]?.id || 0), created: true });
+  } catch (e) {
+    return res.status(500).json({ error: 'api_config_upsert_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+tableBuilderRouter.post('/api-configs/delete', requireDataAdmin, async (req, res) => {
+  const id = Number(req.body?.id || 0);
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'bad_request', details: 'invalid id' });
+
+  const client = await pool.connect();
+  try {
+    const config = await loadRuntimeConfig(client);
+    const qn = apiConfigsQname(config);
+    await ensureApiConfigsTable(client, config);
+    const r = await client.query(
+      `
+      UPDATE ${qn}
+      SET is_active = false, updated_at = now(), updated_by = $2, ao_updated_at = now()
+      WHERE id = $1
+      RETURNING id
+      `,
+      [Math.trunc(id), String(req.header('X-AO-ROLE') || 'ui')]
+    );
+    if (!r.rows?.length) return res.status(404).json({ error: 'not_found', details: 'api_config id not found' });
+    return res.json({ ok: true, id: Number(r.rows[0].id || 0), deleted: true });
+  } catch (e) {
+    return res.status(500).json({ error: 'api_config_delete_failed', details: String(e?.message || e) });
   } finally {
     client.release();
   }

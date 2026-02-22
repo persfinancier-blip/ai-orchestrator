@@ -54,6 +54,7 @@
 
   type ApiSource = {
     id: string;
+    storeId?: number;
     name: string;
     baseUrl: string;
     method: HttpMethod;
@@ -82,7 +83,6 @@
     responseText?: string;
   };
 
-  const SOURCES_KEY = 'ao_api_builder_sources_v2';
   const HISTORY_KEY = 'ao_api_builder_history_v1';
   const AUTH_TEMPLATES_KEY = 'ao_api_builder_auth_templates_v1';
 
@@ -633,6 +633,71 @@
     return src;
   }
 
+  function fromDbConfigRow(row: any): ApiSource {
+    const base = defaultSource();
+    const mapping = row?.mapping_json && typeof row.mapping_json === 'object' ? row.mapping_json : {};
+    const auth = mapping?.auth && typeof mapping.auth === 'object' ? mapping.auth : {};
+    const db = mapping?.db && typeof mapping.db === 'object' ? mapping.db : {};
+    const authTemplate = mapping?.authTemplate && typeof mapping.authTemplate === 'object' ? mapping.authTemplate : {};
+    return normalizeSource({
+      ...base,
+      id: uid(),
+      storeId: Number(row?.id || 0) || undefined,
+      name: String(row?.api_name || 'API'),
+      method: toHttpMethod(String(row?.method || 'GET').toUpperCase()),
+      baseUrl: String(row?.base_url || ''),
+      path: String(row?.path || ''),
+      headersJson: JSON.stringify(row?.headers_json ?? {}, null, 2),
+      queryJson: JSON.stringify(row?.query_json ?? {}, null, 2),
+      bodyJson: JSON.stringify(row?.body_json ?? {}, null, 2),
+      pagination: { ...base.pagination, ...(row?.pagination_json || {}) },
+      auth: { ...base.auth, ...auth, apiKeyIn: toApiKeyIn(String(auth?.apiKeyIn || base.auth.apiKeyIn)) },
+      db: { ...base.db, ...db, bindings: Array.isArray(db?.bindings) ? db.bindings : [] },
+      authTemplate: {
+        ...base.authTemplate,
+        ...authTemplate,
+        fields: Array.isArray(authTemplate?.fields) ? authTemplate.fields : []
+      },
+      exampleRequest: String(mapping?.exampleRequest || ''),
+      createdAt: Date.parse(String(row?.updated_at || '')) || Date.now(),
+      updatedAt: Date.parse(String(row?.updated_at || '')) || Date.now()
+    });
+  }
+
+  function parseJsonSafeObject(text: string) {
+    if (!String(text || '').trim()) return {};
+    try {
+      const parsed = JSON.parse(text);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function toDbConfigPayload(source: ApiSource) {
+    return {
+      id: source.storeId || undefined,
+      api_name: source.name,
+      method: source.method,
+      base_url: source.baseUrl,
+      path: source.path,
+      headers_json: parseJsonSafeObject(source.headersJson),
+      query_json: parseJsonSafeObject(source.queryJson),
+      body_json: parseJsonSafeObject(source.bodyJson),
+      pagination_json: source.pagination || {},
+      target_schema: '',
+      target_table: '',
+      mapping_json: {
+        auth: source.auth,
+        db: source.db,
+        authTemplate: source.authTemplate,
+        exampleRequest: source.exampleRequest
+      },
+      description: '',
+      is_active: true
+    };
+  }
+
   function toHttpMethod(v: string): HttpMethod {
     return v === 'GET' || v === 'POST' || v === 'PUT' || v === 'PATCH' || v === 'DELETE' ? v : 'GET';
   }
@@ -653,16 +718,51 @@
     return v === 'query' ? 'query' : 'header';
   }
 
-  function loadAll() {
-    sources = [];
-    history = [];
+  let saveSourceDebounce: any = null;
 
-    if (!selectedId && sources.length) selectedId = sources[0].id;
-    loadAuthTemplates();
+  async function loadAll() {
+    err = '';
+    try {
+      const j = await apiJson<{ api_configs: any[] }>(`${apiBase}/api-configs`, { headers: headers() });
+      const rows = Array.isArray(j?.api_configs) ? j.api_configs : [];
+      sources = rows.map((r) => fromDbConfigRow(r));
+      history = [];
+      if (!selectedId && sources.length) selectedId = sources[0].id;
+      if (selectedId && !sources.some((s) => s.id === selectedId)) selectedId = sources[0]?.id || null;
+      loadAuthTemplates();
+    } catch (e: any) {
+      err = e?.message ?? String(e);
+      sources = [];
+      selectedId = null;
+    } finally {
+      // no-op
+    }
+  }
+
+  async function persistSelectedNow() {
+    const src = getSelected();
+    if (!src) return;
+    try {
+      const payload = toDbConfigPayload(src);
+      const r = await apiJson<{ id?: number }>(`${apiBase}/api-configs/upsert`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify(payload)
+      });
+      const nextId = Number(r?.id || 0);
+      if (Number.isFinite(nextId) && nextId > 0) {
+        sources = sources.map((s) => (s.id === src.id ? { ...s, storeId: nextId, updatedAt: Date.now() } : s));
+      }
+    } catch (e: any) {
+      err = e?.message ?? String(e);
+    }
   }
 
   function saveSources() {
-    // local storage disabled
+    if (saveSourceDebounce) clearTimeout(saveSourceDebounce);
+    saveSourceDebounce = setTimeout(() => {
+      persistSelectedNow();
+    }, 300);
   }
 
   function saveHistory() {
@@ -762,11 +862,23 @@
     saveSources();
   }
 
-  function deleteSelected() {
+  async function deleteSelected() {
     if (!selectedId) return;
+    const current = getSelected();
+    if (current?.storeId) {
+      try {
+        await apiJson(`${apiBase}/api-configs/delete`, {
+          method: 'POST',
+          headers: headers(),
+          body: JSON.stringify({ id: current.storeId })
+        });
+      } catch (e: any) {
+        err = e?.message ?? String(e);
+        return;
+      }
+    }
     sources = sources.filter((s) => s.id !== selectedId);
     selectedId = sources[0]?.id ?? null;
-    saveSources();
   }
 
   function addBinding() {
@@ -1269,7 +1381,7 @@
     if (authRawEl.offsetHeight < min) authRawEl.style.height = `${min}px`;
   }
 
-  loadAll();
+  void loadAll();
   $: syncEditorsFromSelected();
   $: if (selected) ensureTableSelection();
   $: if (selectedId) generatedApiPreview = buildGeneratedPreview(selected);
