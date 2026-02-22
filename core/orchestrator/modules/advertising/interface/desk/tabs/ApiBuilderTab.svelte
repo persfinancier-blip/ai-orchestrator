@@ -110,6 +110,34 @@
     return JSON.parse(s);
   }
 
+  function parseLooseObject(text: string): Record<string, any> {
+    const src = String(text || '').trim();
+    if (!src) return {};
+    const normalized = src.replace(/^\s*\{/, '').replace(/\}\s*$/, '').trim();
+    if (!normalized) return {};
+
+    const out: Record<string, any> = {};
+    const parts = normalized
+      .split(/\r?\n|,/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+    for (const part of parts) {
+      const idx = part.indexOf(':');
+      if (idx <= 0) continue;
+      const rawKey = part.slice(0, idx).trim();
+      const rawVal = part.slice(idx + 1).trim();
+      const key = rawKey.replace(/^['"]|['"]$/g, '').trim();
+      let value = rawVal.replace(/^['"]|['"]$/g, '').trim();
+      if (!key) continue;
+      if (value === 'true') out[key] = true;
+      else if (value === 'false') out[key] = false;
+      else if (value === 'null') out[key] = null;
+      else if (/^-?\d+(?:\.\d+)?$/.test(value)) out[key] = Number(value);
+      else out[key] = value;
+    }
+    return out;
+  }
+
   function parseJsonObjectField(label: string, text: string): Record<string, any> {
     const src = String(text || '').trim();
     if (!src) return {};
@@ -117,6 +145,8 @@
     try {
       parsed = JSON.parse(src);
     } catch {
+      const loose = parseLooseObject(src);
+      if (Object.keys(loose).length) return loose;
       throw new Error(`${label}: некорректный JSON`);
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -136,11 +166,10 @@
   }
 
   function safePreviewObj(text: string): any {
-    const src = String(text || '').trim();
-    if (!src) return {};
     try {
-      return JSON.parse(src);
+      return parseJsonObjectField('preview', text);
     } catch {
+      const src = String(text || '').trim();
       return { __raw: src, __error: 'Некорректный JSON' };
     }
   }
@@ -331,7 +360,7 @@
     const path = String(d.path || '').trim() || '/';
     const p = path.startsWith('/') ? path : `/${path}`;
     const u = new URL(`${base.replace(/\/$/, '')}${p}`);
-    const q = parseObj(d.queryJson);
+    const q = parseJsonObjectField('Query JSON', d.queryJson);
     for (const [k, v] of Object.entries(q || {})) u.searchParams.set(k, String(v));
     return u.toString();
   }
