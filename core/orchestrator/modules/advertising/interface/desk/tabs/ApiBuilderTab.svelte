@@ -858,8 +858,15 @@
       const rows = Array.isArray(j?.api_configs) ? j.api_configs : [];
       sources = rows.map((r) => fromDbConfigRow(r));
       history = [];
-      if (!selectedId && sources.length) selectedId = sources[0].id;
-      if (selectedId && !sources.some((s) => s.id === selectedId)) selectedId = sources[0]?.id || null;
+      if (!sources.length) {
+        const draft = defaultSource();
+        sources = [draft];
+        selectedId = draft.id;
+        apiNameDraft = draft.name;
+      } else {
+        if (!selectedId && sources.length) selectedId = sources[0].id;
+        if (selectedId && !sources.some((s) => s.id === selectedId)) selectedId = sources[0]?.id || null;
+      }
       loadAuthTemplates();
     } catch (e: any) {
       err = e?.message ?? String(e);
