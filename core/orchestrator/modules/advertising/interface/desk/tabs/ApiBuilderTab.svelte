@@ -1897,9 +1897,6 @@
             }
           >
             OAuth2 (client_credentials)
-            {#if selected?.authMode === AUTH_MODE_OAUTH2}
-              <span class="auth-indicator"></span>
-            {/if}
           </button>
         </div>
         {#if selected?.authMode === 'oauth2_client_credentials'}
