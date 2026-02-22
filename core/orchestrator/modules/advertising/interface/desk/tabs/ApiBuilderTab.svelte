@@ -58,8 +58,7 @@
 
   const AUTH_OPTIONS = [
     { value: 'manual', label: 'Ручная авторизация' },
-    { value: 'oauth2_client_credentials', label: 'OAuth2 (client_credentials)' },
-    { value: 'custom', label: 'Своя схема' }
+    { value: 'oauth2_client_credentials', label: 'OAuth2 (client_credentials)' }
   ];
 
   const PAGINATION_STRATEGIES = [
@@ -1879,62 +1878,6 @@
               </button>
             {/if}
           </div>
-          <div class="auth-mode-panel">
-            <div class="auth-mode-row">
-              {#each AUTH_OPTIONS as option}
-                <button
-                  type="button"
-                  class="mode-pill"
-                  class:active={selected?.authMode === option.value}
-                  on:click={() => mutateSelected((d) => (d.authMode = option.value))}
-                >
-                  {option.label}
-                </button>
-              {/each}
-            </div>
-            {#if selected?.authMode === 'oauth2_client_credentials'}
-              <div class="oauth-grid">
-                <input
-                  placeholder="Token URL"
-                  value={selected?.oauth2TokenUrl || ''}
-                  on:input={(e) => mutateSelected((d) => (d.oauth2TokenUrl = e.currentTarget.value))}
-                />
-                <input
-                  placeholder="Client ID"
-                  value={selected?.oauth2ClientId || ''}
-                  on:input={(e) => mutateSelected((d) => (d.oauth2ClientId = e.currentTarget.value))}
-                />
-                <input
-                  placeholder="Client Secret"
-                  value={selected?.oauth2ClientSecret || ''}
-                  on:input={(e) => mutateSelected((d) => (d.oauth2ClientSecret = e.currentTarget.value))}
-                />
-                <input
-                  placeholder="Grant type"
-                  value={selected?.oauth2GrantType || ''}
-                  on:input={(e) => mutateSelected((d) => (d.oauth2GrantType = e.currentTarget.value))}
-                />
-                <input
-                  placeholder="Поле токена"
-                  value={selected?.oauth2TokenField || ''}
-                  on:input={(e) => mutateSelected((d) => (d.oauth2TokenField = e.currentTarget.value))}
-                />
-                <input
-                  placeholder="Поле expires_in"
-                  value={selected?.oauth2ExpiresField || ''}
-                  on:input={(e) => mutateSelected((d) => (d.oauth2ExpiresField = e.currentTarget.value))}
-                />
-                <input
-                  placeholder="Поле token_type"
-                  value={selected?.oauth2TokenTypeField || ''}
-                  on:input={(e) => mutateSelected((d) => (d.oauth2TokenTypeField = e.currentTarget.value))}
-                />
-              </div>
-              <p class="hint">OAuth2: конструктор автоматически получает токен и подставляет заголовок Authorization.</p>
-            {:else if selected?.authMode === 'custom'}
-              <p class="hint">Свой способ: вставь любой JSON в поле ниже и используй его как основную авторизацию.</p>
-            {/if}
-          </div>
           {#if authJsonValid && authViewMode === 'tree'}
             <div class="response-tree-wrap"><JsonTreeView node={authJsonTree} name="auth" level={0} /></div>
           {:else}
@@ -1945,6 +1888,58 @@
             ></textarea>
           {/if}
         </label>
+        <div class="auth-mode-buttons">
+          {#each AUTH_OPTIONS as option}
+            <button
+              type="button"
+              class="view-toggle auth-mode-btn"
+              class:active={selected?.authMode === option.value}
+              on:click={() => mutateSelected((d) => (d.authMode = option.value))}
+            >
+              {option.label}
+            </button>
+          {/each}
+        </div>
+        {#if selected?.authMode === 'oauth2_client_credentials'}
+          <div class="oauth-grid">
+            <input
+              placeholder="Token URL"
+              value={selected?.oauth2TokenUrl || ''}
+              on:input={(e) => mutateSelected((d) => (d.oauth2TokenUrl = e.currentTarget.value))}
+            />
+            <input
+              placeholder="Client ID"
+              value={selected?.oauth2ClientId || ''}
+              on:input={(e) => mutateSelected((d) => (d.oauth2ClientId = e.currentTarget.value))}
+            />
+            <input
+              placeholder="Client Secret"
+              value={selected?.oauth2ClientSecret || ''}
+              on:input={(e) => mutateSelected((d) => (d.oauth2ClientSecret = e.currentTarget.value))}
+            />
+            <input
+              placeholder="Grant type"
+              value={selected?.oauth2GrantType || ''}
+              on:input={(e) => mutateSelected((d) => (d.oauth2GrantType = e.currentTarget.value))}
+            />
+            <input
+              placeholder="Поле токена"
+              value={selected?.oauth2TokenField || ''}
+              on:input={(e) => mutateSelected((d) => (d.oauth2TokenField = e.currentTarget.value))}
+            />
+            <input
+              placeholder="Поле expires_in"
+              value={selected?.oauth2ExpiresField || ''}
+              on:input={(e) => mutateSelected((d) => (d.oauth2ExpiresField = e.currentTarget.value))}
+            />
+            <input
+              placeholder="Поле token_type"
+              value={selected?.oauth2TokenTypeField || ''}
+              on:input={(e) => mutateSelected((d) => (d.oauth2TokenTypeField = e.currentTarget.value))}
+            />
+          </div>
+          <p class="hint">OAuth2: конструктор автоматически получает токен и подставляет заголовок Authorization.</p>
+        {/if}
 
         <div class="raw-grid">
           <label>
@@ -2412,14 +2407,13 @@
   .okbox { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #bbf7d0; background: #f0fdf4; color:#166534; }
   pre { margin:0; white-space: pre-wrap; word-break: break-word; }
 
-  .auth-mode-panel { margin-bottom: 10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#f8fafc; }
-  .auth-mode-row { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px; }
-  .mode-pill { border:1px solid #e2e8f0; background:#fff; color:#0f172a; padding:6px 12px; border-radius:999px; cursor:pointer; font-size:12px; font-weight:500; }
-  .mode-pill.active { background:#0f172a; color:#fff; border-color:#0f172a; }
+  .auth-mode-buttons { margin:12px 0 10px; display:flex; flex-wrap:wrap; gap:8px; }
+  .auth-mode-btn { border-color:#0f172a; background:#0f172a; color:#fff; padding:6px 12px; font-size:12px; font-weight:500; }
+  .auth-mode-btn.active { background:#fff; color:#0f172a; }
+  .auth-mode-btn:focus-visible { outline:2px solid #0f172a; }
   .oauth-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:8px; }
   .oauth-grid input { margin:0; }
-  .auth-mode-panel .hint { margin:0; }
-
+  .auth-mode-buttons + .oauth-grid + .hint { margin-top:0; }
   .pagination-box { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#f8fafc; }
   .pagination-toggle { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#475569; cursor:pointer; }
   .pagination-toggle input { width:auto; }
