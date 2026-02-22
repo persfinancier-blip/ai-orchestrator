@@ -21,6 +21,7 @@
     authJson: string;
     queryJson: string;
     bodyJson: string;
+    pickedPaths: string[];
     responseTargets: Array<{
       id: string;
       schema: string;
@@ -102,6 +103,7 @@
   let templateParseMessage = '';
   let templateParseTimer: ReturnType<typeof setTimeout> | null = null;
   let activeResponseFieldRef = '';
+  let columnsCache: Record<string, string[]> = {};
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -229,6 +231,7 @@
       authJson: '',
       queryJson: '',
       bodyJson: '',
+      pickedPaths: [],
       responseTargets: [],
       description: '',
       exampleRequest: ''
@@ -282,6 +285,7 @@
       authJson: toPrettyJson(tryObj(mapping?.auth_json || legacy?.auth_json || legacy?.authJson)),
       queryJson: toPrettyJson(tryObj(row?.query_json || legacy?.query_json || legacy?.queryJson || legacy?.query || legacy?.params)),
       bodyJson: toPrettyJson(tryObj(row?.body_json || legacy?.body_json || legacy?.bodyJson || legacy?.body || legacy?.data)),
+      pickedPaths: Array.isArray(mapping?.picked_paths) ? mapping.picked_paths.map((x: any) => String(x || '').trim()).filter(Boolean) : [],
       responseTargets: normalizedTargets,
       description: String(row?.description || legacy?.description || ''),
       exampleRequest: String(mapping?.exampleRequest || legacy?.exampleRequest || '')
@@ -305,7 +309,12 @@
       pagination_json: {},
       target_schema: firstTarget?.schema || '',
       target_table: firstTarget?.table || '',
-      mapping_json: { exampleRequest: d.exampleRequest, response_targets: d.responseTargets, auth_json: parsed?.authJson ?? tryObj(d.authJson) },
+      mapping_json: {
+        exampleRequest: d.exampleRequest,
+        response_targets: d.responseTargets,
+        picked_paths: d.pickedPaths,
+        auth_json: parsed?.authJson ?? tryObj(d.authJson)
+      },
       description: d.description,
       is_active: true
     };
@@ -318,6 +327,109 @@
 
   function formatQualifiedTable(schema: string, table: string): string {
     return schema && table ? `${schema}.${table}` : '';
+  }
+
+  function tableCacheKey(schema: string, table: string) {
+    return `${schema}.${table}`;
+  }
+
+  function mappingRowsOf(d: ApiDraft | null) {
+    if (!d) return [] as Array<{ targetId: string; fieldId: string; schema: string; table: string; responsePath: string; targetField: string }>;
+    const rows: Array<{ targetId: string; fieldId: string; schema: string; table: string; responsePath: string; targetField: string }> = [];
+    for (const t of d.responseTargets) {
+      for (const f of t.fields) {
+        rows.push({
+          targetId: t.id,
+          fieldId: f.id,
+          schema: t.schema,
+          table: t.table,
+          responsePath: f.responsePath,
+          targetField: f.targetField
+        });
+      }
+    }
+    return rows;
+  }
+
+  async function ensureColumnsFor(schema: string, table: string) {
+    if (!schema || !table) return;
+    const key = tableCacheKey(schema, table);
+    if (Array.isArray(columnsCache[key])) return;
+    try {
+      const j = await apiJson<{ columns: Array<{ name: string }> }>(
+        `${apiBase}/columns?schema=${encodeURIComponent(schema)}&table=${encodeURIComponent(table)}`,
+        { headers: headers() }
+      );
+      const cols = Array.isArray(j?.columns) ? j.columns.map((c) => String(c?.name || '').trim()).filter(Boolean) : [];
+      columnsCache = { ...columnsCache, [key]: cols };
+    } catch {
+      columnsCache = { ...columnsCache, [key]: [] };
+    }
+  }
+
+  function columnOptionsFor(schema: string, table: string) {
+    return columnsCache[tableCacheKey(schema, table)] || [];
+  }
+
+  function addMappingRow() {
+    mutateSelected((d) => {
+      const firstTable = existingTables[0];
+      d.responseTargets = [
+        ...d.responseTargets,
+        {
+          id: uid(),
+          schema: firstTable?.schema_name || '',
+          table: firstTable?.table_name || '',
+          fields: [{ id: uid(), responsePath: '', targetField: '' }]
+        }
+      ];
+    });
+  }
+
+  function removeMappingRow(targetId: string, fieldId: string) {
+    mutateSelected((d) => {
+      d.responseTargets = d.responseTargets
+        .map((t) => (t.id === targetId ? { ...t, fields: t.fields.filter((f) => f.id !== fieldId) } : t))
+        .filter((t) => t.fields.length > 0);
+    });
+  }
+
+  async function setMappingRowTable(targetId: string, value: string) {
+    const parsed = parseQualifiedTable(value);
+    mutateSelected((d) => {
+      d.responseTargets = d.responseTargets.map((t) =>
+        t.id === targetId ? { ...t, schema: parsed.schema, table: parsed.table } : t
+      );
+    });
+    await ensureColumnsFor(parsed.schema, parsed.table);
+  }
+
+  function setMappingRowResponsePath(targetId: string, fieldId: string, value: string) {
+    setTargetFieldValue(targetId, fieldId, 'responsePath', value);
+  }
+
+  function setMappingRowColumn(targetId: string, fieldId: string, value: string) {
+    setTargetFieldValue(targetId, fieldId, 'targetField', value);
+  }
+
+  function removePickedPath(path: string) {
+    mutateSelected((d) => {
+      d.pickedPaths = d.pickedPaths.filter((x) => x !== path);
+    });
+  }
+
+  function onPathChipDragStart(event: DragEvent, path: string) {
+    if (!event.dataTransfer) return;
+    event.dataTransfer.setData('text/plain', path);
+    event.dataTransfer.effectAllowed = 'copy';
+  }
+
+  function dropPathToMapping(event: DragEvent, targetId: string, fieldId: string) {
+    event.preventDefault();
+    const path = String(event.dataTransfer?.getData('text/plain') || '').trim();
+    if (!path) return;
+    setActiveResponseField(targetId, fieldId);
+    setMappingRowResponsePath(targetId, fieldId, path);
   }
 
   function addResponseTarget() {
@@ -392,6 +504,9 @@
   function applyPickedResponsePath(rawPath: string) {
     const path = String(rawPath || '').trim();
     if (!path || !selected) return;
+    mutateSelected((d) => {
+      if (!d.pickedPaths.includes(path)) d.pickedPaths = [...d.pickedPaths, path];
+    });
 
     const [activeTargetId, activeFieldId] = String(activeResponseFieldRef || '').split(':');
     if (activeTargetId && activeFieldId) {
@@ -1051,6 +1166,7 @@
       requestInput = `${selected.baseUrl.replace(/\/$/, '')}${selected.path.startsWith('/') ? selected.path : `/${selected.path}`}`;
       myPreviewDirty = false;
       myPreviewApplyMessage = '';
+      activeResponseFieldRef = '';
     }
   }
   $: myApiPreview = selected
@@ -1187,6 +1303,12 @@
   $: selected?.headersJson, tick().then(syncMainTextareasHeight);
   $: selected?.queryJson, tick().then(syncMainTextareasHeight);
   $: selected?.bodyJson, tick().then(syncMainTextareasHeight);
+  $: {
+    const rows = mappingRowsOf(selected);
+    for (const row of rows) {
+      void ensureColumnsFor(row.schema, row.table);
+    }
+  }
   $: authViewMode, tick().then(syncMainTextareasHeight);
   $: headersViewMode, tick().then(syncMainTextareasHeight);
   $: queryViewMode, tick().then(syncMainTextareasHeight);
@@ -1434,54 +1556,72 @@
         <div class="targets-wrap">
           <div class="targets-head">
             <div class="targets-title">Куда записывать ответ</div>
-            <button type="button" on:click={addResponseTarget}>+ Добавить таблицу</button>
+            <button type="button" on:click={addMappingRow}>+ Добавить сопоставление</button>
           </div>
-          {#if !(selected?.responseTargets?.length)}
-            <p class="hint">Добавьте таблицу назначения и настройте поля ответа.</p>
-          {:else}
-            <div class="targets-list">
-              {#each selected?.responseTargets || [] as t (t.id)}
-                <div class="target-card">
-                  <div class="target-top">
+          <div class="crumbs-panel">
+            <div class="crumbs-title">Витрина</div>
+            {#if !(selected?.pickedPaths?.length)}
+              <p class="hint">Отметь узлы в дереве ответа, они появятся здесь.</p>
+            {:else}
+              <div class="crumbs-list">
+                {#each selected?.pickedPaths || [] as pth (pth)}
+                  <div class="crumb-chip" draggable="true" on:dragstart={(e) => onPathChipDragStart(e, pth)}>
+                    <button type="button" class="chip-path" title="Подставить в активное поле" on:click={() => applyPickedResponsePath(pth)}>{pth}</button>
+                    <button type="button" class="chip-remove" title="Убрать из витрины" on:click={() => removePickedPath(pth)}>x</button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+
+          <div class="mapping-panel">
+            <div class="mapping-head">
+              <span>Сопоставление</span>
+              <span class="mapping-head-right">Ответ API | Таблица | Колонка</span>
+            </div>
+            {#if !mappingRowsOf(selected).length}
+              <p class="hint">Добавь сопоставление и укажи куда писать данные.</p>
+            {:else}
+              <div class="mapping-list">
+                {#each mappingRowsOf(selected) as m (`${m.targetId}:${m.fieldId}`)}
+                  <div class="map-row" class:active-map={isActiveResponseField(m.targetId, m.fieldId)}>
+                    <input
+                      placeholder="Ответ API (путь)"
+                      value={m.responsePath}
+                      on:focus={() => setActiveResponseField(m.targetId, m.fieldId)}
+                      on:click={() => setActiveResponseField(m.targetId, m.fieldId)}
+                      on:dragover|preventDefault
+                      on:drop={(e) => dropPathToMapping(e, m.targetId, m.fieldId)}
+                      on:input={(e) => setMappingRowResponsePath(m.targetId, m.fieldId, e.currentTarget.value)}
+                    />
                     <select
-                      value={formatQualifiedTable(t.schema, t.table)}
-                      on:change={(e) => setResponseTargetTable(t.id, e.currentTarget.value)}
+                      value={formatQualifiedTable(m.schema, m.table)}
+                      on:change={(e) => setMappingRowTable(m.targetId, e.currentTarget.value)}
                     >
-                      <option value="">Таблица назначения</option>
+                      <option value="">Таблица</option>
                       {#each existingTables as et}
                         <option value={`${et.schema_name}.${et.table_name}`}>{et.schema_name}.{et.table_name}</option>
                       {/each}
                     </select>
-                    <button class="icon-btn danger" type="button" on:click={() => removeResponseTarget(t.id)} title="Удалить таблицу">x</button>
+                    <input
+                      list={`cols_${m.targetId}_${m.fieldId}`}
+                      placeholder="Колонка"
+                      value={m.targetField}
+                      on:focus={() => setActiveResponseField(m.targetId, m.fieldId)}
+                      on:click={() => setActiveResponseField(m.targetId, m.fieldId)}
+                      on:input={(e) => setMappingRowColumn(m.targetId, m.fieldId, e.currentTarget.value)}
+                    />
+                    <datalist id={`cols_${m.targetId}_${m.fieldId}`}>
+                      {#each columnOptionsFor(m.schema, m.table) as col}
+                        <option value={col}></option>
+                      {/each}
+                    </datalist>
+                    <button class="icon-btn danger" type="button" on:click={() => removeMappingRow(m.targetId, m.fieldId)} title="Удалить сопоставление">x</button>
                   </div>
-                    <div class="field-rows">
-                      {#each t.fields as f (f.id)}
-                      <div class="field-row" class:active-map={isActiveResponseField(t.id, f.id)}>
-                        <input
-                          placeholder="Ответ (путь, например data.items[0].id)"
-                          value={f.responsePath}
-                          on:focus={() => setActiveResponseField(t.id, f.id)}
-                          on:click={() => setActiveResponseField(t.id, f.id)}
-                          on:input={(e) => setTargetFieldValue(t.id, f.id, 'responsePath', e.currentTarget.value)}
-                        />
-                        <input
-                          placeholder="Поле таблицы для записи"
-                          value={f.targetField}
-                          on:focus={() => setActiveResponseField(t.id, f.id)}
-                          on:click={() => setActiveResponseField(t.id, f.id)}
-                          on:input={(e) => setTargetFieldValue(t.id, f.id, 'targetField', e.currentTarget.value)}
-                        />
-                        <button class="icon-btn danger" type="button" on:click={() => removeTargetField(t.id, f.id)} title="Удалить поле">x</button>
-                      </div>
-                    {/each}
-                  </div>
-                  <div class="target-actions">
-                    <button type="button" on:click={() => addTargetField(t.id)}>+ Добавить поле</button>
-                  </div>
-                </div>
-              {/each}
-            </div>
-          {/if}
+                {/each}
+              </div>
+            {/if}
+          </div>
         </div>
       </div>
     </div>
@@ -1586,18 +1726,18 @@
   .targets-wrap { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:transparent; }
   .targets-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; flex-wrap:wrap; }
   .targets-title { font-size:13px; font-weight:700; color:#0f172a; }
-  .targets-list { display:flex; flex-direction:column; gap:10px; }
-  .target-card { border:1px solid #e6eaf2; border-radius:12px; background:#fff; padding:8px; }
-  .target-top { display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; }
-  .field-rows { margin-top:8px; display:flex; flex-direction:column; gap:8px; }
-  .field-row { display:grid; grid-template-columns: 1fr 1fr auto; gap:8px; align-items:center; }
-  .field-row.active-map {
-    border: 1px solid #cbd5e1;
-    border-radius: 10px;
-    padding: 6px;
-    background: #f8fafc;
-  }
-  .target-actions { margin-top:8px; display:flex; justify-content:flex-end; }
+  .crumbs-panel { border:1px dashed #dbe3ef; border-radius:12px; padding:8px; background:#fff; margin-bottom:10px; }
+  .crumbs-title { font-size:12px; font-weight:600; color:#334155; margin-bottom:6px; }
+  .crumbs-list { display:flex; flex-wrap:wrap; gap:6px; }
+  .crumb-chip { display:inline-flex; align-items:center; gap:4px; border:1px solid #e2e8f0; border-radius:999px; background:#f8fafc; padding:3px 6px; max-width:100%; }
+  .chip-path { border:0; background:transparent; color:#0f172a; padding:0; font-size:11px; max-width:420px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .chip-remove { border:0; background:transparent; color:#b91c1c; padding:0 2px; font-size:12px; line-height:1; }
+  .mapping-panel { border:1px solid #e6eaf2; border-radius:12px; background:#fff; padding:8px; }
+  .mapping-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+  .mapping-head-right { font-size:11px; color:#64748b; }
+  .mapping-list { display:flex; flex-direction:column; gap:8px; }
+  .map-row { display:grid; grid-template-columns: 1.2fr 1fr 1fr auto; gap:8px; align-items:center; border:1px solid #eef2f7; border-radius:10px; padding:6px; background:#fff; }
+  .map-row.active-map { border-color:#cbd5e1; background:#f8fafc; }
   .desc { width:100%; box-sizing:border-box; margin-top:8px; min-height:56px; resize:vertical; }
   .raw-grid { display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:8px; }
 
@@ -1622,7 +1762,7 @@
 
   .icon-btn { width:34px; min-width:34px; padding:6px 0; font-size:14px; text-transform:uppercase; border-color:transparent; background:transparent; color:#fff; }
   .danger.icon-btn { color:#b91c1c; }
-  .target-card .icon-btn { color:#b91c1c; }
+  .map-row .icon-btn { color:#b91c1c; }
   .activeitem .icon-btn { color:#b91c1c; }
   .template-head .icon-btn.template-action { width:28px; min-width:28px; padding:4px 0; font-size:16px; border-color:transparent; background:transparent; color:#0f172a; }
   .template-head .icon-btn.template-action.danger { color:#b91c1c; }

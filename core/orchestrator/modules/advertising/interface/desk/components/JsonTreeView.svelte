@@ -49,7 +49,7 @@
       <span class="key">{name || 'root'}</span>
       <span class="meta">object ({Object.keys(node).length})</span>
       {#if path}
-        <button class="pick-btn" type="button" on:click|preventDefault|stopPropagation={pickCurrentPath}>добавить в поле ответа</button>
+        <button class="pick-btn" type="button" title="Добавить в поле ответа" on:click|preventDefault|stopPropagation={pickCurrentPath}>+</button>
       {/if}
     </summary>
     <div class="children">
@@ -64,7 +64,7 @@
       <span class="key">{name || 'root'}</span>
       <span class="meta">array [{node.length}]</span>
       {#if path}
-        <button class="pick-btn" type="button" on:click|preventDefault|stopPropagation={pickCurrentPath}>добавить в поле ответа</button>
+        <button class="pick-btn" type="button" title="Добавить в поле ответа" on:click|preventDefault|stopPropagation={pickCurrentPath}>+</button>
       {/if}
     </summary>
     <div class="children">
@@ -79,7 +79,7 @@
     <span class="sep">:</span>
     <span class={`val ${valueClass(node)}`}>{valueText(node)}</span>
     {#if path}
-      <button class="pick-btn" type="button" on:click|stopPropagation={pickCurrentPath}>добавить в поле ответа</button>
+      <button class="pick-btn" type="button" title="Добавить в поле ответа" on:click|stopPropagation={pickCurrentPath}>+</button>
     {/if}
   </div>
 {/if}
@@ -137,13 +137,14 @@
   }
 
   .pick-btn {
-    border: 1px solid #e2e8f0;
-    background: #fff;
-    color: #0f172a;
-    border-radius: 9px;
-    font-size: 11px;
-    line-height: 1.2;
-    padding: 2px 6px;
+    border: 0;
+    background: transparent;
+    color: #16a34a;
+    border-radius: 999px;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1;
+    padding: 0 4px;
     cursor: pointer;
   }
 
