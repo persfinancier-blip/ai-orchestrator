@@ -961,15 +961,15 @@
     }
   }
 
-  async function applySelectedSource(id: string) {
-    if (!id) return;
-    selectedId = id;
-    const src = sources.find((s) => s.id === id);
+  async function applySelectedSource(ref: string) {
+    if (!ref) return;
+    const src = resolveSource(ref);
     if (!src) {
       previewSyncError = '';
       previewApplyMessage = '';
       return;
     }
+    selectedId = src.id;
     apiNameDraft = String(src?.name || '');
     urlInput = `${src.baseUrl.replace(/\/$/, '')}${src.path.startsWith('/') ? src.path : `/${src.path}`}`;
     generatedApiPreview = buildGeneratedPreview(src);
@@ -1023,6 +1023,31 @@
 
   function getSelected(): ApiSource | null {
     return sources.find((s) => s.id === selectedId) || null;
+  }
+
+  function sourceRef(s: ApiSource): string {
+    return s.storeId ? `db:${s.storeId}` : `tmp:${s.id}`;
+  }
+
+  function resolveSource(ref: string): ApiSource | null {
+    const v = String(ref || '').trim();
+    if (!v) return null;
+    if (v.startsWith('db:')) {
+      const id = Number(v.slice(3));
+      if (Number.isFinite(id) && id > 0) {
+        return sources.find((s) => Number(s.storeId || 0) === id) || null;
+      }
+      return null;
+    }
+    if (v.startsWith('tmp:')) {
+      const localId = v.slice(4);
+      return sources.find((s) => s.id === localId) || null;
+    }
+    const asNum = Number(v);
+    if (Number.isFinite(asNum) && asNum > 0) {
+      return sources.find((s) => Number(s.storeId || 0) === asNum) || null;
+    }
+    return sources.find((s) => s.id === v) || null;
   }
 
   function sourceListTitle(s: ApiSource) {
@@ -1737,15 +1762,15 @@
               class:activeitem={s.id === selectedId}
               role="button"
               tabindex="0"
-              on:click={() => applySelectedSource(s.id)}
+              on:click={() => applySelectedSource(sourceRef(s))}
               on:keydown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
-                  applySelectedSource(s.id);
+                  applySelectedSource(sourceRef(s));
                 }
               }}
             >
-              <button type="button" class="item-button" on:click={() => applySelectedSource(s.id)}>
+              <button type="button" class="item-button" on:click={() => applySelectedSource(sourceRef(s))}>
                 <div class="row-name">{sourceListTitle(s)}</div>
                 <div class="row-meta">{s.method} {s.baseUrl}{s.path}</div>
               </button>
