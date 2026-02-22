@@ -1958,6 +1958,29 @@
         {/if}
       </div>
       <div class="subsec">
+        <div class="targets-wrap parameter-vitrina-block">
+          <div class="targets-head">
+            <div class="targets-title">Витрина параметров</div>
+            <span class="mapping-head-right">Параметр | Фильтр</span>
+          </div>
+          {#if selected?.parameterSources?.length}
+            <div class="parameter-list">
+              {#each selected.parameterSources as src (src.id)}
+                <div class="parameter-chip">
+                  <div>
+                    <div class="param-chip-title">{src.alias || `${src.table}.${src.field}`}</div>
+                    <div class="param-chip-sub">{describeFilter(src.filter)}</div>
+                  </div>
+                  <button class="chip-remove" type="button" on:click={() => removeParameterSource(src.id)}>x</button>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <p class="hint">Параметры пока не выбраны. Добавь таблицы и поля внизу.</p>
+          {/if}
+        </div>
+      </div>
+      <div class="subsec">
         <div class="subttl response-head">
           <span>Предпросмотр твоего API</span>
           <span class="inline-actions">
@@ -2766,6 +2789,7 @@
   .parameter-chip { display:flex; align-items:center; justify-content:space-between; gap:10px; border-radius:10px; border:1px solid #dbe3ef; padding:8px 10px; background:#f8fafc; }
   .param-chip-title { font-size:13px; font-weight:600; color:#0f172a; }
   .param-chip-sub { font-size:11px; color:#475569; }
+  .parameter-vitrina-block { margin-top:10px; }
   .oauth-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:8px; }
   .oauth-grid input { margin:0; }
   .auth-mode-buttons + .oauth-grid + .hint { margin-top:0; }
