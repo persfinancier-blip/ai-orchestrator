@@ -104,6 +104,9 @@
   let templateParseTimer: ReturnType<typeof setTimeout> | null = null;
   let activeResponseFieldRef = '';
   let columnsCache: Record<string, string[]> = {};
+  let responsePathOptions: string[] = [];
+  let responsePathPickerOpen = false;
+  let responsePathPick = '';
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -416,6 +419,36 @@
     mutateSelected((d) => {
       d.pickedPaths = d.pickedPaths.filter((x) => x !== path);
     });
+  }
+
+  function collectResponsePaths(node: any, base: string, out: string[]) {
+    if (out.length >= 5000) return;
+    if (node && typeof node === 'object') {
+      if (base) out.push(base);
+      if (Array.isArray(node)) {
+        node.forEach((v, i) => {
+          const next = base ? `${base}[${i}]` : `[${i}]`;
+          collectResponsePaths(v, next, out);
+        });
+        return;
+      }
+      Object.entries(node).forEach(([k, v]) => {
+        const next = base ? `${base}.${k}` : k;
+        collectResponsePaths(v, next, out);
+      });
+      return;
+    }
+    if (base) out.push(base);
+  }
+
+  function addPickedPathFromPicker() {
+    const path = String(responsePathPick || '').trim();
+    if (!path) return;
+    mutateSelected((d) => {
+      if (!d.pickedPaths.includes(path)) d.pickedPaths = [...d.pickedPaths, path];
+    });
+    responsePathPickerOpen = false;
+    ok = 'Путь добавлен в витрину';
   }
 
   function onPathChipDragStart(event: DragEvent, path: string) {
@@ -1202,6 +1235,14 @@
     }
   }
   $: {
+    const out: string[] = [];
+    if (responseIsJson) collectResponsePaths(responseJson, '', out);
+    responsePathOptions = [...new Set(out)].filter(Boolean);
+    if (!responsePathOptions.includes(responsePathPick)) {
+      responsePathPick = responsePathOptions[0] || '';
+    }
+  }
+  $: {
     const txt = unwrapCodeFence(String(selected?.exampleRequest || '')).trim();
     if (!txt) {
       exampleIsJson = false;
@@ -1556,10 +1597,22 @@
         <div class="targets-wrap">
           <div class="targets-head">
             <div class="targets-title">Куда записывать ответ</div>
-            <button type="button" on:click={addMappingRow}>+ Добавить сопоставление</button>
           </div>
           <div class="crumbs-panel">
-            <div class="crumbs-title">Витрина</div>
+            <div class="crumbs-title-row">
+              <div class="crumbs-title">Витрина</div>
+              <button class="icon-btn plus-dark" type="button" title="Добавить путь из ответа" on:click={() => (responsePathPickerOpen = !responsePathPickerOpen)}>+</button>
+            </div>
+            {#if responsePathPickerOpen}
+              <div class="crumbs-picker">
+                <select bind:value={responsePathPick}>
+                  {#each responsePathOptions as opt}
+                    <option value={opt}>{opt}</option>
+                  {/each}
+                </select>
+                <button type="button" on:click={addPickedPathFromPicker} disabled={!responsePathPick}>Добавить</button>
+              </div>
+            {/if}
             {#if !(selected?.pickedPaths?.length)}
               <p class="hint">Отметь узлы в дереве ответа, они появятся здесь.</p>
             {:else}
@@ -1621,6 +1674,9 @@
                 {/each}
               </div>
             {/if}
+            <div class="mapping-actions">
+              <button class="icon-btn plus-dark" type="button" title="Добавить сопоставление" on:click={addMappingRow}>+</button>
+            </div>
           </div>
         </div>
       </div>
@@ -1724,10 +1780,12 @@
 
   .connect-row { margin-top:10px; display:grid; grid-template-columns: 180px 1fr 150px; gap:8px; align-items:center; }
   .targets-wrap { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:transparent; }
-  .targets-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; flex-wrap:wrap; }
+  .targets-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
   .targets-title { font-size:13px; font-weight:700; color:#0f172a; }
   .crumbs-panel { border:1px dashed #dbe3ef; border-radius:12px; padding:8px; background:#fff; margin-bottom:10px; }
-  .crumbs-title { font-size:12px; font-weight:600; color:#334155; margin-bottom:6px; }
+  .crumbs-title-row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .crumbs-title { font-size:12px; font-weight:600; color:#334155; margin-bottom:0; }
+  .crumbs-picker { margin:6px 0 8px; display:grid; grid-template-columns:1fr auto; gap:8px; align-items:center; }
   .crumbs-list { display:flex; flex-wrap:wrap; gap:6px; }
   .crumb-chip { display:inline-flex; align-items:center; gap:4px; border:1px solid #e2e8f0; border-radius:999px; background:#f8fafc; padding:3px 6px; max-width:100%; }
   .chip-path { border:0; background:transparent; color:#0f172a; padding:0; font-size:11px; max-width:420px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -1738,6 +1796,7 @@
   .mapping-list { display:flex; flex-direction:column; gap:8px; }
   .map-row { display:grid; grid-template-columns: 1.2fr 1fr 1fr auto; gap:8px; align-items:center; border:1px solid #eef2f7; border-radius:10px; padding:6px; background:#fff; }
   .map-row.active-map { border-color:#cbd5e1; background:#f8fafc; }
+  .mapping-actions { margin-top:8px; display:flex; justify-content:flex-end; }
   .desc { width:100%; box-sizing:border-box; margin-top:8px; min-height:56px; resize:vertical; }
   .raw-grid { display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:8px; }
 
@@ -1762,6 +1821,7 @@
 
   .icon-btn { width:34px; min-width:34px; padding:6px 0; font-size:14px; text-transform:uppercase; border-color:transparent; background:transparent; color:#fff; }
   .danger.icon-btn { color:#b91c1c; }
+  .plus-dark.icon-btn { color:#0f172a; font-weight:700; }
   .map-row .icon-btn { color:#b91c1c; }
   .activeitem .icon-btn { color:#b91c1c; }
   .template-head .icon-btn.template-action { width:28px; min-width:28px; padding:4px 0; font-size:16px; border-color:transparent; background:transparent; color:#0f172a; }
