@@ -1,5 +1,6 @@
 ﻿<script lang="ts">
   import { tick } from 'svelte';
+  import JsonTreeView from '../components/JsonTreeView.svelte';
   export type ExistingTable = { schema_name: string; table_name: string };
   type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -63,6 +64,9 @@
   let requestInput = '';
   let responseStatus = 0;
   let responseText = '';
+  let responseJson: any = null;
+  let responseIsJson = false;
+  let responseViewMode: 'tree' | 'raw' = 'tree';
   let selected: ApiDraft | null = null;
   let myApiPreview = '';
   let lastSelectedRef = '';
@@ -891,6 +895,21 @@
         2
       )
     : '';
+  $: {
+    const txt = String(responseText || '').trim();
+    if (!txt) {
+      responseIsJson = false;
+      responseJson = null;
+    } else {
+      try {
+        responseJson = JSON.parse(txt);
+        responseIsJson = true;
+      } catch {
+        responseJson = null;
+        responseIsJson = false;
+      }
+    }
+  }
   $: responseText, tick().then(syncLeftTextareasHeight);
   $: selected?.exampleRequest, tick().then(syncLeftTextareasHeight);
   $: myApiPreview, tick().then(syncLeftTextareasHeight);
@@ -943,9 +962,22 @@
     <aside class="aside compare-aside">
       <div class="aside-title">Предпросмотр API</div>
       <div class="subsec">
-        <div class="subttl">Предпросмотр ответа</div>
+        <div class="subttl response-head">
+          <span>Предпросмотр ответа</span>
+          {#if responseIsJson}
+            <button type="button" class="view-toggle" on:click={() => (responseViewMode = responseViewMode === 'tree' ? 'raw' : 'tree')}>
+              {responseViewMode === 'tree' ? 'RAW' : 'Дерево'}
+            </button>
+          {/if}
+        </div>
         <div class="statusline">status: {responseStatus || '-'}</div>
-        <textarea bind:this={responsePreviewEl} readonly value={responseText}></textarea>
+        {#if responseIsJson && responseViewMode === 'tree'}
+          <div class="response-tree-wrap">
+            <JsonTreeView node={responseJson} name="response" level={0} />
+          </div>
+        {:else}
+          <textarea bind:this={responsePreviewEl} readonly value={responseText}></textarea>
+        {/if}
       </div>
       <div class="subsec">
         <div class="subttl template-head">
@@ -1169,6 +1201,9 @@
 
   .subsec { margin-top:10px; }
   .subttl { font-size:12px; color:#475569; margin-bottom:6px; }
+  .response-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .view-toggle { border-radius:10px; border:1px solid #e2e8f0; background:#fff; color:#0f172a; padding:4px 8px; font-size:11px; line-height:1.2; }
+  .response-tree-wrap { border:1px solid #e6eaf2; border-radius:12px; background:#fff; padding:8px; max-height:360px; overflow:auto; }
   .template-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
   .template-head-actions { display:flex; align-items:center; gap:4px; }
   .template-action {
@@ -1240,6 +1275,10 @@
   .okbox { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #bbf7d0; background: #f0fdf4; color:#166534; }
   pre { margin:0; white-space: pre-wrap; word-break: break-word; }
 </style>
+
+
+
+
 
 
 
