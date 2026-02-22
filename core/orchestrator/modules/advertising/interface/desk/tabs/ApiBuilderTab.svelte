@@ -73,6 +73,9 @@
   let myPreviewJson: any = null;
   let myPreviewIsJson = false;
   let myPreviewViewMode: 'tree' | 'raw' = 'tree';
+  let myApiPreviewDraft = '';
+  let myPreviewDirty = false;
+  let myPreviewApplyMessage = '';
   let authJsonTree: any = null;
   let authJsonValid = false;
   let authViewMode: 'tree' | 'raw' = 'raw';
@@ -408,6 +411,70 @@
         return `${selectedDraft.baseUrl}${selectedDraft.path}`;
       }
     }
+  }
+
+  function applyMyPreviewToFields() {
+    err = '';
+    myPreviewApplyMessage = '';
+    if (!selected) return;
+    const src = String(myApiPreviewDraft || '').trim();
+    if (!src) {
+      err = 'Предпросмотр API пуст';
+      return;
+    }
+    let parsed: any;
+    try {
+      parsed = JSON.parse(src);
+    } catch {
+      err = 'Предпросмотр API: некорректный JSON';
+      return;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      err = 'Предпросмотр API: ожидается JSON-объект';
+      return;
+    }
+
+    const method = parsed?.method ? toHttpMethod(String(parsed.method).toUpperCase()) : undefined;
+    const urlRaw = String(parsed?.url || '').trim();
+    const auth = parsed?.auth && typeof parsed.auth === 'object' && !Array.isArray(parsed.auth) ? parsed.auth : {};
+    const headersObj = parsed?.headers && typeof parsed.headers === 'object' && !Array.isArray(parsed.headers) ? parsed.headers : {};
+    const queryObj = parsed?.query && typeof parsed.query === 'object' && !Array.isArray(parsed.query) ? parsed.query : undefined;
+    const bodyAny = parsed?.body ?? {};
+
+    let baseUrl = selected.baseUrl;
+    let path = selected.path;
+    let queryFromUrl: Record<string, string> = {};
+    if (urlRaw) {
+      try {
+        const u = new URL(urlRaw);
+        baseUrl = u.origin;
+        path = u.pathname || '/';
+        u.searchParams.forEach((v, k) => {
+          queryFromUrl[k] = v;
+        });
+      } catch {
+        err = 'Предпросмотр API: некорректный URL';
+        return;
+      }
+    }
+    const finalQuery = queryObj ?? queryFromUrl;
+
+    mutateSelected((d) => {
+      if (method) d.method = method;
+      d.baseUrl = baseUrl;
+      d.path = path;
+      d.authJson = toPrettyJson(auth);
+      d.headersJson = toPrettyJson(headersObj);
+      d.queryJson = toPrettyJson(finalQuery);
+      d.bodyJson = toPrettyJson(bodyAny);
+    });
+
+    const next = byRef(selectedRef);
+    if (next) {
+      requestInput = `${next.baseUrl.replace(/\/$/, '')}${next.path.startsWith('/') ? next.path : `/${next.path}`}`;
+    }
+    myPreviewDirty = false;
+    myPreviewApplyMessage = 'Применено в поля';
   }
 
   function applyUrlInput(raw: string) {
@@ -897,6 +964,8 @@
     if (selected) {
       nameDraft = selected.name;
       requestInput = `${selected.baseUrl.replace(/\/$/, '')}${selected.path.startsWith('/') ? selected.path : `/${selected.path}`}`;
+      myPreviewDirty = false;
+      myPreviewApplyMessage = '';
     }
   }
   $: myApiPreview = selected
@@ -913,6 +982,9 @@
         2
       )
     : '';
+  $: if (!myPreviewDirty) {
+    myApiPreviewDraft = myApiPreview;
+  }
   $: {
     const txt = String(responseText || '').trim();
     if (!txt) {
@@ -944,7 +1016,7 @@
     }
   }
   $: {
-    const txt = String(myApiPreview || '').trim();
+    const txt = String(myApiPreviewDraft || '').trim();
     if (!txt) {
       myPreviewIsJson = false;
       myPreviewJson = null;
@@ -1020,7 +1092,7 @@
   }
   $: responseText, tick().then(syncLeftTextareasHeight);
   $: selected?.exampleRequest, tick().then(syncLeftTextareasHeight);
-  $: myApiPreview, tick().then(syncLeftTextareasHeight);
+  $: myApiPreviewDraft, tick().then(syncLeftTextareasHeight);
   $: requestInput, tick().then(syncLeftTextareasHeight);
   $: responseViewMode, tick().then(syncLeftTextareasHeight);
   $: exampleViewMode, tick().then(syncLeftTextareasHeight);
@@ -1132,18 +1204,31 @@
       <div class="subsec">
         <div class="subttl response-head">
           <span>Предпросмотр твоего API</span>
-          {#if myPreviewIsJson}
-            <button type="button" class="view-toggle" on:click={() => (myPreviewViewMode = myPreviewViewMode === 'tree' ? 'raw' : 'tree')}>
-              {myPreviewViewMode === 'tree' ? 'RAW' : 'Дерево'}
-            </button>
-          {/if}
+          <span class="inline-actions">
+            <button type="button" class="view-toggle" on:click={applyMyPreviewToFields}>Применить в поля</button>
+            {#if myPreviewIsJson}
+              <button type="button" class="view-toggle" on:click={() => (myPreviewViewMode = myPreviewViewMode === 'tree' ? 'raw' : 'tree')}>
+                {myPreviewViewMode === 'tree' ? 'RAW' : 'Дерево'}
+              </button>
+            {/if}
+          </span>
         </div>
         {#if myPreviewIsJson && myPreviewViewMode === 'tree'}
           <div class="response-tree-wrap">
             <JsonTreeView node={myPreviewJson} name="request" level={0} />
           </div>
         {:else}
-          <textarea bind:this={myPreviewEl} readonly value={myApiPreview}></textarea>
+          <textarea
+            bind:this={myPreviewEl}
+            value={myApiPreviewDraft}
+            on:input={(e) => {
+              myApiPreviewDraft = e.currentTarget.value;
+              myPreviewDirty = true;
+            }}
+          ></textarea>
+        {/if}
+        {#if myPreviewApplyMessage}
+          <div class="template-parse-note">{myPreviewApplyMessage}</div>
         {/if}
       </div>
     </aside>
@@ -1384,7 +1469,9 @@
 
   .subsec { margin-top:10px; }
   .subttl { font-size:12px; color:#475569; margin-bottom:6px; }
-  .response-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .response-head { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:nowrap; }
+  .response-head > span:first-child { white-space:nowrap; }
+  .inline-actions { display:inline-flex; align-items:center; gap:6px; flex-wrap:nowrap; }
   .view-toggle { border-radius:10px; border:1px solid #e2e8f0; background:#fff; color:#0f172a; padding:4px 8px; font-size:11px; line-height:1.2; }
   .response-tree-wrap { border:1px solid #e6eaf2; border-radius:12px; background:#fff; padding:8px; min-height:78px; overflow:visible; }
   .template-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
