@@ -1081,7 +1081,7 @@
   .danger.icon-btn { color:#b91c1c; }
   .target-card .icon-btn { color:#b91c1c; }
   .activeitem .icon-btn { color:#b91c1c; }
-  .template-head .icon-btn.template-action { width:28px; min-width:28px; padding:4px 0; font-size:16px; border:1px solid #e6eaf2; background:#fff; color:#0f172a; }
+  .template-head .icon-btn.template-action { width:28px; min-width:28px; padding:4px 0; font-size:16px; border-color:transparent; background:transparent; color:#0f172a; }
   .template-head .icon-btn.template-action.danger { color:#b91c1c; }
 
   input, select, textarea { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; outline:none; background:#fff; box-sizing:border-box; width:100%; }
