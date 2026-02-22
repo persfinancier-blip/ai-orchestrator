@@ -1959,38 +1959,8 @@
         {/if}
       </div>
       <div class="subsec">
-        <div class="targets-wrap parameter-vitrina-block">
-          <div class="targets-head">
-            <div class="targets-title">Витрина параметров</div>
-            <div class="targets-actions">
-              <div class="param-mode-row">
-                <button
-                  type="button"
-                  class="view-toggle param-mode-btn"
-                  class:active={parameterMode === 'table'}
-                  on:click={() => (parameterMode = 'table')}
-                >
-                  Таблицы
-                </button>
-                <button
-                  type="button"
-                  class="view-toggle param-mode-btn"
-                  class:active={parameterMode === 'date'}
-                  on:click={() => (parameterMode = 'date')}
-                >
-                  Даты
-                </button>
-                <button
-                  type="button"
-                  class="view-toggle param-mode-btn"
-                  class:active={parameterMode === 'formula'}
-                  on:click={() => (parameterMode = 'formula')}
-                >
-                  Формулы
-                </button>
-              </div>
-            </div>
-          </div>
+        <div class="subttl">Витрина параметров</div>
+        <div class="parameter-vitrina-block">
           <div class="param-mode-row">
             <button
               type="button"
@@ -2853,7 +2823,13 @@
   .parameter-chip { display:flex; align-items:center; justify-content:space-between; gap:10px; border-radius:10px; border:1px solid #dbe3ef; padding:8px 10px; background:#f8fafc; }
   .param-chip-title { font-size:13px; font-weight:600; color:#0f172a; }
   .param-chip-sub { font-size:11px; color:#475569; }
-  .parameter-vitrina-block { margin-top:10px; }
+  .parameter-vitrina-block {
+    margin-top:10px;
+    border:1px solid #e6eaf2;
+    border-radius:14px;
+    background:#fff;
+    padding:10px;
+  }
   .parameter-table-picker { margin-top:8px; display:flex; gap:8px; align-items:center; }
   .parameter-table-picker select { flex:1; }
   .targets-actions { display:flex; align-items:center; }
@@ -2867,6 +2843,9 @@
     align-items:center;
     gap:4px;
     cursor:pointer;
+    border-radius:999px;
+    padding:6px 14px;
+    font-size:12px;
   }
   .param-mode-btn.active {
     background:#fff;
