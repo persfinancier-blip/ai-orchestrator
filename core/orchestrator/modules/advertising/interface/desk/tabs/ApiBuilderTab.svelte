@@ -2895,6 +2895,32 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
   .table-crumbs { display:flex; flex-wrap:wrap; gap:6px; }
   .table-chip { display:inline-flex; align-items:center; gap:6px; border-radius:10px; background:#0f172a; color:#fff; padding:4px 10px; font-size:12px; }
   .table-chip .chip-remove { background:transparent; border:0; color:#fee2e2; padding:0 4px; font-size:12px; cursor:pointer; }
+  .param-mode-row { display:flex; gap:8px; }
+  .param-mode-btn {
+    border-radius:10px;
+    border:1px solid #0f172a;
+    background:#0f172a;
+    color:#fff;
+    font-weight:600;
+    display:inline-flex;
+    align-items:center;
+    gap:4px;
+    cursor:pointer;
+    padding:4px 10px;
+    font-size:11px;
+  }
+  .param-mode-btn::before { content:''; }
+  .param-mode-btn.active {
+    background:#fff;
+    color:#0f172a;
+    border-color:#0f172a;
+  }
+  .param-mode-btn.active::before {
+    content:'●';
+    color:#0f172a;
+    font-size:10px;
+    margin-right:4px;
+  }
   .parameter-builder { border:1px solid #e2e8f0; border-radius:12px; background:#fff; padding:10px; }
   .parameter-builder-row { display:grid; gap:8px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); align-items:center; }
   .parameter-vitrina { border:1px solid #e2e8f0; border-radius:12px; background:#fff; padding:10px; }
