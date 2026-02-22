@@ -812,11 +812,13 @@
               <table class="compare-table">
                 <thead>
                   <tr>
-                    <th colspan="3">Левая версия: v{compareTop?.version ?? '-'}</th>
-                    <th colspan="3">Правая версия: v{compareBottom?.version ?? '-'}</th>
+                    <th colspan="3">v{compareTop?.version ?? '-'}</th>
+                    <th class="split-cell"></th>
+                    <th colspan="3">v{compareBottom?.version ?? '-'}</th>
                   </tr>
                   <tr>
                     <th>Колонка</th><th>Тип</th><th>Описание</th>
+                    <th class="split-cell"></th>
                     <th>Колонка</th><th>Тип</th><th>Описание</th>
                   </tr>
                 </thead>
@@ -826,6 +828,7 @@
                       <td class:missing-cell={!row.top}>{row.top?.field_name || ''}</td>
                       <td class:missing-cell={!row.top}>{row.top?.field_type || ''}</td>
                       <td class:missing-cell={!row.top}>{row.top?.description || ''}</td>
+                      <td class="split-cell"></td>
                       <td class:missing-cell={!row.bottom}>{row.bottom?.field_name || ''}</td>
                       <td class:missing-cell={!row.bottom}>{row.bottom?.field_type || ''}</td>
                       <td class:missing-cell={!row.bottom}>{row.bottom?.description || ''}</td>
@@ -968,10 +971,10 @@
           on:click={openCompareVersions}
           disabled={!preview_schema || !preview_table || contractVersions.length < 2}
         >
-          {#if compare_versions_open}● {/if}Сравнение версий
+          {#if compare_versions_open}● {/if}Сравнить
         </button>
         <button on:click={openApplySelectedVersion} disabled={!preview_schema || !preview_table || !selectedContractId || !canEditSelectedTable()}>
-          Применить версию
+          Применить
         </button>
       </div>
       {#if contractVersions.length === 0}
@@ -1180,6 +1183,7 @@
   .compare-table th, .compare-table td { border-bottom:1px solid #eef2f7; padding:8px; font-size:12px; }
   .compare-table th { position:static; background:transparent; }
   .missing-cell { background:#f1f5f9; color:#94a3b8; }
+  .split-cell { width:14px; min-width:14px; padding:0 !important; border-bottom:0 !important; background:#fff !important; }
 
   .preview { margin-top: 10px; overflow:auto; border:1px solid #e6eaf2; border-radius:16px; }
   table { width:100%; border-collapse:collapse; min-width: 740px; }
