@@ -3,6 +3,22 @@
   import JsonTreeView from '../components/JsonTreeView.svelte';
   export type ExistingTable = { schema_name: string; table_name: string };
   type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  type ParameterFilterType = 'text' | 'number' | 'date' | 'boolean' | 'custom';
+  type ParameterFilter = {
+    type: ParameterFilterType;
+    operator: string;
+    value: string;
+    valueTo?: string;
+  };
+  type ParameterSource = {
+    id: string;
+    schema: string;
+    table: string;
+    field: string;
+    alias: string;
+    filter: ParameterFilter;
+  };
+  type ParameterConnection = { schema: string; table: string };
 
   export let apiBase: string;
   export let apiJson: <T = any>(url: string, init?: RequestInit) => Promise<T>;
@@ -54,6 +70,8 @@
     }>;
     description: string;
     exampleRequest: string;
+    parameterConnections: ParameterConnection[];
+    parameterSources: ParameterSource[];
   };
 
   const AUTH_MODE_OAUTH2 = 'oauth2_client_credentials';
@@ -86,6 +104,32 @@
     { name: 'description', types: ['text', 'character varying', 'varchar'] },
     { name: 'is_active', types: ['boolean'] }
   ];
+
+  const FILTER_OPERATORS: Record<ParameterFilterType, Array<{ value: string; label: string; needsValueTo?: boolean }>> = {
+    text: [
+      { value: 'contains', label: 'содержит' },
+      { value: 'equals', label: 'равно' },
+      { value: 'starts_with', label: 'начинается с' },
+      { value: 'ends_with', label: 'заканчивается на' }
+    ],
+    number: [
+      { value: 'equals', label: '=' },
+      { value: 'gt', label: '>' },
+      { value: 'lt', label: '<' },
+      { value: 'between', label: 'между', needsValueTo: true }
+    ],
+    date: [
+      { value: 'equals', label: '=' },
+      { value: 'before', label: 'раньше' },
+      { value: 'after', label: 'позже' },
+      { value: 'between', label: 'между', needsValueTo: true }
+    ],
+    boolean: [
+      { value: 'is_true', label: 'истина' },
+      { value: 'is_false', label: 'ложь' }
+    ],
+    custom: [{ value: 'custom', label: 'своя логика' }]
+  };
 
   let drafts: ApiDraft[] = [];
   let selectedRef = '';
@@ -147,6 +191,14 @@
   let responsePathPickerOpen = false;
   let responsePathPick = '';
   let oauthTokenCache: Record<string, { token: string; tokenType: string; expiresAt: number }> = {};
+  let tableConnectValue = '';
+  let builderTableValue = '';
+  let builderFieldValue = '';
+  let builderFilterType: ParameterFilterType = 'text';
+  let builderFilterOperator = FILTER_OPERATORS.text[0].value;
+  let builderFilterValue = '';
+  let builderFilterValueTo = '';
+  let builderAlias = '';
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -301,7 +353,9 @@
       pickedPaths: [],
       responseTargets: [],
       description: '',
-      exampleRequest: ''
+      exampleRequest: '',
+      parameterConnections: [],
+      parameterSources: []
     };
   }
 
@@ -314,6 +368,16 @@
     const legacy = tryObj(mapping?.source ?? mapping?.config ?? mapping?.payload);
     const pagination = tryObj(row?.pagination_json || mapping?.pagination || legacy?.pagination);
     const oauth2 = tryObj(mapping?.oauth2 || legacy?.oauth2);
+    const parameterConnections = Array.isArray(mapping?.parameter_connections)
+      ? mapping.parameter_connections
+      : Array.isArray(legacy?.parameter_connections)
+      ? legacy.parameter_connections
+      : [];
+    const parameterSources = Array.isArray(mapping?.parameter_sources)
+      ? mapping.parameter_sources
+      : Array.isArray(legacy?.parameter_sources)
+      ? legacy.parameter_sources
+      : [];
     const parsedTargets = Array.isArray(mapping?.response_targets) ? mapping.response_targets : [];
     const normalizedTargets = parsedTargets
       .map((t: any) => ({
@@ -383,7 +447,27 @@
       pickedPaths: Array.isArray(mapping?.picked_paths) ? mapping.picked_paths.map((x: any) => String(x || '').trim()).filter(Boolean) : [],
       responseTargets: normalizedTargets,
       description: String(row?.description || legacy?.description || ''),
-      exampleRequest: String(mapping?.exampleRequest || legacy?.exampleRequest || '')
+      exampleRequest: String(mapping?.exampleRequest || legacy?.exampleRequest || ''),
+      parameterConnections: parameterConnections
+        .map((c: any) => ({ schema: String(c?.schema || ''), table: String(c?.table || '') }))
+        .filter((c) => c.schema && c.table),
+      parameterSources: parameterSources
+        .map((src: any) => ({
+          id: String(src?.id || uid()),
+          schema: String(src?.schema || ''),
+          table: String(src?.table || ''),
+          field: String(src?.field || ''),
+          alias: String(src?.alias || '') || '',
+          filter: {
+            type: (['text', 'number', 'date', 'boolean', 'custom'].includes(String(src?.filter?.type || 'text'))
+              ? (src?.filter?.type as ParameterFilterType)
+              : 'text') as ParameterFilterType,
+            operator: String(src?.filter?.operator || ''),
+            value: String(src?.filter?.value || ''),
+            valueTo: src?.filter?.valueTo ? String(src.filter.valueTo) : undefined
+          }
+        }))
+        .filter((src) => src.schema && src.table && src.field),
     };
   }
 
@@ -438,7 +522,9 @@
                 token_type_field: d.oauth2TokenTypeField || 'token_type'
               }
             : { mode: 'manual' },
-        auth_json: parsed?.authJson ?? tryObj(d.authJson)
+        auth_json: parsed?.authJson ?? tryObj(d.authJson),
+        parameter_connections: d.parameterConnections,
+        parameter_sources: d.parameterSources
       },
       description: d.description,
       is_active: true
@@ -506,6 +592,109 @@
     const cols = columnOptionsFor(schema, table).filter(Boolean);
     const all = current && !cols.includes(current) ? [current, ...cols] : cols;
     return [...new Set(all)];
+  }
+
+  function connectionKey(conn: ParameterConnection) {
+    return `${conn.schema}.${conn.table}`;
+  }
+
+  function ensureConnectionColumns(schema: string, table: string) {
+    ensureColumnsFor(schema, table);
+  }
+
+  function addParameterConnectionByValue(value: string) {
+    const { schema, table } = parseQualifiedTable(value);
+    if (!schema || !table) return;
+    mutateSelected((d) => {
+      const exists = d.parameterConnections.some((c) => c.schema === schema && c.table === table);
+      if (!exists) {
+        d.parameterConnections = [...d.parameterConnections, { schema, table }];
+      }
+    });
+    ensureConnectionColumns(schema, table);
+  }
+
+  function removeParameterConnection(schema: string, table: string) {
+    mutateSelected((d) => {
+      d.parameterConnections = d.parameterConnections.filter((c) => !(c.schema === schema && c.table === table));
+      d.parameterSources = d.parameterSources.filter((p) => !(p.schema === schema && p.table === table));
+    });
+  }
+
+  function handleFilterTypeSelection(value: string) {
+    const normalized = (['text', 'number', 'date', 'boolean', 'custom'].includes(value) ? (value as ParameterFilterType) : 'text') as ParameterFilterType;
+    builderFilterType = normalized;
+    const ops = FILTER_OPERATORS[normalized];
+    builderFilterOperator = ops?.[0]?.value || '';
+  }
+
+  function operatorNeedsValueTo(type: ParameterFilterType, operator: string) {
+    return FILTER_OPERATORS[type]?.some((o) => o.value === operator && o.needsValueTo) ?? false;
+  }
+
+  function operatorLabel(type: ParameterFilterType, operator: string) {
+    return FILTER_OPERATORS[type]?.find((o) => o.value === operator)?.label || operator;
+  }
+
+  function describeFilter(filter: ParameterFilter) {
+    const label = operatorLabel(filter.type, filter.operator);
+    if (!filter.value) return label;
+    if (filter.valueTo) return `${label}: ${filter.value} — ${filter.valueTo}`;
+    return `${label}: ${filter.value}`;
+  }
+
+  function builderTableColumns() {
+    const { schema, table } = parseQualifiedTable(builderTableValue);
+    if (!schema || !table) return [];
+    return columnOptionsFor(schema, table);
+  }
+
+  function addParameterSource() {
+    const tableRef = builderTableValue || '';
+    if (!tableRef || !builderFieldValue || !builderFilterOperator || !builderFilterValue) return;
+    const { schema, table } = parseQualifiedTable(tableRef);
+    if (!schema || !table) return;
+    const needsSecond = operatorNeedsValueTo(builderFilterType, builderFilterOperator);
+    mutateSelected((d) => {
+      if (!d.parameterConnections.some((c) => c.schema === schema && c.table === table)) {
+        d.parameterConnections = [...d.parameterConnections, { schema, table }];
+      }
+      d.parameterSources = [
+        ...(d.parameterSources || []),
+        {
+          id: uid(),
+          schema,
+          table,
+          field: builderFieldValue,
+          alias: builderAlias || `${table}.${builderFieldValue}`,
+          filter: {
+            type: builderFilterType,
+            operator: builderFilterOperator,
+            value: builderFilterValue,
+            valueTo: needsSecond ? builderFilterValueTo : undefined
+          }
+        }
+      ];
+    });
+    ensureConnectionColumns(schema, table);
+    builderFieldValue = '';
+    builderFilterValue = '';
+    builderFilterValueTo = '';
+    builderAlias = '';
+  }
+
+  function removeParameterSource(id: string) {
+    mutateSelected((d) => {
+      d.parameterSources = d.parameterSources.filter((p) => p.id !== id);
+    });
+  }
+
+  $: if (!tableConnectValue && existingTables.length) {
+    tableConnectValue = `${existingTables[0].schema_name}.${existingTables[0].table_name}`;
+  }
+
+  $: if (!builderTableValue && selected?.parameterConnections?.length) {
+    builderTableValue = `${selected.parameterConnections[0].schema}.${selected.parameterConnections[0].table}`;
   }
 
   function addMappingRow() {
@@ -1866,6 +2055,139 @@
           on:input={(e) => mutateSelected((d) => (d.description = e.currentTarget.value))}
         ></textarea>
 
+        <div class="parameter-connect-block">
+          <div class="param-connections-row">
+            <span>Подключенные таблицы</span>
+            <div class="param-connection-actions">
+              <select
+                value={tableConnectValue}
+                on:change={(e) => (tableConnectValue = e.currentTarget.value)}
+              >
+                {#each existingTables as tbl}
+                  <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
+                {/each}
+              </select>
+              <button
+                class="icon-btn plus-dark"
+                type="button"
+                title="Подключить таблицу"
+                on:click={() => addParameterConnectionByValue(tableConnectValue)}
+              >
+                +
+              </button>
+            </div>
+          </div>
+          <div class="param-connection-crumbs">
+            {#if !(selected?.parameterConnections?.length)}
+              <p class="hint">Подключи таблицу, чтобы использовать её поля в параметрах.</p>
+            {:else}
+              <div class="table-crumbs">
+                {#each selected.parameterConnections as conn (connectionKey(conn))}
+                  <div class="table-chip">
+                    <span>{conn.schema}.{conn.table}</span>
+                    <button type="button" class="chip-remove" on:click={() => removeParameterConnection(conn.schema, conn.table)}>x</button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+
+          <div class="parameter-builder">
+            <div class="parameter-builder-row">
+              <select
+                value={builderTableValue}
+                on:change={(e) => {
+                  builderTableValue = e.currentTarget.value;
+                  builderFieldValue = '';
+                  const parsed = parseQualifiedTable(builderTableValue);
+                  ensureConnectionColumns(parsed.schema, parsed.table);
+                }}
+              >
+                <option value="">Таблица из подключенных</option>
+                {#each selected?.parameterConnections || [] as conn}
+                  <option value={`${conn.schema}.${conn.table}`}>{conn.schema}.{conn.table}</option>
+                {/each}
+              </select>
+              <select
+                value={builderFieldValue}
+                on:change={(e) => {
+                  builderFieldValue = e.currentTarget.value;
+                }}
+              >
+                <option value="">Поле таблицы</option>
+                {#if builderTableValue}
+                  {#each builderTableColumns() as field}
+                    <option value={field}>{field}</option>
+                  {/each}
+                {/if}
+              </select>
+              <select
+                value={builderFilterType}
+                on:change={(e) => handleFilterTypeSelection(e.currentTarget.value)}
+              >
+                {#each Object.keys(FILTER_OPERATORS) as type}
+                  <option value={type}>{type}</option>
+                {/each}
+              </select>
+              <select
+                value={builderFilterOperator}
+                on:change={(e) => (builderFilterOperator = e.currentTarget.value)}
+              >
+                {#each FILTER_OPERATORS[builderFilterType] as op}
+                  <option value={op.value}>{op.label}</option>
+                {/each}
+              </select>
+              <input
+                placeholder="Значение"
+                value={builderFilterValue}
+                on:input={(e) => (builderFilterValue = e.currentTarget.value)}
+              />
+              {#if operatorNeedsValueTo(builderFilterType, builderFilterOperator)}
+                <input
+                  placeholder="до"
+                  value={builderFilterValueTo}
+                  on:input={(e) => (builderFilterValueTo = e.currentTarget.value)}
+                />
+              {/if}
+              <button
+                class="icon-btn plus-green"
+                type="button"
+                title="Добавить параметр"
+                on:click={addParameterSource}
+                disabled={!builderTableValue || !builderFieldValue || !builderFilterValue}
+              >
+                +
+              </button>
+            </div>
+            <div class="parameter-builder-row">
+              <input
+                placeholder="Псевдоним параметра"
+                value={builderAlias}
+                on:input={(e) => (builderAlias = e.currentTarget.value)}
+              />
+              <p class="hint">Параметры можно использовать как токены/ID, фильтры — любые условия (текст, числа, даты).</p>
+            </div>
+          </div>
+
+          <div class="parameter-vitrina">
+            {#if selected?.parameterSources?.length}
+              <div class="parameter-list">
+                {#each selected.parameterSources as src (src.id)}
+                  <div class="parameter-chip">
+                    <div>
+                      <div class="param-chip-title">{src.alias || `${src.table}.${src.field}`}</div>
+                      <div class="param-chip-sub">{describeFilter(src.filter)}</div>
+                    </div>
+                    <button class="chip-remove" type="button" on:click={() => removeParameterSource(src.id)}>x</button>
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <p class="hint">Добавь параметр, чтобы он появился в витрине.</p>
+            {/if}
+          </div>
+        </div>
+
         <label>
           <div class="response-head field-head">
             <span>Авторизация</span>
@@ -2430,6 +2752,19 @@
   .auth-mode-btn:focus-visible {
     outline:2px solid #93c5fd;
   }
+  .parameter-connect-block { margin-top:12px; border:1px solid #e6eaf2; border-radius:14px; padding:12px; background:#f1f5f9; }
+  .param-connections-row { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; font-weight:600; color:#0f172a; }
+  .param-connection-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .table-crumbs { display:flex; flex-wrap:wrap; gap:6px; }
+  .table-chip { display:inline-flex; align-items:center; gap:6px; border-radius:10px; background:#0f172a; color:#fff; padding:4px 10px; font-size:12px; }
+  .table-chip .chip-remove { background:transparent; border:0; color:#fee2e2; padding:0 4px; font-size:12px; cursor:pointer; }
+  .parameter-builder { border:1px solid #e2e8f0; border-radius:12px; background:#fff; padding:10px; margin-bottom:10px; }
+  .parameter-builder-row { display:grid; gap:8px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); align-items:center; }
+  .parameter-vitrina { border:1px solid #e2e8f0; border-radius:12px; background:#fff; padding:10px; }
+  .parameter-list { display:flex; flex-direction:column; gap:6px; }
+  .parameter-chip { display:flex; align-items:center; justify-content:space-between; gap:10px; border-radius:10px; border:1px solid #dbe3ef; padding:8px 10px; background:#f8fafc; }
+  .param-chip-title { font-size:13px; font-weight:600; color:#0f172a; }
+  .param-chip-sub { font-size:11px; color:#475569; }
   .oauth-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:8px; }
   .oauth-grid input { margin:0; }
   .auth-mode-buttons + .oauth-grid + .hint { margin-top:0; }
