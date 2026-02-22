@@ -848,10 +848,15 @@
     }
   }
 
-  function applySelectedSource(id: string) {
+  async function applySelectedSource(id: string) {
     selectedId = id;
     const src = sources.find((s) => s.id === id);
     apiNameDraft = String(src?.name || '');
+    previewSyncError = '';
+    previewApplyMessage = '';
+    await tick();
+    syncEditorsFromSelected(true);
+    void loadDbPreview();
   }
 
   async function onAddSourceClick() {
