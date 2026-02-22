@@ -139,11 +139,6 @@ function apiConfigsQname(config) {
 
 function syncProtectedSystemTables(config) {
   const next = new Set([`${SETTINGS_SCHEMA}.${SETTINGS_TABLE}`]);
-  if (config?.api_configs_schema && config?.api_configs_table) {
-    next.add(`${config.api_configs_schema}.${config.api_configs_table}`);
-  } else {
-    next.add(`${DEFAULT_CONFIG.api_configs_schema}.${DEFAULT_CONFIG.api_configs_table}`);
-  }
   if (config?.server_writes_schema && config?.server_writes_table) {
     next.add(`${config.server_writes_schema}.${config.server_writes_table}`);
   } else {

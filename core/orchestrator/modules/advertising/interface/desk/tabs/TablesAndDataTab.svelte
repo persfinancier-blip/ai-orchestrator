@@ -76,7 +76,6 @@
   let contracts_storage_picker_open = false;
   let contracts_storage_pick_value = '';
   const SETTINGS_SYSTEM_TABLE = 'ao_system.table_settings_store';
-  const API_CONFIGS_SYSTEM_TABLE = 'ao_system.api_configs_store';
   const SERVER_WRITES_SYSTEM_TABLE = 'ao_system.table_server_writes_store';
 
   const CONTRACTS_REQUIRED_COLUMNS = [
@@ -99,7 +98,7 @@
 
   function isSystemTable(schema: string, table: string): boolean {
     const qn = `${String(schema || '').trim()}.${String(table || '').trim()}`;
-    return qn === SETTINGS_SYSTEM_TABLE || qn === API_CONFIGS_SYSTEM_TABLE || qn === SERVER_WRITES_SYSTEM_TABLE;
+    return qn === SETTINGS_SYSTEM_TABLE || qn === SERVER_WRITES_SYSTEM_TABLE;
   }
 
   function canEditSelectedTable(): boolean {
