@@ -2091,39 +2091,35 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
                   />
                 </div>
                 <div class="parameter-builder-row parameter-builder-table-field">
-                  <div class="parameter-field">
-                    <label>Имя таблицы</label>
-                    <select
-                      value={builderTableValue}
-                      on:change={(e) => {
-                        builderTableValue = e.currentTarget.value;
-                        builderFieldValue = '';
-                        const parsed = parseQualifiedTable(builderTableValue);
-                        ensureConnectionColumns(parsed.schema, parsed.table);
-                      }}
-                    >
-                      <option value="">Таблица</option>
-                      {#each selected?.parameterConnections || [] as conn}
-                        <option value={`${conn.schema}.${conn.table}`}>{conn.schema}.{conn.table}</option>
+                  <select
+                    value={builderTableValue}
+                    class="table-field"
+                    on:change={(e) => {
+                      builderTableValue = e.currentTarget.value;
+                      builderFieldValue = '';
+                      const parsed = parseQualifiedTable(builderTableValue);
+                      ensureConnectionColumns(parsed.schema, parsed.table);
+                    }}
+                  >
+                    <option value="">Таблица</option>
+                    {#each selected?.parameterConnections || [] as conn}
+                      <option value={`${conn.schema}.${conn.table}`}>{conn.schema}.{conn.table}</option>
+                    {/each}
+                  </select>
+                  <select
+                    value={builderFieldValue}
+                    class="table-field"
+                    on:change={(e) => {
+                      builderFieldValue = e.currentTarget.value;
+                    }}
+                  >
+                    <option value="">Поле</option>
+                    {#if builderTableValue}
+                      {#each builderTableColumns() as field}
+                        <option value={field}>{field}</option>
                       {/each}
-                    </select>
-                  </div>
-                  <div class="parameter-field">
-                    <label>Имя поля</label>
-                    <select
-                      value={builderFieldValue}
-                      on:change={(e) => {
-                        builderFieldValue = e.currentTarget.value;
-                      }}
-                    >
-                      <option value="">Поле</option>
-                      {#if builderTableValue}
-                        {#each builderTableColumns() as field}
-                          <option value={field}>{field}</option>
-                        {/each}
-                      {/if}
-                    </select>
-                  </div>
+                    {/if}
+                  </select>
                 </div>
                 <div class="parameter-builder-row">
                   <select
@@ -2911,9 +2907,8 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
   .parameter-builder { border:1px solid #e2e8f0; border-radius:12px; background:#fff; padding:10px; }
   .parameter-builder-row { display:grid; gap:8px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); align-items:center; }
   .parameter-builder-row.parameter-builder-name input { font-size:14px; font-weight:600; padding:8px 12px; }
-  .parameter-builder-table-field { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
-  .parameter-field { display:flex; flex-direction:column; gap:4px; }
-  .parameter-field label { font-size:11px; color:#475569; font-weight:500; }
+  .parameter-builder-table-field { grid-template-columns: repeat(2, minmax(140px, 1fr)); gap:8px; }
+  .parameter-builder-table-field .table-field { width:100%; box-sizing:border-box; }
   .parameter-vitrina { border:1px solid #e2e8f0; border-radius:12px; background:#fff; padding:10px; }
   .parameter-list { display:flex; flex-direction:column; gap:6px; }
   .parameter-chip { display:flex; align-items:center; justify-content:space-between; gap:10px; border-radius:10px; border:1px solid #dbe3ef; padding:8px 10px; background:#f8fafc; cursor:pointer; }
