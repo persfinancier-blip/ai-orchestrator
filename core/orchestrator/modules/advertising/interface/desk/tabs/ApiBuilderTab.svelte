@@ -192,6 +192,10 @@
   let responsePathPick = '';
   let oauthTokenCache: Record<string, { token: string; tokenType: string; expiresAt: number }> = {};
   let selectedParameterId: string | null = null;
+  let definitionDraft = '';
+  let definitionError = '';
+  let definitionDirty = false;
+  let definitionUpdatingFromFields = false;
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -725,6 +729,20 @@
 
   $: if (selected && selectedParameterId && !selected.parameterDefinitions.some((param) => param.id === selectedParameterId)) {
     selectedParameterId = null;
+  }
+
+  let lastParameterId: string | null = null;
+  $: if (activeParameter && activeParameter.id !== lastParameterId) {
+    lastParameterId = activeParameter.id;
+    definitionDirty = false;
+  } else if (!activeParameter) {
+    lastParameterId = null;
+  }
+
+  $: if (activeParameter && !definitionDirty && !definitionUpdatingFromFields) {
+    definitionUpdatingFromFields = true;
+    definitionDraft = serializeParameterDefinition(activeParameter);
+    definitionUpdatingFromFields = false;
   }
 
   $: if (activeParameter) {
@@ -1467,6 +1485,91 @@
     mutateSelected((d) => (d.paginationStrategy = normalized as ApiDraft['paginationStrategy']));
   }
 
+  function serializeParameterDefinition(param: ParameterDefinition) {
+    const sourceParts = [param.sourceSchema, param.sourceTable, param.sourceField].filter(Boolean);
+    const conditions = param.conditions.map((cond) => {
+      const columnParts = [cond.schema, cond.table, cond.field].filter(Boolean);
+      return {
+        column: columnParts.join('.'),
+        operator: cond.operator,
+        compare_mode: cond.compareMode,
+        compare: cond.compareMode === 'column' ? cond.compareColumn : cond.compareValue
+      };
+    });
+    return JSON.stringify(
+      {
+        alias: param.alias,
+        source: sourceParts.join('.'),
+        definition: param.definition,
+        conditions
+      },
+      null,
+      2
+    );
+  }
+
+  function normalizeConditionEntry(entry: any) {
+    const rawCompareMode = String(entry?.compare_mode || entry?.compareMode || '').toLowerCase();
+    const compareMode: 'column' | 'value' = rawCompareMode === 'column' ? 'column' : 'value';
+    const column = String(entry?.column || entry?.source_column || entry?.compare_column || entry?.compareColumn || '').trim();
+    const [schema, table, field] = column.split('.');
+    return {
+      id: String(entry?.id || uid()),
+      schema: schema || '',
+      table: table || '',
+      field: field || '',
+      operator: String(entry?.operator || 'equals'),
+      compareMode,
+      compareValue: compareMode === 'value' ? String(entry?.compare || entry?.value || entry?.compare_value || '') : '',
+      compareColumn: compareMode === 'column' ? String(entry?.compare || entry?.compare_column || entry?.compareColumn || '') : ''
+    };
+  }
+
+  function applyDefinitionFromJson(payload: any, paramId: string) {
+    if (!selected) return;
+    const param = selected.parameterDefinitions.find((p) => p.id === paramId);
+    if (!param) return;
+    const alias = String(payload?.alias || param.alias);
+    const definitionText = String(payload?.definition || param.definition);
+    const sourceRaw = String(payload?.source || `${param.sourceSchema}.${param.sourceTable}.${param.sourceField}`);
+    const [sourceSchema, sourceTable, sourceField] = sourceRaw.split('.');
+    const conditionsRaw = Array.isArray(payload?.conditions) ? payload.conditions : [];
+    const parsedConditions = conditionsRaw
+      .map((entry) => normalizeConditionEntry(entry))
+      .filter((cond) => cond.schema && cond.table && cond.field && cond.operator);
+    parsedConditions.forEach((cond) => {
+      ensureColumnsFor(cond.schema, cond.table);
+      if (cond.compareMode === 'column' && cond.compareColumn) {
+        const [cmpSchema, cmpTable] = cond.compareColumn.split('.');
+        ensureColumnsFor(cmpSchema, cmpTable);
+      }
+    });
+    ensureColumnsFor(sourceSchema, sourceTable);
+    updateParameterDefinition(paramId, {
+      alias,
+      definition: definitionText,
+      sourceSchema: sourceSchema || param.sourceSchema,
+      sourceTable: sourceTable || param.sourceTable,
+      sourceField: sourceField || param.sourceField,
+      conditions: parsedConditions.length ? parsedConditions : param.conditions
+    });
+  }
+
+  function handleDefinitionInput(value: string) {
+    definitionDraft = value;
+    definitionError = '';
+    definitionDirty = true;
+    const trimmed = value.trim();
+    if (!trimmed || !activeParameter) return;
+    try {
+      const parsed = JSON.parse(trimmed);
+      applyDefinitionFromJson(parsed, activeParameter.id);
+      definitionDirty = false;
+    } catch {
+      definitionError = 'Некорректный JSON. Проверь кавычки и скобки.';
+    }
+  }
+
   function handlePaginationTargetChange(value: string) {
     mutateSelected((d) => (d.paginationTarget = String(value) === 'query' ? 'query' : 'body'));
   }
@@ -2105,14 +2208,20 @@
                 class="parameter-alias"
                 placeholder="Псевдоним параметра"
                 value={activeParameter.alias}
-                on:input={(e) => updateParameterDefinition(activeParameter.id, { alias: e.currentTarget.value })}
+                on:input={(e) => {
+                  definitionDirty = false;
+                  updateParameterDefinition(activeParameter.id, { alias: e.currentTarget.value });
+                }}
               />
               <textarea
                 class="parameter-definition"
                 placeholder="Определи параметр (например: FIELD('tokens.token'))"
-                value={activeParameter.definition}
-                on:input={(e) => updateParameterDefinition(activeParameter.id, { definition: e.currentTarget.value })}
+                value={definitionDraft}
+                on:input={(e) => handleDefinitionInput(e.currentTarget.value)}
               ></textarea>
+              {#if definitionError}
+                <p class="definition-error">{definitionError}</p>
+              {/if}
               <div class="parameter-definition-hint">
                 <span>Доступные функции: FIELD('schema.table.column'), TODAY(), PARAM('alias')</span>
               </div>
@@ -2121,6 +2230,7 @@
                   value={`${activeParameter.sourceSchema}.${activeParameter.sourceTable}`}
                   on:change={(e) => {
                     const [schema, table] = String(e.currentTarget.value || '').split('.');
+                    definitionDirty = false;
                     updateParameterDefinition(activeParameter.id, {
                       sourceSchema: schema || '',
                       sourceTable: table || '',
@@ -2136,7 +2246,10 @@
                 </select>
                 <select
                   value={activeParameter.sourceField}
-                  on:change={(e) => updateParameterDefinition(activeParameter.id, { sourceField: e.currentTarget.value })}
+                  on:change={(e) => {
+                    definitionDirty = false;
+                    updateParameterDefinition(activeParameter.id, { sourceField: e.currentTarget.value });
+                  }}
                 >
                   <option value="">Колонка</option>
                   {#if activeParameter.sourceSchema && activeParameter.sourceTable}
@@ -2149,7 +2262,16 @@
               <div class="parameter-conditions">
                 <div class="conditions-header">
                   <span>Условия фильтрации</span>
-                  <button class="tiny-btn" type="button" on:click={() => addCondition(activeParameter.id)}>Добавить условие</button>
+                  <button
+                    class="tiny-btn"
+                    type="button"
+                    on:click={() => {
+                      definitionDirty = false;
+                      addCondition(activeParameter.id);
+                    }}
+                  >
+                    Добавить условие
+                  </button>
                 </div>
                 {#each activeParameter.conditions as cond (cond.id)}
                   <div class="condition-card">
@@ -2158,6 +2280,7 @@
                         value={`${cond.schema}.${cond.table}`}
                         on:change={(e) => {
                           const [schema, table] = String(e.currentTarget.value || '').split('.');
+                          definitionDirty = false;
                           updateCondition(activeParameter.id, cond.id, { schema: schema || '', table: table || '', field: '' });
                           ensureColumnsFor(schema, table);
                         }}
@@ -2169,7 +2292,10 @@
                       </select>
                       <select
                         value={cond.field}
-                        on:change={(e) => updateCondition(activeParameter.id, cond.id, { field: e.currentTarget.value })}
+                        on:change={(e) => {
+                          definitionDirty = false;
+                          updateCondition(activeParameter.id, cond.id, { field: e.currentTarget.value });
+                        }}
                       >
                         <option value="">Колонка</option>
                         {#if cond.schema && cond.table}
@@ -2180,7 +2306,10 @@
                       </select>
                       <select
                         value={cond.operator}
-                        on:change={(e) => updateCondition(activeParameter.id, cond.id, { operator: e.currentTarget.value })}
+                        on:change={(e) => {
+                          definitionDirty = false;
+                          updateCondition(activeParameter.id, cond.id, { operator: e.currentTarget.value });
+                        }}
                       >
                         {#each getOperatorsForColumn(cond.field, cond.schema, cond.table) as op}
                           <option value={op.value}>{op.label}</option>
@@ -2196,7 +2325,10 @@
                             name={`compareMode-${cond.id}`}
                             value={mode.value}
                             checked={cond.compareMode === mode.value}
-                            on:change={(e) => updateCondition(activeParameter.id, cond.id, { compareMode: parseCompareModeValue(e.currentTarget.value) })}
+                            on:change={(e) => {
+                              definitionDirty = false;
+                              updateCondition(activeParameter.id, cond.id, { compareMode: parseCompareModeValue(e.currentTarget.value) });
+                            }}
                           />
                           <span>{mode.label}</span>
                         </label>
@@ -2207,7 +2339,10 @@
                         class="condition-value"
                         placeholder="Значение"
                         value={cond.compareValue}
-                        on:input={(e) => updateCondition(activeParameter.id, cond.id, { compareValue: e.currentTarget.value })}
+                        on:input={(e) => {
+                          definitionDirty = false;
+                          updateCondition(activeParameter.id, cond.id, { compareValue: e.currentTarget.value });
+                        }}
                       />
                     {:else}
                       <div class="compare-column-row">
@@ -2924,6 +3059,7 @@
   .compare-mode-row { display:flex; gap:12px; font-size:12px; }
   .condition-value { width:100%; }
   .tiny-btn { border:0; background:transparent; font-size:12px; color:#0f172a; cursor:pointer; }
+  .definition-error { margin:0; font-size:11px; color:#b91c1c; }
 </style>
 
 
