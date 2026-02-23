@@ -2175,28 +2175,29 @@
             {#if selected?.parameterDefinitions?.length}
               <div class="parameter-crumbs">
                 {#each selected.parameterDefinitions as param (param.id)}
-                  <div class="parameter-crumb-wrapper">
-                    <button
-                      type="button"
-                      class="parameter-crumb"
-                      class:active-crumb={selectedParameterId === param.id}
-                      draggable="true"
-                      on:dragstart={(e) => parameterCardDragStart(param, e)}
-                      on:click={() => setActiveParameter(param.id)}
-                      title={parameterConditionSummary(param.conditions?.[0] || {})}
-                    >
-                      <span class="crumb-indicator" class:active-indicator={selectedParameterId === param.id}></span>
-                      <span>{param.alias}</span>
-                    </button>
-                    <button
-                      type="button"
-                      class="parameter-crumb-delete"
+                  <button
+                    type="button"
+                    class="parameter-crumb"
+                    class:active-crumb={selectedParameterId === param.id}
+                    draggable="true"
+                    on:dragstart={(e) => parameterCardDragStart(param, e)}
+                    on:click={() => setActiveParameter(param.id)}
+                    title={parameterConditionSummary(param.conditions?.[0] || {})}
+                  >
+                    {#if selectedParameterId === param.id}
+                      <span class="crumb-indicator active-indicator"></span>
+                    {/if}
+                    <span class="crumb-label">{param.alias}</span>
+                    <span
+                      role="button"
+                      tabindex="-1"
+                      class="crumb-close"
                       aria-label="Удалить параметр"
                       on:click|stopPropagation={() => removeParameterDefinition(param.id)}
                     >
                       ×
-                    </button>
-                  </div>
+                    </span>
+                  </button>
                 {/each}
               </div>
             {:else}
@@ -3043,7 +3044,6 @@
   .parameter-list-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; font-weight:500; font-size:12px; color:#64748b; }
   .parameter-list-title { font-size:12px; color:#64748b; line-height:1.2; }
   .parameter-crumbs { display:flex; flex-wrap:wrap; gap:6px; }
-  .parameter-crumb-wrapper { display:flex; align-items:center; gap:4px; }
   .parameter-crumb {
     border-radius:999px;
     border:1px solid #e2e8f0;
@@ -3060,24 +3060,38 @@
     color:#fff;
     border-color:#0f172a;
   }
+  .parameter-crumb.active-crumb {
+    background:#fff;
+    color:#0f172a;
+    border-color:#0f172a;
+  }
   .crumb-indicator {
     width:8px;
     height:8px;
     border-radius:50%;
-    background:#cbd5f5;
-  }
-  .crumb-indicator.active-indicator {
     background:#0f172a;
   }
-  .parameter-crumb-delete {
-    width:18px;
-    height:18px;
-    border:none;
-    background:transparent;
+  .parameter-crumb:not(.active-crumb) .crumb-indicator {
+    display:none;
+  }
+  .crumb-label {
+    flex:1;
+    text-align:left;
+  }
+  .crumb-close {
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    width:16px;
+    height:16px;
+    border-radius:50%;
+    font-size:14px;
+    line-height:1;
+    margin-left:4px;
+    color:#f8fafc;
+  }
+  .parameter-crumb.active-crumb .crumb-close {
     color:#b91c1c;
-    font-weight:600;
-    cursor:pointer;
-    padding:0;
   }
   .parameter-editor { border:1px solid #e6eaf2; border-radius:12px; padding:12px; background:#fff; min-height:200px; }
   .parameter-editor-inner { display:flex; flex-direction:column; gap:8px; }
