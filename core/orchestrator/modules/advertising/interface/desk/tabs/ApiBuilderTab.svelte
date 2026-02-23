@@ -2083,7 +2083,16 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
                   </button>
                 </div>
                 <div class="parameter-builder">
-                  <div class="parameter-builder-row">
+                <div class="parameter-builder-row parameter-builder-name">
+                  <input
+                    placeholder="Имя параметра"
+                    value={builderAlias}
+                    on:input={(e) => (builderAlias = e.currentTarget.value)}
+                  />
+                </div>
+                <div class="parameter-builder-row parameter-builder-table-field">
+                  <div class="parameter-field">
+                    <label>Имя таблицы</label>
                     <select
                       value={builderTableValue}
                       on:change={(e) => {
@@ -2093,70 +2102,69 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
                         ensureConnectionColumns(parsed.schema, parsed.table);
                       }}
                     >
-                      <option value="">Таблица из подключенных</option>
+                      <option value="">Таблица</option>
                       {#each selected?.parameterConnections || [] as conn}
                         <option value={`${conn.schema}.${conn.table}`}>{conn.schema}.{conn.table}</option>
                       {/each}
                     </select>
+                  </div>
+                  <div class="parameter-field">
+                    <label>Имя поля</label>
                     <select
                       value={builderFieldValue}
                       on:change={(e) => {
                         builderFieldValue = e.currentTarget.value;
                       }}
                     >
-                      <option value="">Поле таблицы</option>
+                      <option value="">Поле</option>
                       {#if builderTableValue}
                         {#each builderTableColumns() as field}
                           <option value={field}>{field}</option>
                         {/each}
                       {/if}
                     </select>
-                    <select
-                      value={builderFilterType}
-                      on:change={(e) => handleFilterTypeSelection(e.currentTarget.value)}
-                    >
-                      {#each Object.keys(FILTER_OPERATORS) as type}
-                        <option value={type}>{type}</option>
-                      {/each}
-                    </select>
-                    <select
-                      value={builderFilterOperator}
-                      on:change={(e) => (builderFilterOperator = e.currentTarget.value)}
-                    >
-                      {#each FILTER_OPERATORS[builderFilterType] as op}
-                        <option value={op.value}>{op.label}</option>
-                      {/each}
-                    </select>
-                    <input
-                      placeholder="Значение"
-                      value={builderFilterValue}
-                      on:input={(e) => (builderFilterValue = e.currentTarget.value)}
-                    />
-                    {#if operatorNeedsValueTo(builderFilterType, builderFilterOperator)}
-                      <input
-                        placeholder="до"
-                        value={builderFilterValueTo}
-                        on:input={(e) => (builderFilterValueTo = e.currentTarget.value)}
-                      />
-                    {/if}
-                    <button
-                      class="icon-btn plus-green"
-                      type="button"
-                      title="Добавить параметр"
-                      on:click={addParameterSource}
-                      disabled={!builderTableValue || !builderFieldValue || !builderFilterValue}
-                    >
-                      +
-                    </button>
                   </div>
-                  <div class="parameter-builder-row">
+                </div>
+                <div class="parameter-builder-row">
+                  <select
+                    value={builderFilterType}
+                    on:change={(e) => handleFilterTypeSelection(e.currentTarget.value)}
+                  >
+                    {#each Object.keys(FILTER_OPERATORS) as type}
+                      <option value={type}>{type}</option>
+                    {/each}
+                  </select>
+                  <select
+                    value={builderFilterOperator}
+                    on:change={(e) => (builderFilterOperator = e.currentTarget.value)}
+                  >
+                    {#each FILTER_OPERATORS[builderFilterType] as op}
+                      <option value={op.value}>{op.label}</option>
+                    {/each}
+                  </select>
+                  <input
+                    placeholder="Значение"
+                    value={builderFilterValue}
+                    on:input={(e) => (builderFilterValue = e.currentTarget.value)}
+                  />
+                  {#if operatorNeedsValueTo(builderFilterType, builderFilterOperator)}
                     <input
-                      placeholder="Псевдоним параметра"
-                      value={builderAlias}
-                      on:input={(e) => (builderAlias = e.currentTarget.value)}
+                      placeholder="до"
+                      value={builderFilterValueTo}
+                      on:input={(e) => (builderFilterValueTo = e.currentTarget.value)}
                     />
-                    <p class="hint">Параметры можно использовать как токены/ID, фильтры — любые условия (текст, числа, даты).</p>
-                  </div>
+                  {/if}
+                  <button
+                    class="icon-btn plus-green"
+                    type="button"
+                    title="Добавить параметр"
+                    on:click={addParameterSource}
+                    disabled={!builderTableValue || !builderFieldValue || !builderFilterValue}
+                  >
+                    +
+                  </button>
+                </div>
+                <p class="hint">Параметры можно использовать как токены/ID, фильтры — любые условия (текст, числа, даты).</p>
                 </div>
               </div>
             </div>
@@ -2902,6 +2910,10 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
   .param-mode-row--creator { margin-bottom:8px; }
   .parameter-builder { border:1px solid #e2e8f0; border-radius:12px; background:#fff; padding:10px; }
   .parameter-builder-row { display:grid; gap:8px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); align-items:center; }
+  .parameter-builder-row.parameter-builder-name input { font-size:14px; font-weight:600; padding:8px 12px; }
+  .parameter-builder-table-field { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  .parameter-field { display:flex; flex-direction:column; gap:4px; }
+  .parameter-field label { font-size:11px; color:#475569; font-weight:500; }
   .parameter-vitrina { border:1px solid #e2e8f0; border-radius:12px; background:#fff; padding:10px; }
   .parameter-list { display:flex; flex-direction:column; gap:6px; }
   .parameter-chip { display:flex; align-items:center; justify-content:space-between; gap:10px; border-radius:10px; border:1px solid #dbe3ef; padding:8px 10px; background:#f8fafc; cursor:pointer; }
