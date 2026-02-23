@@ -3212,7 +3212,7 @@ function syncParameterEditorsHeight() {
   .condition-value { width:100%; }
   .tiny-btn { border:0; background:transparent; font-size:12px; color:#0f172a; cursor:pointer; }
   .definition-error { margin:0; font-size:11px; color:#b91c1c; }
-  .parameter-preview-block { border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#fff; width:100%; max-width:292px; overflow-x:auto; box-sizing:border-box; margin:0 auto; }
+  .parameter-preview-block { border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#fff; width:100%; max-width:280px; overflow-x:auto; box-sizing:border-box; margin:0 auto; }
   .parameter-preview-table-wrap { overflow-x:auto; }
   .parameter-preview-table { width:100%; border-collapse:collapse; min-width:260px; }
   .parameter-preview-table th, .parameter-preview-table td { border-bottom:1px solid #e2e8f0; padding:6px; text-align:left; font-size:13px; }
