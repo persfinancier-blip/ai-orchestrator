@@ -3299,7 +3299,7 @@ function syncParameterEditorsHeight() {
   }
   .parameter-preview-controls { gap:6px; justify-content:flex-end; }
   .definition-section .inline-actions { justify-content:flex-end; }
-  .icon-btn.refresh-btn { color:#16a34a; font-weight:700; }
+  .icon-btn.refresh-btn { color:#16a34a; font-weight:400; }
   .parameter-preview-list { display:flex; flex-direction:column; gap:6px; }
   .preview-row { display:flex; gap:8px; align-items:flex-start; }
   .row-index { font-weight:600; width:32px; text-align:right; color:#475569; }
