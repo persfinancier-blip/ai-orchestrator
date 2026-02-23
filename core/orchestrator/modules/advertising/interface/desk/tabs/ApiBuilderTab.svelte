@@ -2399,9 +2399,6 @@ function syncParameterEditorsHeight() {
               {#if definitionError}
                 <p class="definition-error">{definitionError}</p>
               {/if}
-              <div class="parameter-definition-hint">
-                <span>Доступные функции: FIELD('schema.table.column'), TODAY(), PARAM('alias')</span>
-              </div>
               <div class="parameter-source-row">
                 <select
                   value={`${activeParameter.sourceSchema}.${activeParameter.sourceTable}`}
