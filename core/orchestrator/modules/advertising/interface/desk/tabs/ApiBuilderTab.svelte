@@ -2204,11 +2204,11 @@
               <p class="hint">Добавь параметр, чтобы сформировать значение.</p>
             {/if}
           </div>
-        <div class="parameter-editor">
+        <div class="parameter-editor no-border">
           {#if activeParameter}
             <div class="parameter-editor-inner">
               <input
-                class="parameter-alias"
+                class="parameter-alias autoheight"
                 placeholder="Псевдоним параметра"
                 value={activeParameter.alias}
                 on:input={(e) => {
@@ -2217,7 +2217,7 @@
                 }}
               />
               <textarea
-                class="parameter-definition"
+                class="parameter-definition autoheight"
                 placeholder="Определи параметр (например: FIELD('tokens.token'))"
                 value={definitionDraft}
                 on:input={(e) => handleDefinitionInput(e.currentTarget.value)}
@@ -3093,10 +3093,16 @@
     color:#b91c1c;
   }
   .parameter-editor { border:1px solid #e6eaf2; border-radius:12px; padding:12px; background:#fff; min-height:200px; }
+  .parameter-editor.no-border {
+    border:none;
+    padding:0;
+    background:transparent;
+  }
   .parameter-editor-inner { display:flex; flex-direction:column; gap:8px; }
   .parameter-alias, .parameter-definition { width:100%; }
   .parameter-alias { font-weight:600; font-size:14px; padding:8px; }
   .parameter-definition { min-height:60px; resize:none; }
+  .autoheight { min-height:40px; }
   .parameter-definition-hint { font-size:11px; color:#64748b; }
   .parameter-source-row { display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:8px; }
   .parameter-conditions { border:1px solid #e6eaf2; border-radius:10px; padding:10px; background:#f8fafc; }
