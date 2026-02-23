@@ -3046,24 +3046,18 @@
   .parameter-crumbs { display:flex; flex-wrap:wrap; gap:6px; }
   .parameter-crumb {
     border-radius:999px;
-    border:1px solid #e2e8f0;
+    border:none;
     padding:4px 10px;
-    background:#f8fafc;
-    color:#0f172a;
+    background:#0f172a;
+    color:#fff;
     font-size:12px;
     display:inline-flex;
     align-items:center;
     gap:6px;
   }
   .parameter-crumb.active-crumb {
-    background:#0f172a;
-    color:#fff;
-    border-color:#0f172a;
-  }
-  .parameter-crumb.active-crumb {
     background:#fff;
     color:#0f172a;
-    border-color:#0f172a;
   }
   .crumb-indicator {
     width:8px;
@@ -3088,6 +3082,9 @@
     font-size:14px;
     line-height:1;
     margin-left:4px;
+    background:transparent;
+  }
+  .parameter-crumb:not(.active-crumb) .crumb-close {
     color:#f8fafc;
   }
   .parameter-crumb.active-crumb .crumb-close {
