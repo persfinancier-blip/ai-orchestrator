@@ -109,6 +109,35 @@ const API_CONFIGS_REQUIRED_COLUMNS = [
   { name: 'target_schema', types: ['text', 'character varying', 'varchar'] },
   { name: 'target_table', types: ['text', 'character varying', 'varchar'] },
   { name: 'mapping_json', types: ['jsonb', 'json'] },
+  { name: 'auth_mode', types: ['text', 'character varying', 'varchar'] },
+  { name: 'auth_json', types: ['jsonb', 'json'] },
+  { name: 'oauth2_token_url', types: ['text', 'character varying', 'varchar'] },
+  { name: 'oauth2_client_id', types: ['text', 'character varying', 'varchar'] },
+  { name: 'oauth2_client_secret', types: ['text', 'character varying', 'varchar'] },
+  { name: 'oauth2_grant_type', types: ['text', 'character varying', 'varchar'] },
+  { name: 'oauth2_token_field', types: ['text', 'character varying', 'varchar'] },
+  { name: 'oauth2_expires_field', types: ['text', 'character varying', 'varchar'] },
+  { name: 'oauth2_token_type_field', types: ['text', 'character varying', 'varchar'] },
+  { name: 'parameter_definitions', types: ['jsonb', 'json'] },
+  { name: 'response_targets', types: ['jsonb', 'json'] },
+  { name: 'picked_paths', types: ['jsonb', 'json'] },
+  { name: 'example_request', types: ['text', 'character varying', 'varchar'] },
+  { name: 'pagination_enabled', types: ['boolean'] },
+  { name: 'pagination_strategy', types: ['text', 'character varying', 'varchar'] },
+  { name: 'pagination_target', types: ['text', 'character varying', 'varchar'] },
+  { name: 'pagination_data_path', types: ['text', 'character varying', 'varchar'] },
+  { name: 'pagination_page_param', types: ['text', 'character varying', 'varchar'] },
+  { name: 'pagination_start_page', types: ['integer', 'int', 'int4'] },
+  { name: 'pagination_limit_param', types: ['text', 'character varying', 'varchar'] },
+  { name: 'pagination_limit_value', types: ['integer', 'int', 'int4'] },
+  { name: 'pagination_cursor_req_path_1', types: ['text', 'character varying', 'varchar'] },
+  { name: 'pagination_cursor_req_path_2', types: ['text', 'character varying', 'varchar'] },
+  { name: 'pagination_cursor_res_path_1', types: ['text', 'character varying', 'varchar'] },
+  { name: 'pagination_cursor_res_path_2', types: ['text', 'character varying', 'varchar'] },
+  { name: 'pagination_next_url_path', types: ['text', 'character varying', 'varchar'] },
+  { name: 'pagination_max_pages', types: ['integer', 'int', 'int4'] },
+  { name: 'pagination_delay_ms', types: ['integer', 'int', 'int4'] },
+  { name: 'pagination_custom_strategy', types: ['text', 'character varying', 'varchar'] },
   { name: 'description', types: ['text', 'character varying', 'varchar'] },
   { name: 'is_active', types: ['boolean'] },
   { name: 'updated_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] },
@@ -607,6 +636,35 @@ async function ensureApiConfigsTable(client, config) {
       target_schema text NOT NULL DEFAULT '',
       target_table text NOT NULL DEFAULT '',
       mapping_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      auth_mode text NOT NULL DEFAULT 'manual',
+      auth_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      oauth2_token_url text NOT NULL DEFAULT '',
+      oauth2_client_id text NOT NULL DEFAULT '',
+      oauth2_client_secret text NOT NULL DEFAULT '',
+      oauth2_grant_type text NOT NULL DEFAULT 'client_credentials',
+      oauth2_token_field text NOT NULL DEFAULT 'access_token',
+      oauth2_expires_field text NOT NULL DEFAULT 'expires_in',
+      oauth2_token_type_field text NOT NULL DEFAULT 'token_type',
+      parameter_definitions jsonb NOT NULL DEFAULT '[]'::jsonb,
+      response_targets jsonb NOT NULL DEFAULT '[]'::jsonb,
+      picked_paths jsonb NOT NULL DEFAULT '[]'::jsonb,
+      example_request text NOT NULL DEFAULT '',
+      pagination_enabled boolean NOT NULL DEFAULT false,
+      pagination_strategy text NOT NULL DEFAULT 'none',
+      pagination_target text NOT NULL DEFAULT 'body',
+      pagination_data_path text NOT NULL DEFAULT '',
+      pagination_page_param text NOT NULL DEFAULT 'page',
+      pagination_start_page integer NOT NULL DEFAULT 1,
+      pagination_limit_param text NOT NULL DEFAULT 'limit',
+      pagination_limit_value integer NOT NULL DEFAULT 100,
+      pagination_cursor_req_path_1 text NOT NULL DEFAULT '',
+      pagination_cursor_req_path_2 text NOT NULL DEFAULT '',
+      pagination_cursor_res_path_1 text NOT NULL DEFAULT '',
+      pagination_cursor_res_path_2 text NOT NULL DEFAULT '',
+      pagination_next_url_path text NOT NULL DEFAULT 'next',
+      pagination_max_pages integer NOT NULL DEFAULT 1,
+      pagination_delay_ms integer NOT NULL DEFAULT 0,
+      pagination_custom_strategy text NOT NULL DEFAULT '',
       description text NOT NULL DEFAULT '',
       is_active boolean NOT NULL DEFAULT true,
       updated_at timestamptz NOT NULL DEFAULT now(),
@@ -620,6 +678,38 @@ async function ensureApiConfigsTable(client, config) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS ao_api_configs_store_active_idx
     ON ${qn} (is_active, api_name)
+  `);
+  await client.query(`
+    ALTER TABLE ${qn}
+      ADD COLUMN IF NOT EXISTS auth_mode text NOT NULL DEFAULT 'manual',
+      ADD COLUMN IF NOT EXISTS auth_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      ADD COLUMN IF NOT EXISTS oauth2_token_url text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS oauth2_client_id text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS oauth2_client_secret text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS oauth2_grant_type text NOT NULL DEFAULT 'client_credentials',
+      ADD COLUMN IF NOT EXISTS oauth2_token_field text NOT NULL DEFAULT 'access_token',
+      ADD COLUMN IF NOT EXISTS oauth2_expires_field text NOT NULL DEFAULT 'expires_in',
+      ADD COLUMN IF NOT EXISTS oauth2_token_type_field text NOT NULL DEFAULT 'token_type',
+      ADD COLUMN IF NOT EXISTS parameter_definitions jsonb NOT NULL DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS response_targets jsonb NOT NULL DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS picked_paths jsonb NOT NULL DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS example_request text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS pagination_enabled boolean NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS pagination_strategy text NOT NULL DEFAULT 'none',
+      ADD COLUMN IF NOT EXISTS pagination_target text NOT NULL DEFAULT 'body',
+      ADD COLUMN IF NOT EXISTS pagination_data_path text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS pagination_page_param text NOT NULL DEFAULT 'page',
+      ADD COLUMN IF NOT EXISTS pagination_start_page integer NOT NULL DEFAULT 1,
+      ADD COLUMN IF NOT EXISTS pagination_limit_param text NOT NULL DEFAULT 'limit',
+      ADD COLUMN IF NOT EXISTS pagination_limit_value integer NOT NULL DEFAULT 100,
+      ADD COLUMN IF NOT EXISTS pagination_cursor_req_path_1 text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS pagination_cursor_req_path_2 text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS pagination_cursor_res_path_1 text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS pagination_cursor_res_path_2 text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS pagination_next_url_path text NOT NULL DEFAULT 'next',
+      ADD COLUMN IF NOT EXISTS pagination_max_pages integer NOT NULL DEFAULT 1,
+      ADD COLUMN IF NOT EXISTS pagination_delay_ms integer NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS pagination_custom_strategy text NOT NULL DEFAULT ''
   `);
   await ensureSystemContractColumns(client, qn);
   return qn;
@@ -1245,6 +1335,35 @@ tableBuilderRouter.get('/api-configs', requireDataAdmin, async (_req, res) => {
         target_schema,
         target_table,
         mapping_json,
+        auth_mode,
+        auth_json,
+        oauth2_token_url,
+        oauth2_client_id,
+        oauth2_client_secret,
+        oauth2_grant_type,
+        oauth2_token_field,
+        oauth2_expires_field,
+        oauth2_token_type_field,
+        parameter_definitions,
+        response_targets,
+        picked_paths,
+        example_request,
+        pagination_enabled,
+        pagination_strategy,
+        pagination_target,
+        pagination_data_path,
+        pagination_page_param,
+        pagination_start_page,
+        pagination_limit_param,
+        pagination_limit_value,
+        pagination_cursor_req_path_1,
+        pagination_cursor_req_path_2,
+        pagination_cursor_res_path_1,
+        pagination_cursor_res_path_2,
+        pagination_next_url_path,
+        pagination_max_pages,
+        pagination_delay_ms,
+        pagination_custom_strategy,
         description,
         is_active,
         updated_at,
@@ -1281,10 +1400,48 @@ tableBuilderRouter.post('/api-configs/upsert', requireDataAdmin, async (req, res
   }
 
   const toJson = (v) => (v === undefined ? {} : v);
+  const toArray = (v) => (Array.isArray(v) ? v : []);
   const headers_json = toJson(req.body?.headers_json);
   const query_json = toJson(req.body?.query_json);
   const body_json = toJson(req.body?.body_json);
   const pagination_json = toJson(req.body?.pagination_json);
+  const auth_mode = String(req.body?.auth_mode || 'manual').trim();
+  const auth_json = toJson(req.body?.auth_json);
+  const oauth2_token_url = String(req.body?.oauth2_token_url || '').trim();
+  const oauth2_client_id = String(req.body?.oauth2_client_id || '').trim();
+  const oauth2_client_secret = String(req.body?.oauth2_client_secret || '').trim();
+  const oauth2_grant_type = String(req.body?.oauth2_grant_type || 'client_credentials').trim();
+  const oauth2_token_field = String(req.body?.oauth2_token_field || 'access_token').trim();
+  const oauth2_expires_field = String(req.body?.oauth2_expires_field || 'expires_in').trim();
+  const oauth2_token_type_field = String(req.body?.oauth2_token_type_field || 'token_type').trim();
+  const parameter_definitions = toArray(req.body?.parameter_definitions);
+  const response_targets = toArray(req.body?.response_targets);
+  const picked_paths = toArray(req.body?.picked_paths);
+  const example_request = String(req.body?.example_request || '').trim();
+  const pagination_enabled = Boolean(req.body?.pagination_enabled);
+  const pagination_strategy = String(req.body?.pagination_strategy || 'none').trim();
+  const pagination_target = String(req.body?.pagination_target || 'body').trim();
+  const pagination_data_path = String(req.body?.pagination_data_path || '').trim();
+  const pagination_page_param = String(req.body?.pagination_page_param || 'page').trim();
+  const pagination_start_page = Number.isFinite(Number(req.body?.pagination_start_page))
+    ? Number(req.body?.pagination_start_page)
+    : 1;
+  const pagination_limit_param = String(req.body?.pagination_limit_param || 'limit').trim();
+  const pagination_limit_value = Number.isFinite(Number(req.body?.pagination_limit_value))
+    ? Number(req.body?.pagination_limit_value)
+    : 100;
+  const pagination_cursor_req_path_1 = String(req.body?.pagination_cursor_req_path_1 || '').trim();
+  const pagination_cursor_req_path_2 = String(req.body?.pagination_cursor_req_path_2 || '').trim();
+  const pagination_cursor_res_path_1 = String(req.body?.pagination_cursor_res_path_1 || '').trim();
+  const pagination_cursor_res_path_2 = String(req.body?.pagination_cursor_res_path_2 || '').trim();
+  const pagination_next_url_path = String(req.body?.pagination_next_url_path || 'next').trim();
+  const pagination_max_pages = Number.isFinite(Number(req.body?.pagination_max_pages))
+    ? Number(req.body?.pagination_max_pages)
+    : 1;
+  const pagination_delay_ms = Number.isFinite(Number(req.body?.pagination_delay_ms))
+    ? Number(req.body?.pagination_delay_ms)
+    : 0;
+  const pagination_custom_strategy = String(req.body?.pagination_custom_strategy || '').trim();
   const mapping_json = toJson(req.body?.mapping_json);
 
   const client = await pool.connect();
@@ -1311,15 +1468,44 @@ tableBuilderRouter.post('/api-configs/upsert', requireDataAdmin, async (req, res
           target_schema = $10,
           target_table = $11,
           mapping_json = $12::jsonb,
-          description = $13,
-          is_active = $14,
+          auth_mode = $13,
+          auth_json = $14::jsonb,
+          oauth2_token_url = $15,
+          oauth2_client_id = $16,
+          oauth2_client_secret = $17,
+          oauth2_grant_type = $18,
+          oauth2_token_field = $19,
+          oauth2_expires_field = $20,
+          oauth2_token_type_field = $21,
+          parameter_definitions = $22::jsonb,
+          response_targets = $23::jsonb,
+          picked_paths = $24::jsonb,
+          example_request = $25,
+          pagination_enabled = $26,
+          pagination_strategy = $27,
+          pagination_target = $28,
+          pagination_data_path = $29,
+          pagination_page_param = $30,
+          pagination_start_page = $31,
+          pagination_limit_param = $32,
+          pagination_limit_value = $33,
+          pagination_cursor_req_path_1 = $34,
+          pagination_cursor_req_path_2 = $35,
+          pagination_cursor_res_path_1 = $36,
+          pagination_cursor_res_path_2 = $37,
+          pagination_next_url_path = $38,
+          pagination_max_pages = $39,
+          pagination_delay_ms = $40,
+          pagination_custom_strategy = $41,
+          description = $42,
+          is_active = $43,
           updated_at = now(),
-          updated_by = $15,
+          updated_by = $44,
           ao_source = 'api_configs_api',
-          ao_run_id = $16,
+          ao_run_id = $45,
           ao_updated_at = now(),
-          ao_contract_schema = $17,
-          ao_contract_name = $18,
+          ao_contract_schema = $46,
+          ao_contract_name = $47,
           ao_contract_version = 1
         WHERE id = $1
         RETURNING id
@@ -1337,6 +1523,35 @@ tableBuilderRouter.post('/api-configs/upsert', requireDataAdmin, async (req, res
           target_schema,
           target_table,
           JSON.stringify(mapping_json),
+          auth_mode,
+          JSON.stringify(auth_json),
+          oauth2_token_url,
+          oauth2_client_id,
+          oauth2_client_secret,
+          oauth2_grant_type,
+          oauth2_token_field,
+          oauth2_expires_field,
+          oauth2_token_type_field,
+          JSON.stringify(parameter_definitions),
+          JSON.stringify(response_targets),
+          JSON.stringify(picked_paths),
+          example_request,
+          pagination_enabled,
+          pagination_strategy,
+          pagination_target,
+          pagination_data_path,
+          pagination_page_param,
+          pagination_start_page,
+          pagination_limit_param,
+          pagination_limit_value,
+          pagination_cursor_req_path_1,
+          pagination_cursor_req_path_2,
+          pagination_cursor_res_path_1,
+          pagination_cursor_res_path_2,
+          pagination_next_url_path,
+          pagination_max_pages,
+          pagination_delay_ms,
+          pagination_custom_strategy,
           description,
           is_active,
           updated_by,
@@ -1353,11 +1568,19 @@ tableBuilderRouter.post('/api-configs/upsert', requireDataAdmin, async (req, res
       `
       INSERT INTO ${qn}
         (api_name, method, base_url, path, headers_json, query_json, body_json, pagination_json, target_schema, target_table,
-         mapping_json, description, is_active, updated_at, updated_by,
+         mapping_json, auth_mode, auth_json, oauth2_token_url, oauth2_client_id, oauth2_client_secret, oauth2_grant_type,
+         oauth2_token_field, oauth2_expires_field, oauth2_token_type_field, parameter_definitions, response_targets, picked_paths,
+         example_request, pagination_enabled, pagination_strategy, pagination_target, pagination_data_path, pagination_page_param,
+         pagination_start_page, pagination_limit_param, pagination_limit_value, pagination_cursor_req_path_1,
+         pagination_cursor_req_path_2, pagination_cursor_res_path_1, pagination_cursor_res_path_2, pagination_next_url_path,
+         pagination_max_pages, pagination_delay_ms, pagination_custom_strategy, description, is_active, updated_at, updated_by,
          ao_source, ao_run_id, ao_created_at, ao_updated_at, ao_contract_schema, ao_contract_name, ao_contract_version)
       VALUES
-        ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11::jsonb, $12, $13, now(), $14,
-         'api_configs_api', $15, now(), now(), $16, $17, 1)
+        ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10,
+         $11::jsonb, $12, $13::jsonb, $14, $15, $16, $17, $18, $19, $20, $21::jsonb,
+         $22::jsonb, $23::jsonb, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41,
+         $42, $43, now(), $44,
+         'api_configs_api', $45, now(), now(), $46, $47, 1)
       RETURNING id
       `,
       [
@@ -1372,6 +1595,35 @@ tableBuilderRouter.post('/api-configs/upsert', requireDataAdmin, async (req, res
         target_schema,
         target_table,
         JSON.stringify(mapping_json),
+        auth_mode,
+        JSON.stringify(auth_json),
+        oauth2_token_url,
+        oauth2_client_id,
+        oauth2_client_secret,
+        oauth2_grant_type,
+        oauth2_token_field,
+        oauth2_expires_field,
+        oauth2_token_type_field,
+        JSON.stringify(parameter_definitions),
+        JSON.stringify(response_targets),
+        JSON.stringify(picked_paths),
+        example_request,
+        pagination_enabled,
+        pagination_strategy,
+        pagination_target,
+        pagination_data_path,
+        pagination_page_param,
+        pagination_start_page,
+        pagination_limit_param,
+        pagination_limit_value,
+        pagination_cursor_req_path_1,
+        pagination_cursor_req_path_2,
+        pagination_cursor_res_path_1,
+        pagination_cursor_res_path_2,
+        pagination_next_url_path,
+        pagination_max_pages,
+        pagination_delay_ms,
+        pagination_custom_strategy,
         description,
         is_active,
         updated_by,

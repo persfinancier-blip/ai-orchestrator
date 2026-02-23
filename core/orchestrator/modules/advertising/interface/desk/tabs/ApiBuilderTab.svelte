@@ -373,13 +373,16 @@
     const legacy = tryObj(mapping?.source ?? mapping?.config ?? mapping?.payload);
     const pagination = tryObj(row?.pagination_json || mapping?.pagination || legacy?.pagination);
     const oauth2 = tryObj(mapping?.oauth2 || legacy?.oauth2);
-    const parameterDefinitionsRaw = Array.isArray(mapping?.parameter_definitions)
+    const parameterDefinitionsRaw = Array.isArray(row?.parameter_definitions)
+      ? row.parameter_definitions
+      : Array.isArray(mapping?.parameter_definitions)
       ? mapping.parameter_definitions
       : Array.isArray(legacy?.parameter_definitions)
       ? legacy.parameter_definitions
       : [];
     const parsedTargets = Array.isArray(mapping?.response_targets) ? mapping.response_targets : [];
-    const normalizedTargets = parsedTargets
+    const responseTargetsSource = Array.isArray(row?.response_targets) ? row.response_targets : parsedTargets;
+    const normalizedTargets = responseTargetsSource
       .map((t: any) => ({
         id: uid(),
         schema: String(t?.schema || ''),
@@ -409,23 +412,71 @@
     const normalizedDefinitions = parameterDefinitionsRaw.map((pd: any) => ({
       id: String(pd?.id || uid()),
       alias: String(pd?.alias || `param_${uid()}`),
-        definition: String(pd?.definition || ''),
-        sourceSchema: String(pd?.source_schema || pd?.sourceSchema || ''),
-        sourceTable: String(pd?.source_table || pd?.sourceTable || ''),
-        sourceField: String(pd?.source_field || pd?.sourceField || ''),
-        conditions: Array.isArray(pd?.conditions)
-          ? pd.conditions.map((cond: any) => ({
-              id: String(cond?.id || uid()),
-              schema: String(cond?.schema || ''),
-              table: String(cond?.table || ''),
-              field: String(cond?.field || ''),
-              operator: String(cond?.operator || 'equals'),
-              compareMode: String(cond?.compare_mode || cond?.compareMode || 'value') === 'column' ? 'column' : 'value',
-              compareValue: String(cond?.compare_value || cond?.compareValue || ''),
-              compareColumn: cond?.compare_column || cond?.compareColumn || ''
-            }))
-          : []
-      }));
+      definition: String(pd?.definition || ''),
+      sourceSchema: String(pd?.source_schema || pd?.sourceSchema || ''),
+      sourceTable: String(pd?.source_table || pd?.sourceTable || ''),
+      sourceField: String(pd?.source_field || pd?.sourceField || ''),
+      conditions: Array.isArray(pd?.conditions)
+        ? pd.conditions.map((cond: any) => ({
+            id: String(cond?.id || uid()),
+            schema: String(cond?.schema || ''),
+            table: String(cond?.table || ''),
+            field: String(cond?.field || ''),
+            operator: String(cond?.operator || 'equals'),
+            compareMode: String(cond?.compare_mode || cond?.compareMode || 'value') === 'column' ? 'column' : 'value',
+            compareValue: String(cond?.compare_value || cond?.compareValue || ''),
+            compareColumn: cond?.compare_column || cond?.compareColumn || ''
+          }))
+        : []
+    }));
+
+    const pickedPathsSource = Array.isArray(row?.picked_paths)
+      ? row.picked_paths
+      : Array.isArray(mapping?.picked_paths)
+      ? mapping.picked_paths
+      : [];
+
+    const authJsonSource = tryObj(
+      row?.auth_json || mapping?.auth_json || legacy?.auth_json || legacy?.authJson
+    );
+
+    const authModeRaw = String(row?.auth_mode || oauth2?.mode || 'manual').trim();
+    const authMode = authModeRaw === 'oauth2_client_credentials' ? 'oauth2_client_credentials' : 'manual';
+    const oauth2TokenUrl = String(row?.oauth2_token_url || oauth2?.token_url || '');
+    const oauth2ClientId = String(row?.oauth2_client_id || oauth2?.client_id || '');
+    const oauth2ClientSecret = String(row?.oauth2_client_secret || oauth2?.client_secret || '');
+    const oauth2GrantType = String(row?.oauth2_grant_type || oauth2?.grant_type || 'client_credentials');
+    const oauth2TokenField = String(row?.oauth2_token_field || oauth2?.token_field || 'access_token');
+    const oauth2ExpiresField = String(row?.oauth2_expires_field || oauth2?.expires_field || 'expires_in');
+    const oauth2TokenTypeField = String(row?.oauth2_token_type_field || oauth2?.token_type_field || 'token_type');
+    const exampleRequestValue = String(row?.example_request || mapping?.exampleRequest || legacy?.exampleRequest || '');
+    const paginationEnabledValue =
+      row?.pagination_enabled ?? Boolean(pagination?.enabled) ?? false;
+    const paginationStrategyValue = String(row?.pagination_strategy || pagination?.strategy || 'none').trim();
+    const paginationTargetValue = String(row?.pagination_target || pagination?.target || 'body').trim();
+    const paginationDataPathValue = String(row?.pagination_data_path || pagination?.data_path || '');
+    const paginationPageParamValue = String(row?.pagination_page_param || pagination?.page_param || 'page');
+    const paginationStartPageValue = Number.isFinite(Number(row?.pagination_start_page))
+      ? Number(row?.pagination_start_page)
+      : Number(pagination?.start_page || 1);
+    const paginationLimitParamValue = String(row?.pagination_limit_param || pagination?.limit_param || 'limit');
+    const paginationLimitValueValue = Number.isFinite(Number(row?.pagination_limit_value))
+      ? Number(row?.pagination_limit_value)
+      : Number(pagination?.limit_value || 100);
+    const paginationCursorReqPath1Value = String(row?.pagination_cursor_req_path_1 || pagination?.cursor_req_path_1 || '');
+    const paginationCursorReqPath2Value = String(row?.pagination_cursor_req_path_2 || pagination?.cursor_req_path_2 || '');
+    const paginationCursorResPath1Value = String(row?.pagination_cursor_res_path_1 || pagination?.cursor_res_path_1 || '');
+    const paginationCursorResPath2Value = String(row?.pagination_cursor_res_path_2 || pagination?.cursor_res_path_2 || '');
+    const paginationNextUrlPathValue = String(row?.pagination_next_url_path || pagination?.next_url_path || 'next');
+    const paginationMaxPagesValue = Number.isFinite(Number(row?.pagination_max_pages))
+      ? Number(row?.pagination_max_pages)
+      : Number(pagination?.max_pages || 3);
+    const paginationDelayMsValue = Number.isFinite(Number(row?.pagination_delay_ms))
+      ? Number(row?.pagination_delay_ms)
+      : Number(pagination?.delay_ms || 0);
+    const paginationCustomStrategyValue = String(
+      row?.pagination_custom_strategy || pagination?.custom_strategy || ''
+    );
 
     return {
       ...d,
@@ -436,39 +487,40 @@
       baseUrl: String(row?.base_url || legacy?.base_url || legacy?.baseUrl || ''),
       path: String(row?.path || legacy?.path || '/'),
       headersJson: toPrettyJson(tryObj(row?.headers_json || legacy?.headers_json || legacy?.headersJson || legacy?.headers)),
-      authJson: toPrettyJson(tryObj(mapping?.auth_json || legacy?.auth_json || legacy?.authJson)),
-      authMode: String(oauth2?.mode || 'manual') === 'oauth2_client_credentials' ? 'oauth2_client_credentials' : 'manual',
-      oauth2TokenUrl: String(oauth2?.token_url || ''),
-      oauth2ClientId: String(oauth2?.client_id || ''),
-      oauth2ClientSecret: String(oauth2?.client_secret || ''),
-      oauth2GrantType: String(oauth2?.grant_type || 'client_credentials'),
-      oauth2TokenField: String(oauth2?.token_field || 'access_token'),
-      oauth2ExpiresField: String(oauth2?.expires_field || 'expires_in'),
-      oauth2TokenTypeField: String(oauth2?.token_type_field || 'token_type'),
+      authJson: toPrettyJson(authJsonSource),
+      authMode,
+      oauth2TokenUrl,
+      oauth2ClientId,
+      oauth2ClientSecret,
+      oauth2GrantType,
+      oauth2TokenField,
+      oauth2ExpiresField,
+      oauth2TokenTypeField,
       queryJson: toPrettyJson(tryObj(row?.query_json || legacy?.query_json || legacy?.queryJson || legacy?.query || legacy?.params)),
       bodyJson: toPrettyJson(tryObj(row?.body_json || legacy?.body_json || legacy?.bodyJson || legacy?.body || legacy?.data)),
-      paginationEnabled: Boolean(pagination?.enabled),
-      paginationStrategy: (['cursor_fields', 'page_number', 'offset_limit', 'next_url'].includes(String(pagination?.strategy || ''))
-        ? String(pagination.strategy)
-        : 'none') as ApiDraft['paginationStrategy'],
-      paginationTarget: String(pagination?.target || 'body') === 'query' ? 'query' : 'body',
-      paginationDataPath: String(pagination?.data_path || ''),
-      paginationPageParam: String(pagination?.page_param || 'page'),
-      paginationStartPage: Number(pagination?.start_page || 1),
-      paginationLimitParam: String(pagination?.limit_param || 'limit'),
-      paginationLimitValue: Number(pagination?.limit_value || 100),
-      paginationCursorReqPath1: String(pagination?.cursor_req_path_1 || ''),
-      paginationCursorReqPath2: String(pagination?.cursor_req_path_2 || ''),
-      paginationCursorResPath1: String(pagination?.cursor_res_path_1 || ''),
-      paginationCursorResPath2: String(pagination?.cursor_res_path_2 || ''),
-      paginationNextUrlPath: String(pagination?.next_url_path || 'next'),
-      paginationMaxPages: Number(pagination?.max_pages || 3),
-      paginationDelayMs: Number(pagination?.delay_ms || 0),
-      paginationCustomStrategy: String(pagination?.custom_strategy || ''),
-      pickedPaths: Array.isArray(mapping?.picked_paths) ? mapping.picked_paths.map((x: any) => String(x || '').trim()).filter(Boolean) : [],
+      paginationEnabled: paginationEnabledValue,
+      paginationStrategy:
+        ['cursor_fields', 'page_number', 'offset_limit', 'next_url'].includes(paginationStrategyValue)
+          ? (paginationStrategyValue as ApiDraft['paginationStrategy'])
+          : 'none',
+      paginationTarget: paginationTargetValue === 'query' ? 'query' : 'body',
+      paginationDataPath: paginationDataPathValue,
+      paginationPageParam: paginationPageParamValue,
+      paginationStartPage: paginationStartPageValue,
+      paginationLimitParam: paginationLimitParamValue,
+      paginationLimitValue: paginationLimitValueValue,
+      paginationCursorReqPath1: paginationCursorReqPath1Value,
+      paginationCursorReqPath2: paginationCursorReqPath2Value,
+      paginationCursorResPath1: paginationCursorResPath1Value,
+      paginationCursorResPath2: paginationCursorResPath2Value,
+      paginationNextUrlPath: paginationNextUrlPathValue,
+      paginationMaxPages: paginationMaxPagesValue,
+      paginationDelayMs: paginationDelayMsValue,
+      paginationCustomStrategy: paginationCustomStrategyValue,
+      pickedPaths: pickedPathsSource.map((x: any) => String(x || '').trim()).filter(Boolean),
       responseTargets: normalizedTargets,
       description: String(row?.description || legacy?.description || ''),
-      exampleRequest: String(mapping?.exampleRequest || legacy?.exampleRequest || ''),
+      exampleRequest: exampleRequestValue,
       parameterDefinitions: normalizedDefinitions
     };
   }
@@ -478,14 +530,33 @@
     parsed?: { headersJson: Record<string, any>; queryJson: Record<string, any>; bodyJson: any; authJson: Record<string, any> }
   ) {
     const firstTarget = d.responseTargets.find((t) => t.schema && t.table);
-    return {
-      id: d.storeId || undefined,
-      api_name: d.name,
-      method: d.method,
-      base_url: d.baseUrl,
-      path: d.path,
-      headers_json: parsed?.headersJson ?? tryObj(d.headersJson),
-      query_json: parsed?.queryJson ?? tryObj(d.queryJson),
+  const parameterDefinitionsPayload = d.parameterDefinitions.map((pd) => ({
+    id: pd.id,
+    alias: pd.alias,
+    definition: pd.definition,
+    source_schema: pd.sourceSchema,
+    source_table: pd.sourceTable,
+    source_field: pd.sourceField,
+    conditions: pd.conditions.map((cond) => ({
+      id: cond.id,
+      schema: cond.schema,
+      table: cond.table,
+      field: cond.field,
+      operator: cond.operator,
+      compare_mode: cond.compareMode,
+      compare_value: cond.compareValue,
+      compare_column: cond.compareColumn
+    }))
+  }));
+
+  return {
+    id: d.storeId || undefined,
+    api_name: d.name,
+    method: d.method,
+    base_url: d.baseUrl,
+    path: d.path,
+    headers_json: parsed?.headersJson ?? tryObj(d.headersJson),
+    query_json: parsed?.queryJson ?? tryObj(d.queryJson),
       body_json: parsed?.bodyJson ?? tryObj(d.bodyJson),
       pagination_json: {
         enabled: d.paginationEnabled,
@@ -509,11 +580,11 @@
       target_table: firstTarget?.table || '',
       mapping_json: {
         exampleRequest: d.exampleRequest,
-        response_targets: d.responseTargets,
-        picked_paths: d.pickedPaths,
-        oauth2:
-          d.authMode === 'oauth2_client_credentials'
-            ? {
+      response_targets: d.responseTargets,
+      picked_paths: d.pickedPaths,
+      oauth2:
+        d.authMode === 'oauth2_client_credentials'
+          ? {
                 mode: d.authMode,
                 token_url: d.oauth2TokenUrl,
                 client_id: d.oauth2ClientId,
@@ -522,31 +593,43 @@
                 token_field: d.oauth2TokenField || 'access_token',
                 expires_field: d.oauth2ExpiresField || 'expires_in',
                 token_type_field: d.oauth2TokenTypeField || 'token_type'
-              }
-            : { mode: 'manual' },
-        auth_json: parsed?.authJson ?? tryObj(d.authJson),
-        parameter_definitions: d.parameterDefinitions.map((pd) => ({
-          id: pd.id,
-          alias: pd.alias,
-          definition: pd.definition,
-          source_schema: pd.sourceSchema,
-          source_table: pd.sourceTable,
-          source_field: pd.sourceField,
-          conditions: pd.conditions.map((cond) => ({
-            id: cond.id,
-            schema: cond.schema,
-            table: cond.table,
-            field: cond.field,
-            operator: cond.operator,
-            compare_mode: cond.compareMode,
-            compare_value: cond.compareValue,
-            compare_column: cond.compareColumn
-          }))
-        }))
-      },
-      description: d.description,
-      is_active: true
-    };
+          }
+        : { mode: 'manual' },
+      auth_json: parsed?.authJson ?? tryObj(d.authJson),
+      parameter_definitions: parameterDefinitionsPayload
+    },
+    auth_mode: d.authMode,
+    auth_json: parsed?.authJson ?? tryObj(d.authJson),
+    oauth2_token_url: d.oauth2TokenUrl,
+    oauth2_client_id: d.oauth2ClientId,
+    oauth2_client_secret: d.oauth2ClientSecret,
+    oauth2_grant_type: d.oauth2GrantType,
+    oauth2_token_field: d.oauth2TokenField,
+    oauth2_expires_field: d.oauth2ExpiresField,
+    oauth2_token_type_field: d.oauth2TokenTypeField,
+    parameter_definitions: parameterDefinitionsPayload,
+    response_targets: d.responseTargets,
+    picked_paths: d.pickedPaths,
+    example_request: d.exampleRequest,
+    pagination_enabled: d.paginationEnabled,
+    pagination_strategy: d.paginationStrategy,
+    pagination_target: d.paginationTarget,
+    pagination_data_path: d.paginationDataPath,
+    pagination_page_param: d.paginationPageParam,
+    pagination_start_page: d.paginationStartPage,
+    pagination_limit_param: d.paginationLimitParam,
+    pagination_limit_value: d.paginationLimitValue,
+    pagination_cursor_req_path_1: d.paginationCursorReqPath1,
+    pagination_cursor_req_path_2: d.paginationCursorReqPath2,
+    pagination_cursor_res_path_1: d.paginationCursorResPath1,
+    pagination_cursor_res_path_2: d.paginationCursorResPath2,
+    pagination_next_url_path: d.paginationNextUrlPath,
+    pagination_max_pages: d.paginationMaxPages,
+    pagination_delay_ms: d.paginationDelayMs,
+    pagination_custom_strategy: d.paginationCustomStrategy,
+    description: d.description,
+    is_active: true
+  };
   }
 
   function parseQualifiedTable(value: string): { schema: string; table: string } {
