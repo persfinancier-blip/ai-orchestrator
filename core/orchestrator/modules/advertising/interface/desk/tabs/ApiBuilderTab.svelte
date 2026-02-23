@@ -198,6 +198,10 @@
   let definitionError = '';
   let definitionDirty = false;
   let definitionUpdatingFromFields = false;
+  let parameterPreviewRows: any[] = [];
+  let parameterPreviewLoading = false;
+  let parameterPreviewError = '';
+  const PARAMETER_PREVIEW_LIMIT = 5;
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -1572,6 +1576,46 @@
     }
   }
 
+  function getParameterPreviewTarget(param: ParameterDefinition | null) {
+    const schema = String(param?.sourceSchema || '').trim();
+    const table = String(param?.sourceTable || '').trim();
+    return schema && table ? { schema, table } : null;
+  }
+
+  function formatParameterRowValue(row: Record<string, any>, field?: string) {
+    const value = field ? row[field] : row;
+    if (value === undefined || value === null) return '—';
+    if (typeof value === 'object') return JSON.stringify(value);
+    return String(value);
+  }
+
+  async function loadParameterPreview() {
+    parameterPreviewError = '';
+    parameterPreviewRows = [];
+    if (!activeParameter) {
+      parameterPreviewError = 'Выбери параметр.';
+      return;
+    }
+    const target = getParameterPreviewTarget(activeParameter);
+    if (!target) {
+      parameterPreviewError = 'Укажи источник (схема и таблица).';
+      return;
+    }
+    parameterPreviewLoading = true;
+    try {
+      const url = `${apiBase}/preview?schema=${encodeURIComponent(target.schema)}&table=${encodeURIComponent(target.table)}&limit=${PARAMETER_PREVIEW_LIMIT}`;
+      const j = await apiJson<{ rows: any[] }>(url);
+      parameterPreviewRows = j.rows || [];
+      if (!parameterPreviewRows.length) {
+        parameterPreviewError = 'Пока нет строк. Попробуй другой источник или добавь данные.';
+      }
+    } catch (e: any) {
+      parameterPreviewError = e?.message ?? String(e);
+    } finally {
+      parameterPreviewLoading = false;
+    }
+  }
+
   function handlePaginationTargetChange(value: string) {
     mutateSelected((d) => (d.paginationTarget = String(value) === 'query' ? 'query' : 'body'));
   }
@@ -2253,6 +2297,48 @@ function syncParameterEditorsHeight() {
                   </div>
                 {:else}
                   <p class="hint small-hint">Пока нет условий — параметр не фильтрует данные.</p>
+                {/if}
+              </div>
+              <div class="response-head field-head">
+                <span>Предпросмотр параметра</span>
+                <span class="inline-actions">
+                  <button
+                    type="button"
+                    class="view-toggle"
+                    on:click={loadParameterPreview}
+                    disabled={parameterPreviewLoading}
+                  >
+                    {parameterPreviewLoading ? 'Загрузка...' : 'Проверить'}
+                  </button>
+                </span>
+              </div>
+              <div class="parameter-preview-block">
+                {#if parameterPreviewLoading}
+                  <p class="hint">Загружаем строки из таблицы...</p>
+                {:else if parameterPreviewError}
+                  <p class="definition-error">{parameterPreviewError}</p>
+                {:else if !parameterPreviewRows.length}
+                  <p class="hint small-hint">Нажми «Проверить», чтобы увидеть первые значения столбца.</p>
+                {:else}
+                  <div class="parameter-preview-table-wrap">
+                    <table class="parameter-preview-table">
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>{activeParameter.sourceField || 'Значение'}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {#each parameterPreviewRows as row, idx}
+                          <tr>
+                            <td>{idx + 1}</td>
+                            <td>{formatParameterRowValue(row, activeParameter.sourceField)}</td>
+                          </tr>
+                        {/each}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p class="hint small-hint">Показано {parameterPreviewRows.length} строк (макс. {PARAMETER_PREVIEW_LIMIT}).</p>
                 {/if}
               </div>
               <textarea
@@ -3185,6 +3271,10 @@ function syncParameterEditorsHeight() {
   .condition-value { width:100%; }
   .tiny-btn { border:0; background:transparent; font-size:12px; color:#0f172a; cursor:pointer; }
   .definition-error { margin:0; font-size:11px; color:#b91c1c; }
+  .parameter-preview-block { border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#fff; }
+  .parameter-preview-table-wrap { overflow-x:auto; }
+  .parameter-preview-table { width:100%; border-collapse:collapse; }
+  .parameter-preview-table th, .parameter-preview-table td { border-bottom:1px solid #e2e8f0; padding:6px; text-align:left; font-size:13px; }
 </style>
 
 
