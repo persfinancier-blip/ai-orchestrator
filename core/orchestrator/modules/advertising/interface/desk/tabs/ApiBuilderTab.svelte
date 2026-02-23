@@ -2907,8 +2907,13 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
   .parameter-builder { border:1px solid #e2e8f0; border-radius:12px; background:#fff; padding:10px; }
   .parameter-builder-row { display:grid; gap:8px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); align-items:center; }
   .parameter-builder-row.parameter-builder-name input { font-size:14px; font-weight:600; padding:8px 12px; }
-  .parameter-builder-table-field { grid-template-columns: repeat(2, minmax(140px, 1fr)); gap:8px; }
-  .parameter-builder-table-field .table-field { width:100%; box-sizing:border-box; }
+  .parameter-builder-table-field { grid-template-columns: repeat(2, minmax(120px, 1fr)); gap:6px; }
+  .parameter-builder-table-field .table-field {
+    width:100%;
+    box-sizing:border-box;
+    font-size:12px;
+    padding:6px 8px;
+  }
   .parameter-vitrina { border:1px solid #e2e8f0; border-radius:12px; background:#fff; padding:10px; }
   .parameter-list { display:flex; flex-direction:column; gap:6px; }
   .parameter-chip { display:flex; align-items:center; justify-content:space-between; gap:10px; border-radius:10px; border:1px solid #dbe3ef; padding:8px 10px; background:#f8fafc; cursor:pointer; }
