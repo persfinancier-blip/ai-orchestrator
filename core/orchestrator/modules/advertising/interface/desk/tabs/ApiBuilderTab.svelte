@@ -2012,6 +2012,27 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
               {/if}
             </div>
 
+            {#if existingTables?.length}
+              <div class="parameter-table-picker-inline">
+                <select
+                  value={tableConnectValue}
+                  on:change={(e) => (tableConnectValue = e.currentTarget.value)}
+                >
+                  {#each existingTables as tbl}
+                    <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
+                  {/each}
+                </select>
+                <button
+                  class="icon-btn plus-dark"
+                  type="button"
+                  title="Подключить таблицу"
+                  on:click={() => addParameterConnectionByValue(tableConnectValue)}
+                >
+                  +
+                </button>
+              </div>
+            {/if}
+
             <div class="parameter-settings">
             <div
               class="parameter-settings-head view-toggle"
@@ -2959,6 +2980,26 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
     border-radius:14px;
     background:#fff;
     padding:10px;
+  }
+  .parameter-table-picker-inline {
+    margin-top:10px;
+    display:flex;
+    gap:6px;
+    align-items:center;
+  }
+  .parameter-table-picker-inline select {
+    flex:1;
+    appearance:none;
+    font-size:12px;
+    padding:6px 10px;
+    border-radius:10px;
+    border:1px solid #e2e8f0;
+    background:#fff;
+  }
+  .parameter-table-picker-inline .icon-btn {
+    width:34px;
+    min-width:34px;
+    padding:6px 0;
   }
   .targets-actions { display:flex; align-items:center; }
   .parameter-grid { margin-top:10px; display:flex; flex-direction:column; gap:10px; }
