@@ -201,6 +201,8 @@
   let parameterPreviewRows: any[] = [];
   let parameterPreviewLoading = false;
   let parameterPreviewError = '';
+  let definitionTree: any = null;
+  let definitionViewMode: 'text' | 'tree' = 'text';
   const PARAMETER_PREVIEW_LIMIT = 5;
 
   function uid() {
@@ -1566,14 +1568,23 @@
     definitionError = '';
     definitionDirty = true;
     const trimmed = value.trim();
+    definitionTree = null;
+    definitionViewMode = 'text';
     if (!trimmed || !activeParameter) return;
     try {
       const parsed = JSON.parse(trimmed);
       applyDefinitionFromJson(parsed, activeParameter.id);
       definitionDirty = false;
+      definitionTree = parsed;
     } catch {
       definitionError = 'Некорректный JSON. Проверь кавычки и скобки.';
     }
+  }
+
+  function clearParameterPreview() {
+    parameterPreviewRows = [];
+    parameterPreviewError = '';
+    parameterPreviewLoading = false;
   }
 
   function getParameterPreviewTarget(param: ParameterDefinition | null) {
@@ -2277,11 +2288,22 @@ function syncParameterEditorsHeight() {
                 <span class="inline-actions">
                   <button
                     type="button"
-                    class="view-toggle"
+                    class="icon-btn refresh-icon"
+                    aria-label="Обновить"
+                    title="Обновить"
                     on:click={loadParameterPreview}
                     disabled={parameterPreviewLoading}
                   >
-                    {parameterPreviewLoading ? 'Загрузка...' : 'Проверить'}
+                    ⟳
+                  </button>
+                  <button
+                    type="button"
+                    class="icon-btn danger"
+                    aria-label="Очистить предпросмотр"
+                    title="Очистить предпросмотр"
+                    on:click={clearParameterPreview}
+                  >
+                    ×
                   </button>
                 </span>
               </div>
@@ -2304,13 +2326,37 @@ function syncParameterEditorsHeight() {
                   <p class="hint small-hint">Показано {parameterPreviewRows.length} строк (макс. {PARAMETER_PREVIEW_LIMIT}).</p>
                 {/if}
               </div>
-              <textarea
-                class="parameter-definition autoheight"
-                bind:this={definitionParamEl}
-                placeholder="Определи параметр (например: FIELD('tokens.token'))"
-                value={definitionDraft}
-                on:input={(e) => handleDefinitionInput(e.currentTarget.value)}
-              ></textarea>
+              <div class="definition-section">
+                <div class="response-head field-head">
+                  <span>Описание параметра</span>
+                  <span class="inline-actions">
+                    <button
+                      type="button"
+                      class="view-toggle"
+                      on:click={() => (definitionViewMode = definitionViewMode === 'tree' ? 'text' : 'tree')}
+                    >
+                      {definitionViewMode === 'tree' ? 'Текст' : 'Дерево'}
+                    </button>
+                  </span>
+                </div>
+                {#if definitionViewMode === 'text'}
+                  <textarea
+                    class="parameter-definition autoheight"
+                    bind:this={definitionParamEl}
+                    placeholder="Определи параметр (например: FIELD('tokens.token'))"
+                    value={definitionDraft}
+                    on:input={(e) => handleDefinitionInput(e.currentTarget.value)}
+                  ></textarea>
+                {:else}
+                  {#if definitionTree}
+                    <div class="response-tree-wrap">
+                      <JsonTreeView node={definitionTree} name="definition" level={0} />
+                    </div>
+                  {:else}
+                    <p class="hint small-hint">Введите JSON — появится дерево описания.</p>
+                  {/if}
+                {/if}
+              </div>
               {#if definitionError}
                 <p class="definition-error">{definitionError}</p>
               {/if}
@@ -3078,6 +3124,7 @@ function syncParameterEditorsHeight() {
   .icon-btn { width:34px; min-width:34px; padding:6px 0; font-size:14px; text-transform:uppercase; border-color:transparent; background:transparent; color:#fff; }
   .danger.icon-btn { color:#b91c1c; }
   .plus-dark.icon-btn { color:#0f172a; font-weight:700; }
+  .icon-btn.refresh-icon { color:#0f172a; font-weight:700; }
   .plus-green.icon-btn { color:#16a34a; font-weight:700; }
   .map-row .icon-btn { color:#b91c1c; }
   .activeitem .icon-btn { color:#b91c1c; }
