@@ -55,6 +55,23 @@
     exampleRequest: string;
   };
 
+  type ParameterFilterType = 'text' | 'number' | 'date' | 'boolean' | 'custom';
+  type ParameterFilter = {
+    type: ParameterFilterType;
+    operator: string;
+    value: string;
+    valueTo?: string;
+  };
+  type ParameterSource = {
+    id: string;
+    schema: string;
+    table: string;
+    field: string;
+    alias: string;
+    filter: ParameterFilter;
+  };
+  type ParameterConnection = { schema: string; table: string };
+
   const AUTH_MODE_OAUTH2 = 'oauth2_client_credentials';
 
   const PAGINATION_STRATEGIES = [
@@ -85,6 +102,32 @@
     { name: 'description', types: ['text', 'character varying', 'varchar'] },
     { name: 'is_active', types: ['boolean'] }
   ];
+
+  const FILTER_OPERATORS: Record<ParameterFilterType, Array<{ value: string; label: string; needsValueTo?: boolean }>> = {
+    text: [
+      { value: 'contains', label: 'содержит' },
+      { value: 'equals', label: 'равно' },
+      { value: 'starts_with', label: 'начинается с' },
+      { value: 'ends_with', label: 'заканчивается на' }
+    ],
+    number: [
+      { value: 'equals', label: '=' },
+      { value: 'gt', label: '>' },
+      { value: 'lt', label: '<' },
+      { value: 'between', label: 'между', needsValueTo: true }
+    ],
+    date: [
+      { value: 'equals', label: '=' },
+      { value: 'before', label: 'раньше' },
+      { value: 'after', label: 'позже' },
+      { value: 'between', label: 'между', needsValueTo: true }
+    ],
+    boolean: [
+      { value: 'is_true', label: 'истина' },
+      { value: 'is_false', label: 'ложь' }
+    ],
+    custom: [{ value: 'custom', label: 'своя логика' }]
+  };
 
   let drafts: ApiDraft[] = [];
   let selectedRef = '';
@@ -146,6 +189,17 @@
   let responsePathPickerOpen = false;
   let responsePathPick = '';
   let oauthTokenCache: Record<string, { token: string; tokenType: string; expiresAt: number }> = {};
+  let tableConnectValue = '';
+  let builderTableValue = '';
+  let builderFieldValue = '';
+  let builderFilterType: ParameterFilterType = 'text';
+  let builderFilterOperator = FILTER_OPERATORS.text[0].value;
+  let builderFilterValue = '';
+  let builderFilterValueTo = '';
+  let builderAlias = '';
+  let selectedParameterId: string | null = null;
+  let parameterBuilderOpen = true;
+  let parameterSettingsOpen = true;
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -153,6 +207,129 @@
 
   function normalizeTypeName(type: string) {
     return String(type || '').toLowerCase().trim();
+  }
+
+  function setActiveParameter(id: string) {
+    selectedParameterId = selectedParameterId === id ? null : id;
+  }
+
+  function updateSelectedParameter(updates: Partial<ParameterSource>) {
+    if (!selectedParameterId || !selected) return;
+    mutateSelected((d) => {
+      d.parameterSources = d.parameterSources.map((p) => (p.id === selectedParameterId ? { ...p, ...updates } : p));
+    });
+  }
+
+  $: selectedParameter =
+    selected && selectedParameterId
+      ? selected.parameterSources?.find((src) => src.id === selectedParameterId) ?? null
+      : null;
+
+  $: if (selected && selectedParameterId && !selected.parameterSources?.some((src) => src.id === selectedParameterId)) {
+    selectedParameterId = null;
+  }
+
+  function connectionKey(conn: ParameterConnection) {
+    return `${conn.schema}.${conn.table}`;
+  }
+
+  function ensureConnectionColumns(schema: string, table: string) {
+    ensureColumnsFor(schema, table);
+  }
+
+  function addParameterConnectionByValue(value: string) {
+    const { schema, table } = parseQualifiedTable(value);
+    if (!schema || !table || !selected) return;
+    mutateSelected((d) => {
+      if (!d.parameterConnections.some((c) => c.schema === schema && c.table === table)) {
+        d.parameterConnections = [...d.parameterConnections, { schema, table }];
+      }
+    });
+    ensureConnectionColumns(schema, table);
+  }
+
+  function removeParameterConnection(schema: string, table: string) {
+    if (!selected) return;
+    mutateSelected((d) => {
+      d.parameterConnections = d.parameterConnections.filter((c) => !(c.schema === schema && c.table === table));
+      d.parameterSources = d.parameterSources.filter((p) => !(p.schema === schema && p.table === table));
+    });
+  }
+
+  function handleFilterTypeSelection(value: string) {
+    const normalized = (['text', 'number', 'date', 'boolean', 'custom'].includes(value) ? (value as ParameterFilterType) : 'text') as ParameterFilterType;
+    builderFilterType = normalized;
+    const ops = FILTER_OPERATORS[normalized];
+    builderFilterOperator = ops[0]?.value || '';
+  }
+
+  function operatorNeedsValueTo(type: ParameterFilterType, operator: string) {
+    return FILTER_OPERATORS[type]?.some((o) => o.value === operator && o.needsValueTo) ?? false;
+  }
+
+  function describeFilter(filter: ParameterFilter) {
+    const label = FILTER_OPERATORS[filter.type]?.find((o) => o.value === filter.operator)?.label || filter.operator;
+    if (!filter.value) return label;
+    if (filter.valueTo) return `${label}: ${filter.value} — ${filter.valueTo}`;
+    return `${label}: ${filter.value}`;
+  }
+
+  function builderTableColumns() {
+    const { schema, table } = parseQualifiedTable(builderTableValue);
+    if (!schema || !table) return [];
+    return columnOptionsFor(schema, table);
+  }
+
+  function addParameterSource() {
+    if (!selected) return;
+    const tableRef = builderTableValue || '';
+    if (!tableRef || !builderFieldValue || !builderFilterOperator || !builderFilterValue) return;
+    const { schema, table } = parseQualifiedTable(tableRef);
+    if (!schema || !table) return;
+    const needsSecond = operatorNeedsValueTo(builderFilterType, builderFilterOperator);
+    const newParamId = uid();
+    mutateSelected((d) => {
+      if (!d.parameterConnections.some((c) => c.schema === schema && c.table === table)) {
+        d.parameterConnections = [...d.parameterConnections, { schema, table }];
+      }
+      d.parameterSources = [
+        ...(d.parameterSources || []),
+        {
+          id: newParamId,
+          schema,
+          table,
+          field: builderFieldValue,
+          alias: builderAlias || `${table}.${builderFieldValue}`,
+          filter: {
+            type: builderFilterType,
+            operator: builderFilterOperator,
+            value: builderFilterValue,
+            valueTo: needsSecond ? builderFilterValueTo : undefined
+          }
+        }
+      ];
+    });
+    ensureConnectionColumns(schema, table);
+    builderFieldValue = '';
+    builderFilterValue = '';
+    builderFilterValueTo = '';
+    builderAlias = '';
+    selectedParameterId = newParamId;
+  }
+
+  function removeParameterSource(id: string) {
+    if (!selected) return;
+    mutateSelected((d) => {
+      d.parameterSources = d.parameterSources.filter((p) => p.id !== id);
+    });
+  }
+
+  $: if (!tableConnectValue && existingTables.length) {
+    tableConnectValue = `${existingTables[0].schema_name}.${existingTables[0].table_name}`;
+  }
+
+  $: if (!builderTableValue && selected?.parameterConnections?.length) {
+    builderTableValue = `${selected.parameterConnections[0].schema}.${selected.parameterConnections[0].table}`;
   }
 
   function toHttpMethod(v: string): HttpMethod {
@@ -1758,15 +1935,122 @@
             </button>
           {/if}
         </div>
-        <div class="statusline">status: {responseStatus || '-'}</div>
-        {#if responseIsJson && responseViewMode === 'tree'}
-          <div class="response-tree-wrap">
-            <JsonTreeView node={responseJson} name="response" level={0} pickEnabled={true} on:pickpath={(e) => applyPickedResponsePath(e.detail.path)} />
+      <div class="statusline">status: {responseStatus || '-'}</div>
+      {#if responseIsJson && responseViewMode === 'tree'}
+        <div class="response-tree-wrap">
+          <JsonTreeView node={responseJson} name="response" level={0} pickEnabled={true} on:pickpath={(e) => applyPickedResponsePath(e.detail.path)} />
+        </div>
+      {:else}
+        <textarea bind:this={responsePreviewEl} readonly value={responseText}></textarea>
+      {/if}
+    </div>
+
+    <div class="subsec">
+      <div class="subttl">Витрина параметров</div>
+      <div class="parameter-vitrina-block">
+        <div class="parameter-grid">
+          <div class="parameter-vitrina">
+            {#if selected?.parameterSources?.length}
+              <div class="parameter-list">
+                {#each selected.parameterSources as src (src.id)}
+                  <div
+                    class="parameter-chip"
+                    class:active={selectedParameterId === src.id}
+                    on:click={() => setActiveParameter(src.id)}
+                  >
+                    <div>
+                      <div class="param-chip-title">{src.alias || `${src.table}.${src.field}`}</div>
+                      <div class="param-chip-sub">{describeFilter(src.filter)}</div>
+                    </div>
+                    <button class="chip-remove" type="button" on:click|stopPropagation={() => removeParameterSource(src.id)}>x</button>
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <p class="hint">Добавь параметр, чтобы он появился в витрине.</p>
+            {/if}
           </div>
-        {:else}
-          <textarea bind:this={responsePreviewEl} readonly value={responseText}></textarea>
-        {/if}
+
+          {#if existingTables?.length}
+            <div class="parameter-connect-row">
+              <select value={tableConnectValue} on:change={(e) => (tableConnectValue = e.currentTarget.value)}>
+                {#each existingTables as tbl}
+                  <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
+                {/each}
+              </select>
+              <button class="icon-btn plus-dark" type="button" title="Подключить таблицу" on:click={() => addParameterConnectionByValue(tableConnectValue)}>+</button>
+            </div>
+            <div class="table-crumbs">
+              {#each selected?.parameterConnections as conn (connectionKey(conn))}
+                <div class="table-chip">
+                  <span>{conn.schema}.{conn.table}</span>
+                  <button type="button" class="chip-remove" on:click={() => removeParameterConnection(conn.schema, conn.table)}>x</button>
+                </div>
+              {/each}
+            </div>
+          {/if}
+
+          <div class="parameter-builder">
+            <div class="parameter-builder-row">
+              <select
+                value={builderTableValue}
+                class="table-field"
+                on:change={(e) => {
+                  builderTableValue = e.currentTarget.value;
+                  builderFieldValue = '';
+                  const parsed = parseQualifiedTable(builderTableValue);
+                  ensureConnectionColumns(parsed.schema, parsed.table);
+                }}
+              >
+                <option value="">Таблица</option>
+                {#if selected?.parameterConnections?.length}
+                  {#each selected.parameterConnections as conn}
+                    <option value={`${conn.schema}.${conn.table}`}>{conn.schema}.{conn.table}</option>
+                  {/each}
+                {/if}
+              </select>
+              <select
+                value={builderFieldValue}
+                class="table-field"
+                on:change={(e) => (builderFieldValue = e.currentTarget.value)}
+              >
+                <option value="">Поле</option>
+                {#if builderTableValue}
+                  {#each builderTableColumns() as field}
+                    <option value={field}>{field}</option>
+                  {/each}
+                {/if}
+              </select>
+            </div>
+            <div class="parameter-builder-row">
+              <select value={builderFilterType} on:change={(e) => handleFilterTypeSelection(e.currentTarget.value)}>
+                {#each Object.keys(FILTER_OPERATORS) as type}
+                  <option value={type}>{type}</option>
+                {/each}
+              </select>
+              <select value={builderFilterOperator} on:change={(e) => (builderFilterOperator = e.currentTarget.value)}>
+                {#each FILTER_OPERATORS[builderFilterType] as op}
+                  <option value={op.value}>{op.label}</option>
+                {/each}
+              </select>
+              <input placeholder="Значение" value={builderFilterValue} on:input={(e) => (builderFilterValue = e.currentTarget.value)} />
+              {#if operatorNeedsValueTo(builderFilterType, builderFilterOperator)}
+                <input placeholder="до" value={builderFilterValueTo} on:input={(e) => (builderFilterValueTo = e.currentTarget.value)} />
+              {/if}
+              <button
+                class="icon-btn plus-green"
+                type="button"
+                title="Добавить параметр"
+                on:click={addParameterSource}
+                disabled={!builderTableValue || !builderFieldValue || !builderFilterValue}
+              >
+                +
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
+    </div>
       <div class="subsec">
         <div class="subttl response-head">
           <span>Предпросмотр твоего API</span>
@@ -2346,6 +2630,25 @@
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; }
 
   .connect-row { margin-top:10px; display:grid; grid-template-columns: 180px 1fr 150px; gap:8px; align-items:center; }
+  .parameter-vitrina-block { margin-top:10px; border:1px solid #e6eaf2; border-radius:14px; background:#fff; padding:12px; }
+  .parameter-grid { display:flex; flex-direction:column; gap:10px; }
+  .parameter-vitrina { border:1px solid #e2e8f0; border-radius:12px; padding:10px; background:#f8fafc; min-height:78px; }
+  .parameter-list { display:flex; flex-direction:column; gap:6px; }
+  .parameter-chip { display:flex; align-items:center; justify-content:space-between; gap:10px; border-radius:10px; border:1px solid #dbe3ef; padding:8px 10px; background:#fff; cursor:pointer; }
+  .parameter-chip.active { background:#0f172a; color:#fff; border-color:#0f172a; }
+  .parameter-chip.active .param-chip-sub { color:#e2e8f0; }
+  .param-chip-title { font-size:13px; font-weight:600; }
+  .param-chip-sub { font-size:11px; color:#475569; }
+  .chip-remove { border:0; background:transparent; color:#b91c1c; font-size:12px; cursor:pointer; }
+  .parameter-connect-row { display:flex; gap:8px; align-items:center; }
+  .parameter-connect-row select { flex:1; }
+  .table-crumbs { display:flex; flex-wrap:wrap; gap:6px; }
+  .table-chip { display:inline-flex; align-items:center; gap:6px; border-radius:10px; padding:4px 10px; background:#0f172a; color:#fff; font-size:12px; }
+  .parameter-builder { border:1px solid #e2e8f0; border-radius:12px; background:#fff; padding:10px; }
+  .parameter-builder-row { display:grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap:8px; align-items:center; }
+  .parameter-builder-row input, .parameter-builder-row select { font-size:12px; padding:8px 10px; }
+  .parameter-builder .table-field { width:100%; }
+  .plus-green.icon-btn { color:#16a34a; }
   .targets-wrap { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:transparent; }
   .targets-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
   .targets-title { font-size:13px; font-weight:700; color:#0f172a; }
