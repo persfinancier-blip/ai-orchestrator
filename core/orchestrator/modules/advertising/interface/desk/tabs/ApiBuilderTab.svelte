@@ -2272,7 +2272,7 @@ function syncParameterEditorsHeight() {
                   tick().then(syncParameterEditorsHeight);
                 }}
               ></textarea>
-              <div class="response-head field-head">
+              <div class="subttl response-head field-head">
                 <span>Предпросмотр параметра</span>
                 <span class="inline-actions">
                   <button
