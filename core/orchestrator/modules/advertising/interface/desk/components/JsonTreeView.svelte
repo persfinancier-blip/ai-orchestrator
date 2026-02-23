@@ -50,7 +50,7 @@
       <span class="key">{name || 'root'}</span>
       <span class="meta">object ({Object.keys(node).length})</span>
       {#if pickEnabled && path}
-        <button class="pick-btn" type="button" title="Добавить в поле ответа" on:click|preventDefault|stopPropagation={pickCurrentPath}>+</button>
+        <button class="pick-btn" type="button" aria-label="Add to response field" on:click|preventDefault|stopPropagation={pickCurrentPath}>+</button>
       {/if}
     </summary>
     <div class="children">
@@ -65,7 +65,7 @@
       <span class="key">{name || 'root'}</span>
       <span class="meta">array [{node.length}]</span>
       {#if pickEnabled && path}
-        <button class="pick-btn" type="button" title="Добавить в поле ответа" on:click|preventDefault|stopPropagation={pickCurrentPath}>+</button>
+        <button class="pick-btn" type="button" aria-label="Add to response field" on:click|preventDefault|stopPropagation={pickCurrentPath}>+</button>
       {/if}
     </summary>
     <div class="children">
@@ -80,7 +80,7 @@
     <span class="sep">:</span>
     <span class={`val ${valueClass(node)}`}>{valueText(node)}</span>
     {#if pickEnabled && path}
-      <button class="pick-btn" type="button" title="Добавить в поле ответа" on:click|stopPropagation={pickCurrentPath}>+</button>
+      <button class="pick-btn" type="button" aria-label="Add to response field" on:click|stopPropagation={pickCurrentPath}>+</button>
     {/if}
   </div>
 {/if}
