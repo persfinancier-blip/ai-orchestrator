@@ -1,4 +1,4 @@
-<script lang="ts">
+п»ї<script lang="ts">
   import { tick } from 'svelte';
   import JsonTreeView from '../components/JsonTreeView.svelte';
   export type ExistingTable = { schema_name: string; table_name: string };
@@ -78,17 +78,17 @@
   const AUTH_MODE_OAUTH2 = 'oauth2_client_credentials';
 
   const PAGINATION_STRATEGIES = [
-    { value: 'none', label: 'Не использовать' },
-    { value: 'page_number', label: 'Номер страницы' },
-    { value: 'offset_limit', label: 'Смещение + лимит' },
-    { value: 'cursor_fields', label: 'Курсоры (две метки)' },
-    { value: 'next_url', label: 'Ссылка next' },
-    { value: 'custom', label: 'Своя логика' }
+    { value: 'none', label: 'РќРµ РёСЃРїРѕР»СЊР·РѕРІР°С‚СЊ' },
+    { value: 'page_number', label: 'РќРѕРјРµСЂ СЃС‚СЂР°РЅРёС†С‹' },
+    { value: 'offset_limit', label: 'РЎРјРµС‰РµРЅРёРµ + Р»РёРјРёС‚' },
+    { value: 'cursor_fields', label: 'РљСѓСЂСЃРѕСЂС‹ (РґРІРµ РјРµС‚РєРё)' },
+    { value: 'next_url', label: 'РЎСЃС‹Р»РєР° next' },
+    { value: 'custom', label: 'РЎРІРѕСЏ Р»РѕРіРёРєР°' }
   ];
 
   const PAGINATION_TARGETS = [
-    { value: 'query', label: 'query (параметры URL)' },
-    { value: 'body', label: 'body (тело запроса)' }
+    { value: 'query', label: 'query (РїР°СЂР°РјРµС‚СЂС‹ URL)' },
+    { value: 'body', label: 'body (С‚РµР»Рѕ Р·Р°РїСЂРѕСЃР°)' }
   ];
 
   const API_STORAGE_REQUIRED_COLUMNS: Array<{ name: string; types: string[] }> = [
@@ -108,25 +108,25 @@
 
   const CONDITION_OPERATORS: Record<'text' | 'number' | 'date' | 'boolean', Array<{ value: string; label: string }>> = {
     text: [
-      { value: 'equals', label: 'равно' },
-      { value: 'contains', label: 'содержит' },
-      { value: 'starts_with', label: 'начинается с' },
-      { value: 'ends_with', label: 'заканчивается на' }
+      { value: 'equals', label: 'СЂР°РІРЅРѕ' },
+      { value: 'contains', label: 'СЃРѕРґРµСЂР¶РёС‚' },
+      { value: 'starts_with', label: 'РЅР°С‡РёРЅР°РµС‚СЃСЏ СЃ' },
+      { value: 'ends_with', label: 'Р·Р°РєР°РЅС‡РёРІР°РµС‚СЃСЏ РЅР°' }
     ],
     number: [
       { value: 'equals', label: '=' },
       { value: 'gt', label: '>' },
       { value: 'lt', label: '<' },
-      { value: 'between', label: 'между' }
+      { value: 'between', label: 'РјРµР¶РґСѓ' }
     ],
     date: [
       { value: 'equals', label: '=' },
-      { value: 'before', label: 'раньше' },
-      { value: 'after', label: 'позже' }
+      { value: 'before', label: 'СЂР°РЅСЊС€Рµ' },
+      { value: 'after', label: 'РїРѕР·Р¶Рµ' }
     ],
     boolean: [
       { value: 'equals', label: '=' },
-      { value: 'not_equals', label: '?' }
+      { value: 'not_equals', label: 'в‰ ' }
     ]
   };
 
@@ -273,10 +273,10 @@
     } catch {
       const loose = parseLooseObject(src);
       if (Object.keys(loose).length) return loose;
-      throw new Error(`${label}: некорректный JSON`);
+      throw new Error(`${label}: РЅРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON`);
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error(`${label}: ожидается JSON-объект`);
+      throw new Error(`${label}: РѕР¶РёРґР°РµС‚СЃСЏ JSON-РѕР±СЉРµРєС‚`);
     }
     return parsed;
   }
@@ -287,7 +287,7 @@
     try {
       return JSON.parse(src);
     } catch {
-      throw new Error(`${label}: некорректный JSON`);
+      throw new Error(`${label}: РЅРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON`);
     }
   }
 
@@ -296,7 +296,7 @@
       return parseJsonObjectField('preview', text);
     } catch {
       const src = String(text || '').trim();
-      return { __raw: src, __error: 'Некорректный JSON' };
+      return { __raw: src, __error: 'РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON' };
     }
   }
 
@@ -622,8 +622,8 @@
   }
 
   const CONDITION_COMPARE_MODES = [
-    { value: 'value', label: 'Значение' },
-    { value: 'column', label: 'Колонка' }
+    { value: 'value', label: 'Р—РЅР°С‡РµРЅРёРµ' },
+    { value: 'column', label: 'РљРѕР»РѕРЅРєР°' }
   ];
 
   function getDefaultCondition(parameter?: ParameterDefinition): ParameterCondition {
@@ -829,7 +829,7 @@
       if (!d.pickedPaths.includes(path)) d.pickedPaths = [...d.pickedPaths, path];
     });
     responsePathPickerOpen = false;
-    ok = 'Путь добавлен в витрину';
+    ok = 'РџСѓС‚СЊ РґРѕР±Р°РІР»РµРЅ РІ РІРёС‚СЂРёРЅСѓ';
   }
 
   function setActiveParameter(id: string) {
@@ -978,7 +978,7 @@
         });
       });
       if (found) {
-        ok = 'Путь добавлен в активное поле ответа';
+        ok = 'РџСѓС‚СЊ РґРѕР±Р°РІР»РµРЅ РІ Р°РєС‚РёРІРЅРѕРµ РїРѕР»Рµ РѕС‚РІРµС‚Р°';
         return;
       }
     }
@@ -998,7 +998,7 @@
           );
         });
         setActiveResponseField(firstTarget.id, firstField.id);
-        ok = 'Путь добавлен в первое поле ответа';
+        ok = 'РџСѓС‚СЊ РґРѕР±Р°РІР»РµРЅ РІ РїРµСЂРІРѕРµ РїРѕР»Рµ РѕС‚РІРµС‚Р°';
         return;
       }
 
@@ -1011,7 +1011,7 @@
         );
       });
       setActiveResponseField(firstTarget.id, newFieldId);
-      ok = 'Путь добавлен в новое поле ответа';
+      ok = 'РџСѓС‚СЊ РґРѕР±Р°РІР»РµРЅ РІ РЅРѕРІРѕРµ РїРѕР»Рµ РѕС‚РІРµС‚Р°';
       return;
     }
 
@@ -1030,7 +1030,7 @@
       ];
     });
     setActiveResponseField(targetId, fieldId);
-    ok = 'Путь добавлен, создана новая строка маппинга';
+    ok = 'РџСѓС‚СЊ РґРѕР±Р°РІР»РµРЅ, СЃРѕР·РґР°РЅР° РЅРѕРІР°СЏ СЃС‚СЂРѕРєР° РјР°РїРїРёРЅРіР°';
   }
 
   function fullUrl(d: ApiDraft) {
@@ -1117,7 +1117,7 @@
     try {
       json = txt ? JSON.parse(txt) : {};
     } catch {
-      throw new Error(`OAuth2: некорректный ответ токена (${txt.slice(0, 200)})`);
+      throw new Error(`OAuth2: РЅРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ РѕС‚РІРµС‚ С‚РѕРєРµРЅР° (${txt.slice(0, 200)})`);
     }
     if (!res.ok) {
       throw new Error(`OAuth2: ${res.status} ${JSON.stringify(json)}`);
@@ -1126,7 +1126,7 @@
     const expiresField = d.oauth2ExpiresField || 'expires_in';
     const typeField = d.oauth2TokenTypeField || 'token_type';
     const token = String(json?.[tokenField] || '').trim();
-    if (!token) throw new Error(`OAuth2: поле ${tokenField} не найдено`);
+    if (!token) throw new Error(`OAuth2: РїРѕР»Рµ ${tokenField} РЅРµ РЅР°Р№РґРµРЅРѕ`);
     const expiresIn = Number(json?.[expiresField] || 0);
     const tokenType = String(json?.[typeField] || 'Bearer').trim() || 'Bearer';
     oauthTokenCache = {
@@ -1169,18 +1169,18 @@
     if (!selected) return;
     const src = String(myApiPreviewDraft || '').trim();
     if (!src) {
-      err = 'Предпросмотр API пуст';
+      err = 'РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ API РїСѓСЃС‚';
       return;
     }
     let parsed: any;
     try {
       parsed = JSON.parse(src);
     } catch {
-      err = 'Предпросмотр API: некорректный JSON';
+      err = 'РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ API: РЅРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON';
       return;
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      err = 'Предпросмотр API: ожидается JSON-объект';
+      err = 'РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ API: РѕР¶РёРґР°РµС‚СЃСЏ JSON-РѕР±СЉРµРєС‚';
       return;
     }
 
@@ -1203,7 +1203,7 @@
           queryFromUrl[k] = v;
         });
       } catch {
-        err = 'Предпросмотр API: некорректный URL';
+        err = 'РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ API: РЅРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ URL';
         return;
       }
     }
@@ -1224,14 +1224,14 @@
       requestInput = `${next.baseUrl.replace(/\/$/, '')}${next.path.startsWith('/') ? next.path : `/${next.path}`}`;
     }
     myPreviewDirty = false;
-    myPreviewApplyMessage = 'Применено в поля';
+    myPreviewApplyMessage = 'РџСЂРёРјРµРЅРµРЅРѕ РІ РїРѕР»СЏ';
   }
 
   function applyUrlInput(raw: string) {
     const s = String(raw || '').trim();
     if (!selected || !s) return;
 
-    // поддержка: curl 'https://...' / curl "https://..."
+    // РїРѕРґРґРµСЂР¶РєР°: curl 'https://...' / curl "https://..."
     const curlMatch = s.match(/curl\s+(?:-X\s+(GET|POST|PUT|PATCH|DELETE)\s+)?['\"]([^'\"]+)['\"]/i);
     const source = curlMatch ? curlMatch[2] : s;
     const method = curlMatch?.[1] ? toHttpMethod(curlMatch[1].toUpperCase()) : selected.method;
@@ -1250,7 +1250,7 @@
       });
       err = '';
     } catch {
-      err = 'Некорректная строка подключения';
+      err = 'РќРµРєРѕСЂСЂРµРєС‚РЅР°СЏ СЃС‚СЂРѕРєР° РїРѕРґРєР»СЋС‡РµРЅРёСЏ';
     }
   }
 
@@ -1340,7 +1340,7 @@
       }
       return {
         ok: true,
-        message: 'Шаблон разобран из curl',
+        message: 'РЁР°Р±Р»РѕРЅ СЂР°Р·РѕР±СЂР°РЅ РёР· curl',
         patch: {
           method: curl.method,
           baseUrl: u.origin,
@@ -1380,8 +1380,8 @@
       const authFinal = Object.keys(authSrc).length ? authSrc : auth;
       const queryFinal = Object.keys(querySrc).length ? querySrc : queryFromUrl;
       const modeMessage = hasExplicitBody || urlRaw || method
-        ? 'Шаблон разобран из JSON'
-        : 'Шаблон разобран как Body JSON';
+        ? 'РЁР°Р±Р»РѕРЅ СЂР°Р·РѕР±СЂР°РЅ РёР· JSON'
+        : 'РЁР°Р±Р»РѕРЅ СЂР°Р·РѕР±СЂР°РЅ РєР°Рє Body JSON';
       return {
         ok: true,
         message: modeMessage,
@@ -1406,7 +1406,7 @@
       u.searchParams.forEach((v, k) => (query[k] = v));
       return {
         ok: true,
-        message: 'Шаблон разобран из URL',
+        message: 'РЁР°Р±Р»РѕРЅ СЂР°Р·РѕР±СЂР°РЅ РёР· URL',
         patch: {
           baseUrl: u.origin,
           path: u.pathname || '/',
@@ -1417,7 +1417,7 @@
 
     return {
       ok: false,
-      message: 'Не удалось распознать шаблон. Вставьте curl, URL или JSON.',
+      message: 'РќРµ СѓРґР°Р»РѕСЃСЊ СЂР°СЃРїРѕР·РЅР°С‚СЊ С€Р°Р±Р»РѕРЅ. Р’СЃС‚Р°РІСЊС‚Рµ curl, URL РёР»Рё JSON.',
       patch: null
     };
   }
@@ -1441,7 +1441,7 @@
 
   function parseTemplateNow(force = false) {
     if (!selected) {
-      templateParseMessage = 'Выбери API в правом блоке';
+      templateParseMessage = 'Р’С‹Р±РµСЂРё API РІ РїСЂР°РІРѕРј Р±Р»РѕРєРµ';
       return;
     }
     const srcRaw = exampleApiEl ? String(exampleApiEl.value || '') : String(selected.exampleRequest || '');
@@ -1572,7 +1572,7 @@
       applyDefinitionFromJson(parsed, activeParameter.id);
       definitionDirty = false;
     } catch {
-      definitionError = 'Некорректный JSON. Проверь кавычки и скобки.';
+      definitionError = 'РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON. РџСЂРѕРІРµСЂСЊ РєР°РІС‹С‡РєРё Рё СЃРєРѕР±РєРё.';
     }
   }
 
@@ -1584,7 +1584,7 @@
 
   function formatParameterRowValue(row: Record<string, any>, field?: string) {
     const value = field ? row[field] : row;
-    if (value === undefined || value === null) return '—';
+    if (value === undefined || value === null) return 'вЂ”';
     if (typeof value === 'object') return JSON.stringify(value);
     return String(value);
   }
@@ -1593,12 +1593,12 @@
     parameterPreviewError = '';
     parameterPreviewRows = [];
     if (!activeParameter) {
-      parameterPreviewError = 'Выбери параметр.';
+      parameterPreviewError = 'Р’С‹Р±РµСЂРё РїР°СЂР°РјРµС‚СЂ.';
       return;
     }
     const target = getParameterPreviewTarget(activeParameter);
     if (!target) {
-      parameterPreviewError = 'Укажи источник (схема и таблица).';
+      parameterPreviewError = 'РЈРєР°Р¶Рё РёСЃС‚РѕС‡РЅРёРє (СЃС…РµРјР° Рё С‚Р°Р±Р»РёС†Р°).';
       return;
     }
     parameterPreviewLoading = true;
@@ -1607,7 +1607,7 @@
       const j = await apiJson<{ rows: any[] }>(url);
       parameterPreviewRows = j.rows || [];
       if (!parameterPreviewRows.length) {
-        parameterPreviewError = 'Пока нет строк. Попробуй другой источник или добавь данные.';
+        parameterPreviewError = 'РџРѕРєР° РЅРµС‚ СЃС‚СЂРѕРє. РџРѕРїСЂРѕР±СѓР№ РґСЂСѓРіРѕР№ РёСЃС‚РѕС‡РЅРёРє РёР»Рё РґРѕР±Р°РІСЊ РґР°РЅРЅС‹Рµ.';
       }
     } catch (e: any) {
       parameterPreviewError = e?.message ?? String(e);
@@ -1628,13 +1628,13 @@
       );
       const cols = Array.isArray(j?.columns) ? j.columns : [];
       if (!cols.length) {
-        err = `Таблица ${schema}.${table} не найдена или пуста.`;
+        err = `РўР°Р±Р»РёС†Р° ${schema}.${table} РЅРµ РЅР°Р№РґРµРЅР° РёР»Рё РїСѓСЃС‚Р°.`;
         return false;
       }
       for (const need of API_STORAGE_REQUIRED_COLUMNS) {
         const c = cols.find((x) => String(x.name || '').toLowerCase() === need.name);
         if (!c || !need.types.includes(normalizeTypeName(c.type))) {
-          err = `Структура ${schema}.${table} не подходит: колонка ${need.name} отсутствует или имеет неверный тип.`;
+          err = `РЎС‚СЂСѓРєС‚СѓСЂР° ${schema}.${table} РЅРµ РїРѕРґС…РѕРґРёС‚: РєРѕР»РѕРЅРєР° ${need.name} РѕС‚СЃСѓС‚СЃС‚РІСѓРµС‚ РёР»Рё РёРјРµРµС‚ РЅРµРІРµСЂРЅС‹Р№ С‚РёРї.`;
           return false;
         }
       }
@@ -1658,7 +1658,7 @@
       body: JSON.stringify({
         setting_key: 'api_configs_storage',
         setting_value: { schema, table },
-        description: 'Хранилище преднастроенных API',
+        description: 'РҐСЂР°РЅРёР»РёС‰Рµ РїСЂРµРґРЅР°СЃС‚СЂРѕРµРЅРЅС‹С… API',
         scope: 'global',
         is_active: true
       })
@@ -1666,7 +1666,7 @@
     api_storage_schema = schema;
     api_storage_table = table;
     api_storage_picker_open = false;
-    ok = 'Хранилище API подключено';
+    ok = 'РҐСЂР°РЅРёР»РёС‰Рµ API РїРѕРґРєР»СЋС‡РµРЅРѕ';
     await loadAll();
   }
 
@@ -1709,12 +1709,12 @@
     ok = '';
     const current = selected;
     if (!current) {
-      err = 'Выбери API для сохранения';
+      err = 'Р’С‹Р±РµСЂРё API РґР»СЏ СЃРѕС…СЂР°РЅРµРЅРёСЏ';
       return;
     }
     const name = String(nameDraft || current.name || '').trim();
     if (!name) {
-      err = 'Укажи название API';
+      err = 'РЈРєР°Р¶Рё РЅР°Р·РІР°РЅРёРµ API';
       return;
     }
 
@@ -1725,14 +1725,14 @@
 
     const next = byRef(selectedRef);
     if (!next) {
-      err = 'Не удалось найти выбранный API';
+      err = 'РќРµ СѓРґР°Р»РѕСЃСЊ РЅР°Р№С‚Рё РІС‹Р±СЂР°РЅРЅС‹Р№ API';
       return;
     }
 
     let parsedFields: { headersJson: Record<string, any>; queryJson: Record<string, any>; bodyJson: any; authJson: Record<string, any> };
     try {
       parsedFields = {
-        authJson: parseJsonObjectField('Авторизация', next.authJson),
+        authJson: parseJsonObjectField('РђРІС‚РѕСЂРёР·Р°С†РёСЏ', next.authJson),
         headersJson: parseJsonObjectField('Headers JSON', next.headersJson),
         queryJson: parseJsonObjectField('Query JSON', next.queryJson),
         bodyJson: parseJsonAnyField('Body JSON', next.bodyJson)
@@ -1758,7 +1758,7 @@
           nameDraft = m.name;
         }
       }
-      ok = 'API сохранен в БД';
+      ok = 'API СЃРѕС…СЂР°РЅРµРЅ РІ Р‘Р”';
     } catch (e: any) {
       err = e?.message ?? String(e);
     } finally {
@@ -1771,7 +1771,7 @@
     ok = '';
     const name = String(nameDraft || '').trim();
     if (!name) {
-      err = 'Укажи название API';
+      err = 'РЈРєР°Р¶Рё РЅР°Р·РІР°РЅРёРµ API';
       return;
     }
     const d = baseDraft();
@@ -1796,7 +1796,7 @@
       body: JSON.stringify({ id: d.storeId })
     });
     await loadAll();
-    ok = 'API удален';
+    ok = 'API СѓРґР°Р»РµРЅ';
   }
 
   async function checkApiNow() {
@@ -1805,14 +1805,14 @@
     responseStatus = 0;
     responseText = '';
     if (!selected) {
-      err = 'Выбери API';
+      err = 'Р’С‹Р±РµСЂРё API';
       return;
     }
     checking = true;
     try {
       applyUrlInput(requestInput);
       const s = byRef(selectedRef) || selected;
-      const authHdr = parseJsonObjectField('Авторизация', s.authJson);
+      const authHdr = parseJsonObjectField('РђРІС‚РѕСЂРёР·Р°С†РёСЏ', s.authJson);
       const hdr = parseJsonObjectField('Headers JSON', s.headersJson);
       const queryObjBase = parseJsonObjectField('Query JSON', s.queryJson);
       const bodyBaseRaw = parseJsonAnyField('Body JSON', s.bodyJson);
@@ -1820,7 +1820,7 @@
 
       if (s.authMode === 'oauth2_client_credentials') {
         if (!s.oauth2TokenUrl || !s.oauth2ClientId || !s.oauth2ClientSecret) {
-          throw new Error('OAuth2: заполни token URL, client_id и client_secret');
+          throw new Error('OAuth2: Р·Р°РїРѕР»РЅРё token URL, client_id Рё client_secret');
         }
         const t = await getOAuthToken(s);
         authHdr.Authorization = `${t.tokenType} ${t.token}`;
@@ -1926,7 +1926,7 @@
       if (s.paginationEnabled && pagePayloads.length > 1) {
         responseText = JSON.stringify({ pages: pageCounter, last_status: lastStatus, samples: pagePayloads }, null, 2);
       }
-      ok = s.paginationEnabled ? `Проверка выполнена, страниц: ${pageCounter}` : 'Проверка выполнена';
+      ok = s.paginationEnabled ? `РџСЂРѕРІРµСЂРєР° РІС‹РїРѕР»РЅРµРЅР°, СЃС‚СЂР°РЅРёС†: ${pageCounter}` : 'РџСЂРѕРІРµСЂРєР° РІС‹РїРѕР»РЅРµРЅР°';
     } catch (e: any) {
       err = e?.message ?? String(e);
     } finally {
@@ -2044,7 +2044,7 @@
       authJsonTree = null;
     } else {
       try {
-        authJsonTree = parseJsonObjectField('Авторизация', txt);
+        authJsonTree = parseJsonObjectField('РђРІС‚РѕСЂРёР·Р°С†РёСЏ', txt);
         authJsonValid = true;
       } catch {
         authJsonTree = null;
@@ -2152,12 +2152,12 @@ function syncParameterEditorsHeight() {
 
 <section class="panel">
   <div class="panel-head">
-    <h2>API (конструктор)</h2>
+    <h2>API (РєРѕРЅСЃС‚СЂСѓРєС‚РѕСЂ)</h2>
   </div>
 
   {#if err}
     <div class="alert">
-      <div class="alert-title">Ошибка</div>
+      <div class="alert-title">РћС€РёР±РєР°</div>
       <pre>{err}</pre>
     </div>
   {/if}
@@ -2167,13 +2167,13 @@ function syncParameterEditorsHeight() {
 
   <div class="layout">
     <aside class="aside compare-aside">
-      <div class="aside-title">Предпросмотр API</div>
+      <div class="aside-title">РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ API</div>
       <div class="subsec">
         <div class="subttl response-head">
-          <span>Предпросмотр ответа</span>
+          <span>РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ РѕС‚РІРµС‚Р°</span>
           {#if responseIsJson}
             <button type="button" class="view-toggle" on:click={() => (responseViewMode = responseViewMode === 'tree' ? 'raw' : 'tree')}>
-              {responseViewMode === 'tree' ? 'RAW' : 'Дерево'}
+              {responseViewMode === 'tree' ? 'RAW' : 'Р”РµСЂРµРІРѕ'}
             </button>
           {/if}
         </div>
@@ -2188,12 +2188,12 @@ function syncParameterEditorsHeight() {
       </div>
       <div class="subsec">
         <div class="subttl response-head">
-          <span>Предпросмотр твоего API</span>
+          <span>РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ С‚РІРѕРµРіРѕ API</span>
           <span class="inline-actions">
-            <button type="button" class="view-toggle" on:click={applyMyPreviewToFields}>Сохранить</button>
+            <button type="button" class="view-toggle" on:click={applyMyPreviewToFields}>РЎРѕС…СЂР°РЅРёС‚СЊ</button>
             {#if myPreviewIsJson}
               <button type="button" class="view-toggle" on:click={() => (myPreviewViewMode = myPreviewViewMode === 'tree' ? 'raw' : 'tree')}>
-                {myPreviewViewMode === 'tree' ? 'RAW' : 'Дерево'}
+                {myPreviewViewMode === 'tree' ? 'RAW' : 'Р”РµСЂРµРІРѕ'}
               </button>
             {/if}
           </span>
@@ -2218,12 +2218,12 @@ function syncParameterEditorsHeight() {
     </div>
 
     <div class="subsec">
-      <div class="subttl">Витрина параметров</div>
+      <div class="subttl">Р’РёС‚СЂРёРЅР° РїР°СЂР°РјРµС‚СЂРѕРІ</div>
       <div class="parameter-panel">
         <div class="parameter-list-panel no-border">
           <div class="parameter-list-header">
-            <span class="parameter-list-title">Параметры</span>
-            <button class="icon-btn plus-dark" type="button" title="Добавить параметр" on:click={addParameterDefinition}>+</button>
+            <span class="parameter-list-title">РџР°СЂР°РјРµС‚СЂС‹</span>
+            <button class="icon-btn plus-dark" type="button" title="Р”РѕР±Р°РІРёС‚СЊ РїР°СЂР°РјРµС‚СЂ" on:click={addParameterDefinition}>+</button>
           </div>
             {#if selected?.parameterDefinitions?.length}
               <div class="parameter-crumbs">
@@ -2245,16 +2245,16 @@ function syncParameterEditorsHeight() {
                       role="button"
                       tabindex="-1"
                       class="crumb-close"
-                      aria-label="Удалить параметр"
+                      aria-label="РЈРґР°Р»РёС‚СЊ РїР°СЂР°РјРµС‚СЂ"
                       on:click|stopPropagation={() => removeParameterDefinition(param.id)}
                     >
-                      ?
+                      Г—
                     </span>
                   </button>
                 {/each}
               </div>
             {:else}
-              <p class="hint">Добавь параметр, чтобы сформировать значение.</p>
+              <p class="hint">Р”РѕР±Р°РІСЊ РїР°СЂР°РјРµС‚СЂ, С‡С‚РѕР±С‹ СЃС„РѕСЂРјРёСЂРѕРІР°С‚СЊ Р·РЅР°С‡РµРЅРёРµ.</p>
             {/if}
           </div>
         <div class="parameter-editor no-border">
@@ -2264,7 +2264,7 @@ function syncParameterEditorsHeight() {
                 class="parameter-alias autoheight"
                 rows="1"
                 bind:this={aliasParamEl}
-                placeholder="Псевдоним параметра"
+                placeholder="РџСЃРµРІРґРѕРЅРёРј РїР°СЂР°РјРµС‚СЂР°"
                 value={activeParameter.alias}
                 on:input={(e) => {
                   definitionDirty = false;
@@ -2273,7 +2273,7 @@ function syncParameterEditorsHeight() {
                 }}
               ></textarea>
               <div class="response-head field-head">
-                <span>Предпросмотр параметра</span>
+                <span>РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ РїР°СЂР°РјРµС‚СЂР°</span>
                 <span class="inline-actions">
                   <button
                     type="button"
@@ -2281,24 +2281,24 @@ function syncParameterEditorsHeight() {
                     on:click={loadParameterPreview}
                     disabled={parameterPreviewLoading}
                   >
-                    {parameterPreviewLoading ? 'Загрузка...' : 'Проверить'}
+                    {parameterPreviewLoading ? 'Р—Р°РіСЂСѓР·РєР°...' : 'РџСЂРѕРІРµСЂРёС‚СЊ'}
                   </button>
                 </span>
               </div>
               <div class="parameter-preview-block">
                 {#if parameterPreviewLoading}
-                  <p class="hint">Загружаем строки из таблицы...</p>
+                  <p class="hint">Р—Р°РіСЂСѓР¶Р°РµРј СЃС‚СЂРѕРєРё РёР· С‚Р°Р±Р»РёС†С‹...</p>
                 {:else if parameterPreviewError}
                   <p class="definition-error">{parameterPreviewError}</p>
                 {:else if !parameterPreviewRows.length}
-                  <p class="hint small-hint">Нажми «Проверить», чтобы увидеть первые значения столбца.</p>
+                  <p class="hint small-hint">РќР°Р¶РјРё В«РџСЂРѕРІРµСЂРёС‚СЊВ», С‡С‚РѕР±С‹ СѓРІРёРґРµС‚СЊ РїРµСЂРІС‹Рµ Р·РЅР°С‡РµРЅРёСЏ СЃС‚РѕР»Р±С†Р°.</p>
                 {:else}
                   <div class="parameter-preview-table-wrap">
                     <table class="parameter-preview-table">
                       <thead>
                         <tr>
                           <th>#</th>
-                          <th>{activeParameter.sourceField || 'Значение'}</th>
+                          <th>{activeParameter.sourceField || 'Р—РЅР°С‡РµРЅРёРµ'}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2311,13 +2311,13 @@ function syncParameterEditorsHeight() {
                       </tbody>
                     </table>
                   </div>
-                  <p class="hint small-hint">Показано {parameterPreviewRows.length} строк (макс. {PARAMETER_PREVIEW_LIMIT}).</p>
+                  <p class="hint small-hint">РџРѕРєР°Р·Р°РЅРѕ {parameterPreviewRows.length} СЃС‚СЂРѕРє (РјР°РєСЃ. {PARAMETER_PREVIEW_LIMIT}).</p>
                 {/if}
               </div>
               <textarea
                 class="parameter-definition autoheight"
                 bind:this={definitionParamEl}
-                placeholder="Определи параметр (например: FIELD('tokens.token'))"
+                placeholder="РћРїСЂРµРґРµР»Рё РїР°СЂР°РјРµС‚СЂ (РЅР°РїСЂРёРјРµСЂ: FIELD('tokens.token'))"
                 value={definitionDraft}
                 on:input={(e) => handleDefinitionInput(e.currentTarget.value)}
               ></textarea>
@@ -2325,7 +2325,7 @@ function syncParameterEditorsHeight() {
                 <p class="definition-error">{definitionError}</p>
               {/if}
               <div class="parameter-definition-hint">
-                <span>Доступные функции: FIELD('schema.table.column'), TODAY(), PARAM('alias')</span>
+                <span>Р”РѕСЃС‚СѓРїРЅС‹Рµ С„СѓРЅРєС†РёРё: FIELD('schema.table.column'), TODAY(), PARAM('alias')</span>
               </div>
               <div class="parameter-source-row">
                 <select
@@ -2341,7 +2341,7 @@ function syncParameterEditorsHeight() {
                     ensureColumnsFor(schema, table);
                   }}
                 >
-                  <option value="">Таблица</option>
+                  <option value="">РўР°Р±Р»РёС†Р°</option>
                   {#each existingTables as tbl}
                     <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
                   {/each}
@@ -2353,7 +2353,7 @@ function syncParameterEditorsHeight() {
                     updateParameterDefinition(activeParameter.id, { sourceField: e.currentTarget.value });
                   }}
                 >
-                  <option value="">Колонка</option>
+                  <option value="">РљРѕР»РѕРЅРєР°</option>
                   {#if activeParameter.sourceSchema && activeParameter.sourceTable}
                     {#each columnOptionsFor(activeParameter.sourceSchema, activeParameter.sourceTable) as field}
                       <option value={field}>{field}</option>
@@ -2363,7 +2363,7 @@ function syncParameterEditorsHeight() {
               </div>
               <div class="parameter-conditions">
                 <div class="conditions-header">
-                  <span>Условия фильтрации</span>
+                  <span>РЈСЃР»РѕРІРёСЏ С„РёР»СЊС‚СЂР°С†РёРё</span>
                   <button
                     class="tiny-btn"
                     type="button"
@@ -2372,7 +2372,7 @@ function syncParameterEditorsHeight() {
                       addCondition(activeParameter.id);
                     }}
                   >
-                    Добавить условие
+                    Р”РѕР±Р°РІРёС‚СЊ СѓСЃР»РѕРІРёРµ
                   </button>
                 </div>
                 {#each activeParameter.conditions as cond (cond.id)}
@@ -2387,7 +2387,7 @@ function syncParameterEditorsHeight() {
                           ensureColumnsFor(schema, table);
                         }}
                       >
-                        <option value="">Таблица</option>
+                        <option value="">РўР°Р±Р»РёС†Р°</option>
                         {#each existingTables as tbl}
                           <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
                         {/each}
@@ -2399,7 +2399,7 @@ function syncParameterEditorsHeight() {
                           updateCondition(activeParameter.id, cond.id, { field: e.currentTarget.value });
                         }}
                       >
-                        <option value="">Колонка</option>
+                        <option value="">РљРѕР»РѕРЅРєР°</option>
                         {#if cond.schema && cond.table}
                           {#each columnOptionsFor(cond.schema, cond.table) as field}
                             <option value={field}>{field}</option>
@@ -2439,7 +2439,7 @@ function syncParameterEditorsHeight() {
                     {#if cond.compareMode === 'value'}
                       <input
                         class="condition-value"
-                        placeholder="Значение"
+                        placeholder="Р—РЅР°С‡РµРЅРёРµ"
                         value={cond.compareValue}
                         on:input={(e) => {
                           definitionDirty = false;
@@ -2460,7 +2460,7 @@ function syncParameterEditorsHeight() {
                           ensureColumnsFor(schema, table);
                         }}
                       >
-                          <option value="">Таблица</option>
+                          <option value="">РўР°Р±Р»РёС†Р°</option>
                           {#each existingTables as tbl}
                             <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
                           {/each}
@@ -2474,14 +2474,14 @@ function syncParameterEditorsHeight() {
                               updateCondition(activeParameter.id, cond.id, { compareColumn: column ? `${schema}.${table}.${column}` : '' });
                             }}
                           >
-                            <option value="">Колонка</option>
+                            <option value="">РљРѕР»РѕРЅРєР°</option>
                             {#each compareColumnOptions(cond) as column}
                               <option value={column}>{column}</option>
                             {/each}
                           </select>
                         {:else}
                           <select disabled>
-                            <option>Сначала выбери таблицу</option>
+                            <option>РЎРЅР°С‡Р°Р»Р° РІС‹Р±РµСЂРё С‚Р°Р±Р»РёС†Сѓ</option>
                           </select>
                         {/if}
                       </div>
@@ -2491,7 +2491,7 @@ function syncParameterEditorsHeight() {
               </div>
             </div>
           {:else}
-            <p class="hint">Выбери параметр слева, чтобы настроить источник и условия.</p>
+            <p class="hint">Р’С‹Р±РµСЂРё РїР°СЂР°РјРµС‚СЂ СЃР»РµРІР°, С‡С‚РѕР±С‹ РЅР°СЃС‚СЂРѕРёС‚СЊ РёСЃС‚РѕС‡РЅРёРє Рё СѓСЃР»РѕРІРёСЏ.</p>
           {/if}
         </div>
       </div>
@@ -2500,7 +2500,7 @@ function syncParameterEditorsHeight() {
 
     <div class="main">
       <div class="card">
-        <h3 style="margin:0;">Настройка API</h3>
+        <h3 style="margin:0;">РќР°СЃС‚СЂРѕР№РєР° API</h3>
 
         <div class="connect-row">
           <select
@@ -2517,25 +2517,25 @@ function syncParameterEditorsHeight() {
             value={requestInput}
             on:input={(e) => (requestInput = e.currentTarget.value)}
             on:blur={() => applyUrlInput(requestInput)}
-            placeholder="Строка подключения (URL или curl)"
+            placeholder="РЎС‚СЂРѕРєР° РїРѕРґРєР»СЋС‡РµРЅРёСЏ (URL РёР»Рё curl)"
           />
-          <button class="primary" on:click={checkApiNow} disabled={checking}>{checking ? 'Проверка...' : 'Проверить'}</button>
+          <button class="primary" on:click={checkApiNow} disabled={checking}>{checking ? 'РџСЂРѕРІРµСЂРєР°...' : 'РџСЂРѕРІРµСЂРёС‚СЊ'}</button>
         </div>
 
         <textarea
           bind:this={descriptionEl}
           class="desc"
-          placeholder="Описание API"
+          placeholder="РћРїРёСЃР°РЅРёРµ API"
           value={selected?.description || ''}
           on:input={(e) => mutateSelected((d) => (d.description = e.currentTarget.value))}
         ></textarea>
 
         <label>
           <div class="response-head field-head">
-            <span>Авторизация</span>
+            <span>РђРІС‚РѕСЂРёР·Р°С†РёСЏ</span>
             {#if authJsonValid}
               <button type="button" class="view-toggle" on:click={() => (authViewMode = authViewMode === 'tree' ? 'raw' : 'tree')}>
-                {authViewMode === 'tree' ? 'RAW' : 'Дерево'}
+                {authViewMode === 'tree' ? 'RAW' : 'Р”РµСЂРµРІРѕ'}
               </button>
             {/if}
           </div>
@@ -2586,22 +2586,22 @@ function syncParameterEditorsHeight() {
               on:input={(e) => mutateSelected((d) => (d.oauth2GrantType = e.currentTarget.value))}
             />
             <input
-              placeholder="Поле токена"
+              placeholder="РџРѕР»Рµ С‚РѕРєРµРЅР°"
               value={selected?.oauth2TokenField || ''}
               on:input={(e) => mutateSelected((d) => (d.oauth2TokenField = e.currentTarget.value))}
             />
             <input
-              placeholder="Поле expires_in"
+              placeholder="РџРѕР»Рµ expires_in"
               value={selected?.oauth2ExpiresField || ''}
               on:input={(e) => mutateSelected((d) => (d.oauth2ExpiresField = e.currentTarget.value))}
             />
             <input
-              placeholder="Поле token_type"
+              placeholder="РџРѕР»Рµ token_type"
               value={selected?.oauth2TokenTypeField || ''}
               on:input={(e) => mutateSelected((d) => (d.oauth2TokenTypeField = e.currentTarget.value))}
             />
           </div>
-          <p class="hint">OAuth2: конструктор автоматически получает токен и подставляет заголовок Authorization.</p>
+          <p class="hint">OAuth2: РєРѕРЅСЃС‚СЂСѓРєС‚РѕСЂ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РїРѕР»СѓС‡Р°РµС‚ С‚РѕРєРµРЅ Рё РїРѕРґСЃС‚Р°РІР»СЏРµС‚ Р·Р°РіРѕР»РѕРІРѕРє Authorization.</p>
         {/if}
 
         <div class="raw-grid">
@@ -2610,7 +2610,7 @@ function syncParameterEditorsHeight() {
               <span>Headers JSON</span>
               {#if headersJsonValid}
                 <button type="button" class="view-toggle" on:click={() => (headersViewMode = headersViewMode === 'tree' ? 'raw' : 'tree')}>
-                  {headersViewMode === 'tree' ? 'RAW' : 'Дерево'}
+                  {headersViewMode === 'tree' ? 'RAW' : 'Р”РµСЂРµРІРѕ'}
                 </button>
               {/if}
             </div>
@@ -2629,7 +2629,7 @@ function syncParameterEditorsHeight() {
               <span>Query JSON</span>
               {#if queryJsonValid}
                 <button type="button" class="view-toggle" on:click={() => (queryViewMode = queryViewMode === 'tree' ? 'raw' : 'tree')}>
-                  {queryViewMode === 'tree' ? 'RAW' : 'Дерево'}
+                  {queryViewMode === 'tree' ? 'RAW' : 'Р”РµСЂРµРІРѕ'}
                 </button>
               {/if}
             </div>
@@ -2650,7 +2650,7 @@ function syncParameterEditorsHeight() {
             <span>Body JSON</span>
             {#if bodyJsonValid}
               <button type="button" class="view-toggle" on:click={() => (bodyViewMode = bodyViewMode === 'tree' ? 'raw' : 'tree')}>
-                {bodyViewMode === 'tree' ? 'RAW' : 'Дерево'}
+                {bodyViewMode === 'tree' ? 'RAW' : 'Р”РµСЂРµРІРѕ'}
               </button>
             {/if}
           </div>
@@ -2667,20 +2667,20 @@ function syncParameterEditorsHeight() {
 
         <div class="pagination-box">
           <div class="response-head field-head">
-            <span>Пагинация</span>
+            <span>РџР°РіРёРЅР°С†РёСЏ</span>
             <label class="pagination-toggle">
               <input
                 type="checkbox"
                 checked={selected?.paginationEnabled}
                 on:change={(e) => mutateSelected((d) => (d.paginationEnabled = e.currentTarget.checked))}
               />
-              <span>Включить</span>
+              <span>Р’РєР»СЋС‡РёС‚СЊ</span>
             </label>
           </div>
           {#if selected?.paginationEnabled}
             <div class="pagination-grid">
               <div class="pagination-field">
-                <small>Стратегия</small>
+                <small>РЎС‚СЂР°С‚РµРіРёСЏ</small>
                 <select
                   value={selected?.paginationStrategy || 'none'}
                   on:change={(e) => handlePaginationStrategyChange(e.currentTarget.value)}
@@ -2691,7 +2691,7 @@ function syncParameterEditorsHeight() {
                 </select>
               </div>
               <div class="pagination-field">
-                <small>Куда писать</small>
+                <small>РљСѓРґР° РїРёСЃР°С‚СЊ</small>
                 <select
                   value={selected?.paginationTarget || 'body'}
                   on:change={(e) => handlePaginationTargetChange(e.currentTarget.value)}
@@ -2705,9 +2705,9 @@ function syncParameterEditorsHeight() {
             {#if selected?.paginationStrategy === 'custom'}
               <div class="pagination-grid">
                 <div class="pagination-field">
-                  <small>Своя инструкция</small>
+                  <small>РЎРІРѕСЏ РёРЅСЃС‚СЂСѓРєС†РёСЏ</small>
                   <input
-                    placeholder="Например: cursor_name + limit"
+                    placeholder="РќР°РїСЂРёРјРµСЂ: cursor_name + limit"
                     value={selected?.paginationCustomStrategy || ''}
                     on:input={(e) => mutateSelected((d) => (d.paginationCustomStrategy = e.currentTarget.value))}
                   />
@@ -2717,15 +2717,15 @@ function syncParameterEditorsHeight() {
 
             <div class="pagination-grid">
               <div class="pagination-field">
-                <small>Путь к данным (массив)</small>
+                <small>РџСѓС‚СЊ Рє РґР°РЅРЅС‹Рј (РјР°СЃСЃРёРІ)</small>
                 <input
-                  placeholder="Например: settings.cursor.items"
+                  placeholder="РќР°РїСЂРёРјРµСЂ: settings.cursor.items"
                   value={selected?.paginationDataPath || ''}
                   on:input={(e) => mutateSelected((d) => (d.paginationDataPath = e.currentTarget.value))}
                 />
               </div>
               <div class="pagination-field">
-                <small>Макс. страниц</small>
+                <small>РњР°РєСЃ. СЃС‚СЂР°РЅРёС†</small>
                 <input
                   type="number"
                   min="1"
@@ -2737,7 +2737,7 @@ function syncParameterEditorsHeight() {
 
             <div class="pagination-grid">
               <div class="pagination-field">
-                <small>Параметр страницы</small>
+                <small>РџР°СЂР°РјРµС‚СЂ СЃС‚СЂР°РЅРёС†С‹</small>
                 <input
                   placeholder="page"
                   value={selected?.paginationPageParam || ''}
@@ -2745,7 +2745,7 @@ function syncParameterEditorsHeight() {
                 />
               </div>
               <div class="pagination-field">
-                <small>Стартовая страница / смещение</small>
+                <small>РЎС‚Р°СЂС‚РѕРІР°СЏ СЃС‚СЂР°РЅРёС†Р° / СЃРјРµС‰РµРЅРёРµ</small>
                 <input
                   type="number"
                   value={selected?.paginationStartPage || 1}
@@ -2756,7 +2756,7 @@ function syncParameterEditorsHeight() {
 
             <div class="pagination-grid">
               <div class="pagination-field">
-                <small>Limit параметр</small>
+                <small>Limit РїР°СЂР°РјРµС‚СЂ</small>
                 <input
                   placeholder="limit"
                   value={selected?.paginationLimitParam || ''}
@@ -2764,7 +2764,7 @@ function syncParameterEditorsHeight() {
                 />
               </div>
               <div class="pagination-field">
-                <small>Limit значение</small>
+                <small>Limit Р·РЅР°С‡РµРЅРёРµ</small>
                 <input
                   type="number"
                   min="1"
@@ -2820,7 +2820,7 @@ function syncParameterEditorsHeight() {
                 />
               </div>
               <div class="pagination-field">
-                <small>Delay между запросами (мс)</small>
+                <small>Delay РјРµР¶РґСѓ Р·Р°РїСЂРѕСЃР°РјРё (РјСЃ)</small>
                 <input
                   type="number"
                   min="0"
@@ -2829,18 +2829,18 @@ function syncParameterEditorsHeight() {
                 />
               </div>
             </div>
-            <p class="hint">Запросы автоматически повторяются по стратегии в пределах {selected?.paginationMaxPages || 1} страниц.</p>
+            <p class="hint">Р—Р°РїСЂРѕСЃС‹ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РїРѕРІС‚РѕСЂСЏСЋС‚СЃСЏ РїРѕ СЃС‚СЂР°С‚РµРіРёРё РІ РїСЂРµРґРµР»Р°С… {selected?.paginationMaxPages || 1} СЃС‚СЂР°РЅРёС†.</p>
           {/if}
         </div>
 
         <div class="targets-wrap">
           <div class="targets-head">
-            <div class="targets-title">Куда записывать ответ</div>
+            <div class="targets-title">РљСѓРґР° Р·Р°РїРёСЃС‹РІР°С‚СЊ РѕС‚РІРµС‚</div>
           </div>
           <div class="crumbs-panel">
             <div class="crumbs-title-row">
-              <div class="crumbs-title">Витрина</div>
-              <button class="icon-btn plus-dark" type="button" title="Добавить путь из ответа" on:click={() => (responsePathPickerOpen = !responsePathPickerOpen)}>+</button>
+              <div class="crumbs-title">Р’РёС‚СЂРёРЅР°</div>
+              <button class="icon-btn plus-dark" type="button" title="Р”РѕР±Р°РІРёС‚СЊ РїСѓС‚СЊ РёР· РѕС‚РІРµС‚Р°" on:click={() => (responsePathPickerOpen = !responsePathPickerOpen)}>+</button>
             </div>
             {#if responsePathPickerOpen}
               <div class="crumbs-picker">
@@ -2849,17 +2849,17 @@ function syncParameterEditorsHeight() {
                     <option value={opt}>{opt}</option>
                   {/each}
                 </select>
-                <button class="icon-btn plus-green" type="button" title="Добавить путь" on:click={addPickedPathFromPicker} disabled={!responsePathPick}>+</button>
+                <button class="icon-btn plus-green" type="button" title="Р”РѕР±Р°РІРёС‚СЊ РїСѓС‚СЊ" on:click={addPickedPathFromPicker} disabled={!responsePathPick}>+</button>
               </div>
             {/if}
             {#if !(selected?.pickedPaths?.length)}
-              <p class="hint">Отметь узлы в дереве ответа, они появятся здесь.</p>
+              <p class="hint">РћС‚РјРµС‚СЊ СѓР·Р»С‹ РІ РґРµСЂРµРІРµ РѕС‚РІРµС‚Р°, РѕРЅРё РїРѕСЏРІСЏС‚СЃСЏ Р·РґРµСЃСЊ.</p>
             {:else}
               <div class="crumbs-list">
                 {#each selected?.pickedPaths || [] as pth (pth)}
                   <div class="crumb-chip" draggable="true" on:dragstart={(e) => onPathChipDragStart(e, pth)}>
-                    <button type="button" class="chip-path" title="Подставить в активное поле" on:click={() => applyPickedResponsePath(pth)}>{pth}</button>
-                    <button type="button" class="chip-remove" title="Убрать из витрины" on:click={() => removePickedPath(pth)}>x</button>
+                    <button type="button" class="chip-path" title="РџРѕРґСЃС‚Р°РІРёС‚СЊ РІ Р°РєС‚РёРІРЅРѕРµ РїРѕР»Рµ" on:click={() => applyPickedResponsePath(pth)}>{pth}</button>
+                    <button type="button" class="chip-remove" title="РЈР±СЂР°С‚СЊ РёР· РІРёС‚СЂРёРЅС‹" on:click={() => removePickedPath(pth)}>x</button>
                   </div>
                 {/each}
               </div>
@@ -2868,11 +2868,11 @@ function syncParameterEditorsHeight() {
 
           <div class="mapping-panel">
             <div class="mapping-head">
-              <span>Сопоставление</span>
-              <span class="mapping-head-right">Ответ API | Таблица | Поле таблицы</span>
+              <span>РЎРѕРїРѕСЃС‚Р°РІР»РµРЅРёРµ</span>
+              <span class="mapping-head-right">РћС‚РІРµС‚ API | РўР°Р±Р»РёС†Р° | РџРѕР»Рµ С‚Р°Р±Р»РёС†С‹</span>
             </div>
             {#if !mappingRowsOf(selected).length}
-              <p class="hint">Добавь сопоставление и укажи куда писать данные.</p>
+              <p class="hint">Р”РѕР±Р°РІСЊ СЃРѕРїРѕСЃС‚Р°РІР»РµРЅРёРµ Рё СѓРєР°Р¶Рё РєСѓРґР° РїРёСЃР°С‚СЊ РґР°РЅРЅС‹Рµ.</p>
             {:else}
               <div class="mapping-list">
                 {#each mappingRowsOf(selected) as m (`${m.targetId}:${m.fieldId}`)}
@@ -2885,7 +2885,7 @@ function syncParameterEditorsHeight() {
                       on:drop={(e) => dropPathToMapping(e, m.targetId, m.fieldId)}
                       on:change={(e) => setMappingRowResponsePath(m.targetId, m.fieldId, e.currentTarget.value)}
                     >
-                      <option value="">Ответ API</option>
+                      <option value="">РћС‚РІРµС‚ API</option>
                       {#each responsePathOptionsFor(m.responsePath) as pathOpt}
                         <option value={pathOpt}>{pathOpt}</option>
                       {/each}
@@ -2894,7 +2894,7 @@ function syncParameterEditorsHeight() {
                       value={formatQualifiedTable(m.schema, m.table)}
                       on:change={(e) => setMappingRowTable(m.targetId, e.currentTarget.value)}
                     >
-                      <option value="">Таблица</option>
+                      <option value="">РўР°Р±Р»РёС†Р°</option>
                       {#each existingTables as et}
                         <option value={`${et.schema_name}.${et.table_name}`}>{et.schema_name}.{et.table_name}</option>
                       {/each}
@@ -2905,18 +2905,18 @@ function syncParameterEditorsHeight() {
                       on:click={() => setActiveResponseField(m.targetId, m.fieldId)}
                       on:change={(e) => setMappingRowColumn(m.targetId, m.fieldId, e.currentTarget.value)}
                     >
-                      <option value="">Поле таблицы</option>
+                      <option value="">РџРѕР»Рµ С‚Р°Р±Р»РёС†С‹</option>
                       {#each tableFieldOptionsFor(m.schema, m.table, m.targetField) as col}
                         <option value={col}>{col}</option>
                       {/each}
                     </select>
-                    <button class="icon-btn danger" type="button" on:click={() => removeMappingRow(m.targetId, m.fieldId)} title="Удалить сопоставление">x</button>
+                    <button class="icon-btn danger" type="button" on:click={() => removeMappingRow(m.targetId, m.fieldId)} title="РЈРґР°Р»РёС‚СЊ СЃРѕРїРѕСЃС‚Р°РІР»РµРЅРёРµ">x</button>
                   </div>
                 {/each}
               </div>
             {/if}
             <div class="mapping-actions">
-              <button class="icon-btn plus-dark" type="button" title="Добавить сопоставление" on:click={addMappingRow}>+</button>
+              <button class="icon-btn plus-dark" type="button" title="Р”РѕР±Р°РІРёС‚СЊ СЃРѕРїРѕСЃС‚Р°РІР»РµРЅРёРµ" on:click={addMappingRow}>+</button>
             </div>
           </div>
         </div>
@@ -2924,9 +2924,9 @@ function syncParameterEditorsHeight() {
     </div>
 
     <aside class="aside saved-aside">
-      <div class="aside-title">Список API</div>
+      <div class="aside-title">РЎРїРёСЃРѕРє API</div>
       <div class="storage-meta">
-        <span>Хранятся в таблице:</span>
+        <span>РҐСЂР°РЅСЏС‚СЃСЏ РІ С‚Р°Р±Р»РёС†Рµ:</span>
         <button
           class="link-btn"
           on:click={() => {
@@ -2945,19 +2945,19 @@ function syncParameterEditorsHeight() {
               <option value={`${t.schema_name}.${t.table_name}`}>{t.schema_name}.{t.table_name}</option>
             {/each}
           </select>
-          <button on:click={applyStorageChoice} disabled={!api_storage_pick_value}>Подключить</button>
+          <button on:click={applyStorageChoice} disabled={!api_storage_pick_value}>РџРѕРґРєР»СЋС‡РёС‚СЊ</button>
         </div>
       {/if}
 
       <div class="subsec">
         <div class="subttl template-head">
-          <span>Шаблон API</span>
+          <span>РЁР°Р±Р»РѕРЅ API</span>
           <span class="inline-actions">
-            <button type="button" class="view-toggle" on:click={onTemplateParseClick}>Сохранить</button>
-            <button type="button" class="view-toggle" on:click={onTemplateClearClick}>Очистить</button>
+            <button type="button" class="view-toggle" on:click={onTemplateParseClick}>РЎРѕС…СЂР°РЅРёС‚СЊ</button>
+            <button type="button" class="view-toggle" on:click={onTemplateClearClick}>РћС‡РёСЃС‚РёС‚СЊ</button>
             {#if exampleIsJson}
               <button type="button" class="view-toggle" on:click={() => (exampleViewMode = exampleViewMode === 'tree' ? 'raw' : 'tree')}>
-                {exampleViewMode === 'tree' ? 'RAW' : 'Дерево'}
+                {exampleViewMode === 'tree' ? 'RAW' : 'Р”РµСЂРµРІРѕ'}
               </button>
             {/if}
           </span>
@@ -2974,7 +2974,7 @@ function syncParameterEditorsHeight() {
               mutateSelected((d) => (d.exampleRequest = e.currentTarget.value));
               syncLeftTextareasHeight();
             }}
-            placeholder="Вставьте пример API"
+            placeholder="Р’СЃС‚Р°РІСЊС‚Рµ РїСЂРёРјРµСЂ API"
           ></textarea>
         {/if}
         <div class="template-parse-actions">
@@ -2992,11 +2992,11 @@ function syncParameterEditorsHeight() {
             nameDraft = e.currentTarget.value;
             if (selected) mutateSelected((d) => (d.name = e.currentTarget.value));
           }}
-          placeholder="Название API"
+          placeholder="РќР°Р·РІР°РЅРёРµ API"
         />
         <div class="saved-inline-actions">
-          <button on:click={addApi}>Добавить</button>
-          <button on:click={saveSelected} disabled={saving || !selected}>{saving ? 'Сохранение...' : 'Сохранить'}</button>
+          <button on:click={addApi}>Р”РѕР±Р°РІРёС‚СЊ</button>
+          <button on:click={saveSelected} disabled={saving || !selected}>{saving ? 'РЎРѕС…СЂР°РЅРµРЅРёРµ...' : 'РЎРѕС…СЂР°РЅРёС‚СЊ'}</button>
         </div>
       </div>
 
@@ -3004,11 +3004,11 @@ function syncParameterEditorsHeight() {
         {#each drafts as d (d.localId)}
           <div class="row-item" class:activeitem={refOf(d) === selectedRef}>
             <button class="item-button" on:click={() => (selectedRef = refOf(d))}>
-              <div class="row-name">{d.storeId || 'new'} • {d.name}</div>
+              <div class="row-name">{d.storeId || 'new'} вЂў {d.name}</div>
               <div class="row-meta">{d.method} {d.baseUrl}{d.path}</div>
             </button>
             <div class="row-actions">
-              <button class="danger icon-btn" on:click|stopPropagation={() => deleteApi(d)} title="Удалить API">x</button>
+              <button class="danger icon-btn" on:click|stopPropagation={() => deleteApi(d)} title="РЈРґР°Р»РёС‚СЊ API">x</button>
             </div>
           </div>
         {/each}
@@ -3082,7 +3082,7 @@ function syncParameterEditorsHeight() {
   .row-meta { font-size:12px; color:#cbd5e1; margin-top:4px; word-break: break-word; }
   .api-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
   .api-list .activeitem .row-name { font-size:15px; font-weight:600; letter-spacing:.01em; color:#0f172a; }
-  .api-list .activeitem .row-name::before { content:'?'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
+  .api-list .activeitem .row-name::before { content:'в—Џ'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
   .api-list .activeitem .row-meta { color:#64748b; }
 
   .icon-btn { width:34px; min-width:34px; padding:6px 0; font-size:14px; text-transform:uppercase; border-color:transparent; background:transparent; color:#fff; }
@@ -3212,7 +3212,7 @@ function syncParameterEditorsHeight() {
   .condition-value { width:100%; }
   .tiny-btn { border:0; background:transparent; font-size:12px; color:#0f172a; cursor:pointer; }
   .definition-error { margin:0; font-size:11px; color:#b91c1c; }
-  .parameter-preview-block { border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#fff; width:100%; max-width:min(640px,100%); overflow-x:auto; box-sizing:border-box; }
+  .parameter-preview-block { border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#fff; width:100%; max-width:100%; overflow-x:auto; box-sizing:border-box; }
   .parameter-preview-table-wrap { overflow-x:auto; }
   .parameter-preview-table { width:100%; border-collapse:collapse; min-width:260px; }
   .parameter-preview-table th, .parameter-preview-table td { border-bottom:1px solid #e2e8f0; padding:6px; text-align:left; font-size:13px; }
