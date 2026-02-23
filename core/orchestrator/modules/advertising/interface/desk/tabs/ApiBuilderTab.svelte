@@ -192,6 +192,8 @@
   let responsePathPick = '';
   let oauthTokenCache: Record<string, { token: string; tokenType: string; expiresAt: number }> = {};
   let selectedParameterId: string | null = null;
+  let aliasParamEl: HTMLTextAreaElement | null = null;
+  let definitionParamEl: HTMLTextAreaElement | null = null;
   let definitionDraft = '';
   let definitionError = '';
   let definitionDirty = false;
@@ -2063,6 +2065,8 @@
   $: selected?.headersJson, tick().then(syncMainTextareasHeight);
   $: selected?.queryJson, tick().then(syncMainTextareasHeight);
   $: selected?.bodyJson, tick().then(syncMainTextareasHeight);
+  $: definitionDraft, tick().then(syncParameterEditorsHeight);
+  $: activeParameter, tick().then(syncParameterEditorsHeight);
   $: {
     const rows = mappingRowsOf(selected);
     for (const row of rows) {
@@ -2074,11 +2078,16 @@
   $: queryViewMode, tick().then(syncMainTextareasHeight);
   $: bodyViewMode, tick().then(syncMainTextareasHeight);
 
-  function autosize(el: HTMLTextAreaElement | null, minPx = 78) {
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.max(el.scrollHeight, minPx)}px`;
-  }
+function autosize(el: HTMLTextAreaElement | null, minPx = 78) {
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = `${Math.max(el.scrollHeight, minPx)}px`;
+}
+
+function syncParameterEditorsHeight() {
+  autosize(aliasParamEl, 34);
+  autosize(definitionParamEl, 60);
+}
 
   function syncLeftTextareasHeight() {
     autosize(responsePreviewEl);
@@ -2207,17 +2216,21 @@
         <div class="parameter-editor no-border">
           {#if activeParameter}
             <div class="parameter-editor-inner">
-              <input
+              <textarea
                 class="parameter-alias autoheight"
+                rows="1"
+                bind:this={aliasParamEl}
                 placeholder="Псевдоним параметра"
                 value={activeParameter.alias}
                 on:input={(e) => {
                   definitionDirty = false;
                   updateParameterDefinition(activeParameter.id, { alias: e.currentTarget.value });
+                  tick().then(syncParameterEditorsHeight);
                 }}
-              />
+              ></textarea>
               <textarea
                 class="parameter-definition autoheight"
+                bind:this={definitionParamEl}
                 placeholder="Определи параметр (например: FIELD('tokens.token'))"
                 value={definitionDraft}
                 on:input={(e) => handleDefinitionInput(e.currentTarget.value)}
@@ -3102,7 +3115,7 @@
   .parameter-alias, .parameter-definition { width:100%; }
   .parameter-alias { font-weight:600; font-size:14px; padding:8px; }
   .parameter-definition { min-height:60px; resize:none; }
-  .autoheight { min-height:40px; }
+  .autoheight { min-height:40px; overflow:hidden; resize:none; }
   .parameter-definition-hint { font-size:11px; color:#64748b; }
   .parameter-source-row { display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:8px; }
   .parameter-conditions { border:1px solid #e6eaf2; border-radius:10px; padding:10px; background:#f8fafc; }
