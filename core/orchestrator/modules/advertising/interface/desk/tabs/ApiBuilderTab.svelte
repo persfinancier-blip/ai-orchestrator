@@ -2293,25 +2293,15 @@ function syncParameterEditorsHeight() {
                 {:else if !parameterPreviewRows.length}
                   <p class="hint small-hint">Нажми «Проверить», чтобы увидеть первые значения столбца.</p>
                 {:else}
-                  <div class="parameter-preview-table-wrap">
-                    <table class="parameter-preview-table">
-                      <thead>
-                        <tr>
-                          <th>#</th>
-                          <th>{activeParameter.sourceField || 'Значение'}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {#each parameterPreviewRows as row, idx}
-                          <tr>
-                            <td>{idx + 1}</td>
-                            <td>{formatParameterRowValue(row, activeParameter.sourceField)}</td>
-                          </tr>
-                        {/each}
-                      </tbody>
-                    </table>
+                  <div class="parameter-preview-list">
+                    {#each parameterPreviewRows as row, idx}
+                      <div class="preview-row">
+                        <span class="row-index">{idx + 1}</span>
+                        <span class="row-value">{formatParameterRowValue(row, activeParameter.sourceField)}</span>
+                      </div>
+                    {/each}
                   </div>
-                  <p class="hint small-hint">Показано {parameterPreviewRows.length} строк (макс. {PARAMETER_PREVIEW_LIMIT}).</p>
+                  <p class="hint small-hint">�������� {parameterPreviewRows.length} ����� (����. {PARAMETER_PREVIEW_LIMIT}).</p>
                 {/if}
               </div>
               <textarea
@@ -3212,13 +3202,14 @@ function syncParameterEditorsHeight() {
   .condition-value { width:100%; }
   .tiny-btn { border:0; background:transparent; font-size:12px; color:#0f172a; cursor:pointer; }
   .definition-error { margin:0; font-size:11px; color:#b91c1c; }
-  .parameter-preview-block { border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#fff; width:min(100%, calc(100% - 24px)); max-width:calc(100% - 24px); overflow-x:auto; box-sizing:border-box; margin:0 auto; }
+  .parameter-preview-block { border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#fff; width:min(100%, calc(100% - 24px)); max-width:calc(100% - 24px); box-sizing:border-box; margin:0 auto; display:flex; flex-direction:column; gap:8px; }
   @media (max-width: 708px) {
     .parameter-preview-block { width:100%; max-width:100%; }
   }
-  .parameter-preview-table-wrap { overflow-x:auto; }
-  .parameter-preview-table { width:100%; border-collapse:collapse; min-width:260px; }
-  .parameter-preview-table th, .parameter-preview-table td { border-bottom:1px solid #e2e8f0; padding:6px; text-align:left; font-size:13px; }
+  .parameter-preview-list { display:flex; flex-direction:column; gap:6px; }
+  .preview-row { display:flex; gap:8px; align-items:flex-start; }
+  .row-index { font-weight:600; width:32px; text-align:right; color:#475569; }
+  .row-value { flex:1; word-break:break-word; }
 </style>
 
 
