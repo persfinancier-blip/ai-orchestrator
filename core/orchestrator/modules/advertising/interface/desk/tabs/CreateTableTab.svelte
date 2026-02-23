@@ -328,6 +328,7 @@
       table_class: 'custom',
       description: 'Системная таблица преднастроенных API для workflow',
       columns: withRequiredTableFields([
+        { field_name: 'id', field_type: 'bigserial', description: 'идентификатор API-конфига' },
         { field_name: 'api_name', field_type: 'text', description: 'имя API-конфига' },
         { field_name: 'method', field_type: 'text', description: 'HTTP-метод' },
         { field_name: 'base_url', field_type: 'text', description: 'базовый URL API' },
