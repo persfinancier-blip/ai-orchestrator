@@ -2333,7 +2333,7 @@ function syncParameterEditorsHeight() {
                     on:click={loadParameterPreview}
                     disabled={parameterPreviewLoading}
                   >
-                    ⟳
+                    ↻
                   </button>
                   <button
                     type="button"
