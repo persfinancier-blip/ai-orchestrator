@@ -3281,7 +3281,7 @@ function syncParameterEditorsHeight() {
   .parameter-definition { min-height:60px; resize:none; }
   .autoheight { min-height:40px; overflow:hidden; resize:none; }
   .parameter-definition-hint { font-size:11px; color:#64748b; }
-  .parameter-source-row { display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:8px; }
+  .parameter-source-row { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:8px; }
   .parameter-conditions { border:1px solid #e6eaf2; border-radius:10px; padding:10px; background:#f8fafc; }
   .conditions-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
   .condition-card { border:1px solid #dfe7f3; border-radius:10px; padding:8px; background:#fff; margin-bottom:8px; }
