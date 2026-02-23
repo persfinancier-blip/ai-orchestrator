@@ -2892,7 +2892,6 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
     background:#fff;
     color:#0f172a;
     border-color:transparent;
-    box-shadow: inset 0 -2px 0 #0f172a;
   }
   .param-mode-btn.active::before {
     content:'●';
@@ -2985,15 +2984,32 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
     border-radius:10px;
     padding:4px 10px;
   }
-  .parameter-settings-head.view-toggle {
-    border:1px solid transparent;
-    border-radius:10px;
-    padding:4px 10px;
+  .parameter-settings-head.view-toggle,
+  .parameter-creator-head.view-toggle {
+    border:1px solid #e2e8f0;
+    border-radius:16px;
+    padding:6px 12px;
+    background:#fff;
+    color:#0f172a;
+    font-size:13px;
+    font-weight:600;
+    gap:6px;
+    display:inline-flex;
+    align-items:center;
+    cursor:pointer;
   }
   .parameter-settings-head.view-toggle.active,
   .parameter-creator-head.view-toggle.active {
     border-color:#0f172a;
-    background:#fff;
+    background:#0f172a;
+    color:#fff;
+  }
+  .parameter-settings-head.view-toggle.active::before,
+  .parameter-creator-head.view-toggle.active::before {
+    content:'●';
+    font-size:10px;
+    margin-right:6px;
+    color:#fff;
   }
   .parameter-creator-body.collapsed,
   .parameter-settings-body.collapsed {
