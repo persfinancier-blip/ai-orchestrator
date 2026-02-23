@@ -1584,7 +1584,31 @@
   function clearParameterPreview() {
     parameterPreviewRows = [];
     parameterPreviewError = '';
-    parameterPreviewLoading = false;
+  parameterPreviewLoading = false;
+}
+
+function ensureDefinitionTree(): boolean {
+  if (definitionTree) return true;
+  const src = String(definitionDraft || '').trim();
+  if (!src) return false;
+  try {
+    definitionTree = JSON.parse(src);
+    return true;
+  } catch {
+    definitionError = 'Некорректный JSON. Проверь кавычки и скобки.';
+    return false;
+  }
+}
+
+  function toggleDefinitionViewMode() {
+    if (definitionViewMode === 'tree') {
+      definitionViewMode = 'text';
+      tick().then(syncParameterEditorsHeight);
+      return;
+    }
+    if (ensureDefinitionTree()) {
+      definitionViewMode = 'tree';
+    }
   }
 
   function getParameterPreviewTarget(param: ParameterDefinition | null) {
@@ -2285,10 +2309,10 @@ function syncParameterEditorsHeight() {
               ></textarea>
               <div class="subttl response-head field-head">
                 <span>Предпросмотр параметра</span>
-                <span class="inline-actions">
+                <span class="inline-actions parameter-preview-controls">
                   <button
                     type="button"
-                    class="icon-btn refresh-icon"
+                    class="icon-btn refresh-btn"
                     aria-label="Обновить"
                     title="Обновить"
                     on:click={loadParameterPreview}
@@ -2327,13 +2351,13 @@ function syncParameterEditorsHeight() {
                 {/if}
               </div>
               <div class="definition-section">
-                <div class="response-head field-head">
+                <div class="subttl response-head field-head">
                   <span>Описание параметра</span>
                   <span class="inline-actions">
                     <button
                       type="button"
                       class="view-toggle"
-                      on:click={() => (definitionViewMode = definitionViewMode === 'tree' ? 'text' : 'tree')}
+                      on:click={toggleDefinitionViewMode}
                     >
                       {definitionViewMode === 'tree' ? 'Текст' : 'Дерево'}
                     </button>
@@ -3249,10 +3273,13 @@ function syncParameterEditorsHeight() {
   .condition-value { width:100%; }
   .tiny-btn { border:0; background:transparent; font-size:12px; color:#0f172a; cursor:pointer; }
   .definition-error { margin:0; font-size:11px; color:#b91c1c; }
-  .parameter-preview-block { border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#fff; width:min(100%, calc(100% - 24px)); max-width:calc(100% - 24px); box-sizing:border-box; margin:0 auto; display:flex; flex-direction:column; gap:8px; }
+  .parameter-preview-block { border:none; border-radius:12px; padding:10px; background:#fff; width:min(100%, calc(100% - 24px)); max-width:calc(100% - 24px); box-sizing:border-box; margin:0 auto; display:flex; flex-direction:column; gap:8px; }
   @media (max-width: 708px) {
     .parameter-preview-block { width:100%; max-width:100%; }
   }
+  .parameter-preview-controls { gap:6px; justify-content:flex-end; }
+  .definition-section .inline-actions { justify-content:flex-end; }
+  .icon-btn.refresh-btn { color:#16a34a; font-weight:700; }
   .parameter-preview-list { display:flex; flex-direction:column; gap:6px; }
   .preview-row { display:flex; gap:8px; align-items:flex-start; }
   .row-index { font-weight:600; width:32px; text-align:right; color:#475569; }
