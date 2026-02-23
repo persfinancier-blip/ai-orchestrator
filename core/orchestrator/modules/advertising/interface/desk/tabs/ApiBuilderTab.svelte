@@ -2167,34 +2167,25 @@
     <div class="subsec">
       <div class="subttl">Витрина параметров</div>
       <div class="parameter-panel">
-        <div class="parameter-list-panel">
+        <div class="parameter-list-panel no-border">
           <div class="parameter-list-header">
-            <span>Параметры</span>
+            <span class="parameter-list-title">Параметры</span>
             <button class="icon-btn plus-dark" type="button" title="Добавить параметр" on:click={addParameterDefinition}>+</button>
           </div>
           {#if selected?.parameterDefinitions?.length}
-            <div class="parameter-list">
+            <div class="parameter-crumbs">
               {#each selected.parameterDefinitions as param (param.id)}
-                <div
-                  class="parameter-card"
-                  class:active-card={selectedParameterId === param.id}
+                <button
+                  type="button"
+                  class="parameter-crumb"
+                  class:active-crumb={selectedParameterId === param.id}
                   draggable="true"
                   on:dragstart={(e) => parameterCardDragStart(param, e)}
                   on:click={() => setActiveParameter(param.id)}
+                  title={parameterConditionSummary(param.conditions?.[0] || {})}
                 >
-                  <div class="parameter-card-head">
-                    <strong>{param.alias}</strong>
-                    <button class="chip-remove" type="button" title="Удалить параметр" on:click|stopPropagation={() => removeParameterDefinition(param.id)}>x</button>
-                  </div>
-                  <div class="parameter-card-body">
-                    <p class="parameter-card-desc">{param.definition || 'Описание параметра'}</p>
-                    {#if param.conditions.length}
-                      <p class="parameter-card-hint">{param.conditions.map((cond) => parameterConditionSummary(cond)).join('; ')}</p>
-                    {:else}
-                      <p class="hint">Условий пока нет</p>
-                    {/if}
-                  </div>
-                </div>
+                  <span>{param.alias}</span>
+                </button>
               {/each}
             </div>
           {:else}
@@ -3036,15 +3027,27 @@
   .pagination-grid { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
   .pagination-field small { display:block; margin-bottom:4px; font-size:11px; color:#64748b; }
   .parameter-panel { margin-top:10px; border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; display:grid; gap:12px; }
-  .parameter-list-panel { border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#f8fafc; }
-  .parameter-list-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; font-weight:600; }
-  .parameter-list { display:flex; flex-wrap:wrap; gap:8px; }
-  .parameter-card { border:1px solid #e2e8f0; border-radius:10px; padding:8px; background:#fff; cursor:pointer; min-width:120px; flex:1 1 120px; }
-  .parameter-card.active-card { border-color:#0f172a; background:#0f172a; color:#fff; }
-  .parameter-card-head { display:flex; align-items:center; justify-content:space-between; gap:6px; font-size:13px; }
-  .parameter-card-body { margin-top:6px; }
-  .parameter-card-desc { margin:0 0 4px; font-size:12px; color:#475569; }
-  .parameter-card-hint { margin:0; font-size:11px; color:#0f172a; }
+  .parameter-list-panel { padding:0; background:transparent; }
+  .parameter-list-panel.no-border { border:none; }
+  .parameter-list-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; font-weight:500; font-size:12px; color:#64748b; }
+  .parameter-list-title { font-size:12px; color:#64748b; line-height:1.2; }
+  .parameter-crumbs { display:flex; flex-wrap:wrap; gap:6px; }
+  .parameter-crumb {
+    border-radius:999px;
+    border:1px solid #e2e8f0;
+    padding:4px 10px;
+    background:#f8fafc;
+    color:#0f172a;
+    font-size:12px;
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+  }
+  .parameter-crumb.active-crumb {
+    background:#0f172a;
+    color:#fff;
+    border-color:#0f172a;
+  }
   .parameter-editor { border:1px solid #e6eaf2; border-radius:12px; padding:12px; background:#fff; min-height:200px; }
   .parameter-editor-inner { display:flex; flex-direction:column; gap:8px; }
   .parameter-alias, .parameter-definition { width:100%; }
