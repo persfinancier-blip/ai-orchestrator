@@ -2871,12 +2871,12 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
   .table-crumbs { display:flex; flex-wrap:wrap; gap:6px; }
   .table-chip { display:inline-flex; align-items:center; gap:6px; border-radius:10px; background:#0f172a; color:#fff; padding:4px 10px; font-size:12px; }
   .table-chip .chip-remove { background:transparent; border:0; color:#fee2e2; padding:0 4px; font-size:12px; cursor:pointer; }
-  .param-mode-row { display:flex; gap:8px; }
+  .param-mode-row { display:flex; gap:6px; flex-wrap:wrap; }
   .param-mode-btn {
-    border-radius:10px;
-    border:1px solid #0f172a;
-    background:#0f172a;
-    color:#fff;
+    border-radius:999px;
+    border:1px solid #e2e8f0;
+    background:#fff;
+    color:#0f172a;
     font-weight:600;
     display:inline-flex;
     align-items:center;
@@ -2884,12 +2884,15 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
     cursor:pointer;
     padding:4px 10px;
     font-size:11px;
+    min-width:76px;
+    justify-content:center;
   }
   .param-mode-btn::before { content:''; }
   .param-mode-btn.active {
     background:#fff;
     color:#0f172a;
-    border-color:#0f172a;
+    border-color:transparent;
+    box-shadow: inset 0 -2px 0 #0f172a;
   }
   .param-mode-btn.active::before {
     content:'●';
