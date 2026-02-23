@@ -2272,33 +2272,6 @@ function syncParameterEditorsHeight() {
                   tick().then(syncParameterEditorsHeight);
                 }}
               ></textarea>
-              <div class="parameter-preview-summary">
-                <div class="preview-row">
-                  <span class="preview-label">Источник</span>
-                  <span class="preview-value">
-                    {activeParameter.sourceSchema || '—'}
-                    {activeParameter.sourceTable ? '.' + activeParameter.sourceTable : ''}
-                    {activeParameter.sourceField ? '.' + activeParameter.sourceField : ''}
-                  </span>
-                </div>
-                <div class="preview-row">
-                  <span class="preview-label">Условий</span>
-                  <span class="preview-value">{activeParameter.conditions?.length ?? 0}</span>
-                </div>
-                {#if activeParameter.conditions?.length}
-                  <div class="conditions-preview">
-                    {#each activeParameter.conditions as cond (cond.id)}
-                      <div class="condition-item">
-                        <span>{cond.schema || cond.table ? `${cond.schema}.${cond.table}.${cond.field}` : cond.field || 'поле'}</span>
-                        <span>{cond.operator}</span>
-                        <span>{cond.compareMode === 'column' ? cond.compareColumn || '-' : cond.compareValue || '-'}</span>
-                      </div>
-                    {/each}
-                  </div>
-                {:else}
-                  <p class="hint small-hint">Пока нет условий — параметр не фильтрует данные.</p>
-                {/if}
-              </div>
               <div class="response-head field-head">
                 <span>Предпросмотр параметра</span>
                 <span class="inline-actions">
@@ -3230,38 +3203,6 @@ function syncParameterEditorsHeight() {
   .parameter-definition { min-height:60px; resize:none; }
   .autoheight { min-height:40px; overflow:hidden; resize:none; }
   .parameter-definition-hint { font-size:11px; color:#64748b; }
-  .parameter-preview-summary {
-    border:1px solid #e2e8f0;
-    border-radius:10px;
-    padding:10px;
-    background:#f8fafc;
-    display:flex;
-    flex-direction:column;
-    gap:6px;
-  }
-  .preview-row {
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    font-size:12px;
-    color:#475569;
-  }
-  .preview-label { font-weight:600; }
-  .preview-value { font-size:13px; color:#0f172a; }
-  .conditions-preview {
-    display:flex;
-    flex-direction:column;
-    gap:4px;
-    border-top:1px solid #e6eaf2;
-    padding-top:6px;
-  }
-  .condition-item {
-    display:grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap:6px;
-    font-size:12px;
-  }
-  .small-hint { margin:0; font-size:11px; color:#94a3b8; }
   .parameter-source-row { display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:8px; }
   .parameter-conditions { border:1px solid #e6eaf2; border-radius:10px; padding:10px; background:#f8fafc; }
   .conditions-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
