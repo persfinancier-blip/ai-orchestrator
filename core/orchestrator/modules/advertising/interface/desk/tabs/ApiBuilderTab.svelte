@@ -2301,7 +2301,7 @@ function syncParameterEditorsHeight() {
                       </div>
                     {/each}
                   </div>
-                  <p class="hint small-hint">�������� {parameterPreviewRows.length} ����� (����. {PARAMETER_PREVIEW_LIMIT}).</p>
+                  <p class="hint small-hint">Показано {parameterPreviewRows.length} строк (макс. {PARAMETER_PREVIEW_LIMIT}).</p>
                 {/if}
               </div>
               <textarea
