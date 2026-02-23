@@ -2172,26 +2172,37 @@
             <span class="parameter-list-title">Параметры</span>
             <button class="icon-btn plus-dark" type="button" title="Добавить параметр" on:click={addParameterDefinition}>+</button>
           </div>
-          {#if selected?.parameterDefinitions?.length}
-            <div class="parameter-crumbs">
-              {#each selected.parameterDefinitions as param (param.id)}
-                <button
-                  type="button"
-                  class="parameter-crumb"
-                  class:active-crumb={selectedParameterId === param.id}
-                  draggable="true"
-                  on:dragstart={(e) => parameterCardDragStart(param, e)}
-                  on:click={() => setActiveParameter(param.id)}
-                  title={parameterConditionSummary(param.conditions?.[0] || {})}
-                >
-                  <span>{param.alias}</span>
-                </button>
-              {/each}
-            </div>
-          {:else}
-            <p class="hint">Добавь параметр, чтобы сформировать значение.</p>
-          {/if}
-        </div>
+            {#if selected?.parameterDefinitions?.length}
+              <div class="parameter-crumbs">
+                {#each selected.parameterDefinitions as param (param.id)}
+                  <div class="parameter-crumb-wrapper">
+                    <button
+                      type="button"
+                      class="parameter-crumb"
+                      class:active-crumb={selectedParameterId === param.id}
+                      draggable="true"
+                      on:dragstart={(e) => parameterCardDragStart(param, e)}
+                      on:click={() => setActiveParameter(param.id)}
+                      title={parameterConditionSummary(param.conditions?.[0] || {})}
+                    >
+                      <span class="crumb-indicator" class:active-indicator={selectedParameterId === param.id}></span>
+                      <span>{param.alias}</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="parameter-crumb-delete"
+                      aria-label="Удалить параметр"
+                      on:click|stopPropagation={() => removeParameterDefinition(param.id)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <p class="hint">Добавь параметр, чтобы сформировать значение.</p>
+            {/if}
+          </div>
         <div class="parameter-editor">
           {#if activeParameter}
             <div class="parameter-editor-inner">
@@ -3032,6 +3043,7 @@
   .parameter-list-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; font-weight:500; font-size:12px; color:#64748b; }
   .parameter-list-title { font-size:12px; color:#64748b; line-height:1.2; }
   .parameter-crumbs { display:flex; flex-wrap:wrap; gap:6px; }
+  .parameter-crumb-wrapper { display:flex; align-items:center; gap:4px; }
   .parameter-crumb {
     border-radius:999px;
     border:1px solid #e2e8f0;
@@ -3047,6 +3059,25 @@
     background:#0f172a;
     color:#fff;
     border-color:#0f172a;
+  }
+  .crumb-indicator {
+    width:8px;
+    height:8px;
+    border-radius:50%;
+    background:#cbd5f5;
+  }
+  .crumb-indicator.active-indicator {
+    background:#0f172a;
+  }
+  .parameter-crumb-delete {
+    width:18px;
+    height:18px;
+    border:none;
+    background:transparent;
+    color:#b91c1c;
+    font-weight:600;
+    cursor:pointer;
+    padding:0;
   }
   .parameter-editor { border:1px solid #e6eaf2; border-radius:12px; padding:12px; background:#fff; min-height:200px; }
   .parameter-editor-inner { display:flex; flex-direction:column; gap:8px; }
