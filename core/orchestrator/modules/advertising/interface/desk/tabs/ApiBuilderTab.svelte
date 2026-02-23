@@ -2034,17 +2034,37 @@ $: if (selected && selectedParameterId && !selected.parameterSources?.some((src)
             {/if}
 
             <div class="parameter-settings">
-            <div
-              class="parameter-settings-head view-toggle"
-              class:active={parameterSettingsOpen}
-              role="button"
-              tabindex="0"
-              on:click={() => (parameterSettingsOpen = !parameterSettingsOpen)}
-              on:keydown={(e) => e.key === 'Enter' && (parameterSettingsOpen = !parameterSettingsOpen)}
-            >
-              <span>Настройки параметра</span>
-            </div>
+              <div
+                class="parameter-settings-head view-toggle"
+                class:active={parameterSettingsOpen}
+                role="button"
+                tabindex="0"
+                on:click={() => (parameterSettingsOpen = !parameterSettingsOpen)}
+                on:keydown={(e) => e.key === 'Enter' && (parameterSettingsOpen = !parameterSettingsOpen)}
+              >
+                <span>Настройки параметра</span>
+              </div>
               <div class="parameter-settings-body" class:collapsed={!parameterSettingsOpen}>
+                {#if existingTables?.length}
+                  <div class="parameter-table-picker-inline">
+                    <select
+                      value={tableConnectValue}
+                      on:change={(e) => (tableConnectValue = e.currentTarget.value)}
+                    >
+                      {#each existingTables as tbl}
+                        <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
+                      {/each}
+                    </select>
+                    <button
+                      class="icon-btn plus-dark"
+                      type="button"
+                      title="Подключить таблицу"
+                      on:click={() => addParameterConnectionByValue(tableConnectValue)}
+                    >
+                      +
+                    </button>
+                  </div>
+                {/if}
                 {#if selectedParameter}
                   <div class="parameter-detail-row">
                     <label>Название</label>
