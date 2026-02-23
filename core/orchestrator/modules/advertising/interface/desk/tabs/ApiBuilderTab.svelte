@@ -202,6 +202,7 @@
   let parameterPreviewLoading = false;
   let parameterPreviewError = '';
   let definitionTree: any = null;
+  let definitionTreeDisplay: any = null;
   let definitionViewMode: 'text' | 'tree' = 'text';
   const PARAMETER_PREVIEW_LIMIT = 5;
 
@@ -1563,7 +1564,7 @@
     });
   }
 
-  function handleDefinitionInput(value: string) {
+function handleDefinitionInput(value: string) {
     definitionDraft = value;
     definitionError = '';
     definitionDirty = true;
@@ -1581,24 +1582,33 @@
     }
   }
 
+  $: if (definitionTree) {
+    definitionTreeDisplay = {
+      ...definitionTree,
+      alias: activeParameter?.alias || definitionTree.alias
+    };
+  } else {
+    definitionTreeDisplay = null;
+  }
+
   function clearParameterPreview() {
     parameterPreviewRows = [];
     parameterPreviewError = '';
-  parameterPreviewLoading = false;
-}
-
-function ensureDefinitionTree(): boolean {
-  if (definitionTree) return true;
-  const src = String(definitionDraft || '').trim();
-  if (!src) return false;
-  try {
-    definitionTree = JSON.parse(src);
-    return true;
-  } catch {
-    definitionError = 'Некорректный JSON. Проверь кавычки и скобки.';
-    return false;
+    parameterPreviewLoading = false;
   }
-}
+
+  function ensureDefinitionTree(): boolean {
+    if (definitionTree) return true;
+    const src = String(definitionDraft || '').trim();
+    if (!src) return false;
+    try {
+      definitionTree = JSON.parse(src);
+      return true;
+    } catch {
+      definitionError = 'Некорректный JSON. Проверь кавычки и скобки.';
+      return false;
+    }
+  }
 
   function toggleDefinitionViewMode() {
     if (definitionViewMode === 'tree') {
@@ -1610,6 +1620,11 @@ function ensureDefinitionTree(): boolean {
       definitionViewMode = 'tree';
     }
   }
+
+  $: definitionTreeDisplay =
+    definitionTree && activeParameter
+      ? { ...definitionTree, alias: activeParameter.alias || definitionTree.alias }
+      : definitionTree;
 
   function getParameterPreviewTarget(param: ParameterDefinition | null) {
     const schema = String(param?.sourceSchema || '').trim();
@@ -2337,7 +2352,7 @@ function syncParameterEditorsHeight() {
                 {:else if parameterPreviewError}
                   <p class="definition-error">{parameterPreviewError}</p>
                 {:else if !parameterPreviewRows.length}
-                  <p class="hint small-hint">Нажми «Проверить», чтобы увидеть первые значения столбца.</p>
+                  <!-- пусто -->
                 {:else}
                   <div class="parameter-preview-list">
                     {#each parameterPreviewRows as row, idx}
@@ -2359,7 +2374,7 @@ function syncParameterEditorsHeight() {
                       class="view-toggle"
                       on:click={toggleDefinitionViewMode}
                     >
-                      {definitionViewMode === 'tree' ? 'Текст' : 'Дерево'}
+                      {definitionViewMode === 'tree' ? 'RAW' : 'Дерево'}
                     </button>
                   </span>
                 </div>
@@ -2374,7 +2389,7 @@ function syncParameterEditorsHeight() {
                 {:else}
                   {#if definitionTree}
                     <div class="response-tree-wrap">
-                      <JsonTreeView node={definitionTree} name="definition" level={0} />
+                      <JsonTreeView node={definitionTreeDisplay || definitionTree} name="definition" level={0} />
                     </div>
                   {:else}
                     <p class="hint small-hint">Введите JSON — появится дерево описания.</p>
@@ -3148,7 +3163,6 @@ function syncParameterEditorsHeight() {
   .icon-btn { width:34px; min-width:34px; padding:6px 0; font-size:14px; text-transform:uppercase; border-color:transparent; background:transparent; color:#fff; }
   .danger.icon-btn { color:#b91c1c; }
   .plus-dark.icon-btn { color:#0f172a; font-weight:700; }
-  .icon-btn.refresh-icon { color:#0f172a; font-weight:700; }
   .plus-green.icon-btn { color:#16a34a; font-weight:700; }
   .map-row .icon-btn { color:#b91c1c; }
   .activeitem .icon-btn { color:#b91c1c; }
