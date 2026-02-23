@@ -53,8 +53,28 @@
     }>;
     description: string;
     exampleRequest: string;
+    parameterDefinitions: ParameterDefinition[];
   };
 
+  type ParameterCondition = {
+    id: string;
+    schema: string;
+    table: string;
+    field: string;
+    operator: string;
+    compareMode: 'value' | 'column';
+    compareValue: string;
+    compareColumn?: string;
+  };
+  type ParameterDefinition = {
+    id: string;
+    alias: string;
+    definition: string;
+    sourceSchema: string;
+    sourceTable: string;
+    sourceField: string;
+    conditions: ParameterCondition[];
+  };
   const AUTH_MODE_OAUTH2 = 'oauth2_client_credentials';
 
   const PAGINATION_STRATEGIES = [
@@ -85,6 +105,30 @@
     { name: 'description', types: ['text', 'character varying', 'varchar'] },
     { name: 'is_active', types: ['boolean'] }
   ];
+
+  const CONDITION_OPERATORS: Record<'text' | 'number' | 'date' | 'boolean', Array<{ value: string; label: string }>> = {
+    text: [
+      { value: 'equals', label: 'равно' },
+      { value: 'contains', label: 'содержит' },
+      { value: 'starts_with', label: 'начинается с' },
+      { value: 'ends_with', label: 'заканчивается на' }
+    ],
+    number: [
+      { value: 'equals', label: '=' },
+      { value: 'gt', label: '>' },
+      { value: 'lt', label: '<' },
+      { value: 'between', label: 'между' }
+    ],
+    date: [
+      { value: 'equals', label: '=' },
+      { value: 'before', label: 'раньше' },
+      { value: 'after', label: 'позже' }
+    ],
+    boolean: [
+      { value: 'equals', label: '=' },
+      { value: 'not_equals', label: '≠' }
+    ]
+  };
 
   let drafts: ApiDraft[] = [];
   let selectedRef = '';
@@ -141,11 +185,13 @@
   let bodyEl: HTMLTextAreaElement | null = null;
   let templateParseMessage = '';
   let activeResponseFieldRef = '';
-  let columnsCache: Record<string, string[]> = {};
+  type ColumnMeta = { name: string; type?: string };
+  let columnsCache: Record<string, ColumnMeta[]> = {};
   let responsePathOptions: string[] = [];
   let responsePathPickerOpen = false;
   let responsePathPick = '';
   let oauthTokenCache: Record<string, { token: string; tokenType: string; expiresAt: number }> = {};
+  let selectedParameterId: string | null = null;
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -300,7 +346,8 @@
       pickedPaths: [],
       responseTargets: [],
       description: '',
-      exampleRequest: ''
+      exampleRequest: '',
+      parameterDefinitions: []
     };
   }
 
@@ -313,6 +360,11 @@
     const legacy = tryObj(mapping?.source ?? mapping?.config ?? mapping?.payload);
     const pagination = tryObj(row?.pagination_json || mapping?.pagination || legacy?.pagination);
     const oauth2 = tryObj(mapping?.oauth2 || legacy?.oauth2);
+    const parameterDefinitionsRaw = Array.isArray(mapping?.parameter_definitions)
+      ? mapping.parameter_definitions
+      : Array.isArray(legacy?.parameter_definitions)
+      ? legacy.parameter_definitions
+      : [];
     const parsedTargets = Array.isArray(mapping?.response_targets) ? mapping.response_targets : [];
     const normalizedTargets = parsedTargets
       .map((t: any) => ({
@@ -340,6 +392,27 @@
         });
       }
     }
+
+    const normalizedDefinitions = parameterDefinitionsRaw.map((pd: any) => ({
+      id: String(pd?.id || uid()),
+      alias: String(pd?.alias || `param_${uid()}`),
+        definition: String(pd?.definition || ''),
+        sourceSchema: String(pd?.source_schema || pd?.sourceSchema || ''),
+        sourceTable: String(pd?.source_table || pd?.sourceTable || ''),
+        sourceField: String(pd?.source_field || pd?.sourceField || ''),
+        conditions: Array.isArray(pd?.conditions)
+          ? pd.conditions.map((cond: any) => ({
+              id: String(cond?.id || uid()),
+              schema: String(cond?.schema || ''),
+              table: String(cond?.table || ''),
+              field: String(cond?.field || ''),
+              operator: String(cond?.operator || 'equals'),
+              compareMode: String(cond?.compare_mode || cond?.compareMode || 'value') === 'column' ? 'column' : 'value',
+              compareValue: String(cond?.compare_value || cond?.compareValue || ''),
+              compareColumn: cond?.compare_column || cond?.compareColumn || ''
+            }))
+          : []
+      }));
 
     return {
       ...d,
@@ -383,6 +456,7 @@
       responseTargets: normalizedTargets,
       description: String(row?.description || legacy?.description || ''),
       exampleRequest: String(mapping?.exampleRequest || legacy?.exampleRequest || ''),
+      parameterDefinitions: normalizedDefinitions
     };
   }
 
@@ -437,7 +511,25 @@
                 token_type_field: d.oauth2TokenTypeField || 'token_type'
               }
             : { mode: 'manual' },
-        auth_json: parsed?.authJson ?? tryObj(d.authJson)
+        auth_json: parsed?.authJson ?? tryObj(d.authJson),
+        parameter_definitions: d.parameterDefinitions.map((pd) => ({
+          id: pd.id,
+          alias: pd.alias,
+          definition: pd.definition,
+          source_schema: pd.sourceSchema,
+          source_table: pd.sourceTable,
+          source_field: pd.sourceField,
+          conditions: pd.conditions.map((cond) => ({
+            id: cond.id,
+            schema: cond.schema,
+            table: cond.table,
+            field: cond.field,
+            operator: cond.operator,
+            compare_mode: cond.compareMode,
+            compare_value: cond.compareValue,
+            compare_column: cond.compareColumn
+          }))
+        }))
       },
       description: d.description,
       is_active: true
@@ -484,7 +576,14 @@
         `${apiBase}/columns?schema=${encodeURIComponent(schema)}&table=${encodeURIComponent(table)}`,
         { headers: headers() }
       );
-      const cols = Array.isArray(j?.columns) ? j.columns.map((c) => String(c?.name || '').trim()).filter(Boolean) : [];
+      const cols = Array.isArray(j?.columns)
+        ? j.columns
+            .map((c) => ({
+              name: String(c?.name || '').trim(),
+              type: String(c?.type || '').trim().toLowerCase() || undefined
+            }))
+            .filter((c) => c.name)
+        : [];
       columnsCache = { ...columnsCache, [key]: cols };
     } catch {
       columnsCache = { ...columnsCache, [key]: [] };
@@ -492,7 +591,12 @@
   }
 
   function columnOptionsFor(schema: string, table: string) {
-    return columnsCache[tableCacheKey(schema, table)] || [];
+    return (columnsCache[tableCacheKey(schema, table)] || []).map((c) => c.name);
+  }
+
+  function columnMeta(schema: string, table: string, column: string) {
+    const meta = columnsCache[tableCacheKey(schema, table)];
+    return meta?.find((c) => c.name === column);
   }
 
   function responsePathOptionsFor(current: string) {
@@ -505,6 +609,126 @@
     const cols = columnOptionsFor(schema, table).filter(Boolean);
     const all = current && !cols.includes(current) ? [current, ...cols] : cols;
     return [...new Set(all)];
+  }
+
+  const CONDITION_COMPARE_MODES = [
+    { value: 'value', label: 'Значение' },
+    { value: 'column', label: 'Колонка' }
+  ];
+
+  function getDefaultCondition(parameter?: ParameterDefinition): ParameterCondition {
+    const schema = parameter?.sourceSchema || existingTables[0]?.schema_name || '';
+    const table = parameter?.sourceTable || existingTables[0]?.table_name || '';
+    return {
+      id: uid(),
+      schema,
+      table,
+      field: '',
+      operator: 'equals',
+      compareMode: 'value',
+      compareValue: '',
+      compareColumn: undefined
+    };
+  }
+
+  function addParameterDefinition() {
+    if (!selected) return;
+    const source = existingTables[0];
+    const newParam: ParameterDefinition = {
+      id: uid(),
+      alias: `param_${selected.parameterDefinitions.length + 1}`,
+      definition: '',
+      sourceSchema: source?.schema_name || '',
+      sourceTable: source?.table_name || '',
+      sourceField: '',
+      conditions: [getDefaultCondition()]
+    };
+    mutateSelected((d) => {
+      d.parameterDefinitions = [...d.parameterDefinitions, newParam];
+    });
+    selectedParameterId = newParam.id;
+    ensureColumnsFor(newParam.sourceSchema, newParam.sourceTable);
+  }
+
+  function updateParameterDefinition(id: string, updates: Partial<ParameterDefinition>) {
+    if (!selected) return;
+    mutateSelected((d) => {
+      d.parameterDefinitions = d.parameterDefinitions.map((param) =>
+        param.id === id ? { ...param, ...updates } : param
+      );
+    });
+  }
+
+  function removeParameterDefinition(id: string) {
+    if (!selected) return;
+    mutateSelected((d) => {
+      d.parameterDefinitions = d.parameterDefinitions.filter((param) => param.id !== id);
+    });
+    if (selectedParameterId === id) selectedParameterId = null;
+  }
+
+  function addCondition(parameterId: string) {
+    if (!selected) return;
+    const param = selected.parameterDefinitions.find((p) => p.id === parameterId);
+    const newCondition = getDefaultCondition(param);
+    ensureColumnsFor(newCondition.schema, newCondition.table);
+    mutateSelected((d) => {
+      d.parameterDefinitions = d.parameterDefinitions.map((param) => {
+        if (param.id !== parameterId) return param;
+        return { ...param, conditions: [...param.conditions, newCondition] };
+      });
+    });
+  }
+
+  function updateCondition(parameterId: string, conditionId: string, updates: Partial<ParameterCondition>) {
+    if (!selected) return;
+    mutateSelected((d) => {
+      d.parameterDefinitions = d.parameterDefinitions.map((param) => {
+        if (param.id !== parameterId) return param;
+        return {
+          ...param,
+          conditions: param.conditions.map((cond) => (cond.id === conditionId ? { ...cond, ...updates } : cond))
+        };
+      });
+    });
+  }
+
+  function removeCondition(parameterId: string, conditionId: string) {
+    if (!selected) return;
+    mutateSelected((d) => {
+      d.parameterDefinitions = d.parameterDefinitions.map((param) => {
+        if (param.id !== parameterId) return param;
+        return { ...param, conditions: param.conditions.filter((cond) => cond.id !== conditionId) };
+      });
+    });
+  }
+
+  function getOperatorsForColumn(column: string, schema: string, table: string) {
+    const meta = columnMeta(schema, table, column);
+    const type = meta?.type;
+    if (type?.includes('int') || type?.includes('numeric') || type?.includes('double') || type?.includes('decimal')) return CONDITION_OPERATORS.number;
+    if (type?.includes('date') || type?.includes('timestamp')) return CONDITION_OPERATORS.date;
+    if (type === 'boolean') return CONDITION_OPERATORS.boolean;
+    return CONDITION_OPERATORS.text;
+  }
+
+  function parameterConditionSummary(cond: ParameterCondition) {
+    const target = cond.compareMode === 'column' ? cond.compareColumn : cond.compareValue;
+    return `${cond.schema}.${cond.table}.${cond.field} ${cond.operator} ${target || '?'}`;
+  }
+
+  let activeParameter: ParameterDefinition | null = null;
+  $: activeParameter =
+    selected && selectedParameterId
+      ? selected.parameterDefinitions.find((param) => param.id === selectedParameterId) ?? null
+      : null;
+
+  $: if (selected && selectedParameterId && !selected.parameterDefinitions.some((param) => param.id === selectedParameterId)) {
+    selectedParameterId = null;
+  }
+
+  $: if (activeParameter) {
+    ensureColumnsFor(activeParameter.sourceSchema, activeParameter.sourceTable);
   }
 
   function addMappingRow() {
@@ -582,6 +806,45 @@
     });
     responsePathPickerOpen = false;
     ok = 'Путь добавлен в витрину';
+  }
+
+  function setActiveParameter(id: string) {
+    selectedParameterId = selectedParameterId === id ? null : id;
+  }
+
+  function parameterCardDragStart(param: ParameterDefinition, event: DragEvent) {
+    if (!event.dataTransfer) return;
+    const payload = `{{${param.alias}}}`;
+    event.dataTransfer.setData('text/plain', payload);
+    event.dataTransfer.effectAllowed = 'copy';
+  }
+
+  function parseCompareModeValue(value: string): 'value' | 'column' {
+    return value === 'column' ? 'column' : 'value';
+  }
+
+  function compareColumnOptions(cond: ParameterCondition) {
+    const [schema, table] = compareColumnTableValue(cond).split('.');
+    if (!schema || !table) return [];
+    return columnOptionsFor(schema, table);
+  }
+
+  function splitQualified(value: string) {
+    const parts = String(value || '').split('.');
+    return {
+      schema: parts[0] || '',
+      table: parts[1] || '',
+      field: parts[2] || ''
+    };
+  }
+
+  function compareColumnTableValue(cond: ParameterCondition) {
+    const parts = splitQualified(cond.compareColumn || '');
+    return parts.schema && parts.table ? `${parts.schema}.${parts.table}` : '';
+  }
+
+  function compareColumnFieldValue(cond: ParameterCondition) {
+    return splitQualified(cond.compareColumn || '').field;
   }
 
   function onPathChipDragStart(event: DragEvent, path: string) {
@@ -1759,10 +2022,10 @@
           {/if}
         </div>
         <div class="statusline">status: {responseStatus || '-'}</div>
-        {#if responseIsJson && responseViewMode === 'tree'}
-          <div class="response-tree-wrap">
-            <JsonTreeView node={responseJson} name="response" level={0} pickEnabled={true} on:pickpath={(e) => applyPickedResponsePath(e.detail.path)} />
-          </div>
+      {#if responseIsJson && responseViewMode === 'tree'}
+        <div class="response-tree-wrap">
+          <JsonTreeView node={responseJson} name="response" level={0} pickEnabled={true} on:pickpath={(e) => applyPickedResponsePath(e.detail.path)} />
+        </div>
         {:else}
           <textarea bind:this={responsePreviewEl} readonly value={responseText}></textarea>
         {/if}
@@ -1795,9 +2058,208 @@
         {/if}
         {#if myPreviewApplyMessage}
           <div class="template-parse-note">{myPreviewApplyMessage}</div>
-        {/if}
+      {/if}
+    </div>
+
+    <div class="subsec">
+      <div class="subttl">Витрина параметров</div>
+      <div class="parameter-panel">
+        <div class="parameter-list-panel">
+          <div class="parameter-list-header">
+            <span>Параметры</span>
+            <button class="icon-btn plus-dark" type="button" title="Добавить параметр" on:click={addParameterDefinition}>+</button>
+          </div>
+          {#if selected?.parameterDefinitions?.length}
+            <div class="parameter-list">
+              {#each selected.parameterDefinitions as param (param.id)}
+                <div
+                  class="parameter-card"
+                  class:active-card={selectedParameterId === param.id}
+                  draggable="true"
+                  on:dragstart={(e) => parameterCardDragStart(param, e)}
+                  on:click={() => setActiveParameter(param.id)}
+                >
+                  <div class="parameter-card-head">
+                    <strong>{param.alias}</strong>
+                    <button class="chip-remove" type="button" title="Удалить параметр" on:click|stopPropagation={() => removeParameterDefinition(param.id)}>x</button>
+                  </div>
+                  <div class="parameter-card-body">
+                    <p class="parameter-card-desc">{param.definition || 'Описание параметра'}</p>
+                    {#if param.conditions.length}
+                      <p class="parameter-card-hint">{param.conditions.map((cond) => parameterConditionSummary(cond)).join('; ')}</p>
+                    {:else}
+                      <p class="hint">Условий пока нет</p>
+                    {/if}
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <p class="hint">Добавь параметр, чтобы сформировать значение.</p>
+          {/if}
+        </div>
+        <div class="parameter-editor">
+          {#if activeParameter}
+            <div class="parameter-editor-inner">
+              <input
+                class="parameter-alias"
+                placeholder="Псевдоним параметра"
+                value={activeParameter.alias}
+                on:input={(e) => updateParameterDefinition(activeParameter.id, { alias: e.currentTarget.value })}
+              />
+              <textarea
+                class="parameter-definition"
+                placeholder="Определи параметр (например: FIELD('tokens.token'))"
+                value={activeParameter.definition}
+                on:input={(e) => updateParameterDefinition(activeParameter.id, { definition: e.currentTarget.value })}
+              ></textarea>
+              <div class="parameter-definition-hint">
+                <span>Доступные функции: FIELD('schema.table.column'), TODAY(), PARAM('alias')</span>
+              </div>
+              <div class="parameter-source-row">
+                <select
+                  value={`${activeParameter.sourceSchema}.${activeParameter.sourceTable}`}
+                  on:change={(e) => {
+                    const [schema, table] = String(e.currentTarget.value || '').split('.');
+                    updateParameterDefinition(activeParameter.id, {
+                      sourceSchema: schema || '',
+                      sourceTable: table || '',
+                      sourceField: ''
+                    });
+                    ensureColumnsFor(schema, table);
+                  }}
+                >
+                  <option value="">Таблица</option>
+                  {#each existingTables as tbl}
+                    <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
+                  {/each}
+                </select>
+                <select
+                  value={activeParameter.sourceField}
+                  on:change={(e) => updateParameterDefinition(activeParameter.id, { sourceField: e.currentTarget.value })}
+                >
+                  <option value="">Колонка</option>
+                  {#if activeParameter.sourceSchema && activeParameter.sourceTable}
+                    {#each columnOptionsFor(activeParameter.sourceSchema, activeParameter.sourceTable) as field}
+                      <option value={field}>{field}</option>
+                    {/each}
+                  {/if}
+                </select>
+              </div>
+              <div class="parameter-conditions">
+                <div class="conditions-header">
+                  <span>Условия фильтрации</span>
+                  <button class="tiny-btn" type="button" on:click={() => addCondition(activeParameter.id)}>Добавить условие</button>
+                </div>
+                {#each activeParameter.conditions as cond (cond.id)}
+                  <div class="condition-card">
+                    <div class="condition-row">
+                      <select
+                        value={`${cond.schema}.${cond.table}`}
+                        on:change={(e) => {
+                          const [schema, table] = String(e.currentTarget.value || '').split('.');
+                          updateCondition(activeParameter.id, cond.id, { schema: schema || '', table: table || '', field: '' });
+                          ensureColumnsFor(schema, table);
+                        }}
+                      >
+                        <option value="">Таблица</option>
+                        {#each existingTables as tbl}
+                          <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
+                        {/each}
+                      </select>
+                      <select
+                        value={cond.field}
+                        on:change={(e) => updateCondition(activeParameter.id, cond.id, { field: e.currentTarget.value })}
+                      >
+                        <option value="">Колонка</option>
+                        {#if cond.schema && cond.table}
+                          {#each columnOptionsFor(cond.schema, cond.table) as field}
+                            <option value={field}>{field}</option>
+                          {/each}
+                        {/if}
+                      </select>
+                      <select
+                        value={cond.operator}
+                        on:change={(e) => updateCondition(activeParameter.id, cond.id, { operator: e.currentTarget.value })}
+                      >
+                        {#each getOperatorsForColumn(cond.field, cond.schema, cond.table) as op}
+                          <option value={op.value}>{op.label}</option>
+                        {/each}
+                      </select>
+                      <button class="chip-remove" type="button" on:click={() => removeCondition(activeParameter.id, cond.id)}>x</button>
+                    </div>
+                    <div class="compare-mode-row">
+                      {#each CONDITION_COMPARE_MODES as mode}
+                        <label>
+                          <input
+                            type="radio"
+                            name={`compareMode-${cond.id}`}
+                            value={mode.value}
+                            checked={cond.compareMode === mode.value}
+                            on:change={(e) => updateCondition(activeParameter.id, cond.id, { compareMode: parseCompareModeValue(e.currentTarget.value) })}
+                          />
+                          <span>{mode.label}</span>
+                        </label>
+                      {/each}
+                    </div>
+                    {#if cond.compareMode === 'value'}
+                      <input
+                        class="condition-value"
+                        placeholder="Значение"
+                        value={cond.compareValue}
+                        on:input={(e) => updateCondition(activeParameter.id, cond.id, { compareValue: e.currentTarget.value })}
+                      />
+                    {:else}
+                      <div class="compare-column-row">
+                      <select
+                        value={compareColumnTableValue(cond)}
+                        on:change={(e) => {
+                          const [schema, table] = String(e.currentTarget.value || '').split('.');
+                          const column = columnOptionsFor(schema, table)[0] || '';
+                          updateCondition(activeParameter.id, cond.id, {
+                            compareColumn: column ? `${schema}.${table}.${column}` : '',
+                            compareValue: ''
+                          });
+                          ensureColumnsFor(schema, table);
+                        }}
+                      >
+                          <option value="">Таблица</option>
+                          {#each existingTables as tbl}
+                            <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
+                          {/each}
+                        </select>
+                        {#if compareColumnTableValue(cond)}
+                          <select
+                            value={compareColumnFieldValue(cond)}
+                            on:change={(e) => {
+                              const [schema, table] = compareColumnTableValue(cond).split('.');
+                              const column = e.currentTarget.value;
+                              updateCondition(activeParameter.id, cond.id, { compareColumn: column ? `${schema}.${table}.${column}` : '' });
+                            }}
+                          >
+                            <option value="">Колонка</option>
+                            {#each compareColumnOptions(cond) as column}
+                              <option value={column}>{column}</option>
+                            {/each}
+                          </select>
+                        {:else}
+                          <select disabled>
+                            <option>Сначала выбери таблицу</option>
+                          </select>
+                        {/if}
+                      </div>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {:else}
+            <p class="hint">Выбери параметр слева, чтобы настроить источник и условия.</p>
+          {/if}
+        </div>
       </div>
-    </aside>
+    </div>
+  </aside>
 
     <div class="main">
       <div class="card">
@@ -2438,6 +2900,30 @@
   .pagination-toggle input { width:auto; }
   .pagination-grid { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
   .pagination-field small { display:block; margin-bottom:4px; font-size:11px; color:#64748b; }
+  .parameter-panel { margin-top:10px; border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; display:grid; gap:12px; }
+  .parameter-list-panel { border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#f8fafc; }
+  .parameter-list-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; font-weight:600; }
+  .parameter-list { display:flex; flex-wrap:wrap; gap:8px; }
+  .parameter-card { border:1px solid #e2e8f0; border-radius:10px; padding:8px; background:#fff; cursor:pointer; min-width:120px; flex:1 1 120px; }
+  .parameter-card.active-card { border-color:#0f172a; background:#0f172a; color:#fff; }
+  .parameter-card-head { display:flex; align-items:center; justify-content:space-between; gap:6px; font-size:13px; }
+  .parameter-card-body { margin-top:6px; }
+  .parameter-card-desc { margin:0 0 4px; font-size:12px; color:#475569; }
+  .parameter-card-hint { margin:0; font-size:11px; color:#0f172a; }
+  .parameter-editor { border:1px solid #e6eaf2; border-radius:12px; padding:12px; background:#fff; min-height:200px; }
+  .parameter-editor-inner { display:flex; flex-direction:column; gap:8px; }
+  .parameter-alias, .parameter-definition { width:100%; }
+  .parameter-alias { font-weight:600; font-size:14px; padding:8px; }
+  .parameter-definition { min-height:60px; resize:none; }
+  .parameter-definition-hint { font-size:11px; color:#64748b; }
+  .parameter-source-row { display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:8px; }
+  .parameter-conditions { border:1px solid #e6eaf2; border-radius:10px; padding:10px; background:#f8fafc; }
+  .conditions-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+  .condition-card { border:1px solid #dfe7f3; border-radius:10px; padding:8px; background:#fff; margin-bottom:8px; }
+  .condition-row, .compare-column-row { display:grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap:6px; align-items:center; margin-bottom:6px; }
+  .compare-mode-row { display:flex; gap:12px; font-size:12px; }
+  .condition-value { width:100%; }
+  .tiny-btn { border:0; background:transparent; font-size:12px; color:#0f172a; cursor:pointer; }
 </style>
 
 
