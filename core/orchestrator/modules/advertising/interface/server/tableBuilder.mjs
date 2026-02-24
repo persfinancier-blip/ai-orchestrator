@@ -1883,7 +1883,7 @@ tableBuilderRouter.get('/preview', async (req, res) => {
 
   const client = await pool.connect();
   try {
-    const q = `SELECT ctid::text AS __ctid, * FROM ${qname(schema, table)} LIMIT ${limit}`;
+      const q = `SELECT ctid::text AS __ctid, * FROM ${qname(schema, table)} LIMIT ${limit}`;
     const r = await client.query(q);
     return res.json({ rows: r.rows || [] });
   } catch (e) {
@@ -2071,6 +2071,90 @@ tableBuilderRouter.post('/tables/drop', requireDataAdmin, async (req, res) => {
     return res.json({ ok: true, schema, table });
   } catch (e) {
     return res.status(500).json({ error: 'drop_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+const PARAM_CONDITION_OPERATORS = {
+  equals: '=',
+  contains: 'contains',
+  starts_with: 'starts_with',
+  ends_with: 'ends_with',
+  gt: '>',
+  lt: '<',
+  before: '<',
+  after: '>',
+  not_equals: '<>'
+};
+
+function parseParameterConditions(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(String(raw));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function conditionClause(cond, params) {
+  const field = String(cond.field || '').trim();
+  if (!isIdent(field)) return null;
+  const operatorKey = String(cond.operator || 'equals');
+  const op = PARAM_CONDITION_OPERATORS[operatorKey];
+  if (!op) return null;
+  const column = qi(field);
+  const mode = cond.compareMode === 'column' ? 'column' : 'value';
+  if (mode === 'column') {
+    const target = String(cond.compareColumn || '').trim();
+    const parts = target.split('.');
+    const compareField = parts.length ? parts[parts.length - 1] : '';
+    if (!isIdent(compareField)) return null;
+    const cmpColumn = qi(compareField);
+    if (op === 'contains' || op === 'starts_with' || op === 'ends_with') return null;
+    return `${column} ${op} ${cmpColumn}`;
+  }
+  const rawValue = String(cond.compareValue || '').trim();
+  if (!rawValue && op !== 'contains' && op !== 'starts_with' && op !== 'ends_with') return null;
+  if (op === 'contains') {
+    params.push(rawValue);
+    return `${column} ILIKE '%' || $${params.length} || '%'`;
+  }
+  if (op === 'starts_with') {
+    params.push(rawValue);
+    return `${column} ILIKE $${params.length} || '%'`;
+  }
+  if (op === 'ends_with') {
+    params.push(rawValue);
+    return `${column} ILIKE '%' || $${params.length}`;
+  }
+  params.push(rawValue);
+  return `${column} ${op} $${params.length}`;
+}
+
+tableBuilderRouter.get('/parameter-value', async (req, res) => {
+  const schema = String(req.query.schema || '').trim();
+  const table = String(req.query.table || '').trim();
+  const field = String(req.query.field || '').trim();
+  const limit = 1;
+  if (!isIdent(schema) || !isIdent(table) || !isIdent(field)) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid schema/table/field' });
+  }
+  const conditions = parseParameterConditions(req.query?.conditions);
+  const params = [];
+  const clauses = conditions
+    .map((cond) => conditionClause(cond, params))
+    .filter(Boolean);
+  const clause = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+
+  const client = await pool.connect();
+  try {
+    const q = `SELECT ${qi(field)} AS value FROM ${qname(schema, table)} ${clause} LIMIT ${limit}`;
+    const r = await client.query(q, params);
+    return res.json({ value: r.rows?.[0]?.value ?? null });
+  } catch (e) {
+    return res.status(500).json({ error: 'parameter_value_failed', details: String(e?.message || e) });
   } finally {
     client.release();
   }

@@ -1738,6 +1738,64 @@ function handleDefinitionInput(value: string) {
     return String(value);
   }
 
+  function replaceParameterTokens(str: string, map: Record<string, any>) {
+    if (!str || !map || !Object.keys(map).length) return str;
+    return str.replace(/\{\{([A-Za-z0-9_]+)\}\}/g, (_match, alias) => {
+      if (!Object.prototype.hasOwnProperty.call(map, alias)) return _match;
+      const value = map[alias];
+      if (value === undefined || value === null) return _match;
+      return String(value);
+    });
+  }
+
+  function applyParametersToValue(value: any, map: Record<string, any>) {
+    if (!map || !Object.keys(map).length) return value;
+    if (typeof value === 'string') return replaceParameterTokens(value, map);
+    if (Array.isArray(value)) return value.map((item) => applyParametersToValue(item, map));
+    if (value && typeof value === 'object') {
+      Object.entries(value).forEach(([key, val]) => {
+        value[key] = applyParametersToValue(val, map);
+      });
+      return value;
+    }
+    return value;
+  }
+
+  async function fetchParameterValue(param: ParameterDefinition | null) {
+    if (!param) return null;
+    const target = getParameterPreviewTarget(param);
+    const field = String(param?.sourceField || '').trim();
+    if (!target || !field) return null;
+    const url = new URL(`${apiBase}/parameter-value`);
+    url.searchParams.set('schema', target.schema);
+    url.searchParams.set('table', target.table);
+    url.searchParams.set('field', field);
+    if (Array.isArray(param.conditions) && param.conditions.length) {
+      url.searchParams.set('conditions', JSON.stringify(param.conditions));
+    }
+    url.searchParams.set('limit', '1');
+    const response = await apiJson<{ value: any }>(url.toString(), { headers: headers() });
+    return response?.value ?? null;
+  }
+
+  async function resolveParameterValues(definitions: ParameterDefinition[]) {
+    const map: Record<string, any> = {};
+    if (!Array.isArray(definitions)) return map;
+    for (const param of definitions) {
+      const alias = String(param.alias || '').trim();
+      if (!alias) continue;
+      try {
+        const value = await fetchParameterValue(param);
+        if (value !== undefined && value !== null) {
+          map[alias] = value;
+        }
+      } catch (error) {
+        console.warn('Параметр не вычислен', alias, error);
+      }
+    }
+    return map;
+  }
+
   async function loadParameterPreview() {
     parameterPreviewError = '';
     parameterPreviewRows = [];
@@ -1977,6 +2035,14 @@ function handleDefinitionInput(value: string) {
         }
         const t = await getOAuthToken(s);
         authHdr.Authorization = `${t.tokenType} ${t.token}`;
+      }
+
+      const parameterValues = await resolveParameterValues(s.parameterDefinitions);
+      if (Object.keys(parameterValues).length) {
+        applyParametersToValue(authHdr, parameterValues);
+        applyParametersToValue(hdr, parameterValues);
+        applyParametersToValue(queryObjBase, parameterValues);
+        applyParametersToValue(bodyObjBase, parameterValues);
       }
 
       let nextUrlOverride = '';
