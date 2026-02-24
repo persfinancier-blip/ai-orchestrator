@@ -150,6 +150,10 @@
   let responseText = '';
   let responseJson: any = null;
   let responseIsJson = false;
+  let responseTimeMs = 0;
+  let responsePayloadCount = 0;
+  let responsePagesCount = 0;
+  let responsePayloadSize = 0;
   let responseViewMode: 'tree' | 'raw' = 'tree';
   let exampleJson: any = null;
   let exampleIsJson = false;
@@ -294,14 +298,26 @@
     }
   }
 
-  function safePreviewObj(text: string): any {
-    try {
-      return parseJsonObjectField('preview', text);
-    } catch {
-      const src = String(text || '').trim();
-      return { __raw: src, __error: 'Некорректный JSON' };
-    }
+function safePreviewObj(text: string): any {
+  try {
+    return parseJsonObjectField('preview', text);
+  } catch {
+    const src = String(text || '').trim();
+    return { __raw: src, __error: 'Некорректный JSON' };
   }
+}
+
+function countPayloadItems(payload: any) {
+  if (Array.isArray(payload)) return payload.length;
+  if (payload && typeof payload === 'object') return 1;
+  return 0;
+}
+
+function formatBytes(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '-';
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  return `${(bytes / 1024).toFixed(1)} КБ`;
+}
 
   function refOf(d: ApiDraft): string {
     return d.storeId ? `db:${d.storeId}` : `tmp:${d.localId}`;
@@ -1937,6 +1953,10 @@ function handleDefinitionInput(value: string) {
     ok = '';
     responseStatus = 0;
     responseText = '';
+    responseTimeMs = 0;
+    responsePayloadCount = 0;
+    responsePagesCount = 0;
+    responsePayloadSize = 0;
     if (!selected) {
       err = 'Выбери API';
       return;
@@ -1961,6 +1981,8 @@ function handleDefinitionInput(value: string) {
 
       let nextUrlOverride = '';
       const pagesMax = s.paginationEnabled ? Math.max(1, Number(s.paginationMaxPages || 1)) : 1;
+      const startTime = Date.now();
+      let totalSize = 0;
       const pagePayloads: any[] = [];
       let lastStatus = 0;
       let pageCounter = 0;
@@ -2012,6 +2034,7 @@ function handleDefinitionInput(value: string) {
         } catch {
           parsed = null;
         }
+        totalSize += txt ? txt.length : 0;
         pagePayloads.push(parsed ?? txt);
         pageCounter += 1;
         responseStatus = lastStatus;
@@ -2059,6 +2082,10 @@ function handleDefinitionInput(value: string) {
       if (s.paginationEnabled && pagePayloads.length > 1) {
         responseText = JSON.stringify({ pages: pageCounter, last_status: lastStatus, samples: pagePayloads }, null, 2);
       }
+      responsePagesCount = pagePayloads.length;
+      responsePayloadCount = pagePayloads.reduce((sum, item) => sum + countPayloadItems(item), 0);
+      responsePayloadSize = totalSize;
+      responseTimeMs = Date.now() - startTime;
       ok = s.paginationEnabled ? `Проверка выполнена, страниц: ${pageCounter}` : 'Проверка выполнена';
     } catch (e: any) {
       err = e?.message ?? String(e);
@@ -2311,6 +2338,12 @@ function syncParameterEditorsHeight() {
           {/if}
         </div>
         <div class="statusline">status: {responseStatus || '-'}</div>
+        <div class="metrics-row">
+          <span>Страницы: {responsePagesCount || '-'}</span>
+          <span>Записей: {responsePayloadCount || '-'}</span>
+          <span>Размер: {formatBytes(responsePayloadSize)}</span>
+          <span>Время: {responseTimeMs ? `${responseTimeMs} мс` : '-'}</span>
+        </div>
       {#if responseIsJson && responseViewMode === 'tree'}
         <div class="response-tree-wrap">
           <JsonTreeView node={responseJson} name="response" level={0} pickEnabled={true} on:pickpath={(e) => applyPickedResponsePath(e.detail.path)} />
@@ -3199,6 +3232,8 @@ function syncParameterEditorsHeight() {
   .response-tree-wrap { border:1px solid #e6eaf2; border-radius:12px; background:#fff; padding:8px; min-height:78px; overflow:visible; }
   .template-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
   .statusline { font-size:12px; color:#64748b; margin-bottom:6px; }
+  .metrics-row { display:flex; gap:10px; font-size:12px; color:#475569; margin-bottom:8px; flex-wrap:wrap; }
+  .metrics-row span { font-weight:500; }
   .template-parse-actions { margin-top:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .template-parse-note { font-size:12px; color:#64748b; }
 
