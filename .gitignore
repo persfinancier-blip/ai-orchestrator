@@ -6,6 +6,7 @@ core/orchestrator/modules/advertising/interface/dist/
 
 # Local env
 /deploy/server.env
+core/orchestrator/modules/advertising/interface/.env
 
 # OS/editor
 .DS_Store
