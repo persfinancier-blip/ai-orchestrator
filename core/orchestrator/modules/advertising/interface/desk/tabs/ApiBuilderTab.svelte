@@ -209,6 +209,8 @@
   let definitionTreeDisplay: any = null;
   let definitionViewMode: 'text' | 'tree' = 'text';
   const PARAMETER_PREVIEW_LIMIT = 5;
+  const PARAMETER_TOKEN_RE = /\{\{\s*([^{}]+?)\s*\}\}/g;
+  const PARAMETER_TOKEN_EXACT_RE = /^\{\{\s*([^{}]+?)\s*\}\}$/;
 
   function uid() {
     return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -1196,6 +1198,16 @@ function formatBytes(bytes: number) {
     return `${base}${path}`;
   }
 
+  function decodeUrlPathname(pathname: string) {
+    const raw = String(pathname || '/');
+    if (!raw) return '/';
+    try {
+      return decodeURIComponent(raw) || '/';
+    } catch {
+      return raw || '/';
+    }
+  }
+
   async function getOAuthToken(d: ApiDraft): Promise<{ token: string; tokenType: string }> {
     const cacheKey = refOf(d);
     const cached = oauthTokenCache[cacheKey];
@@ -1300,7 +1312,7 @@ function formatBytes(bytes: number) {
       try {
         const u = new URL(urlRaw);
         baseUrl = u.origin;
-        path = u.pathname || '/';
+        path = decodeUrlPathname(u.pathname);
         u.searchParams.forEach((v, k) => {
           queryFromUrl[k] = v;
         });
@@ -1347,7 +1359,7 @@ function formatBytes(bytes: number) {
       mutateSelected((d) => {
         d.method = method;
         d.baseUrl = u.origin;
-        d.path = u.pathname || '/';
+        d.path = decodeUrlPathname(u.pathname);
         d.queryJson = toPrettyJson(q);
       });
       err = '';
@@ -1446,7 +1458,7 @@ function formatBytes(bytes: number) {
         patch: {
           method: curl.method,
           baseUrl: u.origin,
-          path: u.pathname || '/',
+          path: decodeUrlPathname(u.pathname),
           queryJson: toPrettyJson(query),
           headersJson: toPrettyJson(headersOut),
           authJson: toPrettyJson(auth),
@@ -1474,7 +1486,7 @@ function formatBytes(bytes: number) {
       if (urlRaw) {
         const u = new URL(urlRaw);
         finalBaseUrl = u.origin;
-        finalPath = u.pathname || '/';
+        finalPath = decodeUrlPathname(u.pathname);
         u.searchParams.forEach((v, k) => (queryFromUrl[k] = v));
       }
 
@@ -1511,7 +1523,7 @@ function formatBytes(bytes: number) {
         message: 'Шаблон разобран из URL',
         patch: {
           baseUrl: u.origin,
-          path: u.pathname || '/',
+          path: decodeUrlPathname(u.pathname),
           queryJson: toPrettyJson(query)
         }
       };
@@ -1740,17 +1752,30 @@ function handleDefinitionInput(value: string) {
 
   function replaceParameterTokens(str: string, map: Record<string, any>) {
     if (!str || !map || !Object.keys(map).length) return str;
-    return str.replace(/\{\{([A-Za-z0-9_]+)\}\}/g, (_match, alias) => {
-      if (!Object.prototype.hasOwnProperty.call(map, alias)) return _match;
+    return str.replace(PARAMETER_TOKEN_RE, (match, rawAlias) => {
+      const alias = String(rawAlias || '').trim();
+      if (!alias || !Object.prototype.hasOwnProperty.call(map, alias)) return match;
       const value = map[alias];
-      if (value === undefined || value === null) return _match;
+      if (value === undefined || value === null) return match;
+      if (typeof value === 'string') return value;
+      if (typeof value === 'object') return JSON.stringify(value);
       return String(value);
     });
   }
 
   function applyParametersToValue(value: any, map: Record<string, any>) {
     if (!map || !Object.keys(map).length) return value;
-    if (typeof value === 'string') return replaceParameterTokens(value, map);
+    if (typeof value === 'string') {
+      const exact = value.match(PARAMETER_TOKEN_EXACT_RE);
+      if (exact?.[1]) {
+        const alias = String(exact[1] || '').trim();
+        if (alias && Object.prototype.hasOwnProperty.call(map, alias)) {
+          const raw = map[alias];
+          if (raw !== undefined && raw !== null) return raw;
+        }
+      }
+      return replaceParameterTokens(value, map);
+    }
     if (Array.isArray(value)) return value.map((item) => applyParametersToValue(item, map));
     if (value && typeof value === 'object') {
       Object.entries(value).forEach(([key, val]) => {
@@ -1759,6 +1784,24 @@ function handleDefinitionInput(value: string) {
       return value;
     }
     return value;
+  }
+
+  function collectParameterTokens(value: any, out: Set<string>) {
+    if (typeof value === 'string') {
+      const matches = value.matchAll(new RegExp(PARAMETER_TOKEN_RE.source, 'g'));
+      for (const m of matches) {
+        const alias = String(m?.[1] || '').trim();
+        if (alias) out.add(alias);
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item) => collectParameterTokens(item, out));
+      return;
+    }
+    if (value && typeof value === 'object') {
+      Object.values(value).forEach((item) => collectParameterTokens(item, out));
+    }
   }
 
   async function fetchParameterValue(param: ParameterDefinition | null) {
@@ -2038,7 +2081,8 @@ function handleDefinitionInput(value: string) {
       }
 
       const parameterValues = await resolveParameterValues(s.parameterDefinitions);
-      if (Object.keys(parameterValues).length) {
+      const hasParameterValues = Object.keys(parameterValues).length > 0;
+      if (hasParameterValues) {
         applyParametersToValue(authHdr, parameterValues);
         applyParametersToValue(hdr, parameterValues);
         applyParametersToValue(queryObjBase, parameterValues);
@@ -2079,9 +2123,22 @@ function handleDefinitionInput(value: string) {
         }
 
         let url = nextUrlOverride || `${s.baseUrl.replace(/\/$/, '')}${s.path.startsWith('/') ? s.path : `/${s.path}`}`;
+        if (hasParameterValues) {
+          url = replaceParameterTokens(url, parameterValues);
+        }
         const u = new URL(url);
         for (const [k, v] of Object.entries(queryObj || {})) u.searchParams.set(k, String(v));
         url = u.toString();
+
+        const unresolvedTokens = new Set<string>();
+        collectParameterTokens(url, unresolvedTokens);
+        collectParameterTokens(authHdr, unresolvedTokens);
+        collectParameterTokens(hdr, unresolvedTokens);
+        collectParameterTokens(queryObj, unresolvedTokens);
+        collectParameterTokens(bodyObj, unresolvedTokens);
+        if (unresolvedTokens.size) {
+          throw new Error(`Не удалось подставить параметры: ${Array.from(unresolvedTokens).join(', ')}`);
+        }
 
         const init: RequestInit = {
           method: s.method,
