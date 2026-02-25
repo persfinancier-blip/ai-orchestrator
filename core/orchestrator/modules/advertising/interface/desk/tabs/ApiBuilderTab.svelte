@@ -1805,15 +1805,89 @@ function handleDefinitionInput(value: string) {
     }
   }
 
-  async function fetchParameterValue(param: ParameterDefinition | null) {
+  function parseParameterSourceRef(raw: string, param: ParameterDefinition): { schema: string; table: string; field: string } | null {
+    const src = String(raw || '').trim().replace(/^['"]|['"]$/g, '');
+    if (!src) return null;
+    const parts = src.split('.').map((x) => String(x || '').trim()).filter(Boolean);
+    if (parts.length >= 3) {
+      const [schema, table, ...fieldParts] = parts;
+      const field = fieldParts.join('.');
+      return schema && table && field ? { schema, table, field } : null;
+    }
+    if (parts.length === 2) {
+      const [table, field] = parts;
+      const schema =
+        String(param?.sourceSchema || '').trim() ||
+        existingTables.find((t) => String(t.table_name || '').trim() === table)?.schema_name ||
+        existingTables[0]?.schema_name ||
+        '';
+      return schema && table && field ? { schema, table, field } : null;
+    }
+    if (parts.length === 1) {
+      const field = parts[0];
+      const table = String(param?.sourceTable || '').trim();
+      const schema =
+        String(param?.sourceSchema || '').trim() ||
+        (table ? existingTables.find((t) => String(t.table_name || '').trim() === table)?.schema_name || '' : '') ||
+        existingTables[0]?.schema_name ||
+        '';
+      return schema && table && field ? { schema, table, field } : null;
+    }
+    return null;
+  }
+
+  function sourceFromDefinition(param: ParameterDefinition): { schema: string; table: string; field: string } | null {
+    const definition = String(param?.definition || '').trim();
+    if (!definition) return null;
+
+    try {
+      const parsed = JSON.parse(definition);
+      if (parsed && typeof parsed === 'object') {
+        const source = String((parsed as any).source || '').trim();
+        if (source) {
+          const fromSource = parseParameterSourceRef(source, param);
+          if (fromSource) return fromSource;
+        }
+        const schema = String((parsed as any).source_schema || (parsed as any).schema || '').trim();
+        const table = String((parsed as any).source_table || (parsed as any).table || '').trim();
+        const field = String((parsed as any).source_field || (parsed as any).field || '').trim();
+        if (schema && table && field) return { schema, table, field };
+      }
+    } catch {
+      // ignore, then try text formats
+    }
+
+    const fieldFn = definition.match(/FIELD\(\s*['"]([^'"]+)['"]\s*\)/i);
+    if (fieldFn?.[1]) {
+      const fromField = parseParameterSourceRef(fieldFn[1], param);
+      if (fromField) return fromField;
+    }
+
+    if (/^[A-Za-z0-9_.-]+$/.test(definition)) {
+      const fromRaw = parseParameterSourceRef(definition, param);
+      if (fromRaw) return fromRaw;
+    }
+    return null;
+  }
+
+  function resolveParameterSource(param: ParameterDefinition | null): { schema: string; table: string; field: string } | null {
     if (!param) return null;
     const target = getParameterPreviewTarget(param);
     const field = String(param?.sourceField || '').trim();
-    if (!target || !field) return null;
+    if (target && field) {
+      return { schema: target.schema, table: target.table, field };
+    }
+    return sourceFromDefinition(param);
+  }
+
+  async function fetchParameterValue(param: ParameterDefinition | null, source?: { schema: string; table: string; field: string }) {
+    if (!param) return null;
+    const src = source || resolveParameterSource(param);
+    if (!src) return null;
     const url = new URL(`${apiBase}/parameter-value`);
-    url.searchParams.set('schema', target.schema);
-    url.searchParams.set('table', target.table);
-    url.searchParams.set('field', field);
+    url.searchParams.set('schema', src.schema);
+    url.searchParams.set('table', src.table);
+    url.searchParams.set('field', src.field);
     if (Array.isArray(param.conditions) && param.conditions.length) {
       url.searchParams.set('conditions', JSON.stringify(param.conditions));
     }
@@ -1824,20 +1898,29 @@ function handleDefinitionInput(value: string) {
 
   async function resolveParameterValues(definitions: ParameterDefinition[]) {
     const map: Record<string, any> = {};
-    if (!Array.isArray(definitions)) return map;
+    const issues: Record<string, string> = {};
+    if (!Array.isArray(definitions)) return { map, issues };
     for (const param of definitions) {
       const alias = String(param.alias || '').trim();
       if (!alias) continue;
       try {
-        const value = await fetchParameterValue(param);
+        const source = resolveParameterSource(param);
+        if (!source) {
+          issues[alias] = 'не задан источник (schema.table.field) или FIELD(...) в описании';
+          continue;
+        }
+        const value = await fetchParameterValue(param, source);
         if (value !== undefined && value !== null) {
           map[alias] = value;
+        } else {
+          issues[alias] = `источник ${source.schema}.${source.table}.${source.field} вернул пустое значение`;
         }
       } catch (error) {
-        console.warn('Параметр не вычислен', alias, error);
+        const msg = error instanceof Error ? error.message : String(error);
+        issues[alias] = msg || 'ошибка вычисления';
       }
     }
-    return map;
+    return { map, issues };
   }
 
   async function loadParameterPreview() {
@@ -2082,7 +2165,12 @@ function handleDefinitionInput(value: string) {
         authHdr.Authorization = `${t.tokenType} ${t.token}`;
       }
 
-      const parameterValues = await resolveParameterValues(s.parameterDefinitions);
+      const { map: parameterValues, issues: parameterIssues } = await resolveParameterValues(s.parameterDefinitions);
+      const knownAliases = new Set(
+        (Array.isArray(s.parameterDefinitions) ? s.parameterDefinitions : [])
+          .map((p) => String(p?.alias || '').trim())
+          .filter(Boolean)
+      );
       const hasParameterValues = Object.keys(parameterValues).length > 0;
       if (hasParameterValues) {
         applyParametersToValue(authHdr, parameterValues);
@@ -2140,7 +2228,12 @@ function handleDefinitionInput(value: string) {
         collectParameterTokens(queryObj, unresolvedTokens);
         collectParameterTokens(bodyObj, unresolvedTokens);
         if (unresolvedTokens.size) {
-          throw new Error(`Не удалось подставить параметры: ${Array.from(unresolvedTokens).join(', ')}`);
+          const detail = Array.from(unresolvedTokens).map((alias) => {
+            if (parameterIssues[alias]) return `${alias} (${parameterIssues[alias]})`;
+            if (!knownAliases.has(alias)) return `${alias} (нет параметра с таким alias)`;
+            return `${alias} (значение не вычислено)`;
+          });
+          throw new Error(`Не удалось подставить параметры: ${detail.join(', ')}`);
         }
 
         const init: RequestInit = {
@@ -2219,14 +2312,16 @@ function handleDefinitionInput(value: string) {
         pageCounter <= 1
           ? {
               request: sentRequests[0] || null,
-              resolved_parameters: parameterValues
+              resolved_parameters: parameterValues,
+              parameter_issues: Object.keys(parameterIssues).length ? parameterIssues : undefined
             }
           : {
               requests: sentRequests,
               request_count: pageCounter,
               shown_requests: sentRequests.length,
               truncated: pageCounter > sentRequests.length,
-              resolved_parameters: parameterValues
+              resolved_parameters: parameterValues,
+              parameter_issues: Object.keys(parameterIssues).length ? parameterIssues : undefined
             };
       myApiPreview = JSON.stringify(sentPreviewPayload, null, 2);
       myPreviewDirty = false;
