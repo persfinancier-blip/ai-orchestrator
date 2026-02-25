@@ -3061,6 +3061,7 @@ function syncParameterEditorsHeight() {
         <div class="subttl response-head">
           <span>Что ушло на сервер</span>
           <span class="inline-actions">
+            <button type="button" class="view-toggle" on:click={previewRequestsNow} disabled={checking}>Предпросмотр 5</button>
             <button type="button" class="view-toggle" on:click={checkApiNow} disabled={checking}>
               {checking ? 'Проверка...' : 'Обновить'}
             </button>
@@ -3083,7 +3084,7 @@ function syncParameterEditorsHeight() {
           ></textarea>
         {/if}
         {#if !myApiPreviewDraft}
-          <p class="hint small-hint">Нажми «Проверить» или «Обновить», чтобы увидеть финальный отправленный запрос.</p>
+          <p class="hint small-hint">Нажми «Предпросмотр 5», чтобы увидеть первые реальные запросы до отправки, или «Проверить/Обновить» для запуска.</p>
         {/if}
         {#if myPreviewApplyMessage}
           <div class="template-parse-note">{myPreviewApplyMessage}</div>
