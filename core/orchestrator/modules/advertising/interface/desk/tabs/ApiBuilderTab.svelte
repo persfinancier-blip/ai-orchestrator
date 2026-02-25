@@ -209,6 +209,7 @@
   let definitionTreeDisplay: any = null;
   let definitionViewMode: 'text' | 'tree' = 'text';
   const PARAMETER_PREVIEW_LIMIT = 5;
+  const REQUEST_PREVIEW_MAX = 20;
   const PARAMETER_TOKEN_RE = /\{\{\s*([^{}]+?)\s*\}\}/g;
   const PARAMETER_TOKEN_EXACT_RE = /^\{\{\s*([^{}]+?)\s*\}\}$/;
 
@@ -2052,6 +2053,7 @@ function handleDefinitionInput(value: string) {
   async function checkApiNow() {
     err = '';
     ok = '';
+    myPreviewApplyMessage = '';
     responseStatus = 0;
     responseText = '';
     responseTimeMs = 0;
@@ -2098,6 +2100,7 @@ function handleDefinitionInput(value: string) {
       let pageCounter = 0;
       let currentPage = Number(s.paginationStartPage || 1);
       let currentOffset = 0;
+      const sentRequests: any[] = [];
 
       for (let pageIdx = 0; pageIdx < pagesMax; pageIdx++) {
         const queryObj = JSON.parse(JSON.stringify(queryObjBase || {}));
@@ -2146,6 +2149,16 @@ function handleDefinitionInput(value: string) {
         };
         if (s.method !== 'GET' && s.method !== 'DELETE') {
           init.body = JSON.stringify(bodyObj || {});
+        }
+        if (sentRequests.length < REQUEST_PREVIEW_MAX) {
+          sentRequests.push({
+            page: pageIdx + 1,
+            method: s.method,
+            url,
+            headers: { 'Content-Type': 'application/json', ...authHdr, ...hdr },
+            query: JSON.parse(JSON.stringify(queryObj || {})),
+            body: s.method === 'GET' || s.method === 'DELETE' ? undefined : JSON.parse(JSON.stringify(bodyObj || {}))
+          });
         }
 
         const res = await fetch(url, init);
@@ -2202,6 +2215,28 @@ function handleDefinitionInput(value: string) {
         }
       }
 
+      const sentPreviewPayload =
+        pageCounter <= 1
+          ? {
+              request: sentRequests[0] || null,
+              resolved_parameters: parameterValues
+            }
+          : {
+              requests: sentRequests,
+              request_count: pageCounter,
+              shown_requests: sentRequests.length,
+              truncated: pageCounter > sentRequests.length,
+              resolved_parameters: parameterValues
+            };
+      myApiPreview = JSON.stringify(sentPreviewPayload, null, 2);
+      myPreviewDirty = false;
+      myPreviewApplyMessage =
+        pageCounter > REQUEST_PREVIEW_MAX
+          ? `Показаны первые ${REQUEST_PREVIEW_MAX} отправленных запросов из ${pageCounter}`
+          : pageCounter > 1
+          ? `Показаны отправленные запросы по страницам: ${pageCounter}`
+          : 'Показан последний отправленный запрос';
+
       if (s.paginationEnabled && pagePayloads.length > 1) {
         responseText = JSON.stringify({ pages: pageCounter, last_status: lastStatus, samples: pagePayloads }, null, 2);
       }
@@ -2228,42 +2263,11 @@ function handleDefinitionInput(value: string) {
       requestInput = `${selected.baseUrl.replace(/\/$/, '')}${selected.path.startsWith('/') ? selected.path : `/${selected.path}`}`;
       myPreviewDirty = false;
       myPreviewApplyMessage = '';
+      myApiPreview = '';
+      myApiPreviewDraft = '';
       activeResponseFieldRef = '';
     }
   }
-  $: myApiPreview = selected
-    ? JSON.stringify(
-        {
-          method: selected.method,
-          url: previewUrlFromInput(selected),
-          auth_mode: selected.authMode,
-          auth: safePreviewObj(selected.authJson),
-          oauth2:
-            selected.authMode === 'oauth2_client_credentials'
-              ? {
-                  token_url: selected.oauth2TokenUrl,
-                  client_id: selected.oauth2ClientId,
-                  grant_type: selected.oauth2GrantType,
-                  token_field: selected.oauth2TokenField
-                }
-              : undefined,
-          headers: safePreviewObj(selected.headersJson),
-          query: safePreviewObj(selected.queryJson),
-          body: selected.method === 'GET' || selected.method === 'DELETE' ? undefined : safePreviewObj(selected.bodyJson),
-          pagination:
-            selected.paginationEnabled
-              ? {
-                  strategy: selected.paginationStrategy,
-                  target: selected.paginationTarget,
-                  data_path: selected.paginationDataPath,
-                  max_pages: selected.paginationMaxPages
-                }
-              : undefined
-        },
-        null,
-        2
-      )
-    : '';
   $: if (!myPreviewDirty) {
     myApiPreviewDraft = myApiPreview;
   }
@@ -2477,9 +2481,11 @@ function syncParameterEditorsHeight() {
       </div>
       <div class="subsec">
         <div class="subttl response-head">
-          <span>Предпросмотр твоего API</span>
+          <span>Что ушло на сервер</span>
           <span class="inline-actions">
-            <button type="button" class="view-toggle" on:click={applyMyPreviewToFields}>Сохранить</button>
+            <button type="button" class="view-toggle" on:click={checkApiNow} disabled={checking}>
+              {checking ? 'Проверка...' : 'Обновить'}
+            </button>
             {#if myPreviewIsJson}
               <button type="button" class="view-toggle" on:click={() => (myPreviewViewMode = myPreviewViewMode === 'tree' ? 'raw' : 'tree')}>
                 {myPreviewViewMode === 'tree' ? 'RAW' : 'Дерево'}
@@ -2494,12 +2500,12 @@ function syncParameterEditorsHeight() {
         {:else}
           <textarea
             bind:this={myPreviewEl}
+            readonly
             value={myApiPreviewDraft}
-            on:input={(e) => {
-              myApiPreviewDraft = e.currentTarget.value;
-              myPreviewDirty = true;
-            }}
           ></textarea>
+        {/if}
+        {#if !myApiPreviewDraft}
+          <p class="hint small-hint">Нажми «Проверить» или «Обновить», чтобы увидеть финальный отправленный запрос.</p>
         {/if}
         {#if myPreviewApplyMessage}
           <div class="template-parse-note">{myPreviewApplyMessage}</div>
