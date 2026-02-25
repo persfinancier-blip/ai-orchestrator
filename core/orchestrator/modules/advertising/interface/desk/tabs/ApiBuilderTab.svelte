@@ -3,11 +3,20 @@
   import JsonTreeView from '../components/JsonTreeView.svelte';
   export type ExistingTable = { schema_name: string; table_name: string };
   type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  type DispatchMode = 'single' | 'group_by';
+  type BindingTarget = 'header' | 'query' | 'body' | 'body_item';
   export let apiBase: string;
   export let apiJson: <T = any>(url: string, init?: RequestInit) => Promise<T>;
   export let headers: () => Record<string, string>;
   export let existingTables: ExistingTable[] = [];
   export let refreshTables: () => Promise<void>;
+
+  type BindingRule = {
+    id: string;
+    alias: string;
+    target: BindingTarget;
+    path: string;
+  };
 
   type ApiDraft = {
     localId: string;
@@ -54,6 +63,11 @@
     description: string;
     exampleRequest: string;
     parameterDefinitions: ParameterDefinition[];
+    dispatchMode: DispatchMode;
+    groupByAliases: string[];
+    bodyItemsPath: string;
+    previewRequestLimit: number;
+    bindingRules: BindingRule[];
   };
 
   type ParameterCondition = {
@@ -76,6 +90,16 @@
     conditions: ParameterCondition[];
   };
   const AUTH_MODE_OAUTH2 = 'oauth2_client_credentials';
+  const DISPATCH_MODES: Array<{ value: DispatchMode; label: string }> = [
+    { value: 'single', label: 'Один запрос' },
+    { value: 'group_by', label: 'Группировать по ключу' }
+  ];
+  const BINDING_TARGETS: Array<{ value: BindingTarget; label: string }> = [
+    { value: 'header', label: 'Header' },
+    { value: 'query', label: 'Query' },
+    { value: 'body', label: 'Body' },
+    { value: 'body_item', label: 'Body: элемент массива' }
+  ];
 
   const PAGINATION_STRATEGIES = [
     { value: 'none', label: 'Не использовать' },
@@ -223,6 +247,14 @@
 
   function toHttpMethod(v: string): HttpMethod {
     return v === 'GET' || v === 'POST' || v === 'PUT' || v === 'PATCH' || v === 'DELETE' ? v : 'GET';
+  }
+
+  function toDispatchMode(v: string): DispatchMode {
+    return v === 'group_by' ? 'group_by' : 'single';
+  }
+
+  function toBindingTarget(v: string): BindingTarget {
+    return v === 'header' || v === 'query' || v === 'body' || v === 'body_item' ? v : 'body_item';
   }
 
   function tryObj(v: any): any {
@@ -379,7 +411,12 @@ function formatBytes(bytes: number) {
       responseTargets: [],
       description: '',
       exampleRequest: '',
-      parameterDefinitions: []
+      parameterDefinitions: [],
+      dispatchMode: 'single',
+      groupByAliases: [],
+      bodyItemsPath: 'items',
+      previewRequestLimit: 5,
+      bindingRules: []
     };
   }
 
@@ -454,6 +491,31 @@ function formatBytes(bytes: number) {
       : Array.isArray(mapping?.picked_paths)
       ? mapping.picked_paths
       : [];
+    const executionCfg = tryObj(mapping?.execution || row?.execution_json || legacy?.execution);
+    const bindingRulesRaw = Array.isArray(row?.binding_rules)
+      ? row.binding_rules
+      : Array.isArray(executionCfg?.binding_rules)
+      ? executionCfg.binding_rules
+      : [];
+    const normalizedBindingRules = bindingRulesRaw
+      .map((rule: any) => ({
+        id: String(rule?.id || uid()),
+        alias: String(rule?.alias || '').trim(),
+        target: toBindingTarget(String(rule?.target || 'body_item')),
+        path: String(rule?.path || '').trim()
+      }))
+      .filter((rule: BindingRule) => rule.alias && rule.path);
+    const groupByRaw = Array.isArray(row?.group_by_aliases)
+      ? row.group_by_aliases
+      : Array.isArray(executionCfg?.group_by_aliases)
+      ? executionCfg.group_by_aliases
+      : [];
+    const normalizedGroupBy = [...new Set(groupByRaw.map((x: any) => String(x || '').trim()).filter(Boolean))];
+    const dispatchMode = toDispatchMode(String(row?.dispatch_mode || executionCfg?.dispatch_mode || 'single'));
+    const bodyItemsPath = String(row?.body_items_path || executionCfg?.body_items_path || 'items').trim() || 'items';
+    const previewRequestLimit = Number.isFinite(Number(row?.preview_request_limit))
+      ? Number(row?.preview_request_limit)
+      : Number(executionCfg?.preview_request_limit || 5);
 
     const authJsonSource = tryObj(
       row?.auth_json || mapping?.auth_json || legacy?.auth_json || legacy?.authJson
@@ -540,7 +602,12 @@ function formatBytes(bytes: number) {
       responseTargets: normalizedTargets,
       description: String(row?.description || legacy?.description || ''),
       exampleRequest: exampleRequestValue,
-      parameterDefinitions: normalizedDefinitions
+      parameterDefinitions: normalizedDefinitions,
+      dispatchMode,
+      groupByAliases: normalizedGroupBy,
+      bodyItemsPath,
+      previewRequestLimit: Math.max(1, Math.min(50, Number(previewRequestLimit || 5))),
+      bindingRules: normalizedBindingRules
     };
   }
 
@@ -615,7 +682,19 @@ function formatBytes(bytes: number) {
           }
         : { mode: 'manual' },
       auth_json: parsed?.authJson ?? tryObj(d.authJson),
-      parameter_definitions: parameterDefinitionsPayload
+      parameter_definitions: parameterDefinitionsPayload,
+      execution: {
+        dispatch_mode: d.dispatchMode,
+        group_by_aliases: d.groupByAliases,
+        body_items_path: d.bodyItemsPath,
+        preview_request_limit: d.previewRequestLimit,
+        binding_rules: d.bindingRules.map((rule) => ({
+          id: rule.id,
+          alias: rule.alias,
+          target: rule.target,
+          path: rule.path
+        }))
+      }
     },
     auth_mode: d.authMode,
     auth_json: parsed?.authJson ?? tryObj(d.authJson),
@@ -627,6 +706,16 @@ function formatBytes(bytes: number) {
     oauth2_expires_field: d.oauth2ExpiresField,
     oauth2_token_type_field: d.oauth2TokenTypeField,
     parameter_definitions: parameterDefinitionsPayload,
+    dispatch_mode: d.dispatchMode,
+    group_by_aliases: d.groupByAliases,
+    body_items_path: d.bodyItemsPath,
+    preview_request_limit: d.previewRequestLimit,
+    binding_rules: d.bindingRules.map((rule) => ({
+      id: rule.id,
+      alias: rule.alias,
+      target: rule.target,
+      path: rule.path
+    })),
     response_targets: d.responseTargets,
     picked_paths: d.pickedPaths,
     example_request: d.exampleRequest,
@@ -1601,6 +1690,45 @@ function formatBytes(bytes: number) {
     });
   }
 
+  function parseAliasList(raw: string): string[] {
+    return [...new Set(String(raw || '').split(/[,\n;]/).map((x) => x.trim()).filter(Boolean))];
+  }
+
+  function updateGroupByAliases(raw: string) {
+    const next = parseAliasList(raw);
+    mutateSelected((d) => {
+      d.groupByAliases = next;
+    });
+  }
+
+  function addBindingRule() {
+    if (!selected) return;
+    const firstAlias = selected.parameterDefinitions[0]?.alias || '';
+    mutateSelected((d) => {
+      d.bindingRules = [
+        ...d.bindingRules,
+        {
+          id: uid(),
+          alias: firstAlias,
+          target: 'body_item',
+          path: 'value'
+        }
+      ];
+    });
+  }
+
+  function updateBindingRule(ruleId: string, patch: Partial<BindingRule>) {
+    mutateSelected((d) => {
+      d.bindingRules = d.bindingRules.map((rule) => (rule.id === ruleId ? { ...rule, ...patch } : rule));
+    });
+  }
+
+  function removeBindingRule(ruleId: string) {
+    mutateSelected((d) => {
+      d.bindingRules = d.bindingRules.filter((rule) => rule.id !== ruleId);
+    });
+  }
+
   function handlePaginationStrategyChange(value: string) {
     const normalized = PAGINATION_STRATEGIES.some((s) => s.value === value) ? value : 'none';
     mutateSelected((d) => (d.paginationStrategy = normalized as ApiDraft['paginationStrategy']));
@@ -1923,6 +2051,283 @@ function handleDefinitionInput(value: string) {
     return { map, issues };
   }
 
+  function deepClone<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function sameValue(a: any, b: any) {
+    if (a === b) return true;
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  function uniqueAliasList(values: string[]) {
+    return [...new Set(values.map((x) => String(x || '').trim()).filter(Boolean))];
+  }
+
+  async function loadParameterRowsForAliases(
+    definitions: ParameterDefinition[],
+    aliases: string[]
+  ): Promise<{ rows: Array<Record<string, any>>; issues: Record<string, string> }> {
+    const issues: Record<string, string> = {};
+    const requiredAliases = uniqueAliasList(aliases);
+    if (!requiredAliases.length) return { rows: [], issues };
+
+    const aliasSpecs: Array<{
+      alias: string;
+      source: { schema: string; table: string; field: string };
+      conditions: ParameterCondition[];
+    }> = [];
+    for (const alias of requiredAliases) {
+      const param = definitions.find((p) => String(p.alias || '').trim() === alias);
+      if (!param) {
+        issues[alias] = 'параметр не найден в витрине параметров';
+        continue;
+      }
+      const source = resolveParameterSource(param);
+      if (!source) {
+        issues[alias] = 'не задан источник для параметра';
+        continue;
+      }
+      aliasSpecs.push({ alias, source, conditions: Array.isArray(param.conditions) ? param.conditions : [] });
+    }
+    if (!aliasSpecs.length) return { rows: [], issues };
+
+    const sourceKey = `${aliasSpecs[0].source.schema}.${aliasSpecs[0].source.table}`;
+    const sourceMismatch = aliasSpecs.find(
+      (spec) => `${spec.source.schema}.${spec.source.table}` !== sourceKey
+    );
+    if (sourceMismatch) {
+      issues[sourceMismatch.alias] = 'для групповой отправки все параметры должны быть из одной таблицы-источника';
+      return { rows: [], issues };
+    }
+
+    const conditionSignatures = [...new Set(aliasSpecs.map((spec) => JSON.stringify(spec.conditions || [])))];
+    if (conditionSignatures.length > 1) {
+      aliasSpecs.forEach((spec) => {
+        if (spec.conditions?.length) {
+          issues[spec.alias] = 'условия параметров должны совпадать для групповой отправки';
+        }
+      });
+      return { rows: [], issues };
+    }
+    const sharedConditions = conditionSignatures[0] && conditionSignatures[0] !== '[]'
+      ? conditionSignatures[0]
+      : '';
+
+    const fields = uniqueAliasList(aliasSpecs.map((spec) => spec.source.field));
+    const limit = 1000;
+    let offset = 0;
+    const allRows: Array<Record<string, any>> = [];
+    while (offset <= 100000) {
+      const query = new URLSearchParams();
+      query.set('schema', aliasSpecs[0].source.schema);
+      query.set('table', aliasSpecs[0].source.table);
+      query.set('fields', fields.join(','));
+      query.set('limit', String(limit));
+      query.set('offset', String(offset));
+      if (sharedConditions) query.set('conditions', sharedConditions);
+      const resp = await apiJson<{ rows: Array<Record<string, any>>; has_more?: boolean }>(
+        `${apiBase}/parameter-values?${query.toString()}`,
+        { headers: headers() }
+      );
+      const rows = Array.isArray(resp?.rows) ? resp.rows : [];
+      if (!rows.length) break;
+      rows.forEach((row) => {
+        const mapped: Record<string, any> = {};
+        aliasSpecs.forEach((spec) => {
+          mapped[spec.alias] = row?.[spec.source.field];
+        });
+        allRows.push(mapped);
+      });
+      offset += rows.length;
+      if (!resp?.has_more || rows.length < limit) break;
+    }
+    return { rows: allRows, issues };
+  }
+
+  async function buildGroupedRequestPlan(draft: ApiDraft) {
+    const issues: Record<string, string> = {};
+    const groupByAliases = uniqueAliasList(draft.groupByAliases || []);
+    if (!groupByAliases.length) {
+      throw new Error('Укажи ключ группировки (например: client_id)');
+    }
+    const bindingRules = (Array.isArray(draft.bindingRules) ? draft.bindingRules : [])
+      .map((rule) => ({
+        id: String(rule?.id || uid()),
+        alias: String(rule?.alias || '').trim(),
+        target: toBindingTarget(String(rule?.target || 'body_item')),
+        path: String(rule?.path || '').trim()
+      }))
+      .filter((rule) => rule.alias && rule.path);
+    if (!bindingRules.length) {
+      throw new Error('Добавь хотя бы одно правило подстановки');
+    }
+
+    const requiredAliases = uniqueAliasList([
+      ...groupByAliases,
+      ...bindingRules.map((rule) => rule.alias)
+    ]);
+    const dataset = await loadParameterRowsForAliases(draft.parameterDefinitions, requiredAliases);
+    Object.assign(issues, dataset.issues);
+    if (!dataset.rows.length) {
+      throw new Error('Нет строк в источнике данных для построения запросов');
+    }
+
+    const grouped = new Map<string, { key: Record<string, any>; rows: Array<Record<string, any>> }>();
+    dataset.rows.forEach((row) => {
+      const keyObj: Record<string, any> = {};
+      groupByAliases.forEach((alias) => {
+        keyObj[alias] = row[alias];
+      });
+      const key = JSON.stringify(keyObj);
+      if (!grouped.has(key)) grouped.set(key, { key: keyObj, rows: [] });
+      grouped.get(key)?.rows.push(row);
+    });
+
+    let oauthAuthValue = '';
+    if (draft.authMode === 'oauth2_client_credentials') {
+      if (!draft.oauth2TokenUrl || !draft.oauth2ClientId || !draft.oauth2ClientSecret) {
+        throw new Error('OAuth2: заполни token URL, client_id и client_secret');
+      }
+      const tokenData = await getOAuthToken(draft);
+      oauthAuthValue = `${tokenData.tokenType} ${tokenData.token}`;
+    }
+
+    const plans: Array<any> = [];
+    for (const group of grouped.values()) {
+      const authHdr = parseJsonObjectField('Авторизация', draft.authJson);
+      if (oauthAuthValue) {
+        authHdr.Authorization = oauthAuthValue;
+      }
+      const hdr = parseJsonObjectField('Headers JSON', draft.headersJson);
+      const queryObj = parseJsonObjectField('Query JSON', draft.queryJson);
+      const bodyBaseRaw = parseJsonAnyField('Body JSON', draft.bodyJson);
+      const bodyObj = bodyBaseRaw && typeof bodyBaseRaw === 'object' ? deepClone(bodyBaseRaw) : {};
+
+      const itemRules = bindingRules.filter((rule) => rule.target === 'body_item');
+      const scalarRules = bindingRules.filter((rule) => rule.target !== 'body_item');
+
+      for (const rule of scalarRules) {
+        const firstValue = group.rows[0]?.[rule.alias];
+        const hasMismatch = group.rows.some((row) => !sameValue(row?.[rule.alias], firstValue));
+        if (hasMismatch) {
+          issues[`${rule.alias}:${rule.target}.${rule.path}`] =
+            'в группе разные значения; использовано первое';
+        }
+        if (rule.target === 'header') {
+          hdr[rule.path] = firstValue;
+        } else if (rule.target === 'query') {
+          setByPath(queryObj, rule.path, firstValue);
+        } else if (rule.target === 'body') {
+          setByPath(bodyObj, rule.path, firstValue);
+        }
+      }
+
+      if (itemRules.length) {
+        const items = group.rows.map((row) => {
+          const item: Record<string, any> = {};
+          itemRules.forEach((rule) => {
+            setByPath(item, rule.path, row?.[rule.alias]);
+          });
+          return item;
+        });
+        setByPath(bodyObj, draft.bodyItemsPath || 'items', items);
+      }
+
+      let url = `${draft.baseUrl.replace(/\/$/, '')}${draft.path.startsWith('/') ? draft.path : `/${draft.path}`}`;
+      const u = new URL(url);
+      Object.entries(queryObj || {}).forEach(([k, v]) => u.searchParams.set(k, String(v)));
+      url = u.toString();
+
+      plans.push({
+        group: group.key,
+        rows_in_group: group.rows.length,
+        method: draft.method,
+        url,
+        headers: { 'Content-Type': 'application/json', ...authHdr, ...hdr },
+        body: draft.method === 'GET' || draft.method === 'DELETE' ? undefined : bodyObj
+      });
+    }
+
+    return {
+      allRequests: plans,
+      previewRequests: plans.slice(0, Math.max(1, Number(draft.previewRequestLimit || 5))),
+      issues
+    };
+  }
+
+  async function previewRequestsNow() {
+    err = '';
+    ok = '';
+    myPreviewApplyMessage = '';
+    if (!selected) {
+      err = 'Выбери API';
+      return;
+    }
+    try {
+      applyUrlInput(requestInput);
+      const s = byRef(selectedRef) || selected;
+      if (s.dispatchMode === 'group_by') {
+        const groupedPlan = await buildGroupedRequestPlan(s);
+        myApiPreview = JSON.stringify(
+          {
+            mode: 'preview_before_send',
+            total_requests: groupedPlan.allRequests.length,
+            shown_requests: groupedPlan.previewRequests.length,
+            requests: groupedPlan.previewRequests,
+            issues: Object.keys(groupedPlan.issues).length ? groupedPlan.issues : undefined
+          },
+          null,
+          2
+        );
+        myPreviewDirty = false;
+        myPreviewApplyMessage = `Показано ${groupedPlan.previewRequests.length} из ${groupedPlan.allRequests.length} запросов перед отправкой`;
+        return;
+      }
+
+      const authHdr = parseJsonObjectField('Авторизация', s.authJson);
+      const hdr = parseJsonObjectField('Headers JSON', s.headersJson);
+      const queryObj = parseJsonObjectField('Query JSON', s.queryJson);
+      const bodyRaw = parseJsonAnyField('Body JSON', s.bodyJson);
+      const bodyObj = bodyRaw && typeof bodyRaw === 'object' ? deepClone(bodyRaw) : {};
+      const { map: parameterValues, issues: parameterIssues } = await resolveParameterValues(s.parameterDefinitions);
+      if (Object.keys(parameterValues).length) {
+        applyParametersToValue(authHdr, parameterValues);
+        applyParametersToValue(hdr, parameterValues);
+        applyParametersToValue(queryObj, parameterValues);
+        applyParametersToValue(bodyObj, parameterValues);
+      }
+      let url = `${s.baseUrl.replace(/\/$/, '')}${s.path.startsWith('/') ? s.path : `/${s.path}`}`;
+      if (Object.keys(parameterValues).length) {
+        url = replaceParameterTokens(url, parameterValues);
+      }
+      const u = new URL(url);
+      Object.entries(queryObj || {}).forEach(([k, v]) => u.searchParams.set(k, String(v)));
+      const request = {
+        method: s.method,
+        url: u.toString(),
+        headers: { 'Content-Type': 'application/json', ...authHdr, ...hdr },
+        body: s.method === 'GET' || s.method === 'DELETE' ? undefined : bodyObj
+      };
+      myApiPreview = JSON.stringify(
+        {
+          mode: 'preview_before_send',
+          total_requests: 1,
+          shown_requests: 1,
+          requests: [request],
+          resolved_parameters: parameterValues,
+          issues: Object.keys(parameterIssues).length ? parameterIssues : undefined
+        },
+        null,
+        2
+      );
+      myPreviewDirty = false;
+      myPreviewApplyMessage = 'Показан запрос перед отправкой';
+    } catch (e: any) {
+      err = e?.message ?? String(e);
+    }
+  }
+
   async function loadParameterPreview() {
     parameterPreviewError = '';
     parameterPreviewRows = [];
@@ -2151,6 +2556,84 @@ function handleDefinitionInput(value: string) {
     try {
       applyUrlInput(requestInput);
       const s = byRef(selectedRef) || selected;
+      if (s.dispatchMode === 'group_by') {
+        const groupedPlan = await buildGroupedRequestPlan(s);
+        myApiPreview = JSON.stringify(
+          {
+            mode: 'sent_grouped_requests',
+            total_requests: groupedPlan.allRequests.length,
+            shown_requests: groupedPlan.previewRequests.length,
+            requests: groupedPlan.previewRequests,
+            issues: Object.keys(groupedPlan.issues).length ? groupedPlan.issues : undefined
+          },
+          null,
+          2
+        );
+        myPreviewDirty = false;
+        myPreviewApplyMessage =
+          groupedPlan.allRequests.length > groupedPlan.previewRequests.length
+            ? `Перед отправкой показаны первые ${groupedPlan.previewRequests.length} запросов из ${groupedPlan.allRequests.length}`
+            : `Перед отправкой показаны ${groupedPlan.previewRequests.length} запросов`;
+
+        if (!groupedPlan.allRequests.length) {
+          throw new Error('Не удалось сформировать запросы для отправки');
+        }
+
+        const startedAt = Date.now();
+        let success = 0;
+        let failed = 0;
+        let totalItems = 0;
+        let totalSize = 0;
+        let lastStatus = 0;
+        const samples: any[] = [];
+        for (const reqPlan of groupedPlan.allRequests) {
+          const init: RequestInit = {
+            method: reqPlan.method,
+            headers: reqPlan.headers
+          };
+          if (reqPlan.method !== 'GET' && reqPlan.method !== 'DELETE') {
+            init.body = JSON.stringify(reqPlan.body || {});
+          }
+          const res = await fetch(reqPlan.url, init);
+          lastStatus = res.status;
+          const txt = await res.text();
+          totalSize += txt ? txt.length : 0;
+          let parsed: any = null;
+          try {
+            parsed = txt ? JSON.parse(txt) : null;
+          } catch {
+            parsed = null;
+          }
+          if (res.ok) success += 1;
+          else failed += 1;
+          totalItems += countPayloadItems(parsed ?? txt);
+          if (samples.length < REQUEST_PREVIEW_MAX) {
+            samples.push({
+              group: reqPlan.group,
+              status: res.status,
+              response: parsed ?? txt
+            });
+          }
+        }
+
+        responseStatus = lastStatus;
+        responsePagesCount = groupedPlan.allRequests.length;
+        responsePayloadCount = totalItems;
+        responsePayloadSize = totalSize;
+        responseTimeMs = Date.now() - startedAt;
+        responseText = JSON.stringify(
+          {
+            total_requests: groupedPlan.allRequests.length,
+            success,
+            failed,
+            sample_responses: samples
+          },
+          null,
+          2
+        );
+        ok = failed ? `Проверка завершена: успех ${success}, ошибок ${failed}` : `Проверка выполнена, запросов: ${success}`;
+        return;
+      }
       const authHdr = parseJsonObjectField('Авторизация', s.authJson);
       const hdr = parseJsonObjectField('Headers JSON', s.headersJson);
       const queryObjBase = parseJsonObjectField('Query JSON', s.queryJson);
@@ -2931,7 +3414,10 @@ function syncParameterEditorsHeight() {
             on:blur={() => applyUrlInput(requestInput)}
             placeholder="Строка подключения (URL или curl)"
           />
-          <button class="primary" on:click={checkApiNow} disabled={checking}>{checking ? 'Проверка...' : 'Проверить'}</button>
+          <div class="connect-actions">
+            <button class="primary" on:click={checkApiNow} disabled={checking}>{checking ? 'Проверка...' : 'Проверить'}</button>
+            <button type="button" class="view-toggle" on:click={previewRequestsNow} disabled={checking}>Предпросмотр 5</button>
+          </div>
         </div>
 
         <textarea
@@ -3076,6 +3562,91 @@ function syncParameterEditorsHeight() {
             ></textarea>
           {/if}
         </label>
+
+        <div class="dispatch-box">
+          <div class="response-head field-head">
+            <span>Правила отправки</span>
+          </div>
+          <div class="dispatch-grid">
+            <div class="pagination-field">
+              <small>Режим</small>
+              <select
+                value={selected?.dispatchMode || 'single'}
+                on:change={(e) => mutateSelected((d) => (d.dispatchMode = toDispatchMode(e.currentTarget.value)))}
+              >
+                {#each DISPATCH_MODES as mode}
+                  <option value={mode.value}>{mode.label}</option>
+                {/each}
+              </select>
+            </div>
+            <div class="pagination-field">
+              <small>Группировать по alias</small>
+              <input
+                placeholder="например: client_id"
+                value={selected?.groupByAliases?.join(', ') || ''}
+                on:input={(e) => updateGroupByAliases(e.currentTarget.value)}
+              />
+            </div>
+            <div class="pagination-field">
+              <small>Путь массива в body</small>
+              <input
+                placeholder="items"
+                value={selected?.bodyItemsPath || 'items'}
+                on:input={(e) => mutateSelected((d) => (d.bodyItemsPath = e.currentTarget.value || 'items'))}
+              />
+            </div>
+            <div class="pagination-field">
+              <small>Лимит предпросмотра</small>
+              <input
+                type="number"
+                min="1"
+                max="50"
+                value={selected?.previewRequestLimit || 5}
+                on:input={(e) => mutateSelected((d) => (d.previewRequestLimit = Math.max(1, Math.min(50, Number(e.currentTarget.value) || 5))))}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div class="dispatch-box">
+          <div class="response-head field-head">
+            <span>Правила подстановки</span>
+            <button type="button" class="view-toggle" on:click={addBindingRule}>Добавить правило</button>
+          </div>
+          {#if selected?.bindingRules?.length}
+            <div class="binding-list">
+              {#each selected.bindingRules as rule (rule.id)}
+                <div class="binding-row">
+                  <select
+                    value={rule.alias}
+                    on:change={(e) => updateBindingRule(rule.id, { alias: e.currentTarget.value })}
+                  >
+                    <option value="">Параметр</option>
+                    {#each selected.parameterDefinitions as param}
+                      <option value={param.alias}>{param.alias}</option>
+                    {/each}
+                  </select>
+                  <select
+                    value={rule.target}
+                    on:change={(e) => updateBindingRule(rule.id, { target: toBindingTarget(e.currentTarget.value) })}
+                  >
+                    {#each BINDING_TARGETS as target}
+                      <option value={target.value}>{target.label}</option>
+                    {/each}
+                  </select>
+                  <input
+                    value={rule.path}
+                    placeholder="путь (например Authorization или campaign_id)"
+                    on:input={(e) => updateBindingRule(rule.id, { path: e.currentTarget.value })}
+                  />
+                  <button type="button" class="chip-remove" on:click={() => removeBindingRule(rule.id)}>x</button>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <p class="hint">Добавь правила, например: `token -> Header.Authorization`, `campaign_id -> body_item.campaign_id`, `sku -> body_item.sku`.</p>
+          {/if}
+        </div>
 
         <div class="pagination-box">
           <div class="response-head field-head">
@@ -3464,7 +4035,9 @@ function syncParameterEditorsHeight() {
   .main { min-width:0; }
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; }
 
-  .connect-row { margin-top:10px; display:grid; grid-template-columns: 180px 1fr 150px; gap:8px; align-items:center; }
+  .connect-row { margin-top:10px; display:grid; grid-template-columns: 180px 1fr auto; gap:8px; align-items:center; }
+  .connect-actions { display:flex; gap:8px; align-items:center; justify-content:flex-end; }
+  .connect-actions .primary { min-width:130px; }
   .targets-wrap { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:transparent; }
   .targets-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
   .targets-title { font-size:13px; font-weight:700; color:#0f172a; }
@@ -3553,6 +4126,10 @@ function syncParameterEditorsHeight() {
   .oauth-grid input { margin:0; }
   .auth-mode-buttons + .oauth-grid + .hint { margin-top:0; }
   .pagination-box { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#f8fafc; }
+  .dispatch-box { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#f8fafc; }
+  .dispatch-grid { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
+  .binding-list { margin-top:8px; display:flex; flex-direction:column; gap:8px; }
+  .binding-row { display:grid; grid-template-columns: 1fr 220px 1.2fr auto; gap:8px; align-items:center; }
   .pagination-toggle { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#475569; cursor:pointer; }
   .pagination-toggle input { width:auto; }
   .pagination-grid { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
@@ -3643,6 +4220,13 @@ function syncParameterEditorsHeight() {
   .preview-row { display:flex; gap:8px; align-items:flex-start; }
   .row-index { font-weight:600; width:32px; text-align:right; color:#475569; }
   .row-value { flex:1; word-break:break-word; }
+  @media (max-width: 900px) {
+    .connect-row { grid-template-columns: 1fr; }
+    .connect-actions { justify-content:flex-start; flex-wrap:wrap; }
+    .raw-grid { grid-template-columns: 1fr; }
+    .saved-inline-actions { grid-template-columns: 1fr; }
+    .binding-row { grid-template-columns: 1fr; }
+  }
 </style>
 
 

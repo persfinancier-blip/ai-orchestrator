@@ -2160,6 +2160,60 @@ tableBuilderRouter.get('/parameter-value', async (req, res) => {
   }
 });
 
+tableBuilderRouter.get('/parameter-values', async (req, res) => {
+  const schema = String(req.query.schema || '').trim();
+  const table = String(req.query.table || '').trim();
+  const fieldsRaw = String(req.query.fields || '').trim();
+  const limit = Math.max(1, Math.min(5000, Number(req.query.limit || 1000)));
+  const offset = Math.max(0, Number(req.query.offset || 0));
+  if (!isIdent(schema) || !isIdent(table)) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid schema/table' });
+  }
+
+  const fields = fieldsRaw
+    .split(',')
+    .map((x) => String(x || '').trim())
+    .filter(Boolean);
+  const uniqFields = [...new Set(fields)];
+  if (!uniqFields.length) {
+    return res.status(400).json({ error: 'bad_request', details: 'fields are required' });
+  }
+  if (!uniqFields.every((f) => isIdent(f))) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid fields' });
+  }
+
+  const conditions = parseParameterConditions(req.query?.conditions);
+  const params = [];
+  const clauses = conditions
+    .map((cond) => conditionClause(cond, params))
+    .filter(Boolean);
+  const clause = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  params.push(limit);
+  const limitIdx = params.length;
+  params.push(offset);
+  const offsetIdx = params.length;
+
+  const selectCols = uniqFields.map((f) => `${qi(f)} AS ${qi(f)}`).join(', ');
+
+  const client = await pool.connect();
+  try {
+    const q = `
+      SELECT ${selectCols}
+      FROM ${qname(schema, table)}
+      ${clause}
+      LIMIT $${limitIdx}
+      OFFSET $${offsetIdx}
+    `;
+    const r = await client.query(q, params);
+    const rows = Array.isArray(r.rows) ? r.rows : [];
+    return res.json({ rows, has_more: rows.length === limit });
+  } catch (e) {
+    return res.status(500).json({ error: 'parameter_values_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
 tableBuilderRouter.post('/tables/rename', requireDataAdmin, async (req, res) => {
   const schema = String(req.body?.schema || '').trim();
   const table = String(req.body?.table || '').trim();
