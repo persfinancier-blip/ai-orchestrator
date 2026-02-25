@@ -1884,15 +1884,15 @@ function handleDefinitionInput(value: string) {
     if (!param) return null;
     const src = source || resolveParameterSource(param);
     if (!src) return null;
-    const url = new URL(`${apiBase}/parameter-value`);
-    url.searchParams.set('schema', src.schema);
-    url.searchParams.set('table', src.table);
-    url.searchParams.set('field', src.field);
+    const query = new URLSearchParams();
+    query.set('schema', src.schema);
+    query.set('table', src.table);
+    query.set('field', src.field);
     if (Array.isArray(param.conditions) && param.conditions.length) {
-      url.searchParams.set('conditions', JSON.stringify(param.conditions));
+      query.set('conditions', JSON.stringify(param.conditions));
     }
-    url.searchParams.set('limit', '1');
-    const response = await apiJson<{ value: any }>(url.toString(), { headers: headers() });
+    query.set('limit', '1');
+    const response = await apiJson<{ value: any }>(`${apiBase}/parameter-value?${query.toString()}`, { headers: headers() });
     return response?.value ?? null;
   }
 
