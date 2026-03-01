@@ -2728,20 +2728,8 @@ function handleDefinitionInput(value: string) {
     const aliases = uniqueAliasList(requestedAliases);
     if (!aliases.length) return { map: {}, issues: {} as Record<string, string> };
 
-    const definitions = Array.isArray(draft.parameterDefinitions) ? draft.parameterDefinitions : [];
-    const requestedLower = new Set(aliases.map((a) => a.toLowerCase()));
-    const matchedDefinitions = definitions.filter((param) => requestedLower.has(String(param?.alias || '').trim().toLowerCase()));
-    const { map: baseMap, issues } = await resolveParameterValues(matchedDefinitions);
+    const issues: Record<string, string> = {};
     const map: Record<string, any> = {};
-    aliases.forEach((alias) => {
-      const found = findAliasInMap(baseMap, alias);
-      if (found.found && found.value !== undefined && found.value !== null) {
-        map[alias] = found.value;
-      }
-    });
-
-    const missing = aliases.filter((alias) => !findAliasInMap(map, alias).found);
-    if (!missing.length || !hasDataModelConfigured(draft)) return { map, issues };
 
     const dataAliases = uniqueAliasList((draft.dataFields || []).map((f) => String(f?.alias || '').trim()).filter(Boolean));
     const dataAliasByLower = new Map<string, string>();
@@ -2749,40 +2737,61 @@ function handleDefinitionInput(value: string) {
       const key = alias.toLowerCase();
       if (!dataAliasByLower.has(key)) dataAliasByLower.set(key, alias);
     });
-    const needFromData = uniqueAliasList(
-      missing
-        .map((alias) => dataAliasByLower.get(alias.toLowerCase()) || '')
-        .filter(Boolean)
-    );
-    if (!needFromData.length) return { map, issues };
 
-    try {
-      const resp = await fetchDataModelRows(draft, needFromData, 1, 0);
-      const firstRow = Array.isArray(resp?.rows) && resp.rows.length ? resp.rows[0] : null;
-      if (firstRow) {
-        needFromData.forEach((alias) => {
-          const value = firstRow[alias];
-          if (value !== undefined && value !== null) {
-            map[alias] = value;
-            missing
-              .filter((raw) => raw.toLowerCase() === alias.toLowerCase())
-              .forEach((raw) => {
-                map[raw] = value;
-              });
+    if (hasDataModelConfigured(draft)) {
+      const needFromData = uniqueAliasList(
+        aliases
+          .map((alias) => dataAliasByLower.get(alias.toLowerCase()) || '')
+          .filter(Boolean)
+      );
+      if (needFromData.length) {
+        try {
+          const resp = await fetchDataModelRows(draft, needFromData, 1, 0);
+          const firstRow = Array.isArray(resp?.rows) && resp.rows.length ? resp.rows[0] : null;
+          if (firstRow) {
+            needFromData.forEach((alias) => {
+              const value = firstRow[alias];
+              if (value !== undefined && value !== null) {
+                map[alias] = value;
+                aliases
+                  .filter((raw) => raw.toLowerCase() === alias.toLowerCase())
+                  .forEach((raw) => {
+                    map[raw] = value;
+                  });
+              } else if (!issues[alias]) {
+                issues[alias] = 'конструктор данных вернул пустое значение';
+              }
+            });
+          } else {
+            needFromData.forEach((alias) => {
+              if (!issues[alias]) issues[alias] = 'конструктор данных вернул 0 строк';
+            });
           }
-          else if (!issues[alias]) issues[alias] = 'конструктор данных вернул пустое значение';
-        });
-      } else {
-        needFromData.forEach((alias) => {
-          if (!issues[alias]) issues[alias] = 'конструктор данных вернул 0 строк';
-        });
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          needFromData.forEach((alias) => {
+            if (!issues[alias]) issues[alias] = `ошибка чтения из конструктора данных: ${msg}`;
+          });
+        }
       }
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      needFromData.forEach((alias) => {
-        if (!issues[alias]) issues[alias] = `ошибка чтения из конструктора данных: ${msg}`;
-      });
     }
+
+    const missing = aliases.filter((alias) => !findAliasInMap(map, alias).found);
+    if (!missing.length) return { map, issues };
+
+    const definitions = Array.isArray(draft.parameterDefinitions) ? draft.parameterDefinitions : [];
+    const missingLower = new Set(missing.map((a) => a.toLowerCase()));
+    const matchedDefinitions = definitions.filter((param) => missingLower.has(String(param?.alias || '').trim().toLowerCase()));
+    const { map: defMap, issues: defIssues } = await resolveParameterValues(matchedDefinitions);
+    Object.entries(defIssues).forEach(([k, v]) => {
+      if (!issues[k]) issues[k] = v;
+    });
+    missing.forEach((alias) => {
+      const found = findAliasInMap(defMap, alias);
+      if (found.found && found.value !== undefined && found.value !== null) {
+        map[alias] = found.value;
+      }
+    });
 
     return { map, issues };
   }
