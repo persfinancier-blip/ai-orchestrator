@@ -6580,6 +6580,7 @@ function syncParameterEditorsHeight() {
                 <option value="async">Асинхронный</option>
               </select>
               <p class="hint small-hint">Синхронный: обрабатывает сущности последовательно. Проще контролировать и разбирать ошибки.</p>
+              <p class="hint small-hint">Сущность: одна независимая цепочка пагинации. Примеры: 1 магазин (token), 1 кабинет, 1 клиент, 1 строка параметров.</p>
             </div>
             {#if (selected?.executionMode || 'sync') === 'sync'}
               <div class="pagination-field">
@@ -6598,6 +6599,7 @@ function syncParameterEditorsHeight() {
                   <p class="hint small-hint">До остановки сущности: сначала полностью одна сущность, потом следующая.</p>
                 {:else}
                   <p class="hint small-hint">По шагу (волнами): шаг 1 по всем сущностям, потом шаг 2 и так далее.</p>
+                  <p class="hint small-hint">Пример: сущности A/B/C. Волна 1: A1,B1,C1. Волна 2: A2,B2,C2. Волна 3: только те, кто не остановился.</p>
                 {/if}
               </div>
             {:else}
@@ -6614,12 +6616,14 @@ function syncParameterEditorsHeight() {
                     })}
                 />
                 <p class="hint small-hint">Сколько сущностей запускать одновременно. Внутри одной сущности страницы всегда идут по порядку.</p>
+                <p class="hint small-hint">Пример: лимит 3 и сущности A/B/C/D/E. Сначала стартуют A/B/C, потом по завершению подключаются D и E.</p>
               </div>
             {/if}
           </div>
           {#if (selected?.executionMode || 'sync') === 'async'}
             <p class="hint small-hint">Асинхронный: несколько сущностей выполняются параллельно для ускорения.</p>
           {/if}
+          <p class="hint small-hint">Шаг: один запрос внутри сущности. Например шаг 1 (первая страница), шаг 2 (следующая), шаг 3.</p>
           <p class="hint small-hint">Причины отправки итерации пишутся в лог: initial_request, pagination_values_updated, page_increment, offset_increment, cursor_updated, next_url_received.</p>
 
           <div class="response-head field-head parameter-subhead">
