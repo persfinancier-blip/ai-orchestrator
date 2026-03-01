@@ -382,6 +382,13 @@
     return out;
   }
 
+  function quoteUnquotedTemplateTokensInJson(src: string): string {
+    const text = String(src || '');
+    if (!text.includes('{{')) return text;
+    // Allow JSON placeholders without quotes: { "nmID": {{nmID}} } -> { "nmID": "{{nmID}}" }
+    return text.replace(/(:\s*|\[\s*|,\s*)(\{\{\s*[^{}]+\s*\}\})(\s*(?=[,\}\]]))/g, '$1"$2"$3');
+  }
+
   function parseJsonObjectField(label: string, text: string): Record<string, any> {
     const src = String(text || '').trim();
     if (!src) return {};
@@ -389,9 +396,13 @@
     try {
       parsed = JSON.parse(src);
     } catch {
-      const loose = parseLooseObject(src);
-      if (Object.keys(loose).length) return loose;
-      throw new Error(`${label}: некорректный JSON`);
+      try {
+        parsed = JSON.parse(quoteUnquotedTemplateTokensInJson(src));
+      } catch {
+        const loose = parseLooseObject(src);
+        if (Object.keys(loose).length) return loose;
+        throw new Error(`${label}: некорректный JSON`);
+      }
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error(`${label}: ожидается JSON-объект`);
@@ -405,7 +416,11 @@
     try {
       return JSON.parse(src);
     } catch {
-      throw new Error(`${label}: некорректный JSON`);
+      try {
+        return JSON.parse(quoteUnquotedTemplateTokensInJson(src));
+      } catch {
+        throw new Error(`${label}: некорректный JSON`);
+      }
     }
   }
 
