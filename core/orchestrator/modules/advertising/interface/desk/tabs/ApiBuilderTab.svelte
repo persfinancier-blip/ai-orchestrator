@@ -3076,6 +3076,37 @@ function handleDefinitionInput(value: string) {
     }
   }
 
+  function isExactTemplateAlias(value: any, aliasesLower: Set<string>) {
+    if (typeof value !== 'string' || !aliasesLower.size) return false;
+    const exact = value.match(PARAMETER_TOKEN_EXACT_RE);
+    if (!exact?.[1]) return false;
+    return aliasesLower.has(String(exact[1] || '').trim().toLowerCase());
+  }
+
+  function stripUnresolvedPaginationTokens(value: any, aliasesLower: Set<string>) {
+    if (!value || !aliasesLower.size) return;
+    if (Array.isArray(value)) {
+      for (let i = value.length - 1; i >= 0; i--) {
+        const item = value[i];
+        if (isExactTemplateAlias(item, aliasesLower)) {
+          value.splice(i, 1);
+          continue;
+        }
+        stripUnresolvedPaginationTokens(item, aliasesLower);
+      }
+      return;
+    }
+    if (typeof value !== 'object') return;
+    Object.keys(value).forEach((key) => {
+      const val = value[key];
+      if (isExactTemplateAlias(val, aliasesLower)) {
+        delete value[key];
+        return;
+      }
+      stripUnresolvedPaginationTokens(val, aliasesLower);
+    });
+  }
+
   function parseParameterSourceRef(raw: string, param: ParameterDefinition): { schema: string; table: string; field: string } | null {
     const src = String(raw || '').trim().replace(/^['"]|['"]$/g, '');
     if (!src) return null;
@@ -4143,6 +4174,9 @@ function handleDefinitionInput(value: string) {
     const paginationParameters = paginationParametersForDraft(draft).filter(
       (param) => String(param?.responsePath || '').trim() && String(param?.alias || '').trim()
     );
+    const paginationAliasesLower = new Set(
+      paginationParameters.map((param) => String(param?.alias || '').trim().toLowerCase()).filter(Boolean)
+    );
     const paginationState: Record<string, any> = {};
     let bodyCursorState = isBodyMethod && reqPlan?.body && typeof reqPlan.body === 'object' ? deepClone(reqPlan.body) : {};
     let cursorQueryState: Record<string, any> = {};
@@ -4230,6 +4264,11 @@ function handleDefinitionInput(value: string) {
           if (bodyObj && typeof bodyObj === 'object') {
             applyParametersToValue(bodyObj, tokenMap);
           }
+        }
+        stripUnresolvedPaginationTokens(queryObj, paginationAliasesLower);
+        stripUnresolvedPaginationTokens(headersObj, paginationAliasesLower);
+        if (bodyObj && typeof bodyObj === 'object') {
+          stripUnresolvedPaginationTokens(bodyObj, paginationAliasesLower);
         }
       }
 
