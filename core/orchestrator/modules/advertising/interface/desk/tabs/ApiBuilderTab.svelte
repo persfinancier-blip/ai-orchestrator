@@ -1,6 +1,7 @@
 ﻿<script lang="ts">
   import { onDestroy, tick } from 'svelte';
   import JsonTreeView from '../components/JsonTreeView.svelte';
+  import { shouldRetryStatus, retryDelayMs, groupRowsByAliases } from './apiBuilderRuntimeCore.js';
   export type ExistingTable = { schema_name: string; table_name: string };
   type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   type DispatchMode = 'single' | 'group_by';
@@ -421,6 +422,15 @@
   let groupByAliasCandidates: string[] = [];
   const PARAMETER_PREVIEW_LIMIT = 5;
   const REQUEST_PREVIEW_MAX = 20;
+  const DATA_MODEL_ROW_HARD_LIMIT = 100000;
+  const PARAMETER_ROW_HARD_LIMIT = 100000;
+  const MERGE_ROW_CAP = 5000;
+  const EXECUTION_RESPONSE_PREVIEW_MAX = 200;
+  const EXECUTION_AUDIT_FLUSH_BATCH = 200;
+  const EXECUTION_RESPONSE_ENTRY_MAX_CHARS = 120000;
+  const RETRY_MAX_ATTEMPTS_DEFAULT = 3;
+  const RETRY_BASE_DELAY_MS_DEFAULT = 500;
+  const RETRY_MAX_DELAY_MS_DEFAULT = 5000;
   const FILTER_SCOPE_ALIAS = '__alias__';
   const PARAMETER_TOKEN_RE = /\{\{\s*([^{}]+?)\s*\}\}/g;
   const PARAMETER_TOKEN_EXACT_RE = /^\{\{\s*([^{}]+?)\s*\}\}$/;
@@ -2552,6 +2562,39 @@ function formatBytes(bytes: number) {
     });
   }
 
+  async function runHttpRequestViaServerWithRetry(
+    url: string,
+    init: RequestInit,
+    timeoutMs = 30_000,
+    retryConfig?: { attempts?: number; baseDelayMs?: number; maxDelayMs?: number }
+  ) {
+    const attemptsMax = Math.max(1, Math.min(10, Number(retryConfig?.attempts || RETRY_MAX_ATTEMPTS_DEFAULT)));
+    const baseDelayMs = Math.max(50, Number(retryConfig?.baseDelayMs || RETRY_BASE_DELAY_MS_DEFAULT));
+    const maxDelayMs = Math.max(baseDelayMs, Number(retryConfig?.maxDelayMs || RETRY_MAX_DELAY_MS_DEFAULT));
+    let attempt = 0;
+    let lastError: any = null;
+
+    while (attempt < attemptsMax) {
+      attempt += 1;
+      try {
+        const proxied = await runHttpRequestViaServer(url, init, timeoutMs);
+        const status = Number(proxied?.status || 0);
+        if (attempt < attemptsMax && shouldRetryStatus(status)) {
+          const delay = retryDelayMs(attempt, baseDelayMs, maxDelayMs);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          continue;
+        }
+        return { proxied, attempts: attempt };
+      } catch (error: any) {
+        lastError = error;
+        if (attempt >= attemptsMax) break;
+        const delay = retryDelayMs(attempt, baseDelayMs, maxDelayMs);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+    throw lastError || new Error('Ошибка запроса после повторов');
+  }
+
   async function getOAuthToken(d: ApiDraft): Promise<{ token: string; tokenType: string }> {
     const cacheKey = refOf(d);
     const cached = oauthTokenCache[cacheKey];
@@ -4033,7 +4076,7 @@ function formatBytes(bytes: number) {
   function mergeRowsWithCap(
     leftRows: Array<Record<string, any>>,
     rightRows: Array<Record<string, any>>,
-    cap = 5000
+    cap = MERGE_ROW_CAP
   ): Array<Record<string, any>> {
     const left = Array.isArray(leftRows) && leftRows.length ? leftRows : [{}];
     const right = Array.isArray(rightRows) && rightRows.length ? rightRows : [{}];
@@ -4041,7 +4084,9 @@ function formatBytes(bytes: number) {
     for (const l of left) {
       for (const r of right) {
         out.push({ ...(l || {}), ...(r || {}) });
-        if (out.length >= cap) return out;
+        if (out.length >= cap) {
+          throw new Error(`limit_reached: превышен лимит объединения строк (${cap})`);
+        }
       }
     }
     return out;
@@ -4051,7 +4096,7 @@ function formatBytes(bytes: number) {
     baseRows: Array<Record<string, any>>,
     apiRows: Array<Record<string, any>>,
     keys: string[],
-    cap = 5000
+    cap = MERGE_ROW_CAP
   ): Array<Record<string, any>> {
     const out: Array<Record<string, any>> = [];
     const normalizedKeys = uniqueAliasList((keys || []).map((k) => String(k || '').trim()).filter(Boolean));
@@ -4079,7 +4124,9 @@ function formatBytes(bytes: number) {
       if (!matches.length) continue;
       for (const match of matches) {
         out.push({ ...(row || {}), ...(match || {}) });
-        if (out.length >= cap) return out;
+        if (out.length >= cap) {
+          throw new Error(`limit_reached: превышен лимит объединения строк (${cap})`);
+        }
       }
     }
     return out;
@@ -4212,7 +4259,7 @@ function formatBytes(bytes: number) {
     if (hasDataAlias) {
       const limit = 1000;
       let offset = 0;
-      while (offset <= 100000) {
+      while (offset < DATA_MODEL_ROW_HARD_LIMIT) {
         const onlyDataAliases = aliasesRequested.filter((alias) => dataAliases.includes(alias));
         const resp = await fetchDataModelRows(draft, onlyDataAliases, limit, offset);
         const rows = Array.isArray(resp?.rows) ? resp.rows : [];
@@ -4221,6 +4268,10 @@ function formatBytes(bytes: number) {
         allRows.push(...merged);
         offset += rows.length;
         if (!resp?.has_more || rows.length < limit) break;
+        if (offset >= DATA_MODEL_ROW_HARD_LIMIT) {
+          issues.limit_reached = `limit_reached: достигнут лимит строк конструктора данных (${DATA_MODEL_ROW_HARD_LIMIT})`;
+          break;
+        }
       }
     } else {
       allRows.push({ ...dateMap });
@@ -4962,7 +5013,7 @@ function handleDefinitionInput(value: string) {
     const limit = 1000;
     let offset = 0;
     const allRows: Array<Record<string, any>> = [];
-    while (offset <= 100000) {
+    while (offset < PARAMETER_ROW_HARD_LIMIT) {
       const query = new URLSearchParams();
       query.set('schema', aliasSpecs[0].source.schema);
       query.set('table', aliasSpecs[0].source.table);
@@ -4985,6 +5036,10 @@ function handleDefinitionInput(value: string) {
       });
       offset += rows.length;
       if (!resp?.has_more || rows.length < limit) break;
+      if (offset >= PARAMETER_ROW_HARD_LIMIT) {
+        issues.limit_reached = `limit_reached: достигнут лимит строк витрины параметров (${PARAMETER_ROW_HARD_LIMIT})`;
+        break;
+      }
     }
     return { rows: allRows, issues };
   }
@@ -5015,24 +5070,11 @@ function handleDefinitionInput(value: string) {
         path: String(rule?.path || '').trim()
       }))
       .filter((rule) => rule.alias && rule.path);
-    let groupByAliases = uniqueAliasList(sanitizedAliases.groupByAliases || []);
+    const groupByAliases = uniqueAliasList(sanitizedAliases.groupByAliases || []);
     if (!groupByAliases.length) {
-      const scalarAliases = uniqueAliasList(
-        bindingRules
-          .filter((rule) => rule.target !== 'body_item')
-          .map((rule) => rule.alias)
+      throw new Error(
+        'Не указан ключ группировки. Включи кнопку «Группировать» у нужного параметра (например, TKN/кабинет/клиент), чтобы избежать бизнес-ошибок.'
       );
-      const ruleAliases = uniqueAliasList(bindingRules.map((rule) => rule.alias));
-      groupByAliases = scalarAliases.length ? scalarAliases : ruleAliases;
-      if (!groupByAliases.length && templateAliases.length) {
-        groupByAliases = [templateAliases[0]];
-      }
-      if (groupByAliases.length) {
-        issues.auto_grouping = `автогруппировка по alias: ${groupByAliases.join(', ')}`;
-      }
-    }
-    if (!groupByAliases.length) {
-      throw new Error('Не удалось определить ключ группировки. Выбери параметры подстановки и/или включи группировку.');
     }
     if (sanitizedAliases.removedAliases.length) {
       issues.removed_aliases = `удалены неактуальные алиасы: ${sanitizedAliases.removedAliases.join(', ')}`;
@@ -5066,16 +5108,10 @@ function handleDefinitionInput(value: string) {
       );
     }
 
-    const grouped = new Map<string, { key: Record<string, any>; rows: Array<Record<string, any>> }>();
-    dataset.rows.forEach((row) => {
-      const keyObj: Record<string, any> = {};
-      groupByAliases.forEach((alias) => {
-        keyObj[alias] = row[alias];
-      });
-      const key = JSON.stringify(keyObj);
-      if (!grouped.has(key)) grouped.set(key, { key: keyObj, rows: [] });
-      grouped.get(key)?.rows.push(row);
-    });
+    const grouped = groupRowsByAliases(dataset.rows, groupByAliases) as Map<
+      string,
+      { key: Record<string, any>; rows: Array<Record<string, any>> }
+    >;
 
     let oauthAuthValue = '';
     if (draft.authMode === 'oauth2_client_credentials') {
@@ -5662,7 +5698,8 @@ function handleDefinitionInput(value: string) {
   async function executePlannedRequestWithPagination(
     draft: ApiDraft,
     reqPlan: any,
-    sentRequests: any[]
+    sentRequests: any[],
+    onStep?: (entry: any) => Promise<void> | void
   ): Promise<{
     requestCount: number;
     success: number;
@@ -5671,399 +5708,31 @@ function handleDefinitionInput(value: string) {
     totalSize: number;
     lastStatus: number;
     stopReason: string;
-    responses: any[];
+    responses_dropped: number;
   }> {
-    const method = String(reqPlan?.method || draft.method || 'GET').toUpperCase();
-    const isBodyMethod = method !== 'GET' && method !== 'DELETE';
-    const baseHeaders = normalizeRequestHeaders(reqPlan?.headers || {});
-    const paginationParameters = paginationParametersForDraft(draft).filter(
-      (param) => String(param?.responsePath || '').trim() && String(param?.alias || '').trim()
-    );
-    const paginationAliasesLower = new Set(
-      paginationParameters.map((param) => String(param?.alias || '').trim().toLowerCase()).filter(Boolean)
-    );
-    const paginationStopRules = paginationStopRulesForDraft(draft).filter(
-      (rule) => String(rule?.responsePath || '').trim()
-    );
-    const paginationState: Record<string, any> = {};
-    let bodyCursorState = isBodyMethod && reqPlan?.body && typeof reqPlan.body === 'object' ? deepClone(reqPlan.body) : {};
-    let cursorQueryState: Record<string, any> = {};
-    let nextUrlOverride = '';
-    let currentPage = Number(draft.paginationStartPage || 1);
-    let currentOffset = Number(draft.paginationStartPage || 0);
-
+    const state = initWaveRuntimeState(draft, reqPlan);
     const executionDelayMs = Math.max(0, Number(draft.executionDelayMs || 0));
-    const maxPagesEnabled = draft.paginationEnabled && Boolean(draft.paginationUseMaxPages);
-    const pagesMax = maxPagesEnabled ? Math.max(1, Number(draft.paginationMaxPages || 1)) : Number.MAX_SAFE_INTEGER;
-    let requestCount = 0;
-    let success = 0;
-    let failed = 0;
-    let totalItems = 0;
-    let totalSize = 0;
-    let lastStatus = 0;
-    let stopReason = '';
-    const responses: any[] = [];
-    let lastResponseHash = '';
-    let sameResponseCount = 0;
-    const seenPaginationStates = new Set<string>();
-    let nextIterationReason = 'initial_request';
-
-    for (let pageIdx = 0; pageIdx < pagesMax; pageIdx++) {
-      const sourceUrl = String(nextUrlOverride || reqPlan?.url || '').trim();
-      if (!sourceUrl) throw new Error('Пустой URL в плане отправки');
-      const iterationReason = nextIterationReason;
-      const u = new URL(sourceUrl);
-      const queryObj: Record<string, any> = {};
-      u.searchParams.forEach((v, k) => {
-        queryObj[k] = v;
-      });
-      const bodyObj = isBodyMethod ? deepClone(bodyCursorState || {}) : undefined;
-      const headersObj: Record<string, any> = { ...baseHeaders };
-
-      if (draft.paginationEnabled) {
-        if (paginationParameters.length) {
-          for (const param of paginationParameters) {
-            let value = paginationState[param.id];
-            if ((value === undefined || value === null) && requestCount === 0) {
-              const first = String(param?.firstValue || '').trim();
-              if (first) value = parseStopRuleCompareValue(first);
-            }
-            if (value === undefined || value === null) continue;
-            applyPaginationValueToRequest(param, value, queryObj, bodyObj, headersObj);
-          }
-        } else {
-          if (draft.paginationStrategy === 'page_number') {
-            const p = draft.paginationPageParam || 'page';
-            if (draft.paginationTarget === 'query') queryObj[p] = currentPage;
-            else if (bodyObj) setByPath(bodyObj, p, currentPage);
-          } else if (draft.paginationStrategy === 'offset_limit') {
-            const off = draft.paginationPageParam || 'offset';
-            const lim = draft.paginationLimitParam || 'limit';
-            const limVal = Number(draft.paginationLimitValue || 100);
-            if (draft.paginationTarget === 'query') {
-              queryObj[off] = currentOffset;
-              queryObj[lim] = limVal;
-            } else if (bodyObj) {
-              setByPath(bodyObj, off, currentOffset);
-              setByPath(bodyObj, lim, limVal);
-            }
-          } else if (draft.paginationStrategy === 'cursor_fields') {
-            if (draft.paginationCursorReqPath1) {
-              if (draft.paginationTarget === 'query') {
-                const v = cursorQueryState[draft.paginationCursorReqPath1];
-                if (v !== undefined && v !== null) queryObj[draft.paginationCursorReqPath1] = v;
-              } else if (bodyObj) {
-                const v = getByPath(bodyCursorState, draft.paginationCursorReqPath1);
-                if (v !== undefined && v !== null) setByPath(bodyObj, draft.paginationCursorReqPath1, v);
-              }
-            }
-            if (draft.paginationCursorReqPath2) {
-              if (draft.paginationTarget === 'query') {
-                const v = cursorQueryState[draft.paginationCursorReqPath2];
-                if (v !== undefined && v !== null) queryObj[draft.paginationCursorReqPath2] = v;
-              } else if (bodyObj) {
-                const v = getByPath(bodyCursorState, draft.paginationCursorReqPath2);
-                if (v !== undefined && v !== null) setByPath(bodyObj, draft.paginationCursorReqPath2, v);
-              }
-            }
-          }
-        }
-      }
-
-      if (paginationParameters.length) {
-        const tokenMap: Record<string, any> = {};
-        paginationParameters.forEach((param) => {
-          let value = paginationState[param.id];
-          if ((value === undefined || value === null) && requestCount === 0) {
-            const first = String(param?.firstValue || '').trim();
-            if (first) value = parseStopRuleCompareValue(first);
-          }
-          if (value !== undefined && value !== null) tokenMap[param.alias] = value;
-        });
-        if (Object.keys(tokenMap).length) {
-          applyParametersToValue(headersObj, tokenMap);
-          applyParametersToValue(queryObj, tokenMap);
-          if (bodyObj && typeof bodyObj === 'object') {
-            applyParametersToValue(bodyObj, tokenMap);
-          }
-        }
-        stripUnresolvedPaginationTokens(queryObj, paginationAliasesLower);
-        stripUnresolvedPaginationTokens(headersObj, paginationAliasesLower);
-        if (bodyObj && typeof bodyObj === 'object') {
-          stripUnresolvedPaginationTokens(bodyObj, paginationAliasesLower);
-        }
-      }
-
-      u.search = '';
-      Object.entries(queryObj).forEach(([k, v]) => {
-        if (v === undefined || v === null) return;
-        u.searchParams.set(k, String(v));
-      });
-      const finalUrl = u.toString();
-      const requestHeaders: Record<string, string> = {};
-      Object.entries(headersObj).forEach(([k, v]) => {
-        if (v === undefined || v === null) return;
-        requestHeaders[String(k)] = String(v);
-      });
-      const init: RequestInit = {
-        method,
-        headers: requestHeaders
-      };
-      if (isBodyMethod) {
-        init.body = JSON.stringify(bodyObj || {});
-      }
-
-      if (sentRequests.length < REQUEST_PREVIEW_MAX) {
-        const sentReq: Record<string, any> = {
-          method,
-          url: finalUrl,
-          headers: { ...requestHeaders },
-          query: deepClone(queryObj || {}),
-          body: isBodyMethod ? deepClone(bodyObj || {}) : undefined,
-          page: pageIdx + 1,
-          iteration_reason: iterationReason
-        };
-        if (reqPlan?.group) sentReq.group = reqPlan.group;
-        if (reqPlan?.row_index) sentReq.row_index = reqPlan.row_index;
-        sentRequests.push(sentReq);
-      }
-
-      if (executionDelayMs > 0 && requestCount > 0) {
+    let waveNo = 1;
+    while (!state.done) {
+      if (executionDelayMs > 0 && state.requestCount > 0) {
         await new Promise((resolve) => setTimeout(resolve, executionDelayMs));
       }
-
-      let proxied: any = null;
-      try {
-        proxied = await runHttpRequestViaServer(finalUrl, init, 60_000);
-      } catch (requestError: any) {
-        failed += 1;
-        requestCount += 1;
-        stopReason = `Ошибка запроса: ${requestError?.message ?? String(requestError)}`;
-        responses.push({
-          page: pageIdx + 1,
-          status: 0,
-          error: requestError?.message ?? String(requestError),
-          iteration_reason: iterationReason,
-          decision: 'fail',
-          stop_reason: stopReason,
-          request: {
-            method,
-            url: finalUrl,
-            headers: deepClone(requestHeaders),
-            query: deepClone(queryObj || {}),
-            body: isBodyMethod ? deepClone(bodyObj || {}) : undefined
-          },
-          ...(reqPlan?.group ? { group: reqPlan.group } : {}),
-          ...(reqPlan?.row_index ? { row_index: reqPlan.row_index } : {})
-        });
-        break;
+      const step = await executeWaveRuntimeStep(draft, state, sentRequests, waveNo);
+      if (step?.entry) {
+        if (onStep) await onStep(step.entry);
       }
-      lastStatus = Number(proxied?.status || 0);
-      const txt = String(proxied?.body_text || '');
-      totalSize += txt ? txt.length : 0;
-      const parsed = proxied?.body_json !== undefined
-        ? proxied.body_json
-        : (() => {
-            try {
-              return txt ? JSON.parse(txt) : null;
-            } catch {
-              return null;
-            }
-          })();
-      if (proxied?.ok) success += 1;
-      else failed += 1;
-      totalItems += countPayloadItems(parsed ?? txt);
-      requestCount += 1;
-      const currentHash = responseFingerprint(parsed ?? txt);
-      if (currentHash && currentHash === lastResponseHash) sameResponseCount += 1;
-      else sameResponseCount = 1;
-      lastResponseHash = currentHash;
-
-      const responseEntry: Record<string, any> = {
-        page: pageIdx + 1,
-        status: Number(proxied?.status || 0),
-        response: parsed ?? txt,
-        iteration_reason: iterationReason,
-        decision: 'continue',
-        request: {
-          method,
-          url: finalUrl,
-          headers: deepClone(requestHeaders),
-          query: deepClone(queryObj || {}),
-          body: isBodyMethod ? deepClone(bodyObj || {}) : undefined
-        }
-      };
-      if (reqPlan?.group) responseEntry.group = reqPlan.group;
-      if (reqPlan?.row_index) responseEntry.row_index = reqPlan.row_index;
-      responses.push(responseEntry);
-
-      if (!draft.paginationEnabled) {
-        stopReason = 'Пагинация отключена';
-        responseEntry.decision = 'stop';
-        responseEntry.stop_reason = stopReason;
-        break;
-      }
-
-      if (draft.paginationStopOnHttpError && Number(lastStatus || 0) >= 400) {
-        stopReason = `HTTP ошибка ${lastStatus}`;
-        responseEntry.decision = 'fail';
-        responseEntry.stop_reason = stopReason;
-        break;
-      }
-
-      if (paginationStopRules.length) {
-        const runtimeTokenMap: Record<string, any> = {};
-        paginationParameters.forEach((param) => {
-          const value = paginationState[param.id];
-          if (value !== undefined && value !== null) runtimeTokenMap[param.alias] = value;
-        });
-        const contextValues =
-          reqPlan?.context_values && typeof reqPlan.context_values === 'object'
-            ? { ...reqPlan.context_values }
-            : {};
-        const groupValues =
-          reqPlan?.group && typeof reqPlan.group === 'object'
-            ? { ...reqPlan.group }
-            : {};
-        const matched = findMatchedPaginationStopRule(parsed, paginationStopRules, {
-          values: { ...contextValues, ...groupValues, ...runtimeTokenMap },
-          queryObj: queryObj || {},
-          bodyObj: bodyObj || {},
-          headersObj: headersObj || {}
-        });
-        if (matched) {
-          stopReason = formatPaginationStopRuleReason(matched.rule, matched.actualValue, matched.expectedValue);
-          responseEntry.decision = 'stop';
-          responseEntry.stop_reason = stopReason;
-          break;
-        }
-      }
-
-      let stop = false;
-      let pageStopReason = '';
-      let nextReason = 'pagination_values_updated';
-      if (paginationParameters.length) {
-        let foundValues = 0;
-        let updatedValues = 0;
-        const extracted: Record<string, any> = {};
-        for (const param of paginationParameters) {
-          const value = readPaginationValueFromResponse(parsed, param);
-          if (value === undefined || value === null) continue;
-          extracted[param.alias] = value;
-          foundValues += 1;
-          const prevValue = paginationState[param.id];
-          if (prevValue === undefined || prevValue === null || !sameValue(prevValue, value)) {
-            paginationState[param.id] = value;
-            updatedValues += 1;
-          }
-        }
-        responseEntry.pagination_values = extracted;
-        if (!foundValues && draft.paginationStopOnMissingValue) {
-          stop = true;
-          pageStopReason = 'Не найдено значение параметров пагинации';
-        } else if (!updatedValues && draft.paginationStopOnMissingValue) {
-          stop = true;
-          pageStopReason = 'Не найдено новое значение параметров пагинации (значения не изменились)';
-        } else if (foundValues) {
-          const stateFingerprint = JSON.stringify(
-            paginationParameters.map((param) => [param.id, paginationState[param.id]])
-          );
-          if (seenPaginationStates.has(stateFingerprint)) {
-            stop = true;
-            pageStopReason = 'Повторилось состояние пагинации (зацикливание)';
-          } else {
-            seenPaginationStates.add(stateFingerprint);
-            nextReason = updatedValues > 0 ? 'pagination_values_updated' : 'pagination_values_repeat';
-          }
-        }
-      } else if (draft.paginationStrategy === 'page_number') {
-        currentPage += 1;
-        nextReason = 'page_increment';
-      } else if (draft.paginationStrategy === 'offset_limit') {
-        currentOffset += Number(draft.paginationLimitValue || 100);
-        nextReason = 'offset_increment';
-      } else if (draft.paginationStrategy === 'cursor_fields') {
-        const v1 = draft.paginationCursorResPath1 ? getByPath(parsed, draft.paginationCursorResPath1) : undefined;
-        const v2 = draft.paginationCursorResPath2 ? getByPath(parsed, draft.paginationCursorResPath2) : undefined;
-        if (v1 == null && v2 == null) {
-          if (draft.paginationStopOnMissingValue) {
-            stop = true;
-            pageStopReason = 'Не найдено новое значение курсора';
-          }
-        } else {
-          if (draft.paginationCursorReqPath1) {
-            if (draft.paginationTarget === 'query') {
-              cursorQueryState[draft.paginationCursorReqPath1] = v1;
-            } else {
-              setByPath(bodyCursorState, draft.paginationCursorReqPath1, v1);
-            }
-          }
-          if (draft.paginationCursorReqPath2) {
-            if (draft.paginationTarget === 'query') {
-              cursorQueryState[draft.paginationCursorReqPath2] = v2;
-            } else {
-              setByPath(bodyCursorState, draft.paginationCursorReqPath2, v2);
-            }
-          }
-          nextReason = 'cursor_updated';
-        }
-      } else if (draft.paginationStrategy === 'next_url') {
-        const n = draft.paginationNextUrlPath ? getByPath(parsed, draft.paginationNextUrlPath) : undefined;
-        if (!n || typeof n !== 'string') {
-          if (draft.paginationStopOnMissingValue) {
-            stop = true;
-            pageStopReason = 'Не найден следующий URL для пагинации';
-          }
-        } else {
-          nextUrlOverride = n;
-          nextReason = 'next_url_received';
-        }
-      } else if (draft.paginationStrategy === 'custom') {
-        stop = true;
-        pageStopReason = 'Кастомная стратегия не настроена';
-      } else {
-        stop = true;
-        pageStopReason = 'Стратегия пагинации не настроена';
-      }
-      const sameLimit = Math.max(2, Number(draft.paginationSameResponseLimit || 5));
-      if (!stop && draft.paginationEnabled && draft.paginationStopOnSameResponse && sameResponseCount >= sameLimit) {
-        stop = true;
-        pageStopReason = `Получено ${sameResponseCount} одинаковых ответов подряд`;
-      }
-      if (stop) {
-        stopReason = pageStopReason || 'Остановка по условию пагинации';
-        responseEntry.decision = 'stop';
-        responseEntry.stop_reason = stopReason;
-        break;
-      }
-
-      responseEntry.decision = 'continue';
-      responseEntry.next_iteration_reason = nextReason;
-      nextIterationReason = nextReason;
-
-      if (Boolean(draft.paginationUseDelay) && Number(draft.paginationDelayMs || 0) > 0) {
-        await new Promise((resolve) => setTimeout(resolve, Number(draft.paginationDelayMs || 0)));
-      }
+      if (step?.done) break;
+      waveNo += 1;
     }
-
-    if (!stopReason && draft.paginationEnabled && maxPagesEnabled && requestCount >= pagesMax) {
-      stopReason = `Достигнут лимит страниц (${pagesMax})`;
-      const lastEntry = responses[responses.length - 1];
-      if (lastEntry && typeof lastEntry === 'object' && !lastEntry.stop_reason) {
-        lastEntry.decision = 'stop';
-        lastEntry.stop_reason = stopReason;
-      }
-    }
-
     return {
-      requestCount,
-      success,
-      failed,
-      totalItems,
-      totalSize,
-      lastStatus,
-      stopReason,
-      responses
+      requestCount: state.requestCount,
+      success: state.success,
+      failed: state.failed,
+      totalItems: state.totalItems,
+      totalSize: state.totalSize,
+      lastStatus: state.lastStatus,
+      stopReason: state.stopReason || (!draft.paginationEnabled ? 'Пагинация отключена' : ''),
+      responses_dropped: 0
     };
   }
 
@@ -6261,8 +5930,15 @@ function handleDefinitionInput(value: string) {
 
     const startedAt = Date.now();
     let proxied: any = null;
+    let requestAttempts = 0;
     try {
-      proxied = await runHttpRequestViaServer(finalUrl, init, 60_000);
+      const retried = await runHttpRequestViaServerWithRetry(finalUrl, init, 60_000, {
+        attempts: RETRY_MAX_ATTEMPTS_DEFAULT,
+        baseDelayMs: RETRY_BASE_DELAY_MS_DEFAULT,
+        maxDelayMs: RETRY_MAX_DELAY_MS_DEFAULT
+      });
+      proxied = retried.proxied;
+      requestAttempts = Number(retried.attempts || 1);
     } catch (requestError: any) {
       const durationMs = Date.now() - startedAt;
       state.failed += 1;
@@ -6284,7 +5960,9 @@ function handleDefinitionInput(value: string) {
           query: deepClone(queryObj || {}),
           body: state.isBodyMethod ? deepClone(bodyObj || {}) : undefined
         },
-        duration_ms: durationMs
+        duration_ms: durationMs,
+        response_size: String(requestError?.message ?? String(requestError)).length,
+        retry_attempts: requestAttempts || 1
       };
       if (state.reqPlan?.group) failureEntry.group = state.reqPlan.group;
       if (state.reqPlan?.row_index) failureEntry.row_index = state.reqPlan.row_index;
@@ -6326,7 +6004,9 @@ function handleDefinitionInput(value: string) {
         query: deepClone(queryObj || {}),
         body: state.isBodyMethod ? deepClone(bodyObj || {}) : undefined
       },
-      duration_ms: durationMs
+      duration_ms: durationMs,
+      response_size: txt ? txt.length : JSON.stringify(parsed ?? '').length,
+      retry_attempts: requestAttempts || 1
     };
     if (state.reqPlan?.group) responseEntry.group = state.reqPlan.group;
     if (state.reqPlan?.row_index) responseEntry.row_index = state.reqPlan.row_index;
@@ -6518,7 +6198,8 @@ function handleDefinitionInput(value: string) {
     sentRequests: any[];
     issues?: Record<string, string>;
     modeLabel: string;
-    auditRows: any[];
+    responsesDropped: number;
+    auditLog: { written: number; skipped: number; error?: string };
   };
 
   function runEntityIdentity(reqPlan: any, index: number) {
@@ -6670,16 +6351,116 @@ function handleDefinitionInput(value: string) {
     const sentRequests: any[] = [];
     const responses: any[] = [];
     const stopReasons: any[] = [];
-    const auditRows: any[] = [];
     const runId = runIdForExecution();
+    const runIssues: Record<string, string> = { ...(issues || {}) };
     let requestCount = 0;
     let success = 0;
     let failed = 0;
     let totalItems = 0;
     let totalSize = 0;
     let lastStatus = 0;
+    let responsesDropped = 0;
+    let auditWritten = 0;
+    let auditSkipped = 0;
+    let auditError = '';
     const executionDelayMs = Math.max(0, Number(draft.executionDelayMs || 0));
     let scheduledStepsCount = 0;
+
+    const registerIssue = (key: string, value: string) => {
+      const k = String(key || '').trim();
+      const v = String(value || '').trim();
+      if (!k || !v) return;
+      if (!runIssues[k]) runIssues[k] = v;
+    };
+
+    const toPreviewEntry = (entry: any) => {
+      if (!entry || typeof entry !== 'object') return entry;
+      const preview = deepClone(entry);
+      const limit = Math.max(10_000, Number(EXECUTION_RESPONSE_ENTRY_MAX_CHARS || 120000));
+      if (typeof preview.error === 'string' && preview.error.length > limit) {
+        preview.error = `${preview.error.slice(0, limit)}...`;
+        preview.error_truncated = true;
+      }
+      if ('response' in preview) {
+        try {
+          const raw = preview.response;
+          const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
+          if (text.length > limit) {
+            preview.response = typeof raw === 'string'
+              ? `${text.slice(0, limit)}...`
+              : {
+                  __truncated: true,
+                  preview: text.slice(0, limit),
+                  total_chars: text.length
+                };
+            preview.response_truncated = true;
+            preview.response_total_chars = text.length;
+          }
+        } catch {
+          // keep original payload in preview if serialization failed
+        }
+      }
+      return preview;
+    };
+
+    const pushResponsePreview = (entry: any) => {
+      if (responses.length < EXECUTION_RESPONSE_PREVIEW_MAX) {
+        responses.push(toPreviewEntry(entry));
+      } else {
+        responsesDropped += 1;
+      }
+    };
+
+    const writeAuditChunk = async (reqPlan: any, chunk: any[], idx: number) => {
+      if (!draft.responseLogEnabled) return;
+      const entries = Array.isArray(chunk) ? chunk.filter((x) => x && typeof x === 'object') : [];
+      if (!entries.length) return;
+      for (let offset = 0; offset < entries.length; offset += EXECUTION_AUDIT_FLUSH_BATCH) {
+        const batchEntries = entries.slice(offset, offset + EXECUTION_AUDIT_FLUSH_BATCH);
+        const rows = buildAuditRowsFromResponses(runId, draft, reqPlan, batchEntries, idx);
+        if (!rows.length) continue;
+        try {
+          const wr = await writeExecutionAuditRows(draft, rows);
+          auditWritten += Number(wr?.written || 0);
+          auditSkipped += Number(wr?.skipped || 0);
+        } catch (e: any) {
+          auditSkipped += rows.length;
+          const msg = String(e?.message || e || 'Не удалось записать лог выполнения');
+          if (!auditError) auditError = msg;
+          registerIssue('audit_log_error', msg);
+        }
+      }
+    };
+
+    const absorbEntry = async (reqPlan: any, entry: any, idx: number) => {
+      if (!entry || typeof entry !== 'object') return;
+      pushResponsePreview(entry);
+      const status = Number(entry?.status || 0);
+      requestCount += 1;
+      if (status >= 200 && status < 400) success += 1;
+      else failed += 1;
+      if (Number.isFinite(status) && status > 0) lastStatus = status;
+      totalItems += countPayloadItems(entry?.response ?? entry?.error ?? null);
+      const entrySize = Number(entry?.response_size);
+      if (Number.isFinite(entrySize) && entrySize >= 0) {
+        totalSize += entrySize;
+      } else {
+        totalSize += JSON.stringify(entry?.response ?? entry?.error ?? '').length;
+      }
+      await writeAuditChunk(reqPlan, [entry], idx);
+    };
+
+    const registerStopReason = (reqPlan: any, run: any) => {
+      stopReasons.push({
+        ...(reqPlan?.group ? { group: reqPlan.group } : {}),
+        ...(reqPlan?.row_index ? { row_index: reqPlan.row_index } : {}),
+        stop_reason: run?.stopReason || '',
+        requests: Number(run?.requestCount || 0),
+        success: Number(run?.success || 0),
+        failed: Number(run?.failed || 0),
+        last_status: Number(run?.lastStatus || 0)
+      });
+    };
 
     const planner = draft.executionMode === 'sync' ? draft.syncPlanner || 'entity_to_stop' : 'entity_to_stop';
     if (draft.executionMode === 'sync' && planner === 'by_wave') {
@@ -6697,50 +6478,26 @@ function handleDefinitionInput(value: string) {
           try {
             const step = await executeWaveRuntimeStep(draft, state, sentRequests, waveNo);
             if (step?.entry) {
-              const entry = step.entry;
-              responses.push(entry);
-              requestCount += 1;
-              const status = Number(entry?.status || 0);
-              if (status >= 200 && status < 400) success += 1;
-              else failed += 1;
-              lastStatus = Number.isFinite(status) ? status : lastStatus;
-              totalItems += countPayloadItems(entry?.response ?? entry?.error ?? null);
-              totalSize += JSON.stringify(entry?.response ?? entry?.error ?? '').length;
-              auditRows.push(...buildAuditRowsFromResponses(runId, draft, state.reqPlan, [entry], idx));
+              await absorbEntry(state.reqPlan, step.entry, idx);
             }
             if (step?.done && !finishedStateIds.has(idx)) {
               finishedStateIds.add(idx);
-              stopReasons.push({
-                ...(state.reqPlan?.group ? { group: state.reqPlan.group } : {}),
-                ...(state.reqPlan?.row_index ? { row_index: state.reqPlan.row_index } : {}),
-                stop_reason: step.stopReason || state.stopReason || '',
-                requests: state.requestCount,
+              registerStopReason(state.reqPlan, {
+                stopReason: step.stopReason || state.stopReason || '',
+                requestCount: state.requestCount,
                 success: state.success,
                 failed: state.failed,
-                last_status: state.lastStatus
+                lastStatus: state.lastStatus
               });
             }
           } catch (e: any) {
             const fallback = buildExecutionErrorRun(state.reqPlan, e?.message ?? String(e));
-            requestCount += fallback.requestCount;
-            success += fallback.success;
-            failed += fallback.failed;
-            totalItems += fallback.totalItems;
-            totalSize += fallback.totalSize;
-            lastStatus = Number(fallback.lastStatus || lastStatus || 0);
-            responses.push(...fallback.responses);
-            auditRows.push(...buildAuditRowsFromResponses(runId, draft, state.reqPlan, fallback.responses, idx));
+            for (const entry of fallback.responses || []) {
+              await absorbEntry(state.reqPlan, entry, idx);
+            }
             if (!finishedStateIds.has(idx)) {
               finishedStateIds.add(idx);
-              stopReasons.push({
-                ...(state.reqPlan?.group ? { group: state.reqPlan.group } : {}),
-                ...(state.reqPlan?.row_index ? { row_index: state.reqPlan.row_index } : {}),
-                stop_reason: fallback.stopReason || '',
-                requests: fallback.requestCount,
-                success: fallback.success,
-                failed: fallback.failed,
-                last_status: fallback.lastStatus
-              });
+              registerStopReason(state.reqPlan, fallback);
             }
             state.done = true;
             state.stopReason = fallback.stopReason || 'Ошибка выполнения';
@@ -6750,7 +6507,6 @@ function handleDefinitionInput(value: string) {
       }
     } else if (draft.executionMode === 'async') {
       const limit = Math.max(1, Math.min(20, Number(draft.asyncConcurrency || 3)));
-      const results: Array<{ reqPlan: any; run: any; idx: number }> = [];
       let cursor = 0;
       const worker = async () => {
         let workerStepCount = 0;
@@ -6763,41 +6519,22 @@ function handleDefinitionInput(value: string) {
           }
           workerStepCount += 1;
           const reqPlan = allRequests[idx];
+          let run: any;
           try {
-            const run = await executePlannedRequestWithPagination(draft, reqPlan, sentRequests);
-            results.push({ reqPlan, run, idx });
-          } catch (e: any) {
-            results.push({
-              reqPlan,
-              idx,
-              run: buildExecutionErrorRun(reqPlan, e?.message ?? String(e))
+            run = await executePlannedRequestWithPagination(draft, reqPlan, sentRequests, async (entry) => {
+              await absorbEntry(reqPlan, entry, idx);
             });
+          } catch (e: any) {
+            run = buildExecutionErrorRun(reqPlan, e?.message ?? String(e));
+            for (const entry of run.responses || []) {
+              await absorbEntry(reqPlan, entry, idx);
+            }
           }
+          registerStopReason(reqPlan, run);
         }
       };
       const workers = Array.from({ length: Math.min(limit, Math.max(1, allRequests.length)) }, () => worker());
       await Promise.all(workers);
-      results
-        .sort((a, b) => a.idx - b.idx)
-        .forEach(({ reqPlan, run, idx }) => {
-          requestCount += Number(run?.requestCount || 0);
-          success += Number(run?.success || 0);
-          failed += Number(run?.failed || 0);
-          totalItems += Number(run?.totalItems || 0);
-          totalSize += Number(run?.totalSize || 0);
-          lastStatus = Number(run?.lastStatus || lastStatus || 0);
-          if (Array.isArray(run?.responses)) responses.push(...run.responses);
-          stopReasons.push({
-            ...(reqPlan?.group ? { group: reqPlan.group } : {}),
-            ...(reqPlan?.row_index ? { row_index: reqPlan.row_index } : {}),
-            stop_reason: run?.stopReason || '',
-            requests: Number(run?.requestCount || 0),
-            success: Number(run?.success || 0),
-            failed: Number(run?.failed || 0),
-            last_status: Number(run?.lastStatus || 0)
-          });
-          auditRows.push(...buildAuditRowsFromResponses(runId, draft, reqPlan, run?.responses || [], idx));
-        });
     } else {
       for (let idx = 0; idx < allRequests.length; idx += 1) {
         if (executionDelayMs > 0 && idx > 0) {
@@ -6806,28 +6543,24 @@ function handleDefinitionInput(value: string) {
         const reqPlan = allRequests[idx];
         let run: any;
         try {
-          run = await executePlannedRequestWithPagination(draft, reqPlan, sentRequests);
+          run = await executePlannedRequestWithPagination(draft, reqPlan, sentRequests, async (entry) => {
+            await absorbEntry(reqPlan, entry, idx);
+          });
         } catch (e: any) {
           run = buildExecutionErrorRun(reqPlan, e?.message ?? String(e));
+          for (const entry of run.responses || []) {
+            await absorbEntry(reqPlan, entry, idx);
+          }
         }
-        requestCount += Number(run?.requestCount || 0);
-        success += Number(run?.success || 0);
-        failed += Number(run?.failed || 0);
-        totalItems += Number(run?.totalItems || 0);
-        totalSize += Number(run?.totalSize || 0);
-        lastStatus = Number(run?.lastStatus || lastStatus || 0);
-        if (Array.isArray(run?.responses)) responses.push(...run.responses);
-        stopReasons.push({
-          ...(reqPlan?.group ? { group: reqPlan.group } : {}),
-          ...(reqPlan?.row_index ? { row_index: reqPlan.row_index } : {}),
-          stop_reason: run?.stopReason || '',
-          requests: Number(run?.requestCount || 0),
-          success: Number(run?.success || 0),
-          failed: Number(run?.failed || 0),
-          last_status: Number(run?.lastStatus || 0)
-        });
-        auditRows.push(...buildAuditRowsFromResponses(runId, draft, reqPlan, run?.responses || [], idx));
+        registerStopReason(reqPlan, run);
       }
+    }
+
+    if (responsesDropped > 0) {
+      registerIssue(
+        'responses_truncated',
+        `limit_reached: в UI сохранены первые ${EXECUTION_RESPONSE_PREVIEW_MAX} ответов, отброшено ${responsesDropped}`
+      );
     }
 
     return {
@@ -6840,9 +6573,14 @@ function handleDefinitionInput(value: string) {
       responses,
       stopReasons,
       sentRequests,
-      issues,
+      issues: Object.keys(runIssues).length ? runIssues : undefined,
       modeLabel,
-      auditRows
+      responsesDropped,
+      auditLog: {
+        written: auditWritten,
+        skipped: auditSkipped,
+        ...(auditError ? { error: auditError } : {})
+      }
     };
   }
 
@@ -6872,14 +6610,7 @@ function handleDefinitionInput(value: string) {
 
         const startedAt = Date.now();
         const execution = await executePlanRequests(s, groupedPlan.allRequests, 'sent_grouped_requests', groupedPlan.issues);
-        let auditLog: { written: number; skipped: number; error?: string } = { written: 0, skipped: 0 };
-        if (s.responseLogEnabled) {
-          try {
-            auditLog = await writeExecutionAuditRows(s, execution.auditRows);
-          } catch (auditError: any) {
-            auditLog = { written: 0, skipped: execution.auditRows.length, error: auditError?.message ?? String(auditError) };
-          }
-        }
+        const auditLog = execution.auditLog || { written: 0, skipped: 0 };
 
         myApiPreview = JSON.stringify(
           {
@@ -6892,7 +6623,10 @@ function handleDefinitionInput(value: string) {
             request_groups: groupedPlan.allRequests.length,
             shown_requests: execution.sentRequests.length,
             requests: execution.sentRequests,
-            issues: Object.keys(groupedPlan.issues).length ? groupedPlan.issues : undefined
+            issues:
+              Object.keys({ ...(groupedPlan.issues || {}), ...(execution.issues || {}) }).length
+                ? { ...(groupedPlan.issues || {}), ...(execution.issues || {}) }
+                : undefined
           },
           null,
           2
@@ -6921,6 +6655,11 @@ function handleDefinitionInput(value: string) {
             failed: execution.failed,
             stop_reasons: execution.stopReasons,
             responses: execution.responses,
+            responses_dropped: execution.responsesDropped || 0,
+            issues:
+              Object.keys({ ...(groupedPlan.issues || {}), ...(execution.issues || {}) }).length
+                ? { ...(groupedPlan.issues || {}), ...(execution.issues || {}) }
+                : undefined,
             audit_log: s.responseLogEnabled
               ? {
                   schema: s.responseLogSchema,
@@ -6947,14 +6686,7 @@ function handleDefinitionInput(value: string) {
       if (rowPlan.allRequests.length) {
         const startedAt = Date.now();
         const execution = await executePlanRequests(s, rowPlan.allRequests, 'sent_row_requests', rowPlan.issues);
-        let auditLog: { written: number; skipped: number; error?: string } = { written: 0, skipped: 0 };
-        if (s.responseLogEnabled) {
-          try {
-            auditLog = await writeExecutionAuditRows(s, execution.auditRows);
-          } catch (auditError: any) {
-            auditLog = { written: 0, skipped: execution.auditRows.length, error: auditError?.message ?? String(auditError) };
-          }
-        }
+        const auditLog = execution.auditLog || { written: 0, skipped: 0 };
 
         myApiPreview = JSON.stringify(
           {
@@ -6967,7 +6699,10 @@ function handleDefinitionInput(value: string) {
             request_rows: rowPlan.allRequests.length,
             shown_requests: execution.sentRequests.length,
             requests: execution.sentRequests,
-            issues: Object.keys(rowPlan.issues).length ? rowPlan.issues : undefined
+            issues:
+              Object.keys({ ...(rowPlan.issues || {}), ...(execution.issues || {}) }).length
+                ? { ...(rowPlan.issues || {}), ...(execution.issues || {}) }
+                : undefined
           },
           null,
           2
@@ -6996,6 +6731,11 @@ function handleDefinitionInput(value: string) {
             failed: execution.failed,
             stop_reasons: execution.stopReasons,
             responses: execution.responses,
+            responses_dropped: execution.responsesDropped || 0,
+            issues:
+              Object.keys({ ...(rowPlan.issues || {}), ...(execution.issues || {}) }).length
+                ? { ...(rowPlan.issues || {}), ...(execution.issues || {}) }
+                : undefined,
             audit_log: s.responseLogEnabled
               ? {
                   schema: s.responseLogSchema,
@@ -7118,14 +6858,7 @@ function handleDefinitionInput(value: string) {
         context_values: deepClone(parameterValues || {})
       };
       const execution = await executePlanRequests(s, [reqPlan], 'sent_single_request');
-      let auditLog: { written: number; skipped: number; error?: string } = { written: 0, skipped: 0 };
-      if (s.responseLogEnabled) {
-        try {
-          auditLog = await writeExecutionAuditRows(s, execution.auditRows);
-        } catch (auditError: any) {
-          auditLog = { written: 0, skipped: execution.auditRows.length, error: auditError?.message ?? String(auditError) };
-        }
-      }
+      const auditLog = execution.auditLog || { written: 0, skipped: 0 };
       const pageCounter = execution.requestCount;
       const pagePayloads = execution.responses.map((entry) => entry?.response);
       const totalSize = execution.totalSize;
@@ -7144,7 +6877,8 @@ function handleDefinitionInput(value: string) {
               shown_requests: execution.sentRequests.length,
               truncated: pageCounter > execution.sentRequests.length,
               resolved_parameters: parameterValues,
-              parameter_issues: Object.keys(parameterIssues).length ? parameterIssues : undefined
+              parameter_issues: Object.keys(parameterIssues).length ? parameterIssues : undefined,
+              execution_issues: execution.issues
             };
       myApiPreview = JSON.stringify(sentPreviewPayload, null, 2);
       myPreviewDirty = false;
@@ -7166,6 +6900,8 @@ function handleDefinitionInput(value: string) {
           failed: execution.failed,
           stop_reasons: execution.stopReasons,
           responses: execution.responses,
+          responses_dropped: execution.responsesDropped || 0,
+          issues: execution.issues,
           payloads_only: pagePayloads,
           audit_log: s.responseLogEnabled
             ? {
@@ -9178,6 +8914,8 @@ function syncParameterEditorsHeight() {
     }
   }
 </style>
+
+
 
 
 
