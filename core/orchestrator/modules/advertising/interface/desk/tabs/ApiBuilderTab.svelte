@@ -130,15 +130,31 @@
     { value: 'inner', label: 'Только совпавшие' },
     { value: 'left', label: 'Оставить все из основной' }
   ];
-  const DATA_FILTER_OPERATORS: Array<{ value: string; label: string }> = [
-    { value: 'equals', label: '=' },
-    { value: 'not_equals', label: '!=' },
-    { value: 'contains', label: 'содержит' },
-    { value: 'starts_with', label: 'начинается с' },
-    { value: 'ends_with', label: 'заканчивается на' },
-    { value: 'gt', label: '>' },
-    { value: 'lt', label: '<' }
-  ];
+  const DATA_FILTER_OPERATORS_BY_KIND: Record<string, Array<{ value: string; label: string }>> = {
+    text: [
+      { value: 'equals', label: 'равно' },
+      { value: 'not_equals', label: 'не равно' },
+      { value: 'contains', label: 'содержит' },
+      { value: 'starts_with', label: 'начинается с' },
+      { value: 'ends_with', label: 'заканчивается на' }
+    ],
+    number: [
+      { value: 'equals', label: '=' },
+      { value: 'not_equals', label: '!=' },
+      { value: 'gt', label: '>' },
+      { value: 'lt', label: '<' }
+    ],
+    boolean: [
+      { value: 'equals', label: 'равно' },
+      { value: 'not_equals', label: 'не равно' }
+    ],
+    date: [
+      { value: 'equals', label: 'в дату' },
+      { value: 'not_equals', label: 'не в дату' },
+      { value: 'before', label: 'раньше' },
+      { value: 'after', label: 'позже' }
+    ]
+  };
 
   const PAGINATION_STRATEGIES = [
     { value: 'none', label: 'Не использовать' },
@@ -1074,6 +1090,21 @@ function formatBytes(bytes: number) {
     if (JSON.stringify(groupedFromFields) !== JSON.stringify(groupedStored)) {
       mutateSelected((d) => {
         d.groupByAliases = groupedFromFields;
+      });
+    }
+  }
+  $: if (selected?.dataFilters?.length) {
+    let changed = false;
+    const normalized = selected.dataFilters.map((filter) => {
+      const ops = dataFilterOperatorsFor(filter);
+      if (!ops.length) return filter;
+      if (ops.some((op) => op.value === filter.operator)) return filter;
+      changed = true;
+      return { ...filter, operator: ops[0].value };
+    });
+    if (changed) {
+      mutateSelected((d) => {
+        d.dataFilters = normalized;
       });
     }
   }
@@ -2091,6 +2122,7 @@ function formatBytes(bytes: number) {
       err = 'Сначала добавь параметры и выбери у них таблицы, затем настраивай связи.';
       return;
     }
+    err = '';
     const left = options[0] || '';
     const right = options[1] || options[0] || '';
     mutateSelected((d) => {
@@ -2194,9 +2226,15 @@ function formatBytes(bytes: number) {
   }
 
   function addDataFilter() {
-    const fallback = existingTables[0];
+    if (!selected) return;
+    const tableIds = parameterTableIds(selected);
+    if (!tableIds.length) {
+      err = 'Сначала добавь параметры и выбери у них таблицы, затем настраивай фильтры.';
+      return;
+    }
+    err = '';
+    const tableId = tableIds[0];
     mutateSelected((d) => {
-      const tableId = ensureDraftTableEntry(d, fallback?.schema_name || '', fallback?.table_name || '');
       d.dataFilters = [
         ...(Array.isArray(d.dataFilters) ? d.dataFilters : []),
         {
@@ -2208,7 +2246,7 @@ function formatBytes(bytes: number) {
         }
       ];
     });
-    if (fallback?.schema_name && fallback?.table_name) ensureColumnsFor(fallback.schema_name, fallback.table_name);
+    ensureColumnsByTableId(selected, tableId);
   }
 
   function updateDataFilter(filterId: string, patch: Partial<DataModelFilter>) {
@@ -2224,14 +2262,15 @@ function formatBytes(bytes: number) {
     });
   }
 
-  async function updateDataFilterTableRef(filterId: string, value: string) {
-    const parsed = parseQualifiedTable(value);
+  function updateDataFilterTableRef(filterId: string, value: string) {
+    const tableId = String(value || '').trim();
     mutateSelected((d) => {
-      const tableId = ensureDraftTableEntry(d, parsed.schema, parsed.table);
-      d.dataFilters = d.dataFilters.map((f) => (f.id === filterId ? { ...f, tableId, field: '' } : f));
+      d.dataFilters = d.dataFilters.map((f) =>
+        f.id === filterId ? { ...f, tableId, field: '', operator: 'equals', compareValue: '' } : f
+      );
       pruneDataModelTables(d);
     });
-    await ensureColumnsFor(parsed.schema, parsed.table);
+    ensureColumnsByTableId(selected, tableId);
   }
 
   function tableRefById(draft: ApiDraft | null, tableId: string) {
@@ -2245,6 +2284,34 @@ function formatBytes(bytes: number) {
     const t = draft.dataTables.find((x) => x.id === tableId);
     if (!t) return [];
     return columnOptionsFor(t.schema, t.table);
+  }
+
+  function dataFilterFieldKind(filter: DataModelFilter): 'text' | 'number' | 'boolean' | 'date' {
+    if (!selected) return 'text';
+    const t = (selected.dataTables || []).find((x) => x.id === filter.tableId);
+    if (!t || !filter.field) return 'text';
+    const type = normalizeTypeName(columnMeta(t.schema, t.table, filter.field)?.type || '');
+    if (type.includes('bool')) return 'boolean';
+    if (type.includes('date') || type.includes('time')) return 'date';
+    if (
+      type.includes('int') ||
+      type.includes('numeric') ||
+      type.includes('double') ||
+      type.includes('decimal') ||
+      type.includes('real') ||
+      type.includes('serial')
+    ) {
+      return 'number';
+    }
+    return 'text';
+  }
+
+  function dataFilterOperatorsFor(filter: DataModelFilter) {
+    return DATA_FILTER_OPERATORS_BY_KIND[dataFilterFieldKind(filter)] || DATA_FILTER_OPERATORS_BY_KIND.text;
+  }
+
+  function isBooleanDataFilter(filter: DataModelFilter) {
+    return dataFilterFieldKind(filter) === 'boolean';
   }
 
   async function fetchDataModelRows(
@@ -4347,7 +4414,6 @@ function syncParameterEditorsHeight() {
                 <small>Параметры</small>
                 <span class="inline-actions">
                   <button type="button" class="view-toggle" on:click={addDataField}>Поле +</button>
-                  <button type="button" class="view-toggle" on:click={addDataFilter}>Фильтр +</button>
                 </span>
               </div>
               {#if selected?.dataFields?.length}
@@ -4448,18 +4514,19 @@ function syncParameterEditorsHeight() {
             <div class="data-section">
               <div class="response-head field-head parameter-subhead">
                 <small>Фильтры</small>
+                <button type="button" class="view-toggle" on:click={addDataFilter}>Фильтр +</button>
               </div>
               {#if selected?.dataFilters?.length}
                 <div class="data-list">
                   {#each selected.dataFilters as f (f.id)}
                     <div class="data-row filter-row">
                       <select
-                        value={tableRefById(selected, f.tableId)}
+                        value={f.tableId}
                         on:change={(e) => updateDataFilterTableRef(f.id, e.currentTarget.value)}
                       >
                         <option value="">Таблица</option>
-                        {#each existingTables as et}
-                          <option value={`${et.schema_name}.${et.table_name}`}>{et.schema_name}.{et.table_name}</option>
+                        {#each joinTableOptionsFor(selected, f.tableId) as t}
+                          <option value={t.id}>{t.schema}.{t.table}</option>
                         {/each}
                       </select>
                       <select value={f.field} on:change={(e) => updateDataFilter(f.id, { field: e.currentTarget.value })}>
@@ -4469,17 +4536,25 @@ function syncParameterEditorsHeight() {
                         {/each}
                       </select>
                       <select value={f.operator} on:change={(e) => updateDataFilter(f.id, { operator: e.currentTarget.value })}>
-                        {#each DATA_FILTER_OPERATORS as op}
+                        {#each dataFilterOperatorsFor(f) as op}
                           <option value={op.value}>{op.label}</option>
                         {/each}
                       </select>
-                      <input value={f.compareValue} placeholder="значение" on:input={(e) => updateDataFilter(f.id, { compareValue: e.currentTarget.value })} />
+                      {#if isBooleanDataFilter(f)}
+                        <select value={f.compareValue} on:change={(e) => updateDataFilter(f.id, { compareValue: e.currentTarget.value })}>
+                          <option value="">Значение</option>
+                          <option value="true">true</option>
+                          <option value="false">false</option>
+                        </select>
+                      {:else}
+                        <input value={f.compareValue} placeholder="значение" on:input={(e) => updateDataFilter(f.id, { compareValue: e.currentTarget.value })} />
+                      {/if}
                       <button type="button" class="chip-remove" on:click={() => removeDataFilter(f.id)}>x</button>
                     </div>
                   {/each}
                 </div>
               {:else}
-                <p class="hint small-hint">Добавляй фильтры через кнопку «Фильтр +» в блоке параметров.</p>
+                <p class="hint small-hint">Сначала выбери параметры и таблицы, затем добавь фильтр по нужному полю.</p>
               {/if}
             </div>
 
