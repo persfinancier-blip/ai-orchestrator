@@ -3348,6 +3348,20 @@ function handleDefinitionInput(value: string) {
     return [...new Set(values.map((x) => String(x || '').trim()).filter(Boolean))];
   }
 
+  function paginationAliasLowerSet(draft: ApiDraft | null) {
+    return new Set(
+      paginationParametersForDraft(draft)
+        .map((p) => String(p?.alias || '').trim().toLowerCase())
+        .filter(Boolean)
+    );
+  }
+
+  function excludePaginationAliases(values: string[], paginationAliasesLower: Set<string>) {
+    return uniqueAliasList(
+      values.filter((alias) => !paginationAliasesLower.has(String(alias || '').trim().toLowerCase()))
+    );
+  }
+
   async function loadParameterRowsForAliases(
     definitions: ParameterDefinition[],
     aliases: string[]
@@ -3432,6 +3446,7 @@ function handleDefinitionInput(value: string) {
   async function buildGroupedRequestPlan(draft: ApiDraft) {
     const issues: Record<string, string> = {};
     const sanitizedAliases = sanitizeAliasReferences(draft);
+    const paginationAliasesLower = paginationAliasLowerSet(draft);
     const authTemplate = parseJsonObjectField('Авторизация', draft.authJson);
     const headersTemplate = parseJsonObjectField('Headers JSON', draft.headersJson);
     const queryTemplate = parseJsonObjectField('Query JSON', draft.queryJson);
@@ -3444,7 +3459,7 @@ function handleDefinitionInput(value: string) {
     collectParameterTokens(headersTemplate, templateTokenSet);
     collectParameterTokens(queryTemplate, templateTokenSet);
     collectParameterTokens(bodyTemplate, templateTokenSet);
-    const templateAliases = uniqueAliasList(Array.from(templateTokenSet));
+    const templateAliases = excludePaginationAliases(Array.from(templateTokenSet), paginationAliasesLower);
 
     const bindingRules = (Array.isArray(sanitizedAliases.bindingRules) ? sanitizedAliases.bindingRules : [])
       .map((rule) => ({
@@ -3526,7 +3541,10 @@ function handleDefinitionInput(value: string) {
     }
 
     const plans: Array<any> = [];
-    const groupedKnownAliasesLower = new Set(bindingAliasOptions(draft).map((x) => x.toLowerCase()));
+    const groupedKnownAliasesLower = new Set([
+      ...bindingAliasOptions(draft).map((x) => x.toLowerCase()),
+      ...Array.from(paginationAliasesLower)
+    ]);
     for (const group of grouped.values()) {
       const authHdr = parseJsonObjectField('Авторизация', draft.authJson);
       if (oauthAuthValue) {
@@ -3594,8 +3612,11 @@ function handleDefinitionInput(value: string) {
       collectParameterTokens(hdr, unresolvedTokens);
       collectParameterTokens(queryObj, unresolvedTokens);
       collectParameterTokens(bodyObj, unresolvedTokens);
-      if (unresolvedTokens.size) {
-        const detail = Array.from(unresolvedTokens).map((alias) => {
+      const unresolvedRelevant = Array.from(unresolvedTokens).filter(
+        (alias) => !paginationAliasesLower.has(String(alias || '').trim().toLowerCase())
+      );
+      if (unresolvedRelevant.length) {
+        const detail = unresolvedRelevant.map((alias) => {
           if (!groupedKnownAliasesLower.has(alias.toLowerCase())) return `${alias} (нет параметра с таким alias)`;
           return `${alias} (значение не вычислено для группы)`;
         });
@@ -3622,6 +3643,7 @@ function handleDefinitionInput(value: string) {
   async function buildUngroupedRowRequestPlan(draft: ApiDraft) {
     const issues: Record<string, string> = {};
     const sanitizedAliases = sanitizeAliasReferences(draft);
+    const paginationAliasesLower = paginationAliasLowerSet(draft);
     const authTemplate = parseJsonObjectField('Авторизация', draft.authJson);
     const headersTemplate = parseJsonObjectField('Headers JSON', draft.headersJson);
     const queryTemplate = parseJsonObjectField('Query JSON', draft.queryJson);
@@ -3634,7 +3656,7 @@ function handleDefinitionInput(value: string) {
     collectParameterTokens(headersTemplate, templateTokenSet);
     collectParameterTokens(queryTemplate, templateTokenSet);
     collectParameterTokens(bodyTemplate, templateTokenSet);
-    const templateAliases = uniqueAliasList(Array.from(templateTokenSet));
+    const templateAliases = excludePaginationAliases(Array.from(templateTokenSet), paginationAliasesLower);
     const bindingRules = (Array.isArray(sanitizedAliases.bindingRules) ? sanitizedAliases.bindingRules : [])
       .map((rule) => ({
         id: String(rule?.id || uid()),
@@ -3693,7 +3715,10 @@ function handleDefinitionInput(value: string) {
     }
 
     const plans: Array<any> = [];
-    const knownAliasesLower = new Set(bindingAliasOptions(draft).map((x) => x.toLowerCase()));
+    const knownAliasesLower = new Set([
+      ...bindingAliasOptions(draft).map((x) => x.toLowerCase()),
+      ...Array.from(paginationAliasesLower)
+    ]);
     for (let rowIndex = 0; rowIndex < dataset.rows.length; rowIndex++) {
       const row = (dataset.rows[rowIndex] || {}) as Record<string, any>;
       const authHdr = parseJsonObjectField('Авторизация', draft.authJson);
@@ -3723,8 +3748,11 @@ function handleDefinitionInput(value: string) {
       collectParameterTokens(hdr, unresolvedTokens);
       collectParameterTokens(queryObj, unresolvedTokens);
       collectParameterTokens(bodyObj, unresolvedTokens);
-      if (unresolvedTokens.size) {
-        const detail = Array.from(unresolvedTokens).map((alias) => {
+      const unresolvedRelevant = Array.from(unresolvedTokens).filter(
+        (alias) => !paginationAliasesLower.has(String(alias || '').trim().toLowerCase())
+      );
+      if (unresolvedRelevant.length) {
+        const detail = unresolvedRelevant.map((alias) => {
           if (!knownAliasesLower.has(alias.toLowerCase())) return `${alias} (нет параметра с таким alias)`;
           return `${alias} (значение не вычислено в строке ${rowIndex + 1})`;
         });
@@ -3799,6 +3827,7 @@ function handleDefinitionInput(value: string) {
       const bodyRaw = parseJsonAnyField('Body JSON', s.bodyJson);
       const bodyObj = bodyRaw && typeof bodyRaw === 'object' ? deepClone(bodyRaw) : {};
       const sanitizedAliases = sanitizeAliasReferences(s);
+      const paginationAliasesLower = paginationAliasLowerSet(s);
       const initialTokens = new Set<string>();
       const urlTemplate = `${s.baseUrl.replace(/\/$/, '')}${s.path.startsWith('/') ? s.path : `/${s.path}`}`;
       collectParameterTokens(urlTemplate, initialTokens);
@@ -3806,10 +3835,10 @@ function handleDefinitionInput(value: string) {
       collectParameterTokens(hdr, initialTokens);
       collectParameterTokens(queryObj, initialTokens);
       collectParameterTokens(bodyObj, initialTokens);
-      const requestedAliases = uniqueAliasList([
-        ...Array.from(initialTokens),
-        ...sanitizedAliases.bindingRules.map((r) => r.alias)
-      ]);
+      const requestedAliases = excludePaginationAliases(
+        [...Array.from(initialTokens), ...sanitizedAliases.bindingRules.map((r) => r.alias)],
+        paginationAliasesLower
+      );
       const { map: parameterValues, issues: parameterIssues } = await resolveRuntimeAliasValues(s, requestedAliases);
       if (Object.keys(parameterValues).length) {
         applyParametersToValue(authHdr, parameterValues);
@@ -3830,14 +3859,18 @@ function handleDefinitionInput(value: string) {
       collectParameterTokens(hdr, unresolvedTokens);
       collectParameterTokens(queryObj, unresolvedTokens);
       collectParameterTokens(bodyObj, unresolvedTokens);
-      if (unresolvedTokens.size) {
+      const unresolvedRelevant = Array.from(unresolvedTokens).filter(
+        (alias) => !paginationAliasesLower.has(String(alias || '').trim().toLowerCase())
+      );
+      if (unresolvedRelevant.length) {
         const knownAliasesLower = new Set(
           [
             ...uniqueAliasList((s.parameterDefinitions || []).map((p) => String(p?.alias || '').trim()).filter(Boolean)),
-            ...uniqueAliasList((s.dataFields || []).map((f) => String(f?.alias || '').trim()).filter(Boolean))
+            ...uniqueAliasList((s.dataFields || []).map((f) => String(f?.alias || '').trim()).filter(Boolean)),
+            ...Array.from(paginationAliasesLower)
           ].map((x) => x.toLowerCase())
         );
-        const detail = Array.from(unresolvedTokens).map((alias) => {
+        const detail = unresolvedRelevant.map((alias) => {
           const issueByAlias = findAliasInMap(parameterIssues, alias);
           if (issueByAlias.found) return `${alias} (${issueByAlias.value})`;
           if (!knownAliasesLower.has(alias.toLowerCase())) return `${alias} (нет параметра с таким alias)`;
@@ -4488,7 +4521,10 @@ function handleDefinitionInput(value: string) {
           .map((f) => String(f?.alias || '').trim())
           .filter(Boolean)
       );
-      const knownAliasesLower = new Set([...definitionAliases, ...dataModelAliases].map((x) => x.toLowerCase()));
+      const paginationAliasesLower = paginationAliasLowerSet(s);
+      const knownAliasesLower = new Set(
+        [...definitionAliases, ...dataModelAliases, ...Array.from(paginationAliasesLower)].map((x) => x.toLowerCase())
+      );
 
       const requestBase = `${s.baseUrl.replace(/\/$/, '')}${s.path.startsWith('/') ? s.path : `/${s.path}`}`;
       const initialTokens = new Set<string>();
@@ -4497,10 +4533,10 @@ function handleDefinitionInput(value: string) {
       collectParameterTokens(hdr, initialTokens);
       collectParameterTokens(queryObjBase, initialTokens);
       collectParameterTokens(bodyObjBase, initialTokens);
-      const requestedAliases = uniqueAliasList([
-        ...Array.from(initialTokens),
-        ...sanitizedAliases.bindingRules.map((r) => r.alias)
-      ]);
+      const requestedAliases = excludePaginationAliases(
+        [...Array.from(initialTokens), ...sanitizedAliases.bindingRules.map((r) => r.alias)],
+        paginationAliasesLower
+      );
       const { map: parameterValues, issues: parameterIssues } = await resolveRuntimeAliasValues(s, requestedAliases);
 
       const hasParameterValues = Object.keys(parameterValues).length > 0;
@@ -4527,8 +4563,11 @@ function handleDefinitionInput(value: string) {
       collectParameterTokens(hdr, unresolvedTokens);
       collectParameterTokens(queryObjBase, unresolvedTokens);
       collectParameterTokens(bodyObjBase, unresolvedTokens);
-      if (unresolvedTokens.size) {
-        const detail = Array.from(unresolvedTokens).map((alias) => {
+      const unresolvedRelevant = Array.from(unresolvedTokens).filter(
+        (alias) => !paginationAliasesLower.has(String(alias || '').trim().toLowerCase())
+      );
+      if (unresolvedRelevant.length) {
+        const detail = unresolvedRelevant.map((alias) => {
           const issueByAlias = findAliasInMap(parameterIssues, alias);
           if (issueByAlias.found) return `${alias} (${issueByAlias.value})`;
           if (!knownAliasesLower.has(alias.toLowerCase())) return `${alias} (нет параметра с таким alias)`;
