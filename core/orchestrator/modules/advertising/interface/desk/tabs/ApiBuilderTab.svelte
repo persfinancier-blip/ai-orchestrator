@@ -5367,10 +5367,10 @@ function syncParameterEditorsHeight() {
           {#if selected?.paginationEnabled}
             <div class="pagination-wizard">
               <div class="pagination-step">
-                <div class="pagination-step-title">1. Массив данных в ответе</div>
+                <div class="pagination-step-title">1. Правила чтения ответа и подстановки в body</div>
                 <div class="pagination-grid">
                   <div class="pagination-field">
-                    <small>Путь к массиву</small>
+                    <small>Путь к массиву в ответе</small>
                     <input
                       placeholder="Например: cards"
                       value={selected?.paginationDataPath || ''}
@@ -5406,10 +5406,6 @@ function syncParameterEditorsHeight() {
                     <p class="hint small-hint">Когда массив пустой, пагинация остановится.</p>
                   </div>
                 </div>
-              </div>
-
-              <div class="pagination-step">
-                <div class="pagination-step-title">2. Связка «ответ -> body следующего запроса»</div>
                 <div class="pagination-grid">
                   <div class="pagination-field">
                     <small>Из ответа: путь 1</small>
@@ -5483,10 +5479,11 @@ function syncParameterEditorsHeight() {
                     </button>
                   </div>
                 </div>
+                <p class="hint small-hint">Это единая настройка: из ответа берем курсоры и подставляем их в body следующего запроса.</p>
               </div>
 
               <div class="pagination-step">
-                <div class="pagination-step-title">3. Лимиты и безопасность</div>
+                <div class="pagination-step-title">2. Лимиты и безопасность</div>
                 <div class="pagination-grid">
                   <div class="pagination-field">
                     <small>Макс. страниц</small>
