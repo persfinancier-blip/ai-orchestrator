@@ -279,6 +279,8 @@
   let responsePathPick = '';
   let paginationArrayPathOptions: string[] = [];
   let paginationArrayPathPick = '';
+  let paginationCursorResponsePathOptions: string[] = [];
+  let paginationCursorResponsePick = '';
   let oauthTokenCache: Record<string, { token: string; tokenType: string; expiresAt: number }> = {};
   let selectedParameterId: string | null = null;
   let aliasParamEl: HTMLTextAreaElement | null = null;
@@ -1242,6 +1244,31 @@ function formatBytes(bytes: number) {
     });
   }
 
+  function isScalarValue(value: any) {
+    const t = typeof value;
+    return value === null || t === 'string' || t === 'number' || t === 'boolean';
+  }
+
+  function collectScalarResponsePaths(node: any, base: string, out: Set<string>) {
+    if (isScalarValue(node)) {
+      if (base) out.add(base);
+      return;
+    }
+    if (Array.isArray(node)) {
+      node.slice(0, 3).forEach((item, idx) => {
+        const next = base ? `${base}[${idx}]` : `[${idx}]`;
+        collectScalarResponsePaths(item, next, out);
+      });
+      return;
+    }
+    if (node && typeof node === 'object') {
+      Object.entries(node).forEach(([k, v]) => {
+        const next = base ? `${base}.${k}` : k;
+        collectScalarResponsePaths(v, next, out);
+      });
+    }
+  }
+
   function pickBestPaginationArrayPath(paths: string[], payload: any) {
     const preferredTokens = ['items', 'data', 'list', 'rows', 'cards', 'results', 'products', 'campaigns', 'skus'];
     let best = '';
@@ -1288,6 +1315,49 @@ function formatBytes(bytes: number) {
     paginationArrayPathPick = picked;
     mutateSelected((d) => (d.paginationDataPath = picked));
     ok = `Путь к данным выбран автоматически: ${picked}`;
+  }
+
+  function applyCursorResponsePick(slot: 1 | 2) {
+    if (!selected) return;
+    const path = String(paginationCursorResponsePick || '').trim();
+    if (!path) return;
+    mutateSelected((d) => {
+      if (slot === 1) d.paginationCursorResPath1 = path;
+      else d.paginationCursorResPath2 = path;
+    });
+    ok = slot === 1 ? 'Cursor response path 1 заполнен из тестового ответа' : 'Cursor response path 2 заполнен из тестового ответа';
+  }
+
+  function autoPickCursorResponsePaths() {
+    if (!selected) return;
+    if (!paginationCursorResponsePathOptions.length) {
+      err = 'Сначала выполни Проверить, чтобы получить тестовый JSON-ответ с курсором';
+      return;
+    }
+    const preferred = paginationCursorResponsePathOptions;
+    const byKeyWeight = (path: string) => {
+      const low = path.toLowerCase();
+      const key = low.split('.').slice(-1)[0] || low;
+      let score = 0;
+      if (low.includes('cursor')) score += 5;
+      if (/next|after|before|updated|update|ts|time/.test(key)) score += 4;
+      if (/id|nmid|nm_id|last|offset/.test(key)) score += 3;
+      return score;
+    };
+    const sorted = [...preferred].sort((a, b) => byKeyWeight(b) - byKeyWeight(a));
+    const first = sorted[0] || '';
+    const second = sorted.find((p) => p !== first) || '';
+    if (!first) {
+      err = 'Не удалось подобрать курсорные поля в ответе';
+      return;
+    }
+    mutateSelected((d) => {
+      d.paginationCursorResPath1 = first;
+      if (second) d.paginationCursorResPath2 = second;
+    });
+    ok = second
+      ? `Курсорные поля выбраны: ${first}; ${second}`
+      : `Курсорное поле выбрано: ${first}`;
   }
 
   function addPickedPathFromPicker() {
@@ -4435,6 +4505,17 @@ function handleDefinitionInput(value: string) {
     }
   }
   $: {
+    const scalar = new Set<string>();
+    if (responseIsJson) collectScalarResponsePaths(responseJson, '', scalar);
+    const all = Array.from(scalar).filter(Boolean);
+    const cursorFirst = all.filter((p) => p.toLowerCase().includes('cursor'));
+    const rest = all.filter((p) => !p.toLowerCase().includes('cursor'));
+    paginationCursorResponsePathOptions = [...new Set([...cursorFirst, ...rest])];
+    if (!paginationCursorResponsePathOptions.includes(paginationCursorResponsePick)) {
+      paginationCursorResponsePick = paginationCursorResponsePathOptions[0] || '';
+    }
+  }
+  $: {
     const txt = unwrapCodeFence(String(selected?.exampleRequest || '')).trim();
     if (!txt) {
       exampleIsJson = false;
@@ -5458,6 +5539,48 @@ function syncParameterEditorsHeight() {
                 />
               </div>
             </div>
+            {#if selected?.paginationStrategy === 'cursor_fields'}
+              <div class="pagination-cursor-helper">
+                <div class="pagination-helper-row">
+                  <select bind:value={paginationCursorResponsePick} disabled={!paginationCursorResponsePathOptions.length}>
+                    {#if !paginationCursorResponsePathOptions.length}
+                      <option value="">Нет курсорных путей в тестовом ответе</option>
+                    {:else}
+                      {#each paginationCursorResponsePathOptions as opt}
+                        <option value={opt}>{opt}</option>
+                      {/each}
+                    {/if}
+                  </select>
+                  <button
+                    type="button"
+                    class="view-toggle"
+                    on:click={() => applyCursorResponsePick(1)}
+                    disabled={!paginationCursorResponsePathOptions.length}
+                  >
+                    В path 1
+                  </button>
+                  <button
+                    type="button"
+                    class="view-toggle"
+                    on:click={() => applyCursorResponsePick(2)}
+                    disabled={!paginationCursorResponsePathOptions.length}
+                  >
+                    В path 2
+                  </button>
+                </div>
+                <div class="pagination-cursor-actions">
+                  <button
+                    type="button"
+                    class="view-toggle"
+                    on:click={autoPickCursorResponsePaths}
+                    disabled={!paginationCursorResponsePathOptions.length}
+                  >
+                    Автоподбор курсора
+                  </button>
+                </div>
+                <p class="hint small-hint">Курсор берется из ответа (поля cursor...), а "Путь к данным (массив)" нужен только для контроля остановки по пустому массиву.</p>
+              </div>
+            {/if}
 
             <div class="pagination-grid">
               <div class="pagination-field">
@@ -5944,6 +6067,16 @@ function syncParameterEditorsHeight() {
   }
   .pagination-helper-row select {
     min-width:0;
+  }
+  .pagination-cursor-helper {
+    margin-top:6px;
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+  }
+  .pagination-cursor-actions {
+    display:flex;
+    justify-content:flex-end;
   }
   .definition-error { margin:0; font-size:11px; color:#b91c1c; }
   @media (max-width: 900px) {
