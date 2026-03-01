@@ -156,20 +156,6 @@
     ]
   };
 
-  const PAGINATION_STRATEGIES = [
-    { value: 'none', label: 'Не использовать' },
-    { value: 'page_number', label: 'Номер страницы' },
-    { value: 'offset_limit', label: 'Смещение + лимит' },
-    { value: 'cursor_fields', label: 'Курсоры (две метки)' },
-    { value: 'next_url', label: 'Ссылка next' },
-    { value: 'custom', label: 'Своя логика' }
-  ];
-
-  const PAGINATION_TARGETS = [
-    { value: 'query', label: 'query (параметры URL)' },
-    { value: 'body', label: 'body (тело запроса)' }
-  ];
-
   const API_STORAGE_REQUIRED_COLUMNS: Array<{ name: string; types: string[] }> = [
     { name: 'api_name', types: ['text', 'character varying', 'varchar'] },
     { name: 'method', types: ['text', 'character varying', 'varchar'] },
@@ -1139,6 +1125,14 @@ function formatBytes(bytes: number) {
     }
   } else {
     activeDataFilterId = '';
+  }
+  $: if (selected?.paginationEnabled) {
+    if (selected.paginationStrategy !== 'cursor_fields' || selected.paginationTarget !== 'body') {
+      mutateSelected((d) => {
+        d.paginationStrategy = 'cursor_fields';
+        d.paginationTarget = 'body';
+      });
+    }
   }
 
   $: if (selected && selectedParameterId && !selected.parameterDefinitions.some((param) => param.id === selectedParameterId)) {
@@ -2649,11 +2643,6 @@ function formatBytes(bytes: number) {
     return JSON.stringify({ tables, fields, joins, filters });
   }
 
-  function handlePaginationStrategyChange(value: string) {
-    const normalized = PAGINATION_STRATEGIES.some((s) => s.value === value) ? value : 'none';
-    mutateSelected((d) => (d.paginationStrategy = normalized as ApiDraft['paginationStrategy']));
-  }
-
   function serializeParameterDefinition(param: ParameterDefinition) {
     const sourceParts = [param.sourceSchema, param.sourceTable, param.sourceField].filter(Boolean);
     const conditions = param.conditions.map((cond) => {
@@ -3704,10 +3693,6 @@ function handleDefinitionInput(value: string) {
     } finally {
       parameterPreviewLoading = false;
     }
-  }
-
-  function handlePaginationTargetChange(value: string) {
-    mutateSelected((d) => (d.paginationTarget = String(value) === 'query' ? 'query' : 'body'));
   }
 
   async function checkStorageTable(schema: string, table: string) {
@@ -5382,43 +5367,10 @@ function syncParameterEditorsHeight() {
           {#if selected?.paginationEnabled}
             <div class="pagination-wizard">
               <div class="pagination-step">
-                <div class="pagination-step-title">1. Тип пагинации</div>
-                <div class="pagination-strategy-pills">
-                  {#each PAGINATION_STRATEGIES as strat}
-                    <button
-                      type="button"
-                      class="pagination-pill"
-                      class:active-pagination-pill={selected?.paginationStrategy === strat.value}
-                      on:click={() => handlePaginationStrategyChange(strat.value)}
-                    >
-                      {strat.label}
-                    </button>
-                  {/each}
-                </div>
-              </div>
-
-              <div class="pagination-step">
-                <div class="pagination-step-title">2. Куда подставлять параметры</div>
+                <div class="pagination-step-title">1. Массив данных в ответе</div>
                 <div class="pagination-grid">
                   <div class="pagination-field">
-                    <small>Место подстановки</small>
-                    <select
-                      value={selected?.paginationTarget || 'body'}
-                      on:change={(e) => handlePaginationTargetChange(e.currentTarget.value)}
-                    >
-                      {#each PAGINATION_TARGETS as target}
-                        <option value={target.value}>{target.label}</option>
-                      {/each}
-                    </select>
-                  </div>
-                </div>
-              </div>
-
-              <div class="pagination-step">
-                <div class="pagination-step-title">3. Данные ответа</div>
-                <div class="pagination-grid">
-                  <div class="pagination-field">
-                    <small>Путь к данным (массив)</small>
+                    <small>Путь к массиву</small>
                     <input
                       placeholder="Например: cards"
                       value={selected?.paginationDataPath || ''}
@@ -5451,173 +5403,90 @@ function syncParameterEditorsHeight() {
                         Автовыбор
                       </button>
                     </div>
-                    <p class="hint small-hint">Этот путь нужен, чтобы остановить цикл, когда массив стал пустым.</p>
+                    <p class="hint small-hint">Когда массив пустой, пагинация остановится.</p>
                   </div>
                 </div>
               </div>
 
               <div class="pagination-step">
-                <div class="pagination-step-title">4. Параметры выбранной стратегии</div>
-                {#if selected?.paginationStrategy === 'page_number'}
-                  <div class="pagination-grid">
-                    <div class="pagination-field">
-                      <small>Параметр страницы</small>
-                      <input
-                        placeholder="page"
-                        value={selected?.paginationPageParam || ''}
-                        on:input={(e) => mutateSelected((d) => (d.paginationPageParam = e.currentTarget.value))}
-                      />
-                    </div>
-                    <div class="pagination-field">
-                      <small>Стартовая страница</small>
-                      <input
-                        type="number"
-                        value={selected?.paginationStartPage || 1}
-                        on:input={(e) => mutateSelected((d) => (d.paginationStartPage = Number(e.currentTarget.value) || 1))}
-                      />
-                    </div>
+                <div class="pagination-step-title">2. Связка «ответ -> body следующего запроса»</div>
+                <div class="pagination-grid">
+                  <div class="pagination-field">
+                    <small>Из ответа: путь 1</small>
+                    <input
+                      value={selected?.paginationCursorResPath1 || ''}
+                      on:input={(e) => mutateSelected((d) => (d.paginationCursorResPath1 = e.currentTarget.value))}
+                    />
                   </div>
-                {:else if selected?.paginationStrategy === 'offset_limit'}
-                  <div class="pagination-grid">
-                    <div class="pagination-field">
-                      <small>Параметр смещения</small>
-                      <input
-                        placeholder="offset"
-                        value={selected?.paginationPageParam || ''}
-                        on:input={(e) => mutateSelected((d) => (d.paginationPageParam = e.currentTarget.value))}
-                      />
-                    </div>
-                    <div class="pagination-field">
-                      <small>Стартовое смещение</small>
-                      <input
-                        type="number"
-                        value={selected?.paginationStartPage || 0}
-                        on:input={(e) => mutateSelected((d) => (d.paginationStartPage = Number(e.currentTarget.value) || 0))}
-                      />
-                    </div>
+                  <div class="pagination-field">
+                    <small>В body: путь 1</small>
+                    <input
+                      placeholder="settings.cursor.updatedAt"
+                      value={selected?.paginationCursorReqPath1 || ''}
+                      on:input={(e) => mutateSelected((d) => (d.paginationCursorReqPath1 = e.currentTarget.value))}
+                    />
                   </div>
-                  <div class="pagination-grid">
-                    <div class="pagination-field">
-                      <small>Limit параметр</small>
-                      <input
-                        placeholder="limit"
-                        value={selected?.paginationLimitParam || ''}
-                        on:input={(e) => mutateSelected((d) => (d.paginationLimitParam = e.currentTarget.value))}
-                      />
-                    </div>
-                    <div class="pagination-field">
-                      <small>Limit значение</small>
-                      <input
-                        type="number"
-                        min="1"
-                        value={selected?.paginationLimitValue || 1}
-                        on:input={(e) => mutateSelected((d) => (d.paginationLimitValue = Number(e.currentTarget.value) || 1))}
-                      />
-                    </div>
+                </div>
+                <div class="pagination-grid">
+                  <div class="pagination-field">
+                    <small>Из ответа: путь 2 (опционально)</small>
+                    <input
+                      value={selected?.paginationCursorResPath2 || ''}
+                      on:input={(e) => mutateSelected((d) => (d.paginationCursorResPath2 = e.currentTarget.value))}
+                    />
                   </div>
-                {:else if selected?.paginationStrategy === 'cursor_fields'}
-                  <div class="pagination-grid">
-                    <div class="pagination-field">
-                      <small>Cursor request path 1</small>
-                      <input
-                        placeholder="settings.cursor.updatedAt"
-                        value={selected?.paginationCursorReqPath1 || ''}
-                        on:input={(e) => mutateSelected((d) => (d.paginationCursorReqPath1 = e.currentTarget.value))}
-                      />
-                    </div>
-                    <div class="pagination-field">
-                      <small>Cursor request path 2</small>
-                      <input
-                        placeholder="settings.cursor.nmID"
-                        value={selected?.paginationCursorReqPath2 || ''}
-                        on:input={(e) => mutateSelected((d) => (d.paginationCursorReqPath2 = e.currentTarget.value))}
-                      />
-                    </div>
+                  <div class="pagination-field">
+                    <small>В body: путь 2 (опционально)</small>
+                    <input
+                      placeholder="settings.cursor.nmID"
+                      value={selected?.paginationCursorReqPath2 || ''}
+                      on:input={(e) => mutateSelected((d) => (d.paginationCursorReqPath2 = e.currentTarget.value))}
+                    />
                   </div>
-                  <div class="pagination-grid">
-                    <div class="pagination-field">
-                      <small>Cursor response path 1</small>
-                      <input
-                        value={selected?.paginationCursorResPath1 || ''}
-                        on:input={(e) => mutateSelected((d) => (d.paginationCursorResPath1 = e.currentTarget.value))}
-                      />
-                    </div>
-                    <div class="pagination-field">
-                      <small>Cursor response path 2</small>
-                      <input
-                        value={selected?.paginationCursorResPath2 || ''}
-                        on:input={(e) => mutateSelected((d) => (d.paginationCursorResPath2 = e.currentTarget.value))}
-                      />
-                    </div>
+                </div>
+                <div class="pagination-cursor-helper">
+                  <div class="pagination-helper-row">
+                    <select bind:value={paginationCursorResponsePick} disabled={!paginationCursorResponsePathOptions.length}>
+                      {#if !paginationCursorResponsePathOptions.length}
+                        <option value="">Нет подходящих путей в тестовом ответе</option>
+                      {:else}
+                        {#each paginationCursorResponsePathOptions as opt}
+                          <option value={opt}>{opt}</option>
+                        {/each}
+                      {/if}
+                    </select>
+                    <button
+                      type="button"
+                      class="view-toggle"
+                      on:click={() => applyCursorResponsePick(1)}
+                      disabled={!paginationCursorResponsePathOptions.length}
+                    >
+                      В «Из ответа 1»
+                    </button>
+                    <button
+                      type="button"
+                      class="view-toggle"
+                      on:click={() => applyCursorResponsePick(2)}
+                      disabled={!paginationCursorResponsePathOptions.length}
+                    >
+                      В «Из ответа 2»
+                    </button>
                   </div>
-                  <div class="pagination-cursor-helper">
-                    <div class="pagination-helper-row">
-                      <select bind:value={paginationCursorResponsePick} disabled={!paginationCursorResponsePathOptions.length}>
-                        {#if !paginationCursorResponsePathOptions.length}
-                          <option value="">Нет курсорных путей в тестовом ответе</option>
-                        {:else}
-                          {#each paginationCursorResponsePathOptions as opt}
-                            <option value={opt}>{opt}</option>
-                          {/each}
-                        {/if}
-                      </select>
-                      <button
-                        type="button"
-                        class="view-toggle"
-                        on:click={() => applyCursorResponsePick(1)}
-                        disabled={!paginationCursorResponsePathOptions.length}
-                      >
-                        В path 1
-                      </button>
-                      <button
-                        type="button"
-                        class="view-toggle"
-                        on:click={() => applyCursorResponsePick(2)}
-                        disabled={!paginationCursorResponsePathOptions.length}
-                      >
-                        В path 2
-                      </button>
-                    </div>
-                    <div class="pagination-cursor-actions">
-                      <button
-                        type="button"
-                        class="view-toggle"
-                        on:click={autoPickCursorResponsePaths}
-                        disabled={!paginationCursorResponsePathOptions.length}
-                      >
-                        Автоподбор курсора
-                      </button>
-                    </div>
+                  <div class="pagination-cursor-actions">
+                    <button
+                      type="button"
+                      class="view-toggle"
+                      on:click={autoPickCursorResponsePaths}
+                      disabled={!paginationCursorResponsePathOptions.length}
+                    >
+                      Автоподбор из ответа
+                    </button>
                   </div>
-                {:else if selected?.paginationStrategy === 'next_url'}
-                  <div class="pagination-grid">
-                    <div class="pagination-field">
-                      <small>Next URL path</small>
-                      <input
-                        placeholder="links.next"
-                        value={selected?.paginationNextUrlPath || ''}
-                        on:input={(e) => mutateSelected((d) => (d.paginationNextUrlPath = e.currentTarget.value))}
-                      />
-                    </div>
-                  </div>
-                {:else if selected?.paginationStrategy === 'custom'}
-                  <div class="pagination-grid">
-                    <div class="pagination-field">
-                      <small>Своя инструкция</small>
-                      <input
-                        placeholder="Например: cursor_name + limit"
-                        value={selected?.paginationCustomStrategy || ''}
-                        on:input={(e) => mutateSelected((d) => (d.paginationCustomStrategy = e.currentTarget.value))}
-                      />
-                    </div>
-                  </div>
-                {:else}
-                  <p class="hint">Для стратегии «Не использовать» дополнительных параметров не требуется.</p>
-                {/if}
+                </div>
               </div>
 
               <div class="pagination-step">
-                <div class="pagination-step-title">5. Лимиты и безопасность</div>
+                <div class="pagination-step-title">3. Лимиты и безопасность</div>
                 <div class="pagination-grid">
                   <div class="pagination-field">
                     <small>Макс. страниц</small>
@@ -5640,7 +5509,8 @@ function syncParameterEditorsHeight() {
                 </div>
               </div>
             </div>
-            <p class="hint">Логика простая: выбери тип, укажи где подставлять параметры, затем заполни только поля своего типа.</p>
+            <p class="hint">Логика одна: берем значения из ответа и подставляем в body следующего запроса.</p>
+            <p class="hint small-hint">Стратегия фиксирована: последовательная пагинация по курсорам в body.</p>
           {:else}
             <p class="hint">Пагинация отключена. При включении появится пошаговый мастер.</p>
           {/if}
@@ -6114,26 +5984,6 @@ function syncParameterEditorsHeight() {
     font-weight:600;
     color:#334155;
     margin-bottom:6px;
-  }
-  .pagination-strategy-pills {
-    display:flex;
-    flex-wrap:wrap;
-    gap:6px;
-  }
-  .pagination-pill {
-    width:auto;
-    border:1px solid #cbd5e1;
-    border-radius:999px;
-    background:#fff;
-    color:#334155;
-    padding:6px 10px;
-    font-size:12px;
-    line-height:1.2;
-  }
-  .pagination-pill.active-pagination-pill {
-    border-color:#0f172a;
-    background:#0f172a;
-    color:#fff;
   }
   .pagination-grid { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
   .pagination-field small { display:block; margin-bottom:4px; font-size:11px; color:#64748b; }
