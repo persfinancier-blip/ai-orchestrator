@@ -41,6 +41,11 @@
     field: string;
     alias: string;
     grouped?: boolean;
+    dateMode?: 'raw' | 'process';
+    dateAnchorPreset?: DateAnchorPreset;
+    dateAddDays?: number;
+    dateAddMonths?: number;
+    dateFormatPreset?: DateFormatPreset;
   };
 
   type DataModelFilter = {
@@ -775,7 +780,24 @@ function formatBytes(bytes: number) {
         alias: String(f?.alias || f?.field || `field_${idx + 1}`).trim(),
         grouped:
           Boolean(f?.group_by ?? f?.groupBy) ||
-          normalizedGroupBySet.has(String(f?.alias || '').trim().toLowerCase())
+          normalizedGroupBySet.has(String(f?.alias || '').trim().toLowerCase()),
+        dateMode:
+          String((f?.date_mode ?? f?.dateMode ?? f?.date_transform?.enabled ? 'process' : 'raw') || 'raw').toLowerCase() ===
+          'process'
+            ? 'process'
+            : 'raw',
+        dateAnchorPreset: toDateAnchorPreset(
+          String(f?.date_anchor_preset ?? f?.dateAnchorPreset ?? f?.date_transform?.anchor_preset ?? f?.date_transform?.anchor ?? 'raw')
+        ),
+        dateAddDays: Number.isFinite(Number(f?.date_add_days ?? f?.dateAddDays ?? f?.date_transform?.add_days))
+          ? Number(f?.date_add_days ?? f?.dateAddDays ?? f?.date_transform?.add_days)
+          : 0,
+        dateAddMonths: Number.isFinite(Number(f?.date_add_months ?? f?.dateAddMonths ?? f?.date_transform?.add_months))
+          ? Number(f?.date_add_months ?? f?.dateAddMonths ?? f?.date_transform?.add_months)
+          : 0,
+        dateFormatPreset: toDateFormatPreset(
+          String(f?.date_format_preset ?? f?.dateFormatPreset ?? f?.date_transform?.format_preset ?? f?.date_transform?.format ?? 'yyyy_mm_dd')
+        )
       }))
       .filter((f: DataModelField) => f.tableId && f.field && f.alias && dataTableIdSet.has(f.tableId));
     const normalizedDataFilters = (Array.isArray(dataModelCfg?.filters) ? dataModelCfg.filters : [])
@@ -1223,7 +1245,22 @@ function formatBytes(bytes: number) {
               table_id: f.tableId,
               field: f.field,
               alias: f.alias,
-              group_by: Boolean(f.grouped)
+              group_by: Boolean(f.grouped),
+              date_mode: f.dateMode === 'process' ? 'process' : 'raw',
+              date_anchor_preset: toDateAnchorPreset(String(f.dateAnchorPreset || 'raw')),
+              date_add_days: Number(f.dateAddDays || 0),
+              date_add_months: Number(f.dateAddMonths || 0),
+              date_format_preset: toDateFormatPreset(String(f.dateFormatPreset || 'yyyy_mm_dd')),
+              date_transform:
+                f.dateMode === 'process'
+                  ? {
+                      enabled: true,
+                      anchor_preset: toDateAnchorPreset(String(f.dateAnchorPreset || 'raw')),
+                      add_days: Number(f.dateAddDays || 0),
+                      add_months: Number(f.dateAddMonths || 0),
+                      format_preset: toDateFormatPreset(String(f.dateFormatPreset || 'yyyy_mm_dd'))
+                    }
+                  : { enabled: false }
             })),
             filters: d.dataFilters.map((f) => ({
               id: f.id,
@@ -3070,6 +3107,61 @@ function formatBytes(bytes: number) {
     return { value: formatDateByPreset(value, normalized.formatPreset) };
   }
 
+  function parseDateValueFromTable(value: any): Date | null {
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? null : new Date(value.getTime());
+    }
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      const ms = Math.abs(value) > 1e11 ? value : value * 1000;
+      const dt = new Date(ms);
+      return Number.isNaN(dt.getTime()) ? null : dt;
+    }
+    if (typeof value === 'string') {
+      const raw = String(value || '').trim();
+      if (!raw) return null;
+      if (/^\d+(\.\d+)?$/.test(raw)) {
+        const num = Number(raw);
+        if (Number.isFinite(num)) {
+          const ms = Math.abs(num) > 1e11 ? num : num * 1000;
+          const dt = new Date(ms);
+          if (!Number.isNaN(dt.getTime())) return dt;
+        }
+      }
+      const parsed = parseDateInput(raw);
+      if (parsed) return parsed;
+      const dt = new Date(raw);
+      return Number.isNaN(dt.getTime()) ? null : dt;
+    }
+    return null;
+  }
+
+  function transformDataFieldDateValue(value: any, field: DataModelField): any {
+    if (!field || field.dateMode !== 'process') return value;
+    const dt = parseDateValueFromTable(value);
+    if (!dt) return value;
+    let v = applyDateAnchorPreset(dt, toDateAnchorPreset(String(field.dateAnchorPreset || 'raw')));
+    v = shiftDateByMonthsUtc(v, Number(field.dateAddMonths || 0));
+    v.setUTCDate(v.getUTCDate() + Number(field.dateAddDays || 0));
+    return formatDateByPreset(v, toDateFormatPreset(String(field.dateFormatPreset || 'yyyy_mm_dd')));
+  }
+
+  function applyDataFieldTransformsToRows(draft: ApiDraft, rows: Array<Record<string, any>>) {
+    const sourceRows = Array.isArray(rows) ? rows : [];
+    if (!sourceRows.length) return sourceRows;
+    const fields = (Array.isArray(draft?.dataFields) ? draft.dataFields : []).filter((f) => String(f?.alias || '').trim());
+    if (!fields.length) return sourceRows;
+    return sourceRows.map((row) => {
+      const out = { ...(row || {}) };
+      fields.forEach((field) => {
+        if (field.dateMode !== 'process') return;
+        const found = findAliasInMap(out, String(field.alias || '').trim());
+        if (!found.found) return;
+        out[found.key] = transformDataFieldDateValue(found.value, field);
+      });
+      return out;
+    });
+  }
+
   function resolveDateAliasValues(draft: ApiDraft | null, requestedAliases: string[]) {
     const map: Record<string, any> = {};
     const issues: Record<string, string> = {};
@@ -3411,7 +3503,12 @@ function formatBytes(bytes: number) {
           tableId,
           field: '',
           alias: `field_${idx}`,
-          grouped: false
+          grouped: false,
+          dateMode: 'raw',
+          dateAnchorPreset: 'raw',
+          dateAddDays: 0,
+          dateAddMonths: 0,
+          dateFormatPreset: 'yyyy_mm_dd'
         }
       ];
     });
@@ -3622,7 +3719,7 @@ function formatBytes(bytes: number) {
       filtersForRequest = allFilters.filter((f) => usedTableIds.has(f.table_id));
     }
 
-    return apiJson<{ rows: Array<Record<string, any>>; has_more?: boolean }>(`${apiBase}/parameter-join-values`, {
+    const resp = await apiJson<{ rows: Array<Record<string, any>>; has_more?: boolean }>(`${apiBase}/parameter-join-values`, {
       method: 'POST',
       headers: headers(),
       body: JSON.stringify({
@@ -3635,6 +3732,11 @@ function formatBytes(bytes: number) {
         offset
       })
     });
+    const rows = applyDataFieldTransformsToRows(draft, Array.isArray(resp?.rows) ? resp.rows : []);
+    return {
+      ...(resp || {}),
+      rows
+    };
   }
 
   async function loadDataModelRowsForAliases(
@@ -3753,7 +3855,12 @@ function formatBytes(bytes: number) {
       tableId: f.tableId,
       field: f.field,
       alias: f.alias,
-      grouped: Boolean(f.grouped)
+      grouped: Boolean(f.grouped),
+      dateMode: f.dateMode || 'raw',
+      dateAnchorPreset: f.dateAnchorPreset || 'raw',
+      dateAddDays: Number(f.dateAddDays || 0),
+      dateAddMonths: Number(f.dateAddMonths || 0),
+      dateFormatPreset: f.dateFormatPreset || 'yyyy_mm_dd'
     }));
     const joins = (draft.dataJoins || []).map((j) => ({
       id: j.id,
@@ -7593,55 +7700,116 @@ function syncParameterEditorsHeight() {
               {#if selected?.dataFields?.length}
                 <div class="data-list">
                   {#each selected.dataFields as f, idx (f.id)}
-                    <div class="data-row param-row">
-                      <select value={f.tableId} on:change={(e) => updateDataFieldTableRef(f.id, e.currentTarget.value)}>
-                        <option value="">Таблица</option>
-                        {#each selected.dataTables as t}
-                          <option value={t.id}>{t.schema}.{t.table}</option>
-                        {/each}
-                      </select>
-                      <select value={f.field} on:change={(e) => updateDataField(f.id, { field: e.currentTarget.value })}>
-                        <option value="">Колонка</option>
-                        {#each tableColumnsById(selected, f.tableId) as col}
-                          <option value={col}>{col}</option>
-                        {/each}
-                      </select>
-                      <input value={f.alias} placeholder="Название параметра (alias)" on:input={(e) => updateDataField(f.id, { alias: e.currentTarget.value })} />
-                      <button
-                        type="button"
-                        class="group-toggle"
-                        class:active-group-toggle={Boolean(f.grouped)}
-                        on:click={() => updateDataField(f.id, { grouped: !Boolean(f.grouped) })}
-                        aria-pressed={Boolean(f.grouped)}
-                      >
-                        <span>Группировать</span>
-                        {#if Boolean(f.grouped)}
-                          <span class="group-toggle-indicator" aria-hidden="true"></span>
-                        {/if}
-                      </button>
-                      <div class="row-order-actions">
+                    <div class="rule-card">
+                      <div class="data-row param-row">
+                        <select value={f.tableId} on:change={(e) => updateDataFieldTableRef(f.id, e.currentTarget.value)}>
+                          <option value="">Таблица</option>
+                          {#each selected.dataTables as t}
+                            <option value={t.id}>{t.schema}.{t.table}</option>
+                          {/each}
+                        </select>
+                        <select value={f.field} on:change={(e) => updateDataField(f.id, { field: e.currentTarget.value })}>
+                          <option value="">Колонка</option>
+                          {#each tableColumnsById(selected, f.tableId) as col}
+                            <option value={col}>{col}</option>
+                          {/each}
+                        </select>
+                        <input value={f.alias} placeholder="Название параметра (alias)" on:input={(e) => updateDataField(f.id, { alias: e.currentTarget.value })} />
                         <button
                           type="button"
-                          class="row-icon-btn"
-                          title="Поднять выше"
-                          aria-label="Поднять выше"
-                          on:click={() => moveDataField(f.id, -1)}
-                          disabled={idx === 0}
+                          class="group-toggle"
+                          class:active-group-toggle={Boolean(f.grouped)}
+                          on:click={() => updateDataField(f.id, { grouped: !Boolean(f.grouped) })}
+                          aria-pressed={Boolean(f.grouped)}
                         >
-                          ▲
+                          <span>Группировать</span>
+                          {#if Boolean(f.grouped)}
+                            <span class="group-toggle-indicator" aria-hidden="true"></span>
+                          {/if}
                         </button>
                         <button
                           type="button"
-                          class="row-icon-btn"
-                          title="Опустить ниже"
-                          aria-label="Опустить ниже"
-                          on:click={() => moveDataField(f.id, 1)}
-                          disabled={idx === selected.dataFields.length - 1}
+                          class="group-toggle group-toggle-sm"
+                          class:active-group-toggle={String(f.dateMode || 'raw') === 'process'}
+                          on:click={() =>
+                            updateDataField(f.id, {
+                              dateMode: String(f.dateMode || 'raw') === 'process' ? 'raw' : 'process'
+                            })}
+                          aria-pressed={String(f.dateMode || 'raw') === 'process'}
                         >
-                          ▼
+                          <span>{String(f.dateMode || 'raw') === 'process' ? 'Дата из таблицы: обработка' : 'Дата из таблицы: как есть'}</span>
+                          {#if String(f.dateMode || 'raw') === 'process'}
+                            <span class="group-toggle-indicator" aria-hidden="true"></span>
+                          {/if}
                         </button>
+                        <div class="row-order-actions">
+                          <button
+                            type="button"
+                            class="row-icon-btn"
+                            title="Поднять выше"
+                            aria-label="Поднять выше"
+                            on:click={() => moveDataField(f.id, -1)}
+                            disabled={idx === 0}
+                          >
+                            ▲
+                          </button>
+                          <button
+                            type="button"
+                            class="row-icon-btn"
+                            title="Опустить ниже"
+                            aria-label="Опустить ниже"
+                            on:click={() => moveDataField(f.id, 1)}
+                            disabled={idx === selected.dataFields.length - 1}
+                          >
+                            ▼
+                          </button>
+                        </div>
+                        <button type="button" class="chip-remove" on:click={() => removeDataField(f.id)}>x</button>
                       </div>
-                      <button type="button" class="chip-remove" on:click={() => removeDataField(f.id)}>x</button>
+                      {#if String(f.dateMode || 'raw') === 'process'}
+                        <div class="data-row field-date-row">
+                          <select
+                            value={toDateAnchorPreset(String(f.dateAnchorPreset || 'raw'))}
+                            on:change={(e) =>
+                              updateDataField(f.id, {
+                                dateAnchorPreset: toDateAnchorPreset(e.currentTarget.value)
+                              })}
+                          >
+                            {#each DATE_ANCHOR_PRESETS as opt}
+                              <option value={opt.value}>{opt.label}</option>
+                            {/each}
+                          </select>
+                          <input
+                            type="number"
+                            value={f.dateAddDays || 0}
+                            placeholder="+/- дни"
+                            on:input={(e) =>
+                              updateDataField(f.id, {
+                                dateAddDays: Number(e.currentTarget.value) || 0
+                              })}
+                          />
+                          <input
+                            type="number"
+                            value={f.dateAddMonths || 0}
+                            placeholder="+/- месяцы"
+                            on:input={(e) =>
+                              updateDataField(f.id, {
+                                dateAddMonths: Number(e.currentTarget.value) || 0
+                              })}
+                          />
+                          <select
+                            value={toDateFormatPreset(String(f.dateFormatPreset || 'yyyy_mm_dd'))}
+                            on:change={(e) =>
+                              updateDataField(f.id, {
+                                dateFormatPreset: toDateFormatPreset(e.currentTarget.value)
+                              })}
+                          >
+                            {#each DATE_FORMAT_PRESETS as fmt}
+                              <option value={fmt.value}>{fmt.label}</option>
+                            {/each}
+                          </select>
+                        </div>
+                      {/if}
                     </div>
                   {/each}
                 </div>
@@ -8385,7 +8553,8 @@ function syncParameterEditorsHeight() {
   .table-rule-row { grid-template-columns: 1.2fr 1fr 1fr; }
   .join-rule-row { grid-template-columns: 1fr 1fr 80px 1fr 1fr 1fr; }
   .filter-rule-row { grid-template-columns: 1.2fr 1fr 1fr 1fr; }
-  .param-row { grid-template-columns: 1.2fr 1fr 1fr 140px 72px auto; }
+  .param-row { grid-template-columns: 1.2fr 1fr 1fr 140px 220px 72px auto; }
+  .field-date-row { grid-template-columns: 1fr 140px 140px 1fr; align-items:end; }
   .date-param-row { grid-template-columns: 180px 160px minmax(220px, 1fr) 170px 120px 120px minmax(220px, 1fr); }
   .group-toggle {
     display:flex;
@@ -8523,7 +8692,7 @@ function syncParameterEditorsHeight() {
     .connect-actions { justify-content:flex-start; flex-wrap:wrap; }
     .raw-grid { grid-template-columns: 1fr; }
     .saved-inline-actions { grid-template-columns: 1fr; }
-    .data-row, .table-rule-row, .join-rule-row, .filter-rule-row, .param-row, .date-param-row { grid-template-columns: 1fr; }
+    .data-row, .table-rule-row, .join-rule-row, .filter-rule-row, .param-row, .field-date-row, .date-param-row { grid-template-columns: 1fr; }
     .pagination-limit-toggles,
     .pagination-limit-values {
       max-width:100%;
