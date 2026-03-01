@@ -2726,7 +2726,22 @@ function handleDefinitionInput(value: string) {
       : await loadParameterRowsForAliases(draft.parameterDefinitions, requiredAliases);
     Object.assign(issues, dataset.issues);
     if (!dataset.rows.length) {
-      throw new Error('Нет строк в источнике данных для построения запросов');
+      const issueEntries = Object.entries(issues);
+      if (issueEntries.length) {
+        const details = issueEntries
+          .slice(0, 5)
+          .map(([k, v]) => `${k}: ${v}`)
+          .join('; ');
+        throw new Error(`Нет строк для групповой отправки. Причины: ${details}`);
+      }
+      if (hasDataModelConfigured(draft)) {
+        throw new Error(
+          `Конструктор данных вернул 0 строк. Проверь Таблицы/Связи/Фильтры и "Предпросмотр данных". Нужные поля: ${requiredAliases.join(', ')}`
+        );
+      }
+      throw new Error(
+        `Витрина параметров вернула 0 строк. Для группировки параметры должны быть из одной таблицы и с совместимыми условиями. Нужные поля: ${requiredAliases.join(', ')}`
+      );
     }
 
     const grouped = new Map<string, { key: Record<string, any>; rows: Array<Record<string, any>> }>();
