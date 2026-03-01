@@ -2175,36 +2175,6 @@ function formatBytes(bytes: number) {
     }
   }
 
-  function readNumberByPath(obj: any, path: string): number | null {
-    const value = getByPath(obj, path);
-    if (value === undefined || value === null) return null;
-    const num = Number(value);
-    return Number.isFinite(num) ? num : null;
-  }
-
-  function tryReadCursorTotalFromResponse(payload: any): number | null {
-    const candidates = ['cursor.total', 'pagination.total', 'meta.total', 'total'];
-    for (const path of candidates) {
-      const n = readNumberByPath(payload, path);
-      if (n !== null) return n;
-    }
-    return null;
-  }
-
-  function tryReadCursorLimitFromRequest(queryObj: Record<string, any>, bodyObj: any): number | null {
-    const bodyCandidates = ['settings.cursor.limit', 'cursor.limit', 'limit'];
-    for (const path of bodyCandidates) {
-      const n = readNumberByPath(bodyObj, path);
-      if (n !== null) return n;
-    }
-    const queryCandidates = ['limit', 'cursor.limit'];
-    for (const path of queryCandidates) {
-      const n = readNumberByPath(queryObj, path);
-      if (n !== null) return n;
-    }
-    return null;
-  }
-
   function resolveAbsoluteUrl(urlText: string, draft: ApiDraft) {
     const raw = String(urlText || '').trim();
     if (!raw) return fullUrl(draft);
@@ -4873,23 +4843,6 @@ function handleDefinitionInput(value: string) {
         break;
       }
 
-      if (paginationParameters.length) {
-        const total = tryReadCursorTotalFromResponse(parsed);
-        const limit = tryReadCursorLimitFromRequest(queryObj, bodyObj);
-        if (
-          total !== null &&
-          limit !== null &&
-          Number.isFinite(total) &&
-          Number.isFinite(limit) &&
-          total <= limit
-        ) {
-          stopReason = `Остановка: total (${total}) <= limit (${limit})`;
-          responseEntry.decision = 'stop';
-          responseEntry.stop_reason = stopReason;
-          break;
-        }
-      }
-
       if (paginationStopRules.length) {
         const runtimeTokenMap: Record<string, any> = {};
         paginationParameters.forEach((param) => {
@@ -5320,16 +5273,6 @@ function handleDefinitionInput(value: string) {
       state.done = true;
       state.stopReason = `HTTP ошибка ${state.lastStatus}`;
       responseEntry.decision = 'fail';
-      responseEntry.stop_reason = state.stopReason;
-      return { entry: responseEntry, done: true, stopReason: state.stopReason };
-    }
-
-    const total = state.paginationParameters.length ? tryReadCursorTotalFromResponse(parsed) : null;
-    const limit = state.paginationParameters.length ? tryReadCursorLimitFromRequest(queryObj, bodyObj) : null;
-    if (total !== null && limit !== null && total <= limit) {
-      state.done = true;
-      state.stopReason = `Остановка: total (${total}) <= limit (${limit})`;
-      responseEntry.decision = 'stop';
       responseEntry.stop_reason = state.stopReason;
       return { entry: responseEntry, done: true, stopReason: state.stopReason };
     }
