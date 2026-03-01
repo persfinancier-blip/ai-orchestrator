@@ -60,6 +60,25 @@
     applyForAllResponses: boolean;
   };
 
+  type PaginationStopOperator =
+    | 'equals'
+    | 'not_equals'
+    | 'gt'
+    | 'gte'
+    | 'lt'
+    | 'lte'
+    | 'contains'
+    | 'not_contains'
+    | 'is_empty'
+    | 'not_empty';
+
+  type PaginationStopRule = {
+    id: string;
+    responsePath: string;
+    operator: PaginationStopOperator;
+    compareValue: string;
+  };
+
   type ApiDraft = {
     localId: string;
     storeId?: number;
@@ -99,6 +118,7 @@
     paginationStopOnSameResponse: boolean;
     paginationSameResponseLimit: number;
     paginationStopOnHttpError: boolean;
+    paginationStopRules: PaginationStopRule[];
     paginationParameters: PaginationParameter[];
     pickedPaths: string[];
     responseTargets: Array<{
@@ -170,6 +190,18 @@
       { value: 'after', label: 'позже' }
     ]
   };
+  const PAGINATION_STOP_OPERATORS: Array<{ value: PaginationStopOperator; label: string }> = [
+    { value: 'equals', label: 'равно' },
+    { value: 'not_equals', label: 'не равно' },
+    { value: 'gt', label: 'больше' },
+    { value: 'gte', label: 'больше или равно' },
+    { value: 'lt', label: 'меньше' },
+    { value: 'lte', label: 'меньше или равно' },
+    { value: 'contains', label: 'содержит' },
+    { value: 'not_contains', label: 'не содержит' },
+    { value: 'is_empty', label: 'пусто' },
+    { value: 'not_empty', label: 'не пусто' }
+  ];
 
   const API_STORAGE_REQUIRED_COLUMNS: Array<{ name: string; types: string[] }> = [
     { name: 'api_name', types: ['text', 'character varying', 'varchar'] },
@@ -335,6 +367,27 @@
 
   function toPaginationParameterTarget(v: string): PaginationParameterTarget {
     return v === 'query' || v === 'header' || v === 'auth' ? (v as PaginationParameterTarget) : 'body';
+  }
+
+  function toPaginationStopOperator(v: string): PaginationStopOperator {
+    return [
+      'equals',
+      'not_equals',
+      'gt',
+      'gte',
+      'lt',
+      'lte',
+      'contains',
+      'not_contains',
+      'is_empty',
+      'not_empty'
+    ].includes(v)
+      ? (v as PaginationStopOperator)
+      : 'equals';
+  }
+
+  function paginationStopOperatorNeedsValue(op: PaginationStopOperator) {
+    return op !== 'is_empty' && op !== 'not_empty';
   }
 
   function tryObj(v: any): any {
@@ -505,6 +558,7 @@ function formatBytes(bytes: number) {
       paginationStopOnSameResponse: true,
       paginationSameResponseLimit: 5,
       paginationStopOnHttpError: true,
+      paginationStopRules: [],
       paginationCustomStrategy: '',
       paginationParameters: [],
       pickedPaths: [],
@@ -743,6 +797,23 @@ function formatBytes(bytes: number) {
       paginationStopOnHttpErrorRaw === undefined || paginationStopOnHttpErrorRaw === null
         ? true
         : Boolean(paginationStopOnHttpErrorRaw);
+    const paginationStopRulesRaw = Array.isArray((stopConditions as any)?.response_rules)
+      ? (stopConditions as any).response_rules
+      : Array.isArray((stopConditions as any)?.rules)
+      ? (stopConditions as any).rules
+      : [];
+    const normalizedPaginationStopRules: PaginationStopRule[] = paginationStopRulesRaw
+      .map((rule: any) =>
+        normalizePaginationStopRule(
+          {
+            id: String(rule?.id || ''),
+            responsePath: String(rule?.response_path || rule?.responsePath || rule?.path || ''),
+            operator: String(rule?.operator || 'equals'),
+            compareValue: String(rule?.compare_value || rule?.compareValue || rule?.value || '')
+          }
+        )
+      )
+      .filter((rule: PaginationStopRule) => rule.responsePath);
     const paginationParamsRaw = Array.isArray(pagination?.parameters)
       ? pagination.parameters
       : Array.isArray((mapping as any)?.pagination_parameters)
@@ -826,6 +897,7 @@ function formatBytes(bytes: number) {
       paginationStopOnSameResponse,
       paginationSameResponseLimit,
       paginationStopOnHttpError,
+      paginationStopRules: normalizedPaginationStopRules,
       paginationCustomStrategy: paginationCustomStrategyValue,
       paginationParameters: normalizedPaginationParameters,
       pickedPaths: pickedPathsSource.map((x: any) => String(x || '').trim()).filter(Boolean),
@@ -877,6 +949,14 @@ function formatBytes(bytes: number) {
       request_path: p.requestPath,
       apply_for_all_responses: true
     }));
+    const paginationStopRulesPayload = paginationStopRulesForDraft(d)
+      .filter((rule) => String(rule.responsePath || '').trim())
+      .map((rule) => ({
+        id: rule.id,
+        response_path: rule.responsePath,
+        operator: rule.operator,
+        compare_value: rule.compareValue
+      }));
     const legacyCursorParams = paginationParametersPayload.filter((p) => p.response_path || p.request_path);
     const cursor1 = legacyCursorParams[0];
     const cursor2 = legacyCursorParams[1];
@@ -918,7 +998,8 @@ function formatBytes(bytes: number) {
           on_missing_pagination_value: Boolean(d.paginationStopOnMissingValue),
           on_same_response: Boolean(d.paginationStopOnSameResponse),
           same_response_limit: Math.max(2, Number(d.paginationSameResponseLimit || 5)),
-          on_http_error: Boolean(d.paginationStopOnHttpError)
+          on_http_error: Boolean(d.paginationStopOnHttpError),
+          response_rules: paginationStopRulesPayload
         },
         custom_strategy: d.paginationCustomStrategy,
         parameters: paginationParametersPayload
@@ -1451,6 +1532,46 @@ function formatBytes(bytes: number) {
     updatePaginationParameter(activePaginationParameterId, { responsePath: path });
   }
 
+  function paginationStopRulePathOptionsFor(current: string) {
+    const fromPreview = Array.isArray(paginationCursorResponsePathOptions) ? paginationCursorResponsePathOptions : [];
+    const fromPicked = Array.isArray(selected?.pickedPaths) ? selected?.pickedPaths : [];
+    const base = uniqueAliasList([...fromPreview, ...fromPicked].map((path) => String(path || '').trim()).filter(Boolean));
+    if (current && !base.includes(current)) return [current, ...base];
+    return base;
+  }
+
+  function addPaginationStopRule() {
+    if (!selected) return;
+    const next = normalizePaginationStopRule(
+      {
+        id: uid(),
+        responsePath: '',
+        operator: 'equals',
+        compareValue: ''
+      }
+    );
+    mutateSelected((d) => {
+      d.paginationEnabled = true;
+      d.paginationStopRules = [...(Array.isArray(d.paginationStopRules) ? d.paginationStopRules : []), next];
+    });
+  }
+
+  function updatePaginationStopRule(id: string, updates: Partial<PaginationStopRule>) {
+    if (!selected) return;
+    mutateSelected((d) => {
+      d.paginationStopRules = (Array.isArray(d.paginationStopRules) ? d.paginationStopRules : []).map((rule) =>
+        rule.id === id ? normalizePaginationStopRule({ ...rule, ...updates }) : rule
+      );
+    });
+  }
+
+  function removePaginationStopRule(id: string) {
+    if (!selected) return;
+    mutateSelected((d) => {
+      d.paginationStopRules = (Array.isArray(d.paginationStopRules) ? d.paginationStopRules : []).filter((rule) => rule.id !== id);
+    });
+  }
+
   function addPickedPathFromPicker() {
     const path = String(responsePathPick || '').trim();
     if (!path) return;
@@ -1775,6 +1896,148 @@ function formatBytes(bytes: number) {
       return;
     }
     headersObj[path] = value;
+  }
+
+  function readPaginationStopRuleValueFromResponse(payload: any, rule: PaginationStopRule) {
+    const rawPath = String(rule?.responsePath || '').trim();
+    if (!rawPath) return undefined;
+    const direct = getByPath(payload, rawPath);
+    if (direct !== undefined) return direct;
+
+    const strippedPath = stripGroupedResponsePrefix(rawPath);
+    if (strippedPath && strippedPath !== rawPath) {
+      const strippedValue = getByPath(payload, strippedPath);
+      if (strippedValue !== undefined) return strippedValue;
+    }
+
+    const responses = Array.isArray(payload?.responses) ? payload.responses : [];
+    if (!responses.length) return direct;
+    const candidatePaths = uniqueAliasList(
+      [strippedPath, rawPath]
+        .map((path) => String(path || '').trim())
+        .filter(Boolean)
+        .map((path) => stripGroupedResponsePrefix(path))
+        .filter(Boolean)
+    );
+    for (const entry of responses) {
+      const source = entry && typeof entry === 'object' && 'response' in entry ? entry.response : entry;
+      for (const path of candidatePaths) {
+        const value = path ? getByPath(source, path) : source;
+        if (value !== undefined) return value;
+      }
+    }
+    return direct;
+  }
+
+  function isPaginationStopValueEmpty(value: any) {
+    if (value === undefined || value === null) return true;
+    if (typeof value === 'string') return !value.trim();
+    if (Array.isArray(value)) return value.length === 0;
+    if (typeof value === 'object') return Object.keys(value).length === 0;
+    return false;
+  }
+
+  function toNumberOrNull(value: any): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    const txt = String(value ?? '').trim();
+    if (!txt) return null;
+    const n = Number(txt);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function parseStopRuleCompareValue(raw: string): any {
+    const txt = String(raw || '').trim();
+    if (!txt) return '';
+    if (txt.toLowerCase() === 'null') return null;
+    if (txt.toLowerCase() === 'true') return true;
+    if (txt.toLowerCase() === 'false') return false;
+    if (/^-?\d+(\.\d+)?$/.test(txt)) return Number(txt);
+    return txt;
+  }
+
+  function stringValueForContains(value: any) {
+    if (value === undefined || value === null) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+
+  function paginationStopOperatorLabel(op: PaginationStopOperator) {
+    const found = PAGINATION_STOP_OPERATORS.find((item) => item.value === op);
+    return found?.label || op;
+  }
+
+  function evaluatePaginationStopRule(rule: PaginationStopRule, actualValue: any) {
+    const op = rule.operator;
+    const compareRaw = String(rule.compareValue || '');
+    const expected = parseStopRuleCompareValue(compareRaw);
+
+    if (op === 'is_empty') return isPaginationStopValueEmpty(actualValue);
+    if (op === 'not_empty') return !isPaginationStopValueEmpty(actualValue);
+
+    if (op === 'contains' || op === 'not_contains') {
+      const needle = String(compareRaw || '').trim().toLowerCase();
+      let contains = false;
+      if (needle) {
+        if (Array.isArray(actualValue)) {
+          contains = actualValue.some((item) => stringValueForContains(item).toLowerCase().includes(needle));
+        } else {
+          contains = stringValueForContains(actualValue).toLowerCase().includes(needle);
+        }
+      }
+      return op === 'contains' ? contains : !contains;
+    }
+
+    if (op === 'gt' || op === 'gte' || op === 'lt' || op === 'lte') {
+      const left = toNumberOrNull(actualValue);
+      const right = toNumberOrNull(compareRaw);
+      if (left === null || right === null) return false;
+      if (op === 'gt') return left > right;
+      if (op === 'gte') return left >= right;
+      if (op === 'lt') return left < right;
+      return left <= right;
+    }
+
+    if (op === 'equals' || op === 'not_equals') {
+      let equal = false;
+      if (actualValue === null || actualValue === undefined) {
+        equal = expected === null || expected === '';
+      } else if (typeof actualValue === 'number' && typeof expected === 'number') {
+        equal = actualValue === expected;
+      } else if (typeof actualValue === 'boolean' && typeof expected === 'boolean') {
+        equal = actualValue === expected;
+      } else {
+        equal = String(actualValue) === String(expected);
+      }
+      return op === 'equals' ? equal : !equal;
+    }
+
+    return false;
+  }
+
+  function formatPaginationStopRuleReason(rule: PaginationStopRule, actualValue: any) {
+    const left = String(rule.responsePath || '?');
+    const opLabel = paginationStopOperatorLabel(rule.operator);
+    if (paginationStopOperatorNeedsValue(rule.operator)) {
+      return `Сработало условие: ${left} ${opLabel} ${String(rule.compareValue || '')} (текущее: ${stringValueForContains(actualValue)})`;
+    }
+    return `Сработало условие: ${left} ${opLabel}`;
+  }
+
+  function findMatchedPaginationStopRule(payload: any, rules: PaginationStopRule[]) {
+    for (const rule of rules) {
+      const path = String(rule?.responsePath || '').trim();
+      if (!path) continue;
+      const actualValue = readPaginationStopRuleValueFromResponse(payload, rule);
+      if (evaluatePaginationStopRule(rule, actualValue)) {
+        return { rule, actualValue };
+      }
+    }
+    return null;
   }
 
   function stableJsonStringify(value: any): string {
@@ -2336,6 +2599,15 @@ function formatBytes(bytes: number) {
     };
   }
 
+  function normalizePaginationStopRule(input: Partial<PaginationStopRule> | null | undefined): PaginationStopRule {
+    return {
+      id: String(input?.id || uid()),
+      responsePath: String(input?.responsePath || '').trim(),
+      operator: toPaginationStopOperator(String(input?.operator || 'equals').trim()),
+      compareValue: String(input?.compareValue || '').trim()
+    };
+  }
+
   function paginationParametersForDraft(draft: ApiDraft | null): PaginationParameter[] {
     if (!draft) return [];
     const direct = (Array.isArray(draft.paginationParameters) ? draft.paginationParameters : [])
@@ -2375,6 +2647,12 @@ function formatBytes(bytes: number) {
       );
     }
     return legacy;
+  }
+
+  function paginationStopRulesForDraft(draft: ApiDraft | null): PaginationStopRule[] {
+    if (!draft) return [];
+    return (Array.isArray(draft.paginationStopRules) ? draft.paginationStopRules : [])
+      .map((rule) => normalizePaginationStopRule(rule));
   }
 
   function bindingAliasOptions(draft: ApiDraft | null) {
@@ -4196,6 +4474,9 @@ function handleDefinitionInput(value: string) {
     const paginationAliasesLower = new Set(
       paginationParameters.map((param) => String(param?.alias || '').trim().toLowerCase()).filter(Boolean)
     );
+    const paginationStopRules = paginationStopRulesForDraft(draft).filter(
+      (rule) => String(rule?.responsePath || '').trim()
+    );
     const paginationState: Record<string, any> = {};
     let bodyCursorState = isBodyMethod && reqPlan?.body && typeof reqPlan.body === 'object' ? deepClone(reqPlan.body) : {};
     let cursorQueryState: Record<string, any> = {};
@@ -4366,6 +4647,15 @@ function handleDefinitionInput(value: string) {
         stopReason = `HTTP ошибка ${lastStatus}`;
         responseEntry.stop_reason = stopReason;
         break;
+      }
+
+      if (paginationStopRules.length) {
+        const matched = findMatchedPaginationStopRule(parsed, paginationStopRules);
+        if (matched) {
+          stopReason = formatPaginationStopRuleReason(matched.rule, matched.actualValue);
+          responseEntry.stop_reason = stopReason;
+          break;
+        }
       }
 
       let stop = false;
@@ -5820,6 +6110,57 @@ function syncParameterEditorsHeight() {
                   />
                 </div>
               </div>
+              <div class="pagination-stop-rules">
+                <div class="response-head field-head parameter-subhead">
+                  <small>Условия остановки по полю ответа</small>
+                  <button type="button" class="view-toggle" on:click={addPaginationStopRule}>Условие +</button>
+                </div>
+                {#if selected?.paginationStopRules?.length}
+                  <div class="pagination-stop-rules-list">
+                    {#each selected.paginationStopRules as rule (rule.id)}
+                      <div class="data-row pagination-stop-rule-row">
+                        <select
+                          value={rule.responsePath}
+                          on:change={(e) => updatePaginationStopRule(rule.id, { responsePath: e.currentTarget.value })}
+                        >
+                          <option value="">Выбор пути в ответе</option>
+                          {#each paginationStopRulePathOptionsFor(rule.responsePath) as opt}
+                            <option value={opt}>{opt}</option>
+                          {/each}
+                        </select>
+                        <input
+                          value={rule.responsePath}
+                          placeholder="Путь в ответе"
+                          on:input={(e) => updatePaginationStopRule(rule.id, { responsePath: e.currentTarget.value })}
+                        />
+                        <select
+                          value={rule.operator}
+                          on:change={(e) =>
+                            updatePaginationStopRule(rule.id, {
+                              operator: toPaginationStopOperator(e.currentTarget.value),
+                              compareValue: paginationStopOperatorNeedsValue(toPaginationStopOperator(e.currentTarget.value))
+                                ? rule.compareValue
+                                : ''
+                            })}
+                        >
+                          {#each PAGINATION_STOP_OPERATORS as op}
+                            <option value={op.value}>{op.label}</option>
+                          {/each}
+                        </select>
+                        <input
+                          value={rule.compareValue}
+                          placeholder="Значение"
+                          on:input={(e) => updatePaginationStopRule(rule.id, { compareValue: e.currentTarget.value })}
+                          disabled={!paginationStopOperatorNeedsValue(rule.operator)}
+                        />
+                        <button type="button" class="chip-remove" title="Удалить условие" on:click={() => removePaginationStopRule(rule.id)}>x</button>
+                      </div>
+                    {/each}
+                  </div>
+                {:else}
+                  <p class="hint">Добавь условие, если нужно останавливать пагинацию по значению в ответе.</p>
+                {/if}
+              </div>
               <p class="hint small-hint">Причина остановки показывается в результате проверки для каждого запроса.</p>
             </div>
           {:else}
@@ -6307,6 +6648,30 @@ function syncParameterEditorsHeight() {
     gap:8px;
     align-items:end;
   }
+  .pagination-stop-rules {
+    margin-top:8px;
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+  }
+  .pagination-stop-rules-list {
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+  }
+  .pagination-stop-rule-row {
+    grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) 180px 160px auto;
+    align-items:end;
+    padding:8px;
+    border:1px solid #e2e8f0;
+    border-radius:10px;
+    background:#fff;
+  }
+  .pagination-stop-rule-row .chip-remove {
+    align-self:center;
+    justify-self:center;
+    font-size:14px;
+  }
   .json-code-editor {
     font-family: "Cascadia Mono", Consolas, "SFMono-Regular", Menlo, Monaco, monospace;
     font-size:12px;
@@ -6323,7 +6688,8 @@ function syncParameterEditorsHeight() {
     .saved-inline-actions { grid-template-columns: 1fr; }
     .data-row, .table-rule-row, .join-rule-row, .filter-rule-row, .param-row { grid-template-columns: 1fr; }
     .pagination-param-inline-row,
-    .pagination-stop-limit {
+    .pagination-stop-limit,
+    .pagination-stop-rule-row {
       grid-template-columns: 1fr;
     }
   }
