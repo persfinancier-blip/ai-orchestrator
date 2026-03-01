@@ -702,12 +702,7 @@ function formatBytes(bytes: number) {
           ? (String(p?.request_target || p?.requestTarget || '').trim() as PaginationParameterTarget)
           : 'body',
         requestPath: String(p?.request_path || p?.requestPath || '').trim(),
-        applyForAllResponses: Boolean(
-          p?.apply_for_all_responses ??
-            p?.applyForAllResponses ??
-            p?.same_for_all_responses ??
-            p?.sameForAllResponses
-        )
+        applyForAllResponses: true
       }))
       .filter((p: PaginationParameter) => p.alias);
     if (!normalizedPaginationParameters.length) {
@@ -821,7 +816,7 @@ function formatBytes(bytes: number) {
       response_path: p.responsePath,
       request_target: p.requestTarget,
       request_path: p.requestPath,
-      apply_for_all_responses: Boolean(p.applyForAllResponses)
+      apply_for_all_responses: true
     }));
     const legacyCursorParams = paginationParametersPayload.filter((p) => p.response_path || p.request_path);
     const cursor1 = legacyCursorParams[0];
@@ -1701,8 +1696,6 @@ function formatBytes(bytes: number) {
     const direct = getByPath(payload, rawPath);
     if (direct !== undefined && direct !== null) return direct;
 
-    if (!param.applyForAllResponses) return direct;
-
     const strippedPath = stripGroupedResponsePrefix(rawPath);
     if (strippedPath && strippedPath !== rawPath) {
       const strippedValue = getByPath(payload, strippedPath);
@@ -2306,7 +2299,7 @@ function formatBytes(bytes: number) {
       responsePath: String(input?.responsePath || '').trim(),
       requestTarget: toPaginationParameterTarget(String(input?.requestTarget || 'body').trim()),
       requestPath: requestPathRaw,
-      applyForAllResponses: Boolean(input?.applyForAllResponses)
+      applyForAllResponses: true
     };
   }
 
@@ -5580,14 +5573,6 @@ function syncParameterEditorsHeight() {
                         />
                       </div>
                     </div>
-                    <label class="pagination-param-check">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(activePaginationParameter.applyForAllResponses)}
-                        on:change={(e) => updatePaginationParameter(activePaginationParameter.id, { applyForAllResponses: e.currentTarget.checked })}
-                      />
-                      <span>Одинаковая для всех ответов в группировке</span>
-                    </label>
                     <div class="pagination-helper-row">
                       <select bind:value={paginationCursorResponsePick} disabled={!paginationCursorResponsePathOptions.length}>
                         {#if !paginationCursorResponsePathOptions.length}
@@ -6109,15 +6094,6 @@ function syncParameterEditorsHeight() {
   .pagination-field small { display:block; margin-bottom:4px; font-size:11px; color:#64748b; }
   .pagination-param-editor { margin-top:8px; }
   .pagination-param-grid { margin-top:0; }
-  .pagination-param-check {
-    margin-top:8px;
-    display:inline-flex;
-    align-items:center;
-    gap:8px;
-    font-size:12px;
-    color:#334155;
-  }
-  .pagination-param-check input { width:auto; }
   .pagination-helper-row {
     margin-top:6px;
     display:grid;
