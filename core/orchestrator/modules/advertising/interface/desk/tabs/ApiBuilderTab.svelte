@@ -3076,6 +3076,27 @@ function formatBytes(bytes: number) {
     offset: number
   ): Promise<{ rows: Array<Record<string, any>>; has_more?: boolean }> {
     const aliasFilter = new Set(uniqueAliasList(aliases));
+    const allTables = (draft.dataTables || []).map((t) => ({
+      id: String(t.id || '').trim(),
+      schema: String(t.schema || '').trim(),
+      table: String(t.table || '').trim(),
+      alias: String(t.alias || '').trim()
+    }));
+    const allJoins = (draft.dataJoins || []).map((j) => ({
+      id: String(j.id || '').trim(),
+      left_table_id: String(j.leftTableId || '').trim(),
+      left_field: String(j.leftField || '').trim(),
+      right_table_id: String(j.rightTableId || '').trim(),
+      right_field: String(j.rightField || '').trim(),
+      join_type: j.joinType
+    }));
+    const allFilters = (draft.dataFilters || []).map((f) => ({
+      id: String(f.id || '').trim(),
+      table_id: String(f.tableId || '').trim(),
+      field: String(f.field || '').trim(),
+      operator: String(f.operator || '').trim(),
+      compare_value: String(f.compareValue || '')
+    }));
     const fields = fieldSpecs
       .map((f) => ({
         id: String(f.id || uid()),
@@ -3085,32 +3106,33 @@ function formatBytes(bytes: number) {
       }))
       .filter((f) => f.table_id && f.field && f.alias)
       .filter((f) => (aliasFilter.size ? aliasFilter.has(f.alias) : true));
+
+    // If current selection effectively uses one table, send only that table.
+    // This allows keeping extra tables in breadcrumbs without forcing joins.
+    const usedTableIds = new Set<string>();
+    fields.forEach((f) => {
+      if (f.table_id) usedTableIds.add(f.table_id);
+    });
+    allFilters.forEach((f) => {
+      if (f.table_id) usedTableIds.add(f.table_id);
+    });
+    let tablesForRequest = allTables;
+    let joinsForRequest = allJoins;
+    let filtersForRequest = allFilters;
+    if (usedTableIds.size <= 1 && usedTableIds.size > 0) {
+      tablesForRequest = allTables.filter((t) => usedTableIds.has(t.id));
+      joinsForRequest = [];
+      filtersForRequest = allFilters.filter((f) => usedTableIds.has(f.table_id));
+    }
+
     return apiJson<{ rows: Array<Record<string, any>>; has_more?: boolean }>(`${apiBase}/parameter-join-values`, {
       method: 'POST',
       headers: headers(),
       body: JSON.stringify({
-        tables: (draft.dataTables || []).map((t) => ({
-          id: t.id,
-          schema: t.schema,
-          table: t.table,
-          alias: t.alias
-        })),
-        joins: (draft.dataJoins || []).map((j) => ({
-          id: j.id,
-          left_table_id: j.leftTableId,
-          left_field: j.leftField,
-          right_table_id: j.rightTableId,
-          right_field: j.rightField,
-          join_type: j.joinType
-        })),
+        tables: tablesForRequest,
+        joins: joinsForRequest,
         fields,
-        filters: (draft.dataFilters || []).map((f) => ({
-          id: f.id,
-          table_id: f.tableId,
-          field: f.field,
-          operator: f.operator,
-          compare_value: f.compareValue
-        })),
+        filters: filtersForRequest,
         aliases,
         limit,
         offset
