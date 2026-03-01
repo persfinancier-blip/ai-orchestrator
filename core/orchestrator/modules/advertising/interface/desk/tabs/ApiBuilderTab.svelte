@@ -2669,6 +2669,83 @@ function handleDefinitionInput(value: string) {
     return { map, issues };
   }
 
+  async function resolveRuntimeAliasValues(draft: ApiDraft, requestedAliases: string[]) {
+    const aliases = uniqueAliasList(requestedAliases);
+    const { map: baseMap, issues } = await resolveParameterValues(draft.parameterDefinitions || []);
+    const map: Record<string, any> = { ...(baseMap || {}) };
+    if (!aliases.length) return { map, issues };
+
+    const missing = aliases.filter((alias) => !findAliasInMap(map, alias).found);
+    if (!missing.length || !hasDataModelConfigured(draft)) return { map, issues };
+
+    const dataAliases = uniqueAliasList((draft.dataFields || []).map((f) => String(f?.alias || '').trim()).filter(Boolean));
+    const dataAliasByLower = new Map<string, string>();
+    dataAliases.forEach((alias) => {
+      const key = alias.toLowerCase();
+      if (!dataAliasByLower.has(key)) dataAliasByLower.set(key, alias);
+    });
+    const needFromData = uniqueAliasList(
+      missing
+        .map((alias) => dataAliasByLower.get(alias.toLowerCase()) || '')
+        .filter(Boolean)
+    );
+    if (!needFromData.length) return { map, issues };
+
+    try {
+      const resp = await fetchDataModelRows(draft, needFromData, 1, 0);
+      const firstRow = Array.isArray(resp?.rows) && resp.rows.length ? resp.rows[0] : null;
+      if (firstRow) {
+        needFromData.forEach((alias) => {
+          const value = firstRow[alias];
+          if (value !== undefined && value !== null) map[alias] = value;
+          else if (!issues[alias]) issues[alias] = 'конструктор данных вернул пустое значение';
+        });
+      } else {
+        needFromData.forEach((alias) => {
+          if (!issues[alias]) issues[alias] = 'конструктор данных вернул 0 строк';
+        });
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      needFromData.forEach((alias) => {
+        if (!issues[alias]) issues[alias] = `ошибка чтения из конструктора данных: ${msg}`;
+      });
+    }
+
+    return { map, issues };
+  }
+
+  function applyBindingRulesToRequest(
+    rules: BindingRule[],
+    values: Record<string, any>,
+    authHdr: Record<string, any>,
+    hdr: Record<string, any>,
+    queryObj: Record<string, any>,
+    bodyObj: any
+  ) {
+    for (const rule of Array.isArray(rules) ? rules : []) {
+      const aliasValue = findAliasInMap(values, rule.alias);
+      if (!aliasValue.found || aliasValue.value === undefined || aliasValue.value === null) continue;
+      const value = aliasValue.value;
+      if (rule.target === 'header') {
+        if (String(rule.path || '').trim() === 'Authorization') {
+          const source = authHdr.Authorization;
+          if (typeof source === 'string' && source.includes('{{')) {
+            authHdr.Authorization = applyParametersToValue(source, { [rule.alias]: value });
+          } else {
+            authHdr.Authorization = value;
+          }
+        } else {
+          hdr[rule.path] = value;
+        }
+      } else if (rule.target === 'query') {
+        setByPath(queryObj, rule.path, value);
+      } else if (rule.target === 'body' || rule.target === 'body_item') {
+        setByPath(bodyObj, rule.path, value);
+      }
+    }
+  }
+
   function deepClone<T>(value: T): T {
     return JSON.parse(JSON.stringify(value));
   }
@@ -2960,19 +3037,53 @@ function handleDefinitionInput(value: string) {
       const queryObj = parseJsonObjectField('Query JSON', s.queryJson);
       const bodyRaw = parseJsonAnyField('Body JSON', s.bodyJson);
       const bodyObj = bodyRaw && typeof bodyRaw === 'object' ? deepClone(bodyRaw) : {};
-      const { map: parameterValues, issues: parameterIssues } = await resolveParameterValues(s.parameterDefinitions);
+      const sanitizedAliases = sanitizeAliasReferences(s);
+      const initialTokens = new Set<string>();
+      const urlTemplate = `${s.baseUrl.replace(/\/$/, '')}${s.path.startsWith('/') ? s.path : `/${s.path}`}`;
+      collectParameterTokens(urlTemplate, initialTokens);
+      collectParameterTokens(authHdr, initialTokens);
+      collectParameterTokens(hdr, initialTokens);
+      collectParameterTokens(queryObj, initialTokens);
+      collectParameterTokens(bodyObj, initialTokens);
+      const requestedAliases = uniqueAliasList([
+        ...Array.from(initialTokens),
+        ...sanitizedAliases.bindingRules.map((r) => r.alias)
+      ]);
+      const { map: parameterValues, issues: parameterIssues } = await resolveRuntimeAliasValues(s, requestedAliases);
       if (Object.keys(parameterValues).length) {
         applyParametersToValue(authHdr, parameterValues);
         applyParametersToValue(hdr, parameterValues);
         applyParametersToValue(queryObj, parameterValues);
         applyParametersToValue(bodyObj, parameterValues);
       }
+      applyBindingRulesToRequest(sanitizedAliases.bindingRules, parameterValues, authHdr, hdr, queryObj, bodyObj);
       let url = `${s.baseUrl.replace(/\/$/, '')}${s.path.startsWith('/') ? s.path : `/${s.path}`}`;
       if (Object.keys(parameterValues).length) {
         url = replaceParameterTokens(url, parameterValues);
       }
       const u = new URL(url);
       Object.entries(queryObj || {}).forEach(([k, v]) => u.searchParams.set(k, String(v)));
+      const unresolvedTokens = new Set<string>();
+      collectParameterTokens(u.toString(), unresolvedTokens);
+      collectParameterTokens(authHdr, unresolvedTokens);
+      collectParameterTokens(hdr, unresolvedTokens);
+      collectParameterTokens(queryObj, unresolvedTokens);
+      collectParameterTokens(bodyObj, unresolvedTokens);
+      if (unresolvedTokens.size) {
+        const knownAliasesLower = new Set(
+          [
+            ...uniqueAliasList((s.parameterDefinitions || []).map((p) => String(p?.alias || '').trim()).filter(Boolean)),
+            ...uniqueAliasList((s.dataFields || []).map((f) => String(f?.alias || '').trim()).filter(Boolean))
+          ].map((x) => x.toLowerCase())
+        );
+        const detail = Array.from(unresolvedTokens).map((alias) => {
+          const issueByAlias = findAliasInMap(parameterIssues, alias);
+          if (issueByAlias.found) return `${alias} (${issueByAlias.value})`;
+          if (!knownAliasesLower.has(alias.toLowerCase())) return `${alias} (нет параметра с таким alias)`;
+          return `${alias} (значение не вычислено)`;
+        });
+        throw new Error(`Не удалось подставить параметры: ${detail.join(', ')}`);
+      }
       const request = {
         method: s.method,
         url: u.toString(),
@@ -3318,7 +3429,7 @@ function handleDefinitionInput(value: string) {
         authHdr.Authorization = `${t.tokenType} ${t.token}`;
       }
 
-      const { map: parameterValues, issues: parameterIssues } = await resolveParameterValues(s.parameterDefinitions);
+      const sanitizedAliases = sanitizeAliasReferences(s);
       const definitionAliases = uniqueAliasList(
         (Array.isArray(s.parameterDefinitions) ? s.parameterDefinitions : [])
           .map((p) => String(p?.alias || '').trim())
@@ -3338,42 +3449,11 @@ function handleDefinitionInput(value: string) {
       collectParameterTokens(hdr, initialTokens);
       collectParameterTokens(queryObjBase, initialTokens);
       collectParameterTokens(bodyObjBase, initialTokens);
-
-      const missingForValues = Array.from(initialTokens).filter((alias) => !findAliasInMap(parameterValues, alias).found);
-      if (missingForValues.length && hasDataModelConfigured(s) && dataModelAliases.length) {
-        const dataAliasByLower = new Map<string, string>();
-        dataModelAliases.forEach((alias) => {
-          const key = alias.toLowerCase();
-          if (!dataAliasByLower.has(key)) dataAliasByLower.set(key, alias);
-        });
-        const neededFromDataModel = uniqueAliasList(
-          missingForValues
-            .map((alias) => dataAliasByLower.get(alias.toLowerCase()) || '')
-            .filter(Boolean)
-        );
-        if (neededFromDataModel.length) {
-          try {
-            const resp = await fetchDataModelRows(s, neededFromDataModel, 1, 0);
-            const firstRow = Array.isArray(resp?.rows) && resp.rows.length ? resp.rows[0] : null;
-            if (firstRow) {
-              neededFromDataModel.forEach((alias) => {
-                const value = firstRow[alias];
-                if (value !== undefined && value !== null) parameterValues[alias] = value;
-                else if (!parameterIssues[alias]) parameterIssues[alias] = 'конструктор данных вернул пустое значение';
-              });
-            } else {
-              neededFromDataModel.forEach((alias) => {
-                if (!parameterIssues[alias]) parameterIssues[alias] = 'конструктор данных вернул 0 строк';
-              });
-            }
-          } catch (error) {
-            const msg = error instanceof Error ? error.message : String(error);
-            neededFromDataModel.forEach((alias) => {
-              if (!parameterIssues[alias]) parameterIssues[alias] = `ошибка чтения из конструктора данных: ${msg}`;
-            });
-          }
-        }
-      }
+      const requestedAliases = uniqueAliasList([
+        ...Array.from(initialTokens),
+        ...sanitizedAliases.bindingRules.map((r) => r.alias)
+      ]);
+      const { map: parameterValues, issues: parameterIssues } = await resolveRuntimeAliasValues(s, requestedAliases);
 
       const hasParameterValues = Object.keys(parameterValues).length > 0;
       if (hasParameterValues) {
@@ -3382,6 +3462,7 @@ function handleDefinitionInput(value: string) {
         applyParametersToValue(queryObjBase, parameterValues);
         applyParametersToValue(bodyObjBase, parameterValues);
       }
+      applyBindingRulesToRequest(sanitizedAliases.bindingRules, parameterValues, authHdr, hdr, queryObjBase, bodyObjBase);
 
       let nextUrlOverride = '';
       const pagesMax = s.paginationEnabled ? Math.max(1, Number(s.paginationMaxPages || 1)) : 1;
