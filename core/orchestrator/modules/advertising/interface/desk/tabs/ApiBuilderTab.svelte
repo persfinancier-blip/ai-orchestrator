@@ -2480,12 +2480,28 @@ function handleDefinitionInput(value: string) {
     return String(value);
   }
 
+  function findAliasInMap<T = any>(map: Record<string, T>, rawAlias: string): { found: boolean; key: string; value?: T } {
+    const alias = String(rawAlias || '').trim();
+    if (!alias || !map || typeof map !== 'object') return { found: false, key: '' };
+    if (Object.prototype.hasOwnProperty.call(map, alias)) {
+      return { found: true, key: alias, value: map[alias] };
+    }
+    const lower = alias.toLowerCase();
+    for (const key of Object.keys(map)) {
+      if (key.toLowerCase() === lower) {
+        return { found: true, key, value: map[key] };
+      }
+    }
+    return { found: false, key: '' };
+  }
+
   function replaceParameterTokens(str: string, map: Record<string, any>) {
     if (!str || !map || !Object.keys(map).length) return str;
     return str.replace(PARAMETER_TOKEN_RE, (match, rawAlias) => {
       const alias = String(rawAlias || '').trim();
-      if (!alias || !Object.prototype.hasOwnProperty.call(map, alias)) return match;
-      const value = map[alias];
+      const resolved = findAliasInMap(map, alias);
+      if (!alias || !resolved.found) return match;
+      const value = resolved.value;
       if (value === undefined || value === null) return match;
       if (typeof value === 'string') return value;
       if (typeof value === 'object') return JSON.stringify(value);
@@ -2499,8 +2515,9 @@ function handleDefinitionInput(value: string) {
       const exact = value.match(PARAMETER_TOKEN_EXACT_RE);
       if (exact?.[1]) {
         const alias = String(exact[1] || '').trim();
-        if (alias && Object.prototype.hasOwnProperty.call(map, alias)) {
-          const raw = map[alias];
+        const resolved = findAliasInMap(map, alias);
+        if (alias && resolved.found) {
+          const raw = resolved.value;
           if (raw !== undefined && raw !== null) return raw;
         }
       }
@@ -3271,11 +3288,62 @@ function handleDefinitionInput(value: string) {
       }
 
       const { map: parameterValues, issues: parameterIssues } = await resolveParameterValues(s.parameterDefinitions);
-      const knownAliases = new Set(
+      const definitionAliases = uniqueAliasList(
         (Array.isArray(s.parameterDefinitions) ? s.parameterDefinitions : [])
           .map((p) => String(p?.alias || '').trim())
           .filter(Boolean)
       );
+      const dataModelAliases = uniqueAliasList(
+        (Array.isArray(s.dataFields) ? s.dataFields : [])
+          .map((f) => String(f?.alias || '').trim())
+          .filter(Boolean)
+      );
+      const knownAliasesLower = new Set([...definitionAliases, ...dataModelAliases].map((x) => x.toLowerCase()));
+
+      const requestBase = `${s.baseUrl.replace(/\/$/, '')}${s.path.startsWith('/') ? s.path : `/${s.path}`}`;
+      const initialTokens = new Set<string>();
+      collectParameterTokens(requestBase, initialTokens);
+      collectParameterTokens(authHdr, initialTokens);
+      collectParameterTokens(hdr, initialTokens);
+      collectParameterTokens(queryObjBase, initialTokens);
+      collectParameterTokens(bodyObjBase, initialTokens);
+
+      const missingForValues = Array.from(initialTokens).filter((alias) => !findAliasInMap(parameterValues, alias).found);
+      if (missingForValues.length && hasDataModelConfigured(s) && dataModelAliases.length) {
+        const dataAliasByLower = new Map<string, string>();
+        dataModelAliases.forEach((alias) => {
+          const key = alias.toLowerCase();
+          if (!dataAliasByLower.has(key)) dataAliasByLower.set(key, alias);
+        });
+        const neededFromDataModel = uniqueAliasList(
+          missingForValues
+            .map((alias) => dataAliasByLower.get(alias.toLowerCase()) || '')
+            .filter(Boolean)
+        );
+        if (neededFromDataModel.length) {
+          try {
+            const resp = await fetchDataModelRows(s, neededFromDataModel, 1, 0);
+            const firstRow = Array.isArray(resp?.rows) && resp.rows.length ? resp.rows[0] : null;
+            if (firstRow) {
+              neededFromDataModel.forEach((alias) => {
+                const value = firstRow[alias];
+                if (value !== undefined && value !== null) parameterValues[alias] = value;
+                else if (!parameterIssues[alias]) parameterIssues[alias] = 'конструктор данных вернул пустое значение';
+              });
+            } else {
+              neededFromDataModel.forEach((alias) => {
+                if (!parameterIssues[alias]) parameterIssues[alias] = 'конструктор данных вернул 0 строк';
+              });
+            }
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            neededFromDataModel.forEach((alias) => {
+              if (!parameterIssues[alias]) parameterIssues[alias] = `ошибка чтения из конструктора данных: ${msg}`;
+            });
+          }
+        }
+      }
+
       const hasParameterValues = Object.keys(parameterValues).length > 0;
       if (hasParameterValues) {
         applyParametersToValue(authHdr, parameterValues);
@@ -3334,8 +3402,9 @@ function handleDefinitionInput(value: string) {
         collectParameterTokens(bodyObj, unresolvedTokens);
         if (unresolvedTokens.size) {
           const detail = Array.from(unresolvedTokens).map((alias) => {
-            if (parameterIssues[alias]) return `${alias} (${parameterIssues[alias]})`;
-            if (!knownAliases.has(alias)) return `${alias} (нет параметра с таким alias)`;
+            const issueByAlias = findAliasInMap(parameterIssues, alias);
+            if (issueByAlias.found) return `${alias} (${issueByAlias.value})`;
+            if (!knownAliasesLower.has(alias.toLowerCase())) return `${alias} (нет параметра с таким alias)`;
             return `${alias} (значение не вычислено)`;
           });
           throw new Error(`Не удалось подставить параметры: ${detail.join(', ')}`);
@@ -4208,6 +4277,9 @@ function syncParameterEditorsHeight() {
                   {/each}
                 </div>
                 {#if selectedApiAlias}
+                  <p class="hint small-hint">
+                    Alias выбранного параметра: <strong>{selectedApiAlias}</strong>
+                  </p>
                   <p class="hint small-hint">
                     Источник: {aliasSourceLabel(selected, selectedApiAlias)}
                   </p>
