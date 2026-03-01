@@ -3091,307 +3091,6 @@ function syncParameterEditorsHeight() {
       {/if}
     </div>
 
-    <div class="subsec">
-      <div class="subttl">Витрина параметров</div>
-      <div class="parameter-panel">
-        <div class="parameter-list-panel no-border">
-          <div class="parameter-list-header">
-            <span class="parameter-list-title">Параметры</span>
-            <button class="icon-btn plus-dark" type="button" title="Добавить параметр" on:click={addParameterDefinition}>+</button>
-          </div>
-            {#if selected?.parameterDefinitions?.length}
-              <div class="parameter-crumbs">
-                {#each selected.parameterDefinitions as param (param.id)}
-                  <button
-                    type="button"
-                    class="parameter-crumb"
-                    class:active-crumb={selectedParameterId === param.id}
-                    draggable="true"
-                    on:dragstart={(e) => parameterCardDragStart(param, e)}
-                    on:click={() => setActiveParameter(param.id)}
-                    title={parameterConditionSummary(param.conditions?.[0] || {})}
-                  >
-                    {#if selectedParameterId === param.id}
-                      <span class="crumb-indicator active-indicator"></span>
-                    {/if}
-                    <span class="crumb-label">{param.alias}</span>
-                    <span
-                      role="button"
-                      tabindex="-1"
-                      class="crumb-close"
-                      aria-label="Удалить параметр"
-                      on:click|stopPropagation={() => removeParameterDefinition(param.id)}
-                    >
-                      ×
-                    </span>
-                  </button>
-                {/each}
-              </div>
-            {:else}
-              <p class="hint">Добавь параметр, чтобы сформировать значение.</p>
-            {/if}
-          </div>
-        <div class="parameter-editor no-border">
-          {#if activeParameter}
-            <div class="parameter-editor-inner">
-              <textarea
-                class="parameter-alias autoheight"
-                rows="1"
-                bind:this={aliasParamEl}
-                placeholder="Псевдоним параметра"
-                value={activeParameter.alias}
-                on:input={(e) => {
-                  definitionDirty = false;
-                  updateParameterDefinition(activeParameter.id, { alias: e.currentTarget.value });
-                  tick().then(syncParameterEditorsHeight);
-                }}
-              ></textarea>
-              <div class="subttl response-head field-head">
-                <span>Предпросмотр параметра</span>
-                <span class="inline-actions parameter-preview-controls">
-                  <button
-                    type="button"
-                    class="icon-btn refresh-btn"
-                    aria-label="Обновить"
-                    title="Обновить"
-                    on:click={loadParameterPreview}
-                    disabled={parameterPreviewLoading}
-                  >
-                    ↻
-                  </button>
-                  <button
-                    type="button"
-                    class="icon-btn danger"
-                    aria-label="Очистить предпросмотр"
-                    title="Очистить предпросмотр"
-                    on:click={clearParameterPreview}
-                  >
-                    ×
-                  </button>
-                </span>
-              </div>
-              <div class="parameter-preview-block">
-                {#if parameterPreviewLoading}
-                  <p class="hint">Загружаем строки из таблицы...</p>
-                {:else if parameterPreviewError}
-                  <p class="definition-error">{parameterPreviewError}</p>
-                {:else if !parameterPreviewRows.length}
-                  <!-- пусто -->
-                {:else}
-                  <div class="parameter-preview-list">
-                    {#each parameterPreviewRows as row, idx}
-                      <div class="preview-row">
-                        <span class="row-index">{idx + 1}</span>
-                        <span class="row-value">{formatParameterRowValue(row, activeParameter.sourceField)}</span>
-                      </div>
-                    {/each}
-                  </div>
-                  <p class="hint small-hint">Показано {parameterPreviewRows.length} строк (макс. {PARAMETER_PREVIEW_LIMIT}).</p>
-                {/if}
-              </div>
-              <div class="definition-section">
-                <div class="subttl response-head field-head">
-                  <span>Описание параметра</span>
-                  <span class="inline-actions">
-                    <button
-                      type="button"
-                      class="view-toggle"
-                      on:click={toggleDefinitionViewMode}
-                    >
-                      {definitionViewMode === 'tree' ? 'RAW' : 'Дерево'}
-                    </button>
-                  </span>
-                </div>
-                {#if definitionViewMode === 'text'}
-                  <textarea
-                    class="parameter-definition autoheight"
-                    bind:this={definitionParamEl}
-                    placeholder="Определи параметр (например: FIELD('tokens.token'))"
-                    value={definitionDraft}
-                    on:input={(e) => handleDefinitionInput(e.currentTarget.value)}
-                  ></textarea>
-                {:else}
-                  {#if definitionTree}
-                    <div class="response-tree-wrap">
-                      <JsonTreeView node={definitionTreeDisplay || definitionTree} name="definition" level={0} />
-                    </div>
-                  {:else}
-                    <p class="hint small-hint">Введите JSON — появится дерево описания.</p>
-                  {/if}
-                {/if}
-              </div>
-              {#if definitionError}
-                <p class="definition-error">{definitionError}</p>
-              {/if}
-              <div class="parameter-source-row">
-                <select
-                  value={`${activeParameter.sourceSchema}.${activeParameter.sourceTable}`}
-                  on:change={(e) => {
-                    const [schema, table] = String(e.currentTarget.value || '').split('.');
-                    definitionDirty = false;
-                    updateParameterDefinition(activeParameter.id, {
-                      sourceSchema: schema || '',
-                      sourceTable: table || '',
-                      sourceField: ''
-                    });
-                    ensureColumnsFor(schema, table);
-                  }}
-                >
-                  <option value="">Таблица</option>
-                  {#each existingTables as tbl}
-                    <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
-                  {/each}
-                </select>
-                <select
-                  value={activeParameter.sourceField}
-                  on:change={(e) => {
-                    definitionDirty = false;
-                    updateParameterDefinition(activeParameter.id, { sourceField: e.currentTarget.value });
-                  }}
-                >
-                  <option value="">Колонка</option>
-                  {#if activeParameter.sourceSchema && activeParameter.sourceTable}
-                    {#each columnOptionsFor(activeParameter.sourceSchema, activeParameter.sourceTable) as field}
-                      <option value={field}>{field}</option>
-                    {/each}
-                  {/if}
-                </select>
-              </div>
-              <div class="parameter-conditions">
-                <div class="conditions-header">
-                  <span>Условия фильтрации</span>
-                  <button
-                    class="tiny-btn"
-                    type="button"
-                    on:click={() => {
-                      definitionDirty = false;
-                      addCondition(activeParameter.id);
-                    }}
-                  >
-                    Добавить условие
-                  </button>
-                </div>
-                {#each activeParameter.conditions as cond (cond.id)}
-                  <div class="condition-card">
-                    <div class="condition-row">
-                      <select
-                        value={`${cond.schema}.${cond.table}`}
-                        on:change={(e) => {
-                          const [schema, table] = String(e.currentTarget.value || '').split('.');
-                          definitionDirty = false;
-                          updateCondition(activeParameter.id, cond.id, { schema: schema || '', table: table || '', field: '' });
-                          ensureColumnsFor(schema, table);
-                        }}
-                      >
-                        <option value="">Таблица</option>
-                        {#each existingTables as tbl}
-                          <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
-                        {/each}
-                      </select>
-                      <select
-                        value={cond.field}
-                        on:change={(e) => {
-                          definitionDirty = false;
-                          updateCondition(activeParameter.id, cond.id, { field: e.currentTarget.value });
-                        }}
-                      >
-                        <option value="">Колонка</option>
-                        {#if cond.schema && cond.table}
-                          {#each columnOptionsFor(cond.schema, cond.table) as field}
-                            <option value={field}>{field}</option>
-                          {/each}
-                        {/if}
-                      </select>
-                      <select
-                        value={cond.operator}
-                        on:change={(e) => {
-                          definitionDirty = false;
-                          updateCondition(activeParameter.id, cond.id, { operator: e.currentTarget.value });
-                        }}
-                      >
-                        {#each getOperatorsForColumn(cond.field, cond.schema, cond.table) as op}
-                          <option value={op.value}>{op.label}</option>
-                        {/each}
-                      </select>
-                      <button class="chip-remove" type="button" on:click={() => removeCondition(activeParameter.id, cond.id)}>x</button>
-                    </div>
-                    <div class="compare-mode-row">
-                      {#each CONDITION_COMPARE_MODES as mode}
-                        <label>
-                          <input
-                            type="radio"
-                            name={`compareMode-${cond.id}`}
-                            value={mode.value}
-                            checked={cond.compareMode === mode.value}
-                            on:change={(e) => {
-                              definitionDirty = false;
-                              updateCondition(activeParameter.id, cond.id, { compareMode: parseCompareModeValue(e.currentTarget.value) });
-                            }}
-                          />
-                          <span>{mode.label}</span>
-                        </label>
-                      {/each}
-                    </div>
-                    {#if cond.compareMode === 'value'}
-                      <input
-                        class="condition-value"
-                        placeholder="Значение"
-                        value={cond.compareValue}
-                        on:input={(e) => {
-                          definitionDirty = false;
-                          updateCondition(activeParameter.id, cond.id, { compareValue: e.currentTarget.value });
-                        }}
-                      />
-                    {:else}
-                      <div class="compare-column-row">
-                      <select
-                        value={compareColumnTableValue(cond)}
-                        on:change={(e) => {
-                          const [schema, table] = String(e.currentTarget.value || '').split('.');
-                          const column = columnOptionsFor(schema, table)[0] || '';
-                          updateCondition(activeParameter.id, cond.id, {
-                            compareColumn: column ? `${schema}.${table}.${column}` : '',
-                            compareValue: ''
-                          });
-                          ensureColumnsFor(schema, table);
-                        }}
-                      >
-                          <option value="">Таблица</option>
-                          {#each existingTables as tbl}
-                            <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
-                          {/each}
-                        </select>
-                        {#if compareColumnTableValue(cond)}
-                          <select
-                            value={compareColumnFieldValue(cond)}
-                            on:change={(e) => {
-                              const [schema, table] = compareColumnTableValue(cond).split('.');
-                              const column = e.currentTarget.value;
-                              updateCondition(activeParameter.id, cond.id, { compareColumn: column ? `${schema}.${table}.${column}` : '' });
-                            }}
-                          >
-                            <option value="">Колонка</option>
-                            {#each compareColumnOptions(cond) as column}
-                              <option value={column}>{column}</option>
-                            {/each}
-                          </select>
-                        {:else}
-                          <select disabled>
-                            <option>Сначала выбери таблицу</option>
-                          </select>
-                        {/if}
-                      </div>
-                    {/if}
-                  </div>
-                {/each}
-              </div>
-            </div>
-          {:else}
-            <p class="hint">Выбери параметр слева, чтобы настроить источник и условия.</p>
-          {/if}
-        </div>
-      </div>
-    </div>
   </aside>
 
     <div class="main">
@@ -3564,8 +3263,311 @@ function syncParameterEditorsHeight() {
           {/if}
         </label>
 
-        <div class="dispatch-box">
+        <div class="dispatch-box parameter-management-box">
           <div class="response-head field-head">
+            <span>Управление параметрами</span>
+          </div>
+
+          <div class="parameter-panel">
+            <div class="parameter-list-panel no-border">
+              <div class="parameter-list-header">
+                <span class="parameter-list-title">Параметры</span>
+                <button class="icon-btn plus-dark" type="button" title="Добавить параметр" on:click={addParameterDefinition}>+</button>
+              </div>
+              {#if selected?.parameterDefinitions?.length}
+                <div class="parameter-crumbs">
+                  {#each selected.parameterDefinitions as param (param.id)}
+                    <button
+                      type="button"
+                      class="parameter-crumb"
+                      class:active-crumb={selectedParameterId === param.id}
+                      draggable="true"
+                      on:dragstart={(e) => parameterCardDragStart(param, e)}
+                      on:click={() => setActiveParameter(param.id)}
+                      title={parameterConditionSummary(param.conditions?.[0] || {})}
+                    >
+                      {#if selectedParameterId === param.id}
+                        <span class="crumb-indicator active-indicator"></span>
+                      {/if}
+                      <span class="crumb-label">{param.alias}</span>
+                      <span
+                        role="button"
+                        tabindex="-1"
+                        class="crumb-close"
+                        aria-label="Удалить параметр"
+                        on:click|stopPropagation={() => removeParameterDefinition(param.id)}
+                      >
+                        ×
+                      </span>
+                    </button>
+                  {/each}
+                </div>
+              {:else}
+                <p class="hint">Добавь параметр, чтобы сформировать значение.</p>
+              {/if}
+            </div>
+            <div class="parameter-editor no-border">
+              {#if activeParameter}
+                <div class="parameter-editor-inner">
+                  <textarea
+                    class="parameter-alias autoheight"
+                    rows="1"
+                    bind:this={aliasParamEl}
+                    placeholder="Псевдоним параметра"
+                    value={activeParameter.alias}
+                    on:input={(e) => {
+                      definitionDirty = false;
+                      updateParameterDefinition(activeParameter.id, { alias: e.currentTarget.value });
+                      tick().then(syncParameterEditorsHeight);
+                    }}
+                  ></textarea>
+                  <div class="subttl response-head field-head">
+                    <span>Предпросмотр параметра</span>
+                    <span class="inline-actions parameter-preview-controls">
+                      <button
+                        type="button"
+                        class="icon-btn refresh-btn"
+                        aria-label="Обновить"
+                        title="Обновить"
+                        on:click={loadParameterPreview}
+                        disabled={parameterPreviewLoading}
+                      >
+                        ↻
+                      </button>
+                      <button
+                        type="button"
+                        class="icon-btn danger"
+                        aria-label="Очистить предпросмотр"
+                        title="Очистить предпросмотр"
+                        on:click={clearParameterPreview}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  </div>
+                  <div class="parameter-preview-block">
+                    {#if parameterPreviewLoading}
+                      <p class="hint">Загружаем строки из таблицы...</p>
+                    {:else if parameterPreviewError}
+                      <p class="definition-error">{parameterPreviewError}</p>
+                    {:else if !parameterPreviewRows.length}
+                      <!-- пусто -->
+                    {:else}
+                      <div class="parameter-preview-list">
+                        {#each parameterPreviewRows as row, idx}
+                          <div class="preview-row">
+                            <span class="row-index">{idx + 1}</span>
+                            <span class="row-value">{formatParameterRowValue(row, activeParameter.sourceField)}</span>
+                          </div>
+                        {/each}
+                      </div>
+                      <p class="hint small-hint">Показано {parameterPreviewRows.length} строк (макс. {PARAMETER_PREVIEW_LIMIT}).</p>
+                    {/if}
+                  </div>
+                  <div class="definition-section">
+                    <div class="subttl response-head field-head">
+                      <span>Описание параметра</span>
+                      <span class="inline-actions">
+                        <button
+                          type="button"
+                          class="view-toggle"
+                          on:click={toggleDefinitionViewMode}
+                        >
+                          {definitionViewMode === 'tree' ? 'RAW' : 'Дерево'}
+                        </button>
+                      </span>
+                    </div>
+                    {#if definitionViewMode === 'text'}
+                      <textarea
+                        class="parameter-definition autoheight"
+                        bind:this={definitionParamEl}
+                        placeholder="Определи параметр (например: FIELD('tokens.token'))"
+                        value={definitionDraft}
+                        on:input={(e) => handleDefinitionInput(e.currentTarget.value)}
+                      ></textarea>
+                    {:else}
+                      {#if definitionTree}
+                        <div class="response-tree-wrap">
+                          <JsonTreeView node={definitionTreeDisplay || definitionTree} name="definition" level={0} />
+                        </div>
+                      {:else}
+                        <p class="hint small-hint">Введите JSON — появится дерево описания.</p>
+                      {/if}
+                    {/if}
+                  </div>
+                  {#if definitionError}
+                    <p class="definition-error">{definitionError}</p>
+                  {/if}
+                  <div class="parameter-source-row">
+                    <select
+                      value={`${activeParameter.sourceSchema}.${activeParameter.sourceTable}`}
+                      on:change={(e) => {
+                        const [schema, table] = String(e.currentTarget.value || '').split('.');
+                        definitionDirty = false;
+                        updateParameterDefinition(activeParameter.id, {
+                          sourceSchema: schema || '',
+                          sourceTable: table || '',
+                          sourceField: ''
+                        });
+                        ensureColumnsFor(schema, table);
+                      }}
+                    >
+                      <option value="">Таблица</option>
+                      {#each existingTables as tbl}
+                        <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
+                      {/each}
+                    </select>
+                    <select
+                      value={activeParameter.sourceField}
+                      on:change={(e) => {
+                        definitionDirty = false;
+                        updateParameterDefinition(activeParameter.id, { sourceField: e.currentTarget.value });
+                      }}
+                    >
+                      <option value="">Колонка</option>
+                      {#if activeParameter.sourceSchema && activeParameter.sourceTable}
+                        {#each columnOptionsFor(activeParameter.sourceSchema, activeParameter.sourceTable) as field}
+                          <option value={field}>{field}</option>
+                        {/each}
+                      {/if}
+                    </select>
+                  </div>
+                  <div class="parameter-conditions">
+                    <div class="conditions-header">
+                      <span>Условия фильтрации</span>
+                      <button
+                        class="tiny-btn"
+                        type="button"
+                        on:click={() => {
+                          definitionDirty = false;
+                          addCondition(activeParameter.id);
+                        }}
+                      >
+                        Добавить условие
+                      </button>
+                    </div>
+                    {#each activeParameter.conditions as cond (cond.id)}
+                      <div class="condition-card">
+                        <div class="condition-row">
+                          <select
+                            value={`${cond.schema}.${cond.table}`}
+                            on:change={(e) => {
+                              const [schema, table] = String(e.currentTarget.value || '').split('.');
+                              definitionDirty = false;
+                              updateCondition(activeParameter.id, cond.id, { schema: schema || '', table: table || '', field: '' });
+                              ensureColumnsFor(schema, table);
+                            }}
+                          >
+                            <option value="">Таблица</option>
+                            {#each existingTables as tbl}
+                              <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
+                            {/each}
+                          </select>
+                          <select
+                            value={cond.field}
+                            on:change={(e) => {
+                              definitionDirty = false;
+                              updateCondition(activeParameter.id, cond.id, { field: e.currentTarget.value });
+                            }}
+                          >
+                            <option value="">Колонка</option>
+                            {#if cond.schema && cond.table}
+                              {#each columnOptionsFor(cond.schema, cond.table) as field}
+                                <option value={field}>{field}</option>
+                              {/each}
+                            {/if}
+                          </select>
+                          <select
+                            value={cond.operator}
+                            on:change={(e) => {
+                              definitionDirty = false;
+                              updateCondition(activeParameter.id, cond.id, { operator: e.currentTarget.value });
+                            }}
+                          >
+                            {#each getOperatorsForColumn(cond.field, cond.schema, cond.table) as op}
+                              <option value={op.value}>{op.label}</option>
+                            {/each}
+                          </select>
+                          <button class="chip-remove" type="button" on:click={() => removeCondition(activeParameter.id, cond.id)}>x</button>
+                        </div>
+                        <div class="compare-mode-row">
+                          {#each CONDITION_COMPARE_MODES as mode}
+                            <label>
+                              <input
+                                type="radio"
+                                name={`compareMode-${cond.id}`}
+                                value={mode.value}
+                                checked={cond.compareMode === mode.value}
+                                on:change={(e) => {
+                                  definitionDirty = false;
+                                  updateCondition(activeParameter.id, cond.id, { compareMode: parseCompareModeValue(e.currentTarget.value) });
+                                }}
+                              />
+                              <span>{mode.label}</span>
+                            </label>
+                          {/each}
+                        </div>
+                        {#if cond.compareMode === 'value'}
+                          <input
+                            class="condition-value"
+                            placeholder="Значение"
+                            value={cond.compareValue}
+                            on:input={(e) => {
+                              definitionDirty = false;
+                              updateCondition(activeParameter.id, cond.id, { compareValue: e.currentTarget.value });
+                            }}
+                          />
+                        {:else}
+                          <div class="compare-column-row">
+                            <select
+                              value={compareColumnTableValue(cond)}
+                              on:change={(e) => {
+                                const [schema, table] = String(e.currentTarget.value || '').split('.');
+                                const column = columnOptionsFor(schema, table)[0] || '';
+                                updateCondition(activeParameter.id, cond.id, {
+                                  compareColumn: column ? `${schema}.${table}.${column}` : '',
+                                  compareValue: ''
+                                });
+                                ensureColumnsFor(schema, table);
+                              }}
+                            >
+                              <option value="">Таблица</option>
+                              {#each existingTables as tbl}
+                                <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
+                              {/each}
+                            </select>
+                            {#if compareColumnTableValue(cond)}
+                              <select
+                                value={compareColumnFieldValue(cond)}
+                                on:change={(e) => {
+                                  const [schema, table] = compareColumnTableValue(cond).split('.');
+                                  const column = e.currentTarget.value;
+                                  updateCondition(activeParameter.id, cond.id, { compareColumn: column ? `${schema}.${table}.${column}` : '' });
+                                }}
+                              >
+                                <option value="">Колонка</option>
+                                {#each compareColumnOptions(cond) as column}
+                                  <option value={column}>{column}</option>
+                                {/each}
+                              </select>
+                            {:else}
+                              <select disabled>
+                                <option>Сначала выбери таблицу</option>
+                              </select>
+                            {/if}
+                          </div>
+                        {/if}
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+              {:else}
+                <p class="hint">Выбери параметр в списке, чтобы настроить источник и условия.</p>
+              {/if}
+            </div>
+          </div>
+
+          <div class="response-head field-head parameter-subhead">
             <span>Правила отправки</span>
           </div>
           <div class="dispatch-grid">
@@ -3607,10 +3609,8 @@ function syncParameterEditorsHeight() {
               />
             </div>
           </div>
-        </div>
 
-        <div class="dispatch-box">
-          <div class="response-head field-head">
+          <div class="response-head field-head parameter-subhead">
             <span>Правила подстановки</span>
             <button type="button" class="view-toggle" on:click={addBindingRule}>Добавить правило</button>
           </div>
@@ -4128,6 +4128,8 @@ function syncParameterEditorsHeight() {
   .auth-mode-buttons + .oauth-grid + .hint { margin-top:0; }
   .pagination-box { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#f8fafc; }
   .dispatch-box { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#f8fafc; }
+  .parameter-management-box .parameter-panel { margin-top:8px; }
+  .parameter-subhead { margin-top:12px; }
   .dispatch-grid { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
   .binding-list { margin-top:8px; display:flex; flex-direction:column; gap:8px; }
   .binding-row { display:grid; grid-template-columns: 1fr 220px 1.2fr auto; gap:8px; align-items:center; }
