@@ -4757,9 +4757,21 @@ function syncParameterEditorsHeight() {
               {#if selected?.dataTables?.length}
                 <div class="crumb-strip">
                   {#each selected.dataTables as tbl (tbl.id)}
-                    <button type="button" class="entity-crumb" class:active-crumb={activeDataTableId === tbl.id} on:click={() => (activeDataTableId = tbl.id)}>
-                      {tbl.alias || `${tbl.schema}.${tbl.table}`}
-                    </button>
+                    <div class="entity-crumb-wrap" class:active-crumb-wrap={activeDataTableId === tbl.id}>
+                      <button type="button" class="entity-crumb" on:click={() => (activeDataTableId = tbl.id)}>
+                        {tbl.alias || `${tbl.schema}.${tbl.table}`}
+                      </button>
+                      <button
+                        type="button"
+                        class="entity-crumb-remove"
+                        class:active-crumb-remove={activeDataTableId === tbl.id}
+                        title="Удалить таблицу"
+                        aria-label="Удалить таблицу"
+                        on:click|stopPropagation={() => removeDataTable(tbl.id)}
+                      >
+                        ×
+                      </button>
+                    </div>
                   {/each}
                 </div>
                 {@const activeTable = selected.dataTables.find((tbl) => tbl.id === activeDataTableId)}
@@ -4794,9 +4806,21 @@ function syncParameterEditorsHeight() {
               {#if selected?.dataJoins?.length}
                 <div class="crumb-strip">
                   {#each selected.dataJoins as j (j.id)}
-                    <button type="button" class="entity-crumb" class:active-crumb={activeDataJoinId === j.id} on:click={() => (activeDataJoinId = j.id)}>
-                      {joinCrumbLabel(selected, j)}
-                    </button>
+                    <div class="entity-crumb-wrap" class:active-crumb-wrap={activeDataJoinId === j.id}>
+                      <button type="button" class="entity-crumb" on:click={() => (activeDataJoinId = j.id)}>
+                        {joinCrumbLabel(selected, j)}
+                      </button>
+                      <button
+                        type="button"
+                        class="entity-crumb-remove"
+                        class:active-crumb-remove={activeDataJoinId === j.id}
+                        title="Удалить связь"
+                        aria-label="Удалить связь"
+                        on:click|stopPropagation={() => removeDataJoin(j.id)}
+                      >
+                        ×
+                      </button>
+                    </div>
                   {/each}
                 </div>
                 {@const activeJoin = selected.dataJoins.find((j) => j.id === activeDataJoinId)}
@@ -4922,13 +4946,39 @@ function syncParameterEditorsHeight() {
                         {/each}
                       </select>
                       <input value={f.alias} placeholder="Название параметра (alias)" on:input={(e) => updateDataField(f.id, { alias: e.currentTarget.value })} />
-                      <label class="group-flag">
-                        <input type="checkbox" checked={Boolean(f.grouped)} on:change={(e) => updateDataField(f.id, { grouped: e.currentTarget.checked })} />
+                      <button
+                        type="button"
+                        class="group-toggle"
+                        class:active-group-toggle={Boolean(f.grouped)}
+                        on:click={() => updateDataField(f.id, { grouped: !Boolean(f.grouped) })}
+                        aria-pressed={Boolean(f.grouped)}
+                      >
                         <span>Группировать</span>
-                      </label>
+                        {#if Boolean(f.grouped)}
+                          <span class="group-toggle-indicator" aria-hidden="true"></span>
+                        {/if}
+                      </button>
                       <div class="row-order-actions">
-                        <button type="button" class="view-toggle mini-toggle" on:click={() => moveDataField(f.id, -1)} disabled={idx === 0}>↑</button>
-                        <button type="button" class="view-toggle mini-toggle" on:click={() => moveDataField(f.id, 1)} disabled={idx === selected.dataFields.length - 1}>↓</button>
+                        <button
+                          type="button"
+                          class="row-icon-btn"
+                          title="Поднять выше"
+                          aria-label="Поднять выше"
+                          on:click={() => moveDataField(f.id, -1)}
+                          disabled={idx === 0}
+                        >
+                          ▲
+                        </button>
+                        <button
+                          type="button"
+                          class="row-icon-btn"
+                          title="Опустить ниже"
+                          aria-label="Опустить ниже"
+                          on:click={() => moveDataField(f.id, 1)}
+                          disabled={idx === selected.dataFields.length - 1}
+                        >
+                          ▼
+                        </button>
                       </div>
                       <button type="button" class="chip-remove" on:click={() => removeDataField(f.id)}>x</button>
                     </div>
@@ -5489,6 +5539,17 @@ function syncParameterEditorsHeight() {
   .data-list { display:flex; flex-direction:column; gap:8px; }
   .data-row { display:grid; gap:8px; align-items:center; }
   .crumb-strip { display:flex; flex-wrap:wrap; gap:6px; }
+  .entity-crumb-wrap {
+    display:inline-flex;
+    align-items:center;
+    gap:4px;
+    border:1px solid #cbd5e1;
+    border-radius:999px;
+    background:#fff;
+    color:#334155;
+    padding:0 6px 0 0;
+  }
+  .entity-crumb-wrap.active-crumb-wrap { border-color:#0f172a; background:#0f172a; color:#fff; }
   .entity-crumb {
     width:auto;
     border:1px solid #cbd5e1;
@@ -5499,27 +5560,81 @@ function syncParameterEditorsHeight() {
     font-size:12px;
     line-height:1.2;
   }
+  .entity-crumb-wrap .entity-crumb {
+    border:0;
+    background:transparent;
+    color:inherit;
+    padding:6px 4px 6px 10px;
+  }
   .entity-crumb.active-crumb { border-color:#0f172a; background:#0f172a; color:#fff; }
+  .entity-crumb-remove {
+    width:20px;
+    height:20px;
+    border:1px solid #fecaca;
+    border-radius:999px;
+    background:#fff;
+    color:#b91c1c;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    font-size:13px;
+    line-height:1;
+    padding:0;
+  }
+  .entity-crumb-remove.active-crumb-remove {
+    border-color:rgba(255,255,255,.25);
+    background:rgba(255,255,255,.12);
+    color:#f8fafc;
+  }
   .rule-card { border:1px solid #e2e8f0; border-radius:10px; background:#fff; padding:8px; display:flex; flex-direction:column; gap:8px; }
   .rule-card-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
   .table-rule-row { grid-template-columns: 1.2fr 1fr 1fr; }
   .join-rule-row { grid-template-columns: 1fr 1fr 80px 1fr 1fr 1fr; }
   .filter-rule-row { grid-template-columns: 1.2fr 1fr 1fr 1fr; }
   .param-row { grid-template-columns: 1.2fr 1fr 1fr 140px 72px auto; }
-  .group-flag {
+  .group-toggle {
     display:flex;
     align-items:center;
-    gap:6px;
+    justify-content:space-between;
+    gap:8px;
     border:1px solid #e2e8f0;
     border-radius:10px;
     background:#f8fafc;
     padding:8px 10px;
     font-size:12px;
     color:#334155;
+    min-height:34px;
   }
-  .group-flag input { width:auto; margin:0; }
+  .group-toggle.active-group-toggle {
+    border-color:#0f172a;
+    background:#0f172a;
+    color:#f8fafc;
+  }
+  .group-toggle-indicator {
+    width:8px;
+    height:8px;
+    border-radius:999px;
+    background:#22c55e;
+    box-shadow:0 0 0 2px rgba(34,197,94,.25);
+  }
   .row-order-actions { display:grid; grid-template-columns: 1fr 1fr; gap:6px; }
-  .mini-toggle { padding:6px 0; border-radius:8px; }
+  .row-icon-btn {
+    border:0;
+    background:transparent;
+    color:#334155;
+    padding:4px 0;
+    border-radius:6px;
+    font-size:12px;
+    line-height:1;
+  }
+  .row-icon-btn:hover:not(:disabled) {
+    background:#eef2f7;
+    color:#0f172a;
+  }
+  .row-icon-btn:disabled {
+    opacity:.35;
+    cursor:not-allowed;
+  }
   .preview-limit-inline {
     display:inline-flex;
     align-items:center;
