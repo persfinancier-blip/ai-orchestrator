@@ -2133,6 +2133,27 @@ function conditionClause(cond, params) {
   return `${column} ${op} $${params.length}`;
 }
 
+function scalarConditionClause(columnExpr, operatorKey, rawValue, params) {
+  const op = PARAM_CONDITION_OPERATORS[String(operatorKey || 'equals')];
+  if (!op) return null;
+  const value = String(rawValue ?? '').trim();
+  if (!value && op !== 'contains' && op !== 'starts_with' && op !== 'ends_with') return null;
+  if (op === 'contains') {
+    params.push(value);
+    return `${columnExpr} ILIKE '%' || $${params.length} || '%'`;
+  }
+  if (op === 'starts_with') {
+    params.push(value);
+    return `${columnExpr} ILIKE $${params.length} || '%'`;
+  }
+  if (op === 'ends_with') {
+    params.push(value);
+    return `${columnExpr} ILIKE '%' || $${params.length}`;
+  }
+  params.push(value);
+  return `${columnExpr} ${op} $${params.length}`;
+}
+
 tableBuilderRouter.get('/parameter-value', async (req, res) => {
   const schema = String(req.query.schema || '').trim();
   const table = String(req.query.table || '').trim();
@@ -2209,6 +2230,185 @@ tableBuilderRouter.get('/parameter-values', async (req, res) => {
     return res.json({ rows, has_more: rows.length === limit });
   } catch (e) {
     return res.status(500).json({ error: 'parameter_values_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+tableBuilderRouter.post('/parameter-join-values', async (req, res) => {
+  const tablesRaw = Array.isArray(req.body?.tables) ? req.body.tables : [];
+  const joinsRaw = Array.isArray(req.body?.joins) ? req.body.joins : [];
+  const fieldsRaw = Array.isArray(req.body?.fields) ? req.body.fields : [];
+  const filtersRaw = Array.isArray(req.body?.filters) ? req.body.filters : [];
+  const aliasesRaw = Array.isArray(req.body?.aliases) ? req.body.aliases : [];
+  const limit = Math.max(1, Math.min(5000, Number(req.body?.limit || 1000)));
+  const offset = Math.max(0, Number(req.body?.offset || 0));
+
+  const tables = tablesRaw
+    .map((t, idx) => ({
+      id: String(t?.id || `t${idx}`).trim(),
+      schema: String(t?.schema || '').trim(),
+      table: String(t?.table || '').trim(),
+      sqlAlias: `t${idx}`
+    }))
+    .filter((t) => t.id && isIdent(t.schema) && isIdent(t.table));
+  if (!tables.length) {
+    return res.status(400).json({ error: 'bad_request', details: 'at least one valid table is required' });
+  }
+
+  const tableById = new Map();
+  for (const t of tables) tableById.set(t.id, t);
+
+  const joins = joinsRaw
+    .map((j, idx) => ({
+      id: String(j?.id || `j${idx}`).trim(),
+      leftTableId: String(j?.left_table_id || j?.leftTableId || '').trim(),
+      leftField: String(j?.left_field || j?.leftField || '').trim(),
+      rightTableId: String(j?.right_table_id || j?.rightTableId || '').trim(),
+      rightField: String(j?.right_field || j?.rightField || '').trim(),
+      joinType: String(j?.join_type || j?.joinType || 'inner').trim().toLowerCase() === 'left' ? 'left' : 'inner'
+    }))
+    .filter(
+      (j) =>
+        j.leftTableId &&
+        j.rightTableId &&
+        j.leftTableId !== j.rightTableId &&
+        tableById.has(j.leftTableId) &&
+        tableById.has(j.rightTableId) &&
+        isIdent(j.leftField) &&
+        isIdent(j.rightField)
+    );
+
+  if (tables.length > 1 && !joins.length) {
+    return res.status(400).json({ error: 'bad_request', details: 'joins are required for multi-table selection' });
+  }
+
+  const aliasesFilter = [...new Set(aliasesRaw.map((x) => String(x || '').trim()).filter(Boolean))];
+  if (aliasesFilter.length && !aliasesFilter.every((a) => isIdent(a))) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid aliases filter' });
+  }
+  const aliasesFilterSet = new Set(aliasesFilter);
+
+  const fields = [];
+  for (let i = 0; i < fieldsRaw.length; i += 1) {
+    const f = fieldsRaw[i] || {};
+    const tableId = String(f.table_id || f.tableId || '').trim();
+    const field = String(f.field || '').trim();
+    const alias = String(f.alias || '').trim();
+    if (!tableId || !field || !alias) continue;
+    if (!tableById.has(tableId) || !isIdent(field) || !isIdent(alias)) {
+      return res.status(400).json({ error: 'bad_request', details: `invalid field at index ${i}` });
+    }
+    if (aliasesFilterSet.size && !aliasesFilterSet.has(alias)) continue;
+    const t = tableById.get(tableId);
+    fields.push({
+      tableId,
+      field,
+      alias,
+      expr: `${t.sqlAlias}.${qi(field)}`
+    });
+  }
+
+  if (!fields.length) {
+    return res.status(400).json({ error: 'bad_request', details: 'fields are required' });
+  }
+
+  const aliasSeen = new Set();
+  for (const f of fields) {
+    if (aliasSeen.has(f.alias)) {
+      return res.status(400).json({ error: 'bad_request', details: `duplicate field alias: ${f.alias}` });
+    }
+    aliasSeen.add(f.alias);
+  }
+
+  const filters = filtersRaw
+    .map((f, idx) => ({
+      id: String(f?.id || `f${idx}`).trim(),
+      tableId: String(f?.table_id || f?.tableId || '').trim(),
+      field: String(f?.field || '').trim(),
+      operator: String(f?.operator || 'equals').trim(),
+      compareValue: String(f?.compare_value || f?.compareValue || '').trim()
+    }))
+    .filter((f) => f.tableId && tableById.has(f.tableId) && isIdent(f.field));
+
+  const base = tables[0];
+  const connected = new Set([base.id]);
+  const pending = [...joins];
+  const joinClauses = [];
+  const extraJoinConditions = [];
+  let guard = 0;
+  while (pending.length && guard < 1000) {
+    let progressed = false;
+    for (let i = pending.length - 1; i >= 0; i -= 1) {
+      const j = pending[i];
+      const leftConnected = connected.has(j.leftTableId);
+      const rightConnected = connected.has(j.rightTableId);
+      if (!leftConnected && !rightConnected) continue;
+      if (leftConnected && rightConnected) {
+        const l = tableById.get(j.leftTableId);
+        const r = tableById.get(j.rightTableId);
+        extraJoinConditions.push(`${l.sqlAlias}.${qi(j.leftField)} = ${r.sqlAlias}.${qi(j.rightField)}`);
+        pending.splice(i, 1);
+        progressed = true;
+        continue;
+      }
+
+      const sourceId = leftConnected ? j.leftTableId : j.rightTableId;
+      const targetId = leftConnected ? j.rightTableId : j.leftTableId;
+      const sourceField = leftConnected ? j.leftField : j.rightField;
+      const targetField = leftConnected ? j.rightField : j.leftField;
+      const source = tableById.get(sourceId);
+      const target = tableById.get(targetId);
+      const joinKeyword = j.joinType === 'left' ? 'LEFT JOIN' : 'INNER JOIN';
+      joinClauses.push(
+        `${joinKeyword} ${qname(target.schema, target.table)} ${target.sqlAlias} ON ${source.sqlAlias}.${qi(sourceField)} = ${target.sqlAlias}.${qi(
+          targetField
+        )}`
+      );
+      connected.add(targetId);
+      pending.splice(i, 1);
+      progressed = true;
+    }
+    if (!progressed) break;
+    guard += 1;
+  }
+
+  if (connected.size !== tables.length) {
+    return res.status(400).json({ error: 'bad_request', details: 'unable to connect all selected tables with joins' });
+  }
+
+  const params = [];
+  const whereClauses = [...extraJoinConditions];
+  for (const f of filters) {
+    const tableRef = tableById.get(f.tableId);
+    const colExpr = `${tableRef.sqlAlias}.${qi(f.field)}`;
+    const clause = scalarConditionClause(colExpr, f.operator, f.compareValue, params);
+    if (clause) whereClauses.push(clause);
+  }
+
+  params.push(limit);
+  const limitIdx = params.length;
+  params.push(offset);
+  const offsetIdx = params.length;
+
+  const selectCols = fields.map((f) => `${f.expr} AS ${qi(f.alias)}`).join(', ');
+  const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
+  const sql = `
+    SELECT ${selectCols}
+    FROM ${qname(base.schema, base.table)} ${base.sqlAlias}
+    ${joinClauses.join('\n')}
+    ${whereSql}
+    LIMIT $${limitIdx}
+    OFFSET $${offsetIdx}
+  `;
+
+  const client = await pool.connect();
+  try {
+    const r = await client.query(sql, params);
+    const rows = Array.isArray(r.rows) ? r.rows : [];
+    return res.json({ rows, has_more: rows.length === limit });
+  } catch (e) {
+    return res.status(500).json({ error: 'parameter_join_values_failed', details: String(e?.message || e) });
   } finally {
     client.release();
   }

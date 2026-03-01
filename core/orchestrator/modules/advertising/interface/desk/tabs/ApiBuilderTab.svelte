@@ -18,6 +18,37 @@
     path: string;
   };
 
+  type DataModelTable = {
+    id: string;
+    schema: string;
+    table: string;
+    alias: string;
+  };
+
+  type DataModelJoin = {
+    id: string;
+    leftTableId: string;
+    leftField: string;
+    rightTableId: string;
+    rightField: string;
+    joinType: 'inner' | 'left';
+  };
+
+  type DataModelField = {
+    id: string;
+    tableId: string;
+    field: string;
+    alias: string;
+  };
+
+  type DataModelFilter = {
+    id: string;
+    tableId: string;
+    field: string;
+    operator: string;
+    compareValue: string;
+  };
+
   type ApiDraft = {
     localId: string;
     storeId?: number;
@@ -68,6 +99,10 @@
     bodyItemsPath: string;
     previewRequestLimit: number;
     bindingRules: BindingRule[];
+    dataTables: DataModelTable[];
+    dataJoins: DataModelJoin[];
+    dataFields: DataModelField[];
+    dataFilters: DataModelFilter[];
   };
 
   type ParameterCondition = {
@@ -99,6 +134,19 @@
     { value: 'query', label: 'Query' },
     { value: 'body', label: 'Body' },
     { value: 'body_item', label: 'Body: элемент массива' }
+  ];
+  const DATA_JOIN_TYPES: Array<{ value: 'inner' | 'left'; label: string }> = [
+    { value: 'inner', label: 'INNER' },
+    { value: 'left', label: 'LEFT' }
+  ];
+  const DATA_FILTER_OPERATORS: Array<{ value: string; label: string }> = [
+    { value: 'equals', label: '=' },
+    { value: 'not_equals', label: '!=' },
+    { value: 'contains', label: 'содержит' },
+    { value: 'starts_with', label: 'начинается с' },
+    { value: 'ends_with', label: 'заканчивается на' },
+    { value: 'gt', label: '>' },
+    { value: 'lt', label: '<' }
   ];
 
   const PAGINATION_STRATEGIES = [
@@ -232,6 +280,9 @@
   let definitionTree: any = null;
   let definitionTreeDisplay: any = null;
   let definitionViewMode: 'text' | 'tree' = 'text';
+  let datasetPreviewText = '';
+  let datasetPreviewLoading = false;
+  let datasetPreviewError = '';
   const PARAMETER_PREVIEW_LIMIT = 5;
   const REQUEST_PREVIEW_MAX = 20;
   const PARAMETER_TOKEN_RE = /\{\{\s*([^{}]+?)\s*\}\}/g;
@@ -416,7 +467,11 @@ function formatBytes(bytes: number) {
       groupByAliases: [],
       bodyItemsPath: 'items',
       previewRequestLimit: 5,
-      bindingRules: []
+      bindingRules: [],
+      dataTables: [],
+      dataJoins: [],
+      dataFields: [],
+      dataFilters: []
     };
   }
 
@@ -505,6 +560,51 @@ function formatBytes(bytes: number) {
         path: String(rule?.path || '').trim()
       }))
       .filter((rule: BindingRule) => rule.alias && rule.path);
+    const dataModelCfg = tryObj(executionCfg?.data_model || mapping?.data_model || row?.data_model_json);
+    const normalizedDataTables = (Array.isArray(dataModelCfg?.tables) ? dataModelCfg.tables : [])
+      .map((t: any, idx: number) => ({
+        id: String(t?.id || `t${idx}`),
+        schema: String(t?.schema || '').trim(),
+        table: String(t?.table || '').trim(),
+        alias: String(t?.alias || t?.table || `table_${idx + 1}`).trim()
+      }))
+      .filter((t: DataModelTable) => t.id && t.schema && t.table);
+    const dataTableIdSet = new Set(normalizedDataTables.map((t: DataModelTable) => t.id));
+    const normalizedDataJoins = (Array.isArray(dataModelCfg?.joins) ? dataModelCfg.joins : [])
+      .map((j: any, idx: number) => ({
+        id: String(j?.id || `j${idx}`),
+        leftTableId: String(j?.left_table_id || j?.leftTableId || '').trim(),
+        leftField: String(j?.left_field || j?.leftField || '').trim(),
+        rightTableId: String(j?.right_table_id || j?.rightTableId || '').trim(),
+        rightField: String(j?.right_field || j?.rightField || '').trim(),
+        joinType: String(j?.join_type || j?.joinType || 'inner').toLowerCase() === 'left' ? 'left' : 'inner'
+      }))
+      .filter(
+        (j: DataModelJoin) =>
+          j.leftTableId &&
+          j.rightTableId &&
+          j.leftField &&
+          j.rightField &&
+          dataTableIdSet.has(j.leftTableId) &&
+          dataTableIdSet.has(j.rightTableId)
+      );
+    const normalizedDataFields = (Array.isArray(dataModelCfg?.fields) ? dataModelCfg.fields : [])
+      .map((f: any, idx: number) => ({
+        id: String(f?.id || `f${idx}`),
+        tableId: String(f?.table_id || f?.tableId || '').trim(),
+        field: String(f?.field || '').trim(),
+        alias: String(f?.alias || f?.field || `field_${idx + 1}`).trim()
+      }))
+      .filter((f: DataModelField) => f.tableId && f.field && f.alias && dataTableIdSet.has(f.tableId));
+    const normalizedDataFilters = (Array.isArray(dataModelCfg?.filters) ? dataModelCfg.filters : [])
+      .map((f: any, idx: number) => ({
+        id: String(f?.id || `flt_${idx}`),
+        tableId: String(f?.table_id || f?.tableId || '').trim(),
+        field: String(f?.field || '').trim(),
+        operator: String(f?.operator || 'equals').trim(),
+        compareValue: String(f?.compare_value || f?.compareValue || '').trim()
+      }))
+      .filter((f: DataModelFilter) => f.tableId && f.field && dataTableIdSet.has(f.tableId));
     const groupByRaw = Array.isArray(row?.group_by_aliases)
       ? row.group_by_aliases
       : Array.isArray(executionCfg?.group_by_aliases)
@@ -607,7 +707,11 @@ function formatBytes(bytes: number) {
       groupByAliases: normalizedGroupBy,
       bodyItemsPath,
       previewRequestLimit: Math.max(1, Math.min(50, Number(previewRequestLimit || 5))),
-      bindingRules: normalizedBindingRules
+      bindingRules: normalizedBindingRules,
+      dataTables: normalizedDataTables,
+      dataJoins: normalizedDataJoins,
+      dataFields: normalizedDataFields,
+      dataFilters: normalizedDataFilters
     };
   }
 
@@ -688,6 +792,35 @@ function formatBytes(bytes: number) {
         group_by_aliases: d.groupByAliases,
         body_items_path: d.bodyItemsPath,
         preview_request_limit: d.previewRequestLimit,
+        data_model: {
+          tables: d.dataTables.map((t) => ({
+            id: t.id,
+            schema: t.schema,
+            table: t.table,
+            alias: t.alias
+          })),
+          joins: d.dataJoins.map((j) => ({
+            id: j.id,
+            left_table_id: j.leftTableId,
+            left_field: j.leftField,
+            right_table_id: j.rightTableId,
+            right_field: j.rightField,
+            join_type: j.joinType
+          })),
+          fields: d.dataFields.map((f) => ({
+            id: f.id,
+            table_id: f.tableId,
+            field: f.field,
+            alias: f.alias
+          })),
+          filters: d.dataFilters.map((f) => ({
+            id: f.id,
+            table_id: f.tableId,
+            field: f.field,
+            operator: f.operator,
+            compare_value: f.compareValue
+          }))
+        },
         binding_rules: d.bindingRules.map((rule) => ({
           id: rule.id,
           alias: rule.alias,
@@ -1701,9 +1834,289 @@ function formatBytes(bytes: number) {
     });
   }
 
+  function hasDataModelConfigured(draft: ApiDraft | null) {
+    if (!draft) return false;
+    return Array.isArray(draft.dataTables) && draft.dataTables.length > 0 && Array.isArray(draft.dataFields) && draft.dataFields.length > 0;
+  }
+
+  function bindingAliasOptions(draft: ApiDraft | null) {
+    if (!draft) return [];
+    const fromDataModel = (Array.isArray(draft.dataFields) ? draft.dataFields : [])
+      .map((f) => String(f?.alias || '').trim())
+      .filter(Boolean);
+    if (fromDataModel.length) return uniqueAliasList(fromDataModel);
+    return uniqueAliasList((Array.isArray(draft.parameterDefinitions) ? draft.parameterDefinitions : []).map((p) => String(p?.alias || '').trim()));
+  }
+
+  function ensureDataTableColumnsLoaded(tableId: string) {
+    if (!selected) return;
+    const t = selected.dataTables.find((x) => x.id === tableId);
+    if (!t) return;
+    ensureColumnsFor(t.schema, t.table);
+  }
+
+  function addDataTable() {
+    const fallback = existingTables[0];
+    const tableId = uid();
+    mutateSelected((d) => {
+      const idx = (d.dataTables?.length || 0) + 1;
+      d.dataTables = [
+        ...(Array.isArray(d.dataTables) ? d.dataTables : []),
+        {
+          id: tableId,
+          schema: fallback?.schema_name || '',
+          table: fallback?.table_name || '',
+          alias: fallback?.table_name || `table_${idx}`
+        }
+      ];
+    });
+    if (fallback?.schema_name && fallback?.table_name) ensureColumnsFor(fallback.schema_name, fallback.table_name);
+  }
+
+  async function updateDataTableRef(tableId: string, value: string) {
+    const [schema, table] = String(value || '').split('.');
+    mutateSelected((d) => {
+      d.dataTables = d.dataTables.map((t) => {
+        if (t.id !== tableId) return t;
+        return { ...t, schema: schema || '', table: table || '', alias: t.alias || table || '' };
+      });
+    });
+    await ensureColumnsFor(schema || '', table || '');
+  }
+
+  function updateDataTableAlias(tableId: string, alias: string) {
+    mutateSelected((d) => {
+      d.dataTables = d.dataTables.map((t) => (t.id === tableId ? { ...t, alias } : t));
+    });
+  }
+
+  function removeDataTable(tableId: string) {
+    mutateSelected((d) => {
+      d.dataTables = d.dataTables.filter((t) => t.id !== tableId);
+      d.dataJoins = d.dataJoins.filter((j) => j.leftTableId !== tableId && j.rightTableId !== tableId);
+      d.dataFields = d.dataFields.filter((f) => f.tableId !== tableId);
+      d.dataFilters = d.dataFilters.filter((f) => f.tableId !== tableId);
+    });
+  }
+
+  function addDataJoin() {
+    if (!selected) return;
+    const tables = selected.dataTables || [];
+    const left = tables[0]?.id || '';
+    const right = tables[1]?.id || tables[0]?.id || '';
+    mutateSelected((d) => {
+      d.dataJoins = [
+        ...(Array.isArray(d.dataJoins) ? d.dataJoins : []),
+        {
+          id: uid(),
+          leftTableId: left,
+          leftField: '',
+          rightTableId: right,
+          rightField: '',
+          joinType: 'inner'
+        }
+      ];
+    });
+    if (left) ensureDataTableColumnsLoaded(left);
+    if (right) ensureDataTableColumnsLoaded(right);
+  }
+
+  function updateDataJoin(joinId: string, patch: Partial<DataModelJoin>) {
+    mutateSelected((d) => {
+      d.dataJoins = d.dataJoins.map((j) => (j.id === joinId ? { ...j, ...patch } : j));
+    });
+  }
+
+  function removeDataJoin(joinId: string) {
+    mutateSelected((d) => {
+      d.dataJoins = d.dataJoins.filter((j) => j.id !== joinId);
+    });
+  }
+
+  function addDataField() {
+    if (!selected) return;
+    const tableId = selected.dataTables[0]?.id || '';
+    mutateSelected((d) => {
+      const idx = (d.dataFields?.length || 0) + 1;
+      d.dataFields = [
+        ...(Array.isArray(d.dataFields) ? d.dataFields : []),
+        {
+          id: uid(),
+          tableId,
+          field: '',
+          alias: `field_${idx}`
+        }
+      ];
+    });
+    if (tableId) ensureDataTableColumnsLoaded(tableId);
+  }
+
+  function updateDataField(fieldId: string, patch: Partial<DataModelField>) {
+    mutateSelected((d) => {
+      d.dataFields = d.dataFields.map((f) => (f.id === fieldId ? { ...f, ...patch } : f));
+    });
+  }
+
+  function removeDataField(fieldId: string) {
+    mutateSelected((d) => {
+      d.dataFields = d.dataFields.filter((f) => f.id !== fieldId);
+    });
+  }
+
+  function addDataFilter() {
+    if (!selected) return;
+    const tableId = selected.dataTables[0]?.id || '';
+    mutateSelected((d) => {
+      d.dataFilters = [
+        ...(Array.isArray(d.dataFilters) ? d.dataFilters : []),
+        {
+          id: uid(),
+          tableId,
+          field: '',
+          operator: 'equals',
+          compareValue: ''
+        }
+      ];
+    });
+    if (tableId) ensureDataTableColumnsLoaded(tableId);
+  }
+
+  function updateDataFilter(filterId: string, patch: Partial<DataModelFilter>) {
+    mutateSelected((d) => {
+      d.dataFilters = d.dataFilters.map((f) => (f.id === filterId ? { ...f, ...patch } : f));
+    });
+  }
+
+  function removeDataFilter(filterId: string) {
+    mutateSelected((d) => {
+      d.dataFilters = d.dataFilters.filter((f) => f.id !== filterId);
+    });
+  }
+
+  function tableRefById(draft: ApiDraft | null, tableId: string) {
+    if (!draft) return '';
+    const t = draft.dataTables.find((x) => x.id === tableId);
+    return t ? `${t.schema}.${t.table}` : '';
+  }
+
+  function tableLabelById(draft: ApiDraft | null, tableId: string) {
+    if (!draft) return '';
+    const t = draft.dataTables.find((x) => x.id === tableId);
+    if (!t) return '';
+    return `${t.alias || t.table} (${t.schema}.${t.table})`;
+  }
+
+  function tableColumnsById(draft: ApiDraft | null, tableId: string) {
+    if (!draft) return [];
+    const t = draft.dataTables.find((x) => x.id === tableId);
+    if (!t) return [];
+    return columnOptionsFor(t.schema, t.table);
+  }
+
+  async function fetchDataModelRows(
+    draft: ApiDraft,
+    aliases: string[],
+    limit: number,
+    offset: number
+  ): Promise<{ rows: Array<Record<string, any>>; has_more?: boolean }> {
+    return apiJson<{ rows: Array<Record<string, any>>; has_more?: boolean }>(`${apiBase}/parameter-join-values`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({
+        tables: (draft.dataTables || []).map((t) => ({
+          id: t.id,
+          schema: t.schema,
+          table: t.table,
+          alias: t.alias
+        })),
+        joins: (draft.dataJoins || []).map((j) => ({
+          id: j.id,
+          left_table_id: j.leftTableId,
+          left_field: j.leftField,
+          right_table_id: j.rightTableId,
+          right_field: j.rightField,
+          join_type: j.joinType
+        })),
+        fields: (draft.dataFields || []).map((f) => ({
+          id: f.id,
+          table_id: f.tableId,
+          field: f.field,
+          alias: f.alias
+        })),
+        filters: (draft.dataFilters || []).map((f) => ({
+          id: f.id,
+          table_id: f.tableId,
+          field: f.field,
+          operator: f.operator,
+          compare_value: f.compareValue
+        })),
+        aliases,
+        limit,
+        offset
+      })
+    });
+  }
+
+  async function loadDataModelRowsForAliases(
+    draft: ApiDraft,
+    aliases: string[]
+  ): Promise<{ rows: Array<Record<string, any>>; issues: Record<string, string> }> {
+    const issues: Record<string, string> = {};
+    if (!hasDataModelConfigured(draft)) return { rows: [], issues };
+    const aliasesRequested = uniqueAliasList(aliases);
+    const available = new Set((draft.dataFields || []).map((f) => String(f.alias || '').trim()).filter(Boolean));
+    aliasesRequested.forEach((alias) => {
+      if (!available.has(alias)) issues[alias] = 'alias не найден в конструкторе данных';
+    });
+    if (Object.keys(issues).length) return { rows: [], issues };
+
+    const allRows: Array<Record<string, any>> = [];
+    const limit = 1000;
+    let offset = 0;
+    while (offset <= 100000) {
+      const resp = await fetchDataModelRows(draft, aliasesRequested, limit, offset);
+      const rows = Array.isArray(resp?.rows) ? resp.rows : [];
+      if (!rows.length) break;
+      allRows.push(...rows);
+      offset += rows.length;
+      if (!resp?.has_more || rows.length < limit) break;
+    }
+    return { rows: allRows, issues };
+  }
+
+  async function previewDataModelNow() {
+    datasetPreviewError = '';
+    datasetPreviewText = '';
+    if (!selected) {
+      datasetPreviewError = 'Выбери API';
+      return;
+    }
+    if (!hasDataModelConfigured(selected)) {
+      datasetPreviewError = 'Добавь таблицы и поля результата';
+      return;
+    }
+    datasetPreviewLoading = true;
+    try {
+      const aliases = uniqueAliasList((selected.dataFields || []).map((f) => f.alias));
+      const resp = await fetchDataModelRows(selected, aliases, 10, 0);
+      datasetPreviewText = JSON.stringify(
+        {
+          rows: Array.isArray(resp?.rows) ? resp.rows : [],
+          has_more: Boolean(resp?.has_more)
+        },
+        null,
+        2
+      );
+    } catch (e: any) {
+      datasetPreviewError = e?.message ?? String(e);
+    } finally {
+      datasetPreviewLoading = false;
+    }
+  }
+
   function addBindingRule() {
     if (!selected) return;
-    const firstAlias = selected.parameterDefinitions[0]?.alias || '';
+    const firstAlias = bindingAliasOptions(selected)[0] || '';
     mutateSelected((d) => {
       d.bindingRules = [
         ...d.bindingRules,
@@ -2167,7 +2580,9 @@ function handleDefinitionInput(value: string) {
       ...groupByAliases,
       ...bindingRules.map((rule) => rule.alias)
     ]);
-    const dataset = await loadParameterRowsForAliases(draft.parameterDefinitions, requiredAliases);
+    const dataset = hasDataModelConfigured(draft)
+      ? await loadDataModelRowsForAliases(draft, requiredAliases)
+      : await loadParameterRowsForAliases(draft.parameterDefinitions, requiredAliases);
     Object.assign(issues, dataset.issues);
     if (!dataset.rows.length) {
       throw new Error('Нет строк в источнике данных для построения запросов');
@@ -2982,6 +3397,12 @@ function handleDefinitionInput(value: string) {
       void ensureColumnsFor(row.schema, row.table);
     }
   }
+  $: {
+    const tables = selected?.dataTables || [];
+    for (const t of tables) {
+      void ensureColumnsFor(t.schema, t.table);
+    }
+  }
   $: authViewMode, tick().then(syncMainTextareasHeight);
   $: headersViewMode, tick().then(syncMainTextareasHeight);
   $: queryViewMode, tick().then(syncMainTextareasHeight);
@@ -3266,6 +3687,187 @@ function syncParameterEditorsHeight() {
         <div class="dispatch-box parameter-management-box">
           <div class="response-head field-head">
             <span>Управление параметрами</span>
+          </div>
+
+          <div class="data-builder-box">
+            <div class="response-head field-head parameter-subhead">
+              <span>Конструктор данных (таблицы, связи, поля)</span>
+              <span class="inline-actions">
+                <button type="button" class="view-toggle" on:click={addDataTable}>Таблица +</button>
+                <button type="button" class="view-toggle" on:click={previewDataModelNow} disabled={datasetPreviewLoading}>
+                  {datasetPreviewLoading ? 'Загрузка...' : 'Предпросмотр данных'}
+                </button>
+              </span>
+            </div>
+
+            <div class="data-section">
+              <small>Таблицы</small>
+              {#if selected?.dataTables?.length}
+                <div class="data-list">
+                  {#each selected.dataTables as tbl (tbl.id)}
+                    <div class="data-row">
+                      <select value={`${tbl.schema}.${tbl.table}`} on:change={(e) => updateDataTableRef(tbl.id, e.currentTarget.value)}>
+                        <option value="">Таблица</option>
+                        {#each existingTables as et}
+                          <option value={`${et.schema_name}.${et.table_name}`}>{et.schema_name}.{et.table_name}</option>
+                        {/each}
+                      </select>
+                      <input value={tbl.alias} placeholder="alias таблицы" on:input={(e) => updateDataTableAlias(tbl.id, e.currentTarget.value)} />
+                      <button type="button" class="chip-remove" on:click={() => removeDataTable(tbl.id)}>x</button>
+                    </div>
+                  {/each}
+                </div>
+              {:else}
+                <p class="hint">Добавь минимум одну таблицу.</p>
+              {/if}
+            </div>
+
+            <div class="data-section">
+              <div class="response-head field-head parameter-subhead">
+                <small>Связи JOIN</small>
+                <button type="button" class="view-toggle" on:click={addDataJoin}>Связь +</button>
+              </div>
+              {#if selected?.dataJoins?.length}
+                <div class="data-list">
+                  {#each selected.dataJoins as j (j.id)}
+                    <div class="data-row join-row">
+                      <select
+                        value={j.leftTableId}
+                        on:change={(e) => {
+                          updateDataJoin(j.id, { leftTableId: e.currentTarget.value, leftField: '' });
+                          ensureDataTableColumnsLoaded(e.currentTarget.value);
+                        }}
+                      >
+                        <option value="">Левая таблица</option>
+                        {#each selected.dataTables as t}
+                          <option value={t.id}>{tableLabelById(selected, t.id)}</option>
+                        {/each}
+                      </select>
+                      <select value={j.leftField} on:change={(e) => updateDataJoin(j.id, { leftField: e.currentTarget.value })}>
+                        <option value="">Левый ключ</option>
+                        {#each tableColumnsById(selected, j.leftTableId) as col}
+                          <option value={col}>{col}</option>
+                        {/each}
+                      </select>
+                      <select value={j.joinType} on:change={(e) => updateDataJoin(j.id, { joinType: e.currentTarget.value === 'left' ? 'left' : 'inner' })}>
+                        {#each DATA_JOIN_TYPES as jt}
+                          <option value={jt.value}>{jt.label}</option>
+                        {/each}
+                      </select>
+                      <select
+                        value={j.rightTableId}
+                        on:change={(e) => {
+                          updateDataJoin(j.id, { rightTableId: e.currentTarget.value, rightField: '' });
+                          ensureDataTableColumnsLoaded(e.currentTarget.value);
+                        }}
+                      >
+                        <option value="">Правая таблица</option>
+                        {#each selected.dataTables as t}
+                          <option value={t.id}>{tableLabelById(selected, t.id)}</option>
+                        {/each}
+                      </select>
+                      <select value={j.rightField} on:change={(e) => updateDataJoin(j.id, { rightField: e.currentTarget.value })}>
+                        <option value="">Правый ключ</option>
+                        {#each tableColumnsById(selected, j.rightTableId) as col}
+                          <option value={col}>{col}</option>
+                        {/each}
+                      </select>
+                      <button type="button" class="chip-remove" on:click={() => removeDataJoin(j.id)}>x</button>
+                    </div>
+                  {/each}
+                </div>
+              {:else}
+                <p class="hint">Для нескольких таблиц добавь связи по ключам (например store_id, campaign_id).</p>
+              {/if}
+            </div>
+
+            <div class="data-section">
+              <div class="response-head field-head parameter-subhead">
+                <small>Поля результата</small>
+                <button type="button" class="view-toggle" on:click={addDataField}>Поле +</button>
+              </div>
+              {#if selected?.dataFields?.length}
+                <div class="data-list">
+                  {#each selected.dataFields as f (f.id)}
+                    <div class="data-row">
+                      <select
+                        value={f.tableId}
+                        on:change={(e) => {
+                          updateDataField(f.id, { tableId: e.currentTarget.value, field: '' });
+                          ensureDataTableColumnsLoaded(e.currentTarget.value);
+                        }}
+                      >
+                        <option value="">Таблица</option>
+                        {#each selected.dataTables as t}
+                          <option value={t.id}>{tableLabelById(selected, t.id)}</option>
+                        {/each}
+                      </select>
+                      <select value={f.field} on:change={(e) => updateDataField(f.id, { field: e.currentTarget.value })}>
+                        <option value="">Колонка</option>
+                        {#each tableColumnsById(selected, f.tableId) as col}
+                          <option value={col}>{col}</option>
+                        {/each}
+                      </select>
+                      <input value={f.alias} placeholder="alias поля (например token, campaign_id, sku)" on:input={(e) => updateDataField(f.id, { alias: e.currentTarget.value })} />
+                      <button type="button" class="chip-remove" on:click={() => removeDataField(f.id)}>x</button>
+                    </div>
+                  {/each}
+                </div>
+              {:else}
+                <p class="hint">Выбери поля, которые пойдут в запрос (token, campaign_id, sku и т.д.).</p>
+              {/if}
+            </div>
+
+            <div class="data-section">
+              <div class="response-head field-head parameter-subhead">
+                <small>Фильтры</small>
+                <button type="button" class="view-toggle" on:click={addDataFilter}>Фильтр +</button>
+              </div>
+              {#if selected?.dataFilters?.length}
+                <div class="data-list">
+                  {#each selected.dataFilters as f (f.id)}
+                    <div class="data-row">
+                      <select
+                        value={f.tableId}
+                        on:change={(e) => {
+                          updateDataFilter(f.id, { tableId: e.currentTarget.value, field: '' });
+                          ensureDataTableColumnsLoaded(e.currentTarget.value);
+                        }}
+                      >
+                        <option value="">Таблица</option>
+                        {#each selected.dataTables as t}
+                          <option value={t.id}>{tableLabelById(selected, t.id)}</option>
+                        {/each}
+                      </select>
+                      <select value={f.field} on:change={(e) => updateDataFilter(f.id, { field: e.currentTarget.value })}>
+                        <option value="">Колонка</option>
+                        {#each tableColumnsById(selected, f.tableId) as col}
+                          <option value={col}>{col}</option>
+                        {/each}
+                      </select>
+                      <select value={f.operator} on:change={(e) => updateDataFilter(f.id, { operator: e.currentTarget.value })}>
+                        {#each DATA_FILTER_OPERATORS as op}
+                          <option value={op.value}>{op.label}</option>
+                        {/each}
+                      </select>
+                      <input value={f.compareValue} placeholder="значение" on:input={(e) => updateDataFilter(f.id, { compareValue: e.currentTarget.value })} />
+                      <button type="button" class="chip-remove" on:click={() => removeDataFilter(f.id)}>x</button>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+
+            {#if datasetPreviewError}
+              <p class="definition-error">{datasetPreviewError}</p>
+            {/if}
+            {#if datasetPreviewText}
+              <textarea readonly value={datasetPreviewText}></textarea>
+            {/if}
+          </div>
+
+          <div class="response-head field-head parameter-subhead">
+            <span>Витрина параметров (совместимость)</span>
           </div>
 
           <div class="parameter-panel">
@@ -3623,8 +4225,8 @@ function syncParameterEditorsHeight() {
                     on:change={(e) => updateBindingRule(rule.id, { alias: e.currentTarget.value })}
                   >
                     <option value="">Параметр</option>
-                    {#each selected.parameterDefinitions as param}
-                      <option value={param.alias}>{param.alias}</option>
+                    {#each bindingAliasOptions(selected) as alias}
+                      <option value={alias}>{alias}</option>
                     {/each}
                   </select>
                   <select
@@ -4130,6 +4732,12 @@ function syncParameterEditorsHeight() {
   .dispatch-box { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#f8fafc; }
   .parameter-management-box .parameter-panel { margin-top:8px; }
   .parameter-subhead { margin-top:12px; }
+  .data-builder-box { border:1px solid #e2e8f0; border-radius:12px; padding:10px; background:#fff; margin-top:8px; display:flex; flex-direction:column; gap:10px; }
+  .data-section { display:flex; flex-direction:column; gap:6px; }
+  .data-section > small { color:#64748b; font-size:11px; }
+  .data-list { display:flex; flex-direction:column; gap:8px; }
+  .data-row { display:grid; grid-template-columns: 1.2fr 1fr 1fr auto; gap:8px; align-items:center; }
+  .join-row { grid-template-columns: 1fr 1fr 120px 1fr 1fr auto; }
   .dispatch-grid { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
   .binding-list { margin-top:8px; display:flex; flex-direction:column; gap:8px; }
   .binding-row { display:grid; grid-template-columns: 1fr 220px 1.2fr auto; gap:8px; align-items:center; }
@@ -4228,6 +4836,7 @@ function syncParameterEditorsHeight() {
     .connect-actions { justify-content:flex-start; flex-wrap:wrap; }
     .raw-grid { grid-template-columns: 1fr; }
     .saved-inline-actions { grid-template-columns: 1fr; }
+    .data-row, .join-row { grid-template-columns: 1fr; }
     .binding-row { grid-template-columns: 1fr; }
   }
 </style>
