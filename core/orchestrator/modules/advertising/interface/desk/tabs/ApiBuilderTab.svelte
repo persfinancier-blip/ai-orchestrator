@@ -3015,10 +3015,7 @@ function formatBytes(bytes: number) {
     const hasDateParams =
       Array.isArray(draft.dataDateParams) &&
       draft.dataDateParams.some((p) => String(p?.alias || '').trim());
-    const hasApiParams =
-      Array.isArray(draft.dataApiParams) &&
-      draft.dataApiParams.some((p) => String(p?.alias || '').trim() && (String(p?.sourceApiRef || '').trim() || Number(p?.sourceApiStoreId || 0) > 0));
-    return Boolean(hasTableFields || hasDateParams || hasApiParams);
+    return Boolean(hasTableFields || hasDateParams);
   }
 
   function pad2(v: number) {
@@ -3161,10 +3158,8 @@ function formatBytes(bytes: number) {
   }
 
   function dataApiParametersForDraft(draft: ApiDraft | null): DataApiParameter[] {
-    if (!draft) return [];
-    return (Array.isArray(draft.dataApiParams) ? draft.dataApiParams : [])
-      .map((p, idx) => normalizeDataApiParameter(p, idx + 1))
-      .filter((p) => String(p.alias || '').trim());
+    void draft;
+    return [];
   }
 
   function sourceDraftByRefOrStoreId(sourceApiRef: string, sourceApiStoreId?: number): ApiDraft | null {
@@ -3302,7 +3297,7 @@ function formatBytes(bytes: number) {
   }
 
   function transformDataFieldDateValue(value: any, field: DataModelField): any {
-    if (!field || field.dateMode !== 'process') return value;
+    if (!field || String(field.dateMode || 'raw') !== 'process') return value;
     const dt = parseDateValueFromTable(value);
     if (!dt) return value;
     let v = applyDateAnchorPreset(dt, toDateAnchorPreset(String(field.dateAnchorPreset || 'raw')));
@@ -3319,7 +3314,8 @@ function formatBytes(bytes: number) {
     return sourceRows.map((row) => {
       const out = { ...(row || {}) };
       fields.forEach((field) => {
-        if (field.dateMode !== 'process') return;
+        if (!isDataFieldDateType(draft, field)) return;
+        if (String(field.dateMode || 'raw') !== 'process') return;
         const found = findAliasInMap(out, String(field.alias || '').trim());
         if (!found.found) return;
         out[found.key] = transformDataFieldDateValue(found.value, field);
@@ -3435,14 +3431,11 @@ function formatBytes(bytes: number) {
     const fromDateParams = dataDateParametersForDraft(draft)
       .map((p) => String(p?.alias || '').trim())
       .filter(Boolean);
-    const fromApiParams = dataApiParametersForDraft(draft)
-      .map((p) => String(p?.alias || '').trim())
-      .filter(Boolean);
     const fromDefinitions = (Array.isArray(draft.parameterDefinitions) ? draft.parameterDefinitions : [])
       .map((p) => String(p?.alias || '').trim())
       .filter(Boolean);
-    if (fromDataModel.length || fromDateParams.length || fromApiParams.length) {
-      return uniqueAliasList([...fromDataModel, ...fromDateParams, ...fromApiParams]);
+    if (fromDataModel.length || fromDateParams.length) {
+      return uniqueAliasList([...fromDataModel, ...fromDateParams]);
     }
     return uniqueAliasList(fromDefinitions);
   }
@@ -3477,14 +3470,10 @@ function formatBytes(bytes: number) {
       .filter((p) => Boolean(p?.grouped))
       .map((p) => canonicalAlias(String(p?.alias || '')))
       .filter(Boolean);
-    const groupByFromApi = dataApiParametersForDraft(draft)
-      .filter((p) => Boolean(p?.grouped))
-      .map((p) => canonicalAlias(String(p?.alias || '')))
-      .filter(Boolean);
     const groupByLegacy = (Array.isArray(draft.groupByAliases) ? draft.groupByAliases : [])
       .map(canonicalAlias)
       .filter(Boolean);
-    const groupedAuto = uniqueAliasList([...groupByFromFields, ...groupByFromDates, ...groupByFromApi]);
+    const groupedAuto = uniqueAliasList([...groupByFromFields, ...groupByFromDates]);
     const groupByAliases = uniqueAliasList(groupedAuto.length ? groupedAuto : groupByLegacy);
     const seenRules = new Set<string>();
     const bindingRules = (Array.isArray(draft.bindingRules) ? draft.bindingRules : [])
@@ -3823,6 +3812,14 @@ function formatBytes(bytes: number) {
     const t = draft.dataTables.find((x) => x.id === tableId);
     if (!t) return [];
     return columnOptionsFor(t.schema, t.table);
+  }
+
+  function isDataFieldDateType(draft: ApiDraft | null, field: DataModelField) {
+    if (!draft) return false;
+    const table = (draft.dataTables || []).find((x) => x.id === field.tableId);
+    if (!table || !String(field?.field || '').trim()) return false;
+    const type = normalizeTypeName(columnMeta(table.schema, table.table, field.field)?.type || '');
+    return type.includes('date') || type.includes('time');
   }
 
   function tableAliasById(draft: ApiDraft | null, tableId: string) {
@@ -4197,8 +4194,7 @@ function formatBytes(bytes: number) {
     const aliasesRequested = uniqueAliasList(aliases);
     const dataAliases = uniqueAliasList((draft.dataFields || []).map((f) => String(f.alias || '').trim()).filter(Boolean));
     const dateAliases = uniqueAliasList(dataDateParametersForDraft(draft).map((p) => String(p.alias || '').trim()).filter(Boolean));
-    const apiAliases = uniqueAliasList(dataApiParametersForDraft(draft).map((p) => String(p.alias || '').trim()).filter(Boolean));
-    const available = new Set([...dataAliases, ...dateAliases, ...apiAliases]);
+    const available = new Set([...dataAliases, ...dateAliases]);
     aliasesRequested.forEach((alias) => {
       if (!available.has(alias)) issues[alias] = 'alias не найден в конструкторе данных';
     });
@@ -4233,21 +4229,8 @@ function formatBytes(bytes: number) {
       allRows.push({ ...dateMap });
     }
 
-    const apiNeededAliases = aliasesRequested.filter((alias) => apiAliases.includes(alias));
-    if (!apiNeededAliases.length) return { rows: applyAliasFiltersToRows(allRows, aliasFilters), issues };
-    const nextVisited = new Set<string>([...Array.from(visited), refOf(draft)]);
-    const apiLoaded = await loadApiSourceRowsForAliases(draft, apiNeededAliases, nextVisited);
-    Object.entries(apiLoaded.issues || {}).forEach(([k, v]) => {
-      if (!issues[k]) issues[k] = String(v || '');
-    });
-    const apiRows = Array.isArray(apiLoaded.rows) ? apiLoaded.rows : [];
-    if (!apiRows.length) return { rows: applyAliasFiltersToRows(allRows, aliasFilters), issues };
-    if (!allRows.length) return { rows: applyAliasFiltersToRows(apiRows, aliasFilters), issues };
-    const commonKeys = uniqueAliasList(
-      Object.keys(allRows[0] || {}).filter((k) => Object.prototype.hasOwnProperty.call(apiRows[0] || {}, k))
-    );
-    const rows = commonKeys.length ? joinRowsByKeysWithCap(allRows, apiRows, commonKeys) : mergeRowsWithCap(allRows, apiRows);
-    return { rows: applyAliasFiltersToRows(rows, aliasFilters), issues };
+    void visited;
+    return { rows: applyAliasFiltersToRows(allRows, aliasFilters), issues };
   }
 
   async function previewDataModelNow() {
@@ -4260,18 +4243,16 @@ function formatBytes(bytes: number) {
       return;
     }
     const dateParams = dataDateParametersForDraft(selected);
-    const apiParams = dataApiParametersForDraft(selected);
-    if (!selected.dataTables?.length && !dateParams.length && !apiParams.length) {
+    if (!selected.dataTables?.length && !dateParams.length) {
       datasetPreviewColumns = [];
-      datasetPreviewError = 'Добавь источник данных: таблицы, даты или API-шаблоны.';
+      datasetPreviewError = 'Добавь источник данных: таблицы или даты.';
       return;
     }
     const previewCols = (selected.dataFields || [])
       .filter((f) => String(f?.tableId || '').trim() && String(f?.field || '').trim() && String(f?.alias || '').trim())
       .map((f) => ({ id: f.id, tableId: f.tableId, field: f.field, alias: f.alias }));
     const dateAliases = uniqueAliasList(dateParams.map((p) => String(p.alias || '').trim()).filter(Boolean));
-    const apiAliases = uniqueAliasList(apiParams.map((p) => String(p.alias || '').trim()).filter(Boolean));
-    if (!previewCols.length && !dateAliases.length && !apiAliases.length) {
+    if (!previewCols.length && !dateAliases.length) {
       datasetPreviewColumns = [];
       datasetPreviewError = 'Добавь хотя бы один показатель для работы.';
       return;
@@ -4280,8 +4261,7 @@ function formatBytes(bytes: number) {
     try {
       const aliases = uniqueAliasList([
         ...previewCols.map((f) => String(f?.alias || '').trim()).filter(Boolean),
-        ...dateAliases,
-        ...apiAliases
+        ...dateAliases
       ]);
       if (requestId !== datasetPreviewRequestSeq) return;
       datasetPreviewColumns = aliases;
@@ -4741,8 +4721,7 @@ function handleDefinitionInput(value: string) {
     });
 
     const dataAliases = uniqueAliasList([
-      ...(draft.dataFields || []).map((f) => String(f?.alias || '').trim()).filter(Boolean),
-      ...dataApiParametersForDraft(draft).map((p) => String(p?.alias || '').trim()).filter(Boolean)
+      ...(draft.dataFields || []).map((f) => String(f?.alias || '').trim()).filter(Boolean)
     ]);
     const dataAliasByLower = new Map<string, string>();
     dataAliases.forEach((alias) => {
@@ -7984,7 +7963,10 @@ function syncParameterEditorsHeight() {
             <div class="data-section">
               <div class="response-head field-head parameter-subhead">
                 <small>Таблицы</small>
-                <button type="button" class="view-toggle" on:click={addDataTable}>Таблица +</button>
+                <span class="inline-actions">
+                  <button type="button" class="view-toggle" on:click={addDataTable}>Таблица +</button>
+                  <button type="button" class="view-toggle" on:click={addDataDateParam}>Дата +</button>
+                </span>
               </div>
               {#if selected?.dataTables?.length}
                 <div class="crumb-strip">
@@ -8136,7 +8118,7 @@ function syncParameterEditorsHeight() {
                     <div class="data-row filter-rule-row">
                       <select value={activeFilter.tableId} on:change={(e) => updateDataFilterTableRef(activeFilter.id, e.currentTarget.value)}>
                         <option value="">Краткое наименование таблицы</option>
-                        <option value={FILTER_SCOPE_ALIAS}>Итоговые параметры (таблицы/даты/API)</option>
+                        <option value={FILTER_SCOPE_ALIAS}>Итоговые параметры (таблицы/даты)</option>
                         {#each selected.dataTables as t}
                           <option value={t.id}>{t.alias || `${t.schema}.${t.table}`}</option>
                         {/each}
@@ -8179,10 +8161,13 @@ function syncParameterEditorsHeight() {
             <div class="parameter-sources-grid">
               <div class="source-card">
                 <div class="response-head field-head parameter-subhead">
-                  <small>Параметры из таблиц</small>
-                  <button type="button" class="view-toggle" on:click={addDataField}>Таблица +</button>
+                  <small>Показатели для работы</small>
+                  <span class="inline-actions">
+                    <button type="button" class="view-toggle" on:click={addDataField}>Таблица +</button>
+                    <button type="button" class="view-toggle" on:click={addDataDateParam}>Дата +</button>
+                  </span>
                 </div>
-                {#if selected?.dataFields?.length}
+                {#if selected?.dataFields?.length || selected?.dataDateParams?.length}
                   <div class="data-list">
                     {#each selected.dataFields as f, idx (f.id)}
                       <div class="rule-card">
@@ -8212,21 +8197,6 @@ function syncParameterEditorsHeight() {
                               <span class="group-toggle-indicator" aria-hidden="true"></span>
                             {/if}
                           </button>
-                          <button
-                            type="button"
-                            class="group-toggle group-toggle-sm"
-                            class:active-group-toggle={String(f.dateMode || 'raw') === 'process'}
-                            on:click={() =>
-                              updateDataField(f.id, {
-                                dateMode: String(f.dateMode || 'raw') === 'process' ? 'raw' : 'process'
-                              })}
-                            aria-pressed={String(f.dateMode || 'raw') === 'process'}
-                          >
-                            <span>{String(f.dateMode || 'raw') === 'process' ? 'Дата: обработка' : 'Дата: как есть'}</span>
-                            {#if String(f.dateMode || 'raw') === 'process'}
-                              <span class="group-toggle-indicator" aria-hidden="true"></span>
-                            {/if}
-                          </button>
                           <div class="row-order-actions">
                             <button
                               type="button"
@@ -8251,12 +8221,13 @@ function syncParameterEditorsHeight() {
                           </div>
                           <button type="button" class="chip-remove" on:click={() => removeDataField(f.id)}>x</button>
                         </div>
-                        {#if String(f.dateMode || 'raw') === 'process'}
+                        {#if isDataFieldDateType(selected, f)}
                           <div class="data-row field-date-row">
                             <select
                               value={toDateAnchorPreset(String(f.dateAnchorPreset || 'raw'))}
                               on:change={(e) =>
                                 updateDataField(f.id, {
+                                  dateMode: 'process',
                                   dateAnchorPreset: toDateAnchorPreset(e.currentTarget.value)
                                 })}
                             >
@@ -8270,6 +8241,7 @@ function syncParameterEditorsHeight() {
                               placeholder="+/- дни"
                               on:input={(e) =>
                                 updateDataField(f.id, {
+                                  dateMode: 'process',
                                   dateAddDays: Number(e.currentTarget.value) || 0
                                 })}
                             />
@@ -8279,6 +8251,7 @@ function syncParameterEditorsHeight() {
                               placeholder="+/- месяцы"
                               on:input={(e) =>
                                 updateDataField(f.id, {
+                                  dateMode: 'process',
                                   dateAddMonths: Number(e.currentTarget.value) || 0
                                 })}
                             />
@@ -8286,6 +8259,7 @@ function syncParameterEditorsHeight() {
                               value={toDateFormatPreset(String(f.dateFormatPreset || 'yyyy_mm_dd'))}
                               on:change={(e) =>
                                 updateDataField(f.id, {
+                                  dateMode: 'process',
                                   dateFormatPreset: toDateFormatPreset(e.currentTarget.value)
                                 })}
                             >
@@ -8297,43 +8271,43 @@ function syncParameterEditorsHeight() {
                         {/if}
                       </div>
                     {/each}
-                  </div>
-                {:else}
-                  <p class="hint">Добавь параметры из таблиц.</p>
-                {/if}
-              </div>
-
-              <div class="source-card">
-                <div class="response-head field-head parameter-subhead">
-                  <small>Параметры из дат</small>
-                  <button type="button" class="view-toggle" on:click={addDataDateParam}>Дата +</button>
-                </div>
-                {#if selected?.dataDateParams?.length}
-                  <div class="data-list">
                     {#each selected.dataDateParams as p (p.id)}
                       <div class="rule-card">
-                        <div class="rule-card-head">
-                          <small>{p.alias || 'date_param'}</small>
-                          <button type="button" class="chip-remove" title="Удалить параметр даты" on:click={() => removeDataDateParam(p.id)}>x</button>
-                        </div>
-                        <div class="data-row date-param-row">
-                          <input
-                            value={p.alias}
-                            placeholder="Короткое название (alias)"
-                            on:input={(e) => updateDataDateParam(p.id, { alias: e.currentTarget.value })}
-                          />
-                          <select value={p.basePreset} on:change={(e) => updateDataDateParam(p.id, { basePreset: e.currentTarget.value === 'custom' ? 'custom' : 'today' })}>
+                        <div class="data-row param-row date-param-inline-row">
+                          <select
+                            value={p.basePreset}
+                            on:change={(e) => updateDataDateParam(p.id, { basePreset: e.currentTarget.value === 'custom' ? 'custom' : 'today' })}
+                          >
                             {#each DATE_BASE_PRESETS as opt}
                               <option value={opt.value}>{opt.label}</option>
                             {/each}
                           </select>
                           <input
-                            type="text"
-                            value={p.customDate}
-                            placeholder="Свободная дата: 2024-03-01 или 2024-03-01T00:00:00"
+                            type="date"
+                            value={String(p.customDate || '').slice(0, 10)}
                             disabled={p.basePreset !== 'custom'}
                             on:input={(e) => updateDataDateParam(p.id, { customDate: e.currentTarget.value })}
                           />
+                          <input
+                            value={p.alias}
+                            placeholder="Краткое наименование (alias)"
+                            on:input={(e) => updateDataDateParam(p.id, { alias: e.currentTarget.value })}
+                          />
+                          <button
+                            type="button"
+                            class="group-toggle group-toggle-sm"
+                            class:active-group-toggle={Boolean(p.grouped)}
+                            on:click={() => updateDataDateParam(p.id, { grouped: !Boolean(p.grouped) })}
+                            aria-pressed={Boolean(p.grouped)}
+                          >
+                            <span>Группировать</span>
+                            {#if Boolean(p.grouped)}
+                              <span class="group-toggle-indicator"></span>
+                            {/if}
+                          </button>
+                          <button type="button" class="chip-remove" title="Удалить параметр даты" on:click={() => removeDataDateParam(p.id)}>x</button>
+                        </div>
+                        <div class="data-row field-date-row">
                           <select value={p.anchorPreset} on:change={(e) => updateDataDateParam(p.id, { anchorPreset: toDateAnchorPreset(e.currentTarget.value) })}>
                             {#each DATE_ANCHOR_PRESETS as opt}
                               <option value={opt.value}>{opt.label}</option>
@@ -8356,115 +8330,18 @@ function syncParameterEditorsHeight() {
                               <option value={fmt.value}>{fmt.label}</option>
                             {/each}
                           </select>
-                          <button
-                            type="button"
-                            class="group-toggle group-toggle-sm"
-                            class:active-group-toggle={Boolean(p.grouped)}
-                            on:click={() => updateDataDateParam(p.id, { grouped: !Boolean(p.grouped) })}
-                            aria-pressed={Boolean(p.grouped)}
-                          >
-                            <span>Группировать</span>
-                            {#if Boolean(p.grouped)}
-                              <span class="group-toggle-indicator"></span>
-                            {/if}
-                          </button>
                         </div>
                         <p class="hint small-hint">Превью значения: <code>{dateParamPreviewValue(p)}</code></p>
                       </div>
                     {/each}
                   </div>
                 {:else}
-                  <p class="hint">Добавь параметры дат через «Дата +».</p>
-                {/if}
-              </div>
-
-              <div class="source-card">
-                <div class="response-head field-head parameter-subhead">
-                  <small>Параметры из шаблонов API</small>
-                  <button type="button" class="view-toggle" on:click={addDataApiParam}>API +</button>
-                </div>
-                {#if apiSourceDraftOptions(selected).length === 0}
-                  <p class="hint">Нет доступных API-шаблонов. Создай и сохрани минимум один API.</p>
-                {:else if selected?.dataApiParams?.length}
-                  <div class="data-list">
-                    {#each selected.dataApiParams as p (p.id)}
-                      {@const sourceDraft = sourceDraftByRefOrStoreId(p.sourceApiRef, p.sourceApiStoreId)}
-                      <div class="rule-card">
-                        <div class="data-row api-param-row">
-                          <select
-                            value={p.sourceApiRef}
-                            on:change={(e) => {
-                              const refValue = e.currentTarget.value;
-                              const picked = apiSourceDraftOptions(selected).find((x) => x.ref === refValue);
-                              updateDataApiParam(p.id, {
-                                sourceApiRef: refValue,
-                                sourceApiStoreId: Number(picked?.storeId || 0) || undefined,
-                                sourceKey: ''
-                              });
-                            }}
-                          >
-                            <option value="">Шаблон API</option>
-                            {#each apiSourceDraftOptions(selected) as opt}
-                              <option value={opt.ref}>{opt.label}</option>
-                            {/each}
-                          </select>
-                          <select
-                            value={p.sourceType}
-                            on:change={(e) =>
-                              updateDataApiParam(p.id, {
-                                sourceType:
-                                  e.currentTarget.value === 'input'
-                                    ? 'input'
-                                    : e.currentTarget.value === 'output'
-                                    ? 'output'
-                                    : 'system',
-                                sourceKey: ''
-                              })}
-                          >
-                            {#each apiParamSourceTypeOptions() as t}
-                              <option value={t.value}>{t.label}</option>
-                            {/each}
-                          </select>
-                          <select value={p.sourceKey} on:change={(e) => updateDataApiParam(p.id, { sourceKey: e.currentTarget.value })}>
-                            <option value="">{p.sourceType === 'output' ? 'Путь из ответа API' : 'Параметр источника'}</option>
-                            {#each apiParamSourceKeyOptions(p) as keyOpt}
-                              <option value={keyOpt.value}>{keyOpt.label}</option>
-                            {/each}
-                          </select>
-                          <input
-                            value={p.alias}
-                            placeholder="Alias"
-                            on:input={(e) => updateDataApiParam(p.id, { alias: e.currentTarget.value })}
-                          />
-                          <button
-                            type="button"
-                            class="group-toggle group-toggle-sm"
-                            class:active-group-toggle={Boolean(p.grouped)}
-                            on:click={() => updateDataApiParam(p.id, { grouped: !Boolean(p.grouped) })}
-                            aria-pressed={Boolean(p.grouped)}
-                          >
-                            <span>Группировать</span>
-                            {#if Boolean(p.grouped)}
-                              <span class="group-toggle-indicator"></span>
-                            {/if}
-                          </button>
-                          <button type="button" class="chip-remove" on:click={() => removeDataApiParam(p.id)}>x</button>
-                        </div>
-                        {#if p.sourceType === 'output' && sourceDraft}
-                          <p class="hint small-hint">
-                            Для выходных параметров используется последний ответ API-шаблона. Сначала запусти источник <code>{sourceDraft.name}</code>.
-                          </p>
-                        {/if}
-                      </div>
-                    {/each}
-                  </div>
-                {:else}
-                  <p class="hint">Добавь параметры из других API через «API +».</p>
+                  <p class="hint">Добавь параметры через «Таблица +» или «Дата +».</p>
                 {/if}
               </div>
             </div>
 
-            <p class="hint small-hint">Группировка работает одинаково для параметров из таблиц, дат и API-шаблонов.</p>
+            <p class="hint small-hint">Группировка работает одинаково для параметров из таблиц и дат.</p>
 
             <div class="data-section">
               <div class="response-head field-head parameter-subhead">
@@ -9150,9 +9027,8 @@ function syncParameterEditorsHeight() {
   .join-rule-row { grid-template-columns: 1fr 1fr 80px 1fr 1fr 1fr; }
   .filter-rule-row { grid-template-columns: 1.2fr 1fr 1fr 1fr; }
   .param-row { grid-template-columns: 1.2fr 1fr 1fr 140px 220px 72px auto; }
+  .date-param-inline-row { grid-template-columns: 200px 180px minmax(220px, 1fr) 170px auto; }
   .field-date-row { grid-template-columns: 1fr 140px 140px 1fr; align-items:end; }
-  .date-param-row { grid-template-columns: 180px 160px minmax(220px, 1fr) 170px 120px 120px minmax(220px, 1fr); }
-  .api-param-row { grid-template-columns: 1fr 200px 1fr 180px 130px auto; }
   .group-toggle {
     display:flex;
     align-items:center;
@@ -9290,7 +9166,7 @@ function syncParameterEditorsHeight() {
     .raw-grid { grid-template-columns: 1fr; }
     .saved-inline-actions { grid-template-columns: 1fr; }
     .parameter-sources-grid { grid-template-columns: 1fr; }
-    .data-row, .table-rule-row, .join-rule-row, .filter-rule-row, .param-row, .field-date-row, .date-param-row, .api-param-row { grid-template-columns: 1fr; }
+    .data-row, .table-rule-row, .join-rule-row, .filter-rule-row, .param-row, .date-param-inline-row, .field-date-row { grid-template-columns: 1fr; }
     .pagination-limit-toggles,
     .pagination-limit-values {
       max-width:100%;
