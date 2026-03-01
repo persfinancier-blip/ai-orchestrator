@@ -1,5 +1,5 @@
 ﻿<script lang="ts">
-  import { tick } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
   import JsonTreeView from '../components/JsonTreeView.svelte';
   export type ExistingTable = { schema_name: string; table_name: string };
   type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -276,6 +276,9 @@
   let datasetPreviewHasMore = false;
   let datasetPreviewLoading = false;
   let datasetPreviewError = '';
+  let datasetPreviewTimer: ReturnType<typeof setTimeout> | null = null;
+  let datasetPreviewRequestSeq = 0;
+  let datasetPreviewSignature = '';
   let groupByAliasCandidates: string[] = [];
   const PARAMETER_PREVIEW_LIMIT = 5;
   const REQUEST_PREVIEW_MAX = 20;
@@ -2056,17 +2059,41 @@ function formatBytes(bytes: number) {
     );
   }
 
+  function parameterTableIds(draft: ApiDraft | null) {
+    if (!draft) return [] as string[];
+    const set = new Set<string>();
+    (draft.dataFields || []).forEach((f) => {
+      const tableId = String(f?.tableId || '').trim();
+      if (tableId) set.add(tableId);
+    });
+    return [...set];
+  }
+
+  function joinTableOptionsFor(draft: ApiDraft | null, includeTableId = '') {
+    if (!draft) return [] as DataModelTable[];
+    const allowedIds = new Set(parameterTableIds(draft));
+    const extraId = String(includeTableId || '').trim();
+    if (extraId) allowedIds.add(extraId);
+    return (draft.dataTables || []).filter((t) => allowedIds.has(t.id));
+  }
+
+  function ensureColumnsByTableId(draft: ApiDraft | null, tableId: string) {
+    if (!draft) return;
+    const t = (draft.dataTables || []).find((x) => x.id === tableId);
+    if (!t) return;
+    ensureColumnsFor(t.schema, t.table);
+  }
+
   function addDataJoin() {
     if (!selected) return;
-    const leftRef = existingTables[0] ? formatQualifiedTable(existingTables[0].schema_name, existingTables[0].table_name) : '';
-    const rightRef = existingTables[1]
-      ? formatQualifiedTable(existingTables[1].schema_name, existingTables[1].table_name)
-      : leftRef;
+    const options = parameterTableIds(selected);
+    if (!options.length) {
+      err = 'Сначала добавь параметры и выбери у них таблицы, затем настраивай связи.';
+      return;
+    }
+    const left = options[0] || '';
+    const right = options[1] || options[0] || '';
     mutateSelected((d) => {
-      const leftParsed = parseQualifiedTable(leftRef);
-      const rightParsed = parseQualifiedTable(rightRef);
-      const left = ensureDraftTableEntry(d, leftParsed.schema, leftParsed.table);
-      const right = ensureDraftTableEntry(d, rightParsed.schema, rightParsed.table);
       d.dataJoins = [
         ...(Array.isArray(d.dataJoins) ? d.dataJoins : []),
         {
@@ -2079,10 +2106,8 @@ function formatBytes(bytes: number) {
         }
       ];
     });
-    const leftParsed = parseQualifiedTable(leftRef);
-    const rightParsed = parseQualifiedTable(rightRef);
-    if (leftParsed.schema && leftParsed.table) ensureColumnsFor(leftParsed.schema, leftParsed.table);
-    if (rightParsed.schema && rightParsed.table) ensureColumnsFor(rightParsed.schema, rightParsed.table);
+    ensureColumnsByTableId(selected, left);
+    ensureColumnsByTableId(selected, right);
   }
 
   function updateDataJoin(joinId: string, patch: Partial<DataModelJoin>) {
@@ -2091,10 +2116,9 @@ function formatBytes(bytes: number) {
     });
   }
 
-  async function updateDataJoinTableRef(joinId: string, side: 'left' | 'right', value: string) {
-    const parsed = parseQualifiedTable(value);
+  function updateDataJoinTableRef(joinId: string, side: 'left' | 'right', tableIdRaw: string) {
+    const tableId = String(tableIdRaw || '').trim();
     mutateSelected((d) => {
-      const tableId = ensureDraftTableEntry(d, parsed.schema, parsed.table);
       d.dataJoins = d.dataJoins.map((j) => {
         if (j.id !== joinId) return j;
         if (side === 'left') {
@@ -2104,7 +2128,7 @@ function formatBytes(bytes: number) {
       });
       pruneDataModelTables(d);
     });
-    await ensureColumnsFor(parsed.schema, parsed.table);
+    ensureColumnsByTableId(selected, tableId);
   }
 
   function removeDataJoin(joinId: string) {
@@ -2295,30 +2319,61 @@ function formatBytes(bytes: number) {
   }
 
   async function previewDataModelNow() {
+    const requestId = ++datasetPreviewRequestSeq;
     datasetPreviewError = '';
     datasetPreviewRows = [];
-    datasetPreviewColumns = [];
     datasetPreviewHasMore = false;
     if (!selected) {
       datasetPreviewError = 'Выбери API';
       return;
     }
     if (!hasDataModelConfigured(selected)) {
+      datasetPreviewColumns = uniqueAliasList((selected.dataFields || []).map((f) => String(f?.alias || '').trim()).filter(Boolean));
       datasetPreviewError = 'Добавь хотя бы один параметр (таблица + колонка + alias)';
       return;
     }
     datasetPreviewLoading = true;
     try {
       const aliases = uniqueAliasList((selected.dataFields || []).map((f) => String(f?.alias || '').trim()).filter(Boolean));
+      if (requestId !== datasetPreviewRequestSeq) return;
       datasetPreviewColumns = aliases;
       const resp = await fetchDataModelRows(selected, aliases, 10, 0);
+      if (requestId !== datasetPreviewRequestSeq) return;
       datasetPreviewRows = Array.isArray(resp?.rows) ? resp.rows : [];
       datasetPreviewHasMore = Boolean(resp?.has_more);
     } catch (e: any) {
+      if (requestId !== datasetPreviewRequestSeq) return;
       datasetPreviewError = e?.message ?? String(e);
     } finally {
-      datasetPreviewLoading = false;
+      if (requestId === datasetPreviewRequestSeq) datasetPreviewLoading = false;
     }
+  }
+
+  function dataModelPreviewSignature(draft: ApiDraft | null) {
+    if (!draft) return '';
+    const fields = (draft.dataFields || []).map((f) => ({
+      id: f.id,
+      tableId: f.tableId,
+      field: f.field,
+      alias: f.alias,
+      grouped: Boolean(f.grouped)
+    }));
+    const joins = (draft.dataJoins || []).map((j) => ({
+      id: j.id,
+      leftTableId: j.leftTableId,
+      leftField: j.leftField,
+      rightTableId: j.rightTableId,
+      rightField: j.rightField,
+      joinType: j.joinType
+    }));
+    const filters = (draft.dataFilters || []).map((f) => ({
+      id: f.id,
+      tableId: f.tableId,
+      field: f.field,
+      operator: f.operator,
+      compareValue: f.compareValue
+    }));
+    return JSON.stringify({ fields, joins, filters });
   }
 
   function handlePaginationStrategyChange(value: string) {
@@ -3884,6 +3939,34 @@ function handleDefinitionInput(value: string) {
       void ensureColumnsFor(t.schema, t.table);
     }
   }
+  $: {
+    const sig = `${selectedRef || ''}|${dataModelPreviewSignature(selected)}`;
+    if (sig !== datasetPreviewSignature) {
+      datasetPreviewSignature = sig;
+      if (datasetPreviewTimer) {
+        clearTimeout(datasetPreviewTimer);
+        datasetPreviewTimer = null;
+      }
+      if (!selected) {
+        datasetPreviewRows = [];
+        datasetPreviewColumns = [];
+        datasetPreviewHasMore = false;
+        datasetPreviewLoading = false;
+        datasetPreviewError = '';
+      } else if (!hasDataModelConfigured(selected)) {
+        datasetPreviewRows = [];
+        datasetPreviewColumns = uniqueAliasList((selected.dataFields || []).map((f) => String(f?.alias || '').trim()).filter(Boolean));
+        datasetPreviewHasMore = false;
+        datasetPreviewLoading = false;
+        datasetPreviewError = '';
+      } else {
+        datasetPreviewLoading = true;
+        datasetPreviewTimer = setTimeout(() => {
+          void previewDataModelNow();
+        }, 250);
+      }
+    }
+  }
   $: authViewMode, tick().then(syncMainTextareasHeight);
   $: headersViewMode, tick().then(syncMainTextareasHeight);
   $: queryViewMode, tick().then(syncMainTextareasHeight);
@@ -3913,6 +3996,10 @@ function syncParameterEditorsHeight() {
     autosize(queryEl);
     autosize(bodyEl);
   }
+
+  onDestroy(() => {
+    if (datasetPreviewTimer) clearTimeout(datasetPreviewTimer);
+  });
 
   void loadAll();
 </script>
@@ -4258,7 +4345,10 @@ function syncParameterEditorsHeight() {
             <div class="data-section">
               <div class="response-head field-head parameter-subhead">
                 <small>Параметры</small>
-                <button type="button" class="view-toggle" on:click={addDataField}>Поле +</button>
+                <span class="inline-actions">
+                  <button type="button" class="view-toggle" on:click={addDataField}>Поле +</button>
+                  <button type="button" class="view-toggle" on:click={addDataFilter}>Фильтр +</button>
+                </span>
               </div>
               {#if selected?.dataFields?.length}
                 <div class="data-list">
@@ -4312,12 +4402,12 @@ function syncParameterEditorsHeight() {
                   {#each selected.dataJoins as j (j.id)}
                     <div class="data-row join-row">
                       <select
-                        value={tableRefById(selected, j.leftTableId)}
+                        value={j.leftTableId}
                         on:change={(e) => updateDataJoinTableRef(j.id, 'left', e.currentTarget.value)}
                       >
                         <option value="">Левая таблица</option>
-                        {#each existingTables as et}
-                          <option value={`${et.schema_name}.${et.table_name}`}>{et.schema_name}.{et.table_name}</option>
+                        {#each joinTableOptionsFor(selected, j.leftTableId) as t}
+                          <option value={t.id}>{t.schema}.{t.table}</option>
                         {/each}
                       </select>
                       <select value={j.leftField} on:change={(e) => updateDataJoin(j.id, { leftField: e.currentTarget.value })}>
@@ -4332,12 +4422,12 @@ function syncParameterEditorsHeight() {
                         {/each}
                       </select>
                       <select
-                        value={tableRefById(selected, j.rightTableId)}
+                        value={j.rightTableId}
                         on:change={(e) => updateDataJoinTableRef(j.id, 'right', e.currentTarget.value)}
                       >
                         <option value="">Правая таблица</option>
-                        {#each existingTables as et}
-                          <option value={`${et.schema_name}.${et.table_name}`}>{et.schema_name}.{et.table_name}</option>
+                        {#each joinTableOptionsFor(selected, j.rightTableId) as t}
+                          <option value={t.id}>{t.schema}.{t.table}</option>
                         {/each}
                       </select>
                       <select value={j.rightField} on:change={(e) => updateDataJoin(j.id, { rightField: e.currentTarget.value })}>
@@ -4358,7 +4448,6 @@ function syncParameterEditorsHeight() {
             <div class="data-section">
               <div class="response-head field-head parameter-subhead">
                 <small>Фильтры</small>
-                <button type="button" class="view-toggle" on:click={addDataFilter}>Фильтр +</button>
               </div>
               {#if selected?.dataFilters?.length}
                 <div class="data-list">
@@ -4389,15 +4478,15 @@ function syncParameterEditorsHeight() {
                     </div>
                   {/each}
                 </div>
+              {:else}
+                <p class="hint small-hint">Добавляй фильтры через кнопку «Фильтр +» в блоке параметров.</p>
               {/if}
             </div>
 
             <div class="data-section">
               <div class="response-head field-head parameter-subhead">
                 <small>Предпросмотр данных</small>
-                <button type="button" class="view-toggle" on:click={previewDataModelNow} disabled={datasetPreviewLoading}>
-                  {datasetPreviewLoading ? 'Загрузка...' : 'Обновить предпросмотр'}
-                </button>
+                <span class="hint small-hint">{datasetPreviewLoading ? 'Обновляется...' : 'Обновляется автоматически'}</span>
               </div>
               {#if datasetPreviewError}
                 <p class="definition-error">{datasetPreviewError}</p>
