@@ -2833,6 +2833,7 @@ function handleDefinitionInput(value: string) {
     }
 
     const plans: Array<any> = [];
+    const groupedKnownAliasesLower = new Set(bindingAliasOptions(draft).map((x) => x.toLowerCase()));
     for (const group of grouped.values()) {
       const authHdr = parseJsonObjectField('Авторизация', draft.authJson);
       if (oauthAuthValue) {
@@ -2854,7 +2855,16 @@ function handleDefinitionInput(value: string) {
             'в группе разные значения; использовано первое';
         }
         if (rule.target === 'header') {
-          hdr[rule.path] = firstValue;
+          if (String(rule.path || '').trim() === 'Authorization') {
+            const source = authHdr.Authorization;
+            if (typeof source === 'string' && source.includes('{{')) {
+              authHdr.Authorization = applyParametersToValue(source, { [rule.alias]: firstValue });
+            } else {
+              authHdr.Authorization = firstValue;
+            }
+          } else {
+            hdr[rule.path] = firstValue;
+          }
         } else if (rule.target === 'query') {
           setByPath(queryObj, rule.path, firstValue);
         } else if (rule.target === 'body') {
@@ -2873,10 +2883,31 @@ function handleDefinitionInput(value: string) {
         setByPath(bodyObj, draft.bodyItemsPath || 'items', items);
       }
 
+      const groupFirstMap = (group.rows[0] || {}) as Record<string, any>;
+      applyParametersToValue(authHdr, groupFirstMap);
+      applyParametersToValue(hdr, groupFirstMap);
+      applyParametersToValue(queryObj, groupFirstMap);
+      applyParametersToValue(bodyObj, groupFirstMap);
+
       let url = `${draft.baseUrl.replace(/\/$/, '')}${draft.path.startsWith('/') ? draft.path : `/${draft.path}`}`;
+      url = replaceParameterTokens(url, groupFirstMap);
       const u = new URL(url);
       Object.entries(queryObj || {}).forEach(([k, v]) => u.searchParams.set(k, String(v)));
       url = u.toString();
+
+      const unresolvedTokens = new Set<string>();
+      collectParameterTokens(url, unresolvedTokens);
+      collectParameterTokens(authHdr, unresolvedTokens);
+      collectParameterTokens(hdr, unresolvedTokens);
+      collectParameterTokens(queryObj, unresolvedTokens);
+      collectParameterTokens(bodyObj, unresolvedTokens);
+      if (unresolvedTokens.size) {
+        const detail = Array.from(unresolvedTokens).map((alias) => {
+          if (!groupedKnownAliasesLower.has(alias.toLowerCase())) return `${alias} (нет параметра с таким alias)`;
+          return `${alias} (значение не вычислено для группы)`;
+        });
+        throw new Error(`Не удалось подставить параметры в групповой отправке: ${detail.join(', ')}`);
+      }
 
       plans.push({
         group: group.key,
