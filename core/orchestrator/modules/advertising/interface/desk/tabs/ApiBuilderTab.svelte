@@ -277,6 +277,8 @@
   let responsePathOptions: string[] = [];
   let responsePathPickerOpen = false;
   let responsePathPick = '';
+  let paginationArrayPathOptions: string[] = [];
+  let paginationArrayPathPick = '';
   let oauthTokenCache: Record<string, { token: string; tokenType: string; expiresAt: number }> = {};
   let selectedParameterId: string | null = null;
   let aliasParamEl: HTMLTextAreaElement | null = null;
@@ -1224,6 +1226,68 @@ function formatBytes(bytes: number) {
       return;
     }
     if (base) out.push(base);
+  }
+
+  function collectArrayResponsePaths(node: any, base: string, out: Set<string>) {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      if (base) out.add(base);
+      const sampleObjects = node.filter((item) => item && typeof item === 'object').slice(0, 3);
+      sampleObjects.forEach((item) => collectArrayResponsePaths(item, base, out));
+      return;
+    }
+    Object.entries(node).forEach(([k, v]) => {
+      const next = base ? `${base}.${k}` : k;
+      collectArrayResponsePaths(v, next, out);
+    });
+  }
+
+  function pickBestPaginationArrayPath(paths: string[], payload: any) {
+    const preferredTokens = ['items', 'data', 'list', 'rows', 'cards', 'results', 'products', 'campaigns', 'skus'];
+    let best = '';
+    let bestScore = -Infinity;
+    paths.forEach((path) => {
+      const value = getByPath(payload, path);
+      const arr = Array.isArray(value) ? value : [];
+      const len = arr.length;
+      const depth = String(path || '').split('.').filter(Boolean).length;
+      const lower = path.toLowerCase();
+      let tokenScore = 0;
+      preferredTokens.forEach((token) => {
+        if (lower.endsWith(`.${token}`) || lower === token) tokenScore += 4;
+        else if (lower.includes(token)) tokenScore += 2;
+      });
+      const score = tokenScore + (len > 0 ? 5 : 0) + Math.min(len, 20) * 0.2 + depth * 0.1;
+      if (score > bestScore) {
+        best = path;
+        bestScore = score;
+      }
+    });
+    return best || (paths[0] || '');
+  }
+
+  function applyPickedPaginationArrayPath() {
+    if (!selected) return;
+    const path = String(paginationArrayPathPick || '').trim();
+    if (!path) return;
+    mutateSelected((d) => (d.paginationDataPath = path));
+    ok = 'Путь к данным подставлен из тестового ответа';
+  }
+
+  function autoPickPaginationArrayPath() {
+    if (!selected) return;
+    if (!paginationArrayPathOptions.length || !responseJson) {
+      err = 'Сначала выполни Проверить, чтобы получить тестовый JSON-ответ';
+      return;
+    }
+    const picked = pickBestPaginationArrayPath(paginationArrayPathOptions, responseJson);
+    if (!picked) {
+      err = 'Не удалось подобрать путь к массиву в ответе';
+      return;
+    }
+    paginationArrayPathPick = picked;
+    mutateSelected((d) => (d.paginationDataPath = picked));
+    ok = `Путь к данным выбран автоматически: ${picked}`;
   }
 
   function addPickedPathFromPicker() {
@@ -4363,6 +4427,14 @@ function handleDefinitionInput(value: string) {
     }
   }
   $: {
+    const out = new Set<string>();
+    if (responseIsJson) collectArrayResponsePaths(responseJson, '', out);
+    paginationArrayPathOptions = Array.from(out).filter(Boolean);
+    if (!paginationArrayPathOptions.includes(paginationArrayPathPick)) {
+      paginationArrayPathPick = paginationArrayPathOptions[0] || '';
+    }
+  }
+  $: {
     const txt = unwrapCodeFence(String(selected?.exampleRequest || '')).trim();
     if (!txt) {
       exampleIsJson = false;
@@ -5272,6 +5344,34 @@ function syncParameterEditorsHeight() {
                   value={selected?.paginationDataPath || ''}
                   on:input={(e) => mutateSelected((d) => (d.paginationDataPath = e.currentTarget.value))}
                 />
+                <div class="pagination-helper-row">
+                  <select bind:value={paginationArrayPathPick} disabled={!paginationArrayPathOptions.length}>
+                    {#if !paginationArrayPathOptions.length}
+                      <option value="">Нет массивов в тестовом ответе</option>
+                    {:else}
+                      {#each paginationArrayPathOptions as opt}
+                        <option value={opt}>{opt}</option>
+                      {/each}
+                    {/if}
+                  </select>
+                  <button
+                    type="button"
+                    class="view-toggle"
+                    on:click={applyPickedPaginationArrayPath}
+                    disabled={!paginationArrayPathOptions.length}
+                  >
+                    Подставить
+                  </button>
+                  <button
+                    type="button"
+                    class="view-toggle"
+                    on:click={autoPickPaginationArrayPath}
+                    disabled={!paginationArrayPathOptions.length}
+                  >
+                    Автовыбор
+                  </button>
+                </div>
+                <p class="hint small-hint">Сначала нажми «Проверить», затем выбери массив из ответа и подставь путь.</p>
               </div>
               <div class="pagination-field">
                 <small>Макс. страниц</small>
@@ -5835,6 +5935,16 @@ function syncParameterEditorsHeight() {
   .pagination-toggle input { width:auto; }
   .pagination-grid { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
   .pagination-field small { display:block; margin-bottom:4px; font-size:11px; color:#64748b; }
+  .pagination-helper-row {
+    margin-top:6px;
+    display:grid;
+    grid-template-columns: 1fr auto auto;
+    gap:6px;
+    align-items:center;
+  }
+  .pagination-helper-row select {
+    min-width:0;
+  }
   .definition-error { margin:0; font-size:11px; color:#b91c1c; }
   @media (max-width: 900px) {
     .connect-row { grid-template-columns: 1fr; }
