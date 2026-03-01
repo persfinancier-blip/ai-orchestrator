@@ -1803,6 +1803,143 @@ tableBuilderRouter.post('/http-request', requireDataAdmin, async (req, res) => {
   }
 });
 
+tableBuilderRouter.post('/api-execution-log/write', requireDataAdmin, async (req, res) => {
+  const schema = String(req.body?.schema || '').trim();
+  const table = String(req.body?.table || '').trim();
+  const rowsRaw = Array.isArray(req.body?.rows) ? req.body.rows : [];
+  const updatedBy = String(req.body?.updated_by || req.header('X-AO-ROLE') || 'ui').trim();
+
+  if (!isIdent(schema) || !isIdent(table)) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid schema/table' });
+  }
+  if (!rowsRaw.length) {
+    return res.status(400).json({ error: 'bad_request', details: 'rows are required' });
+  }
+
+  const rows = rowsRaw
+    .filter((row) => row && typeof row === 'object' && !Array.isArray(row))
+    .slice(0, 5000);
+  if (!rows.length) {
+    return res.status(400).json({ error: 'bad_request', details: 'rows must be objects' });
+  }
+
+  const client = await pool.connect();
+  try {
+    const columnsRes = await client.query(
+      `
+      SELECT
+        c.column_name AS name,
+        c.data_type AS type,
+        c.udt_name AS udt_name
+      FROM information_schema.columns c
+      WHERE c.table_schema = $1
+        AND c.table_name = $2
+      `,
+      [schema, table]
+    );
+    const columns = Array.isArray(columnsRes.rows) ? columnsRes.rows : [];
+    if (!columns.length) {
+      return res.status(404).json({ error: 'not_found', details: 'target table not found' });
+    }
+
+    const columnMeta = new Map();
+    for (const c of columns) {
+      const name = String(c?.name || '').trim();
+      if (!name) continue;
+      columnMeta.set(name, {
+        type: normalizeTypeName(c?.type || ''),
+        udt: normalizeTypeName(c?.udt_name || '')
+      });
+    }
+
+    const normalizeInsertValue = (columnName, value) => {
+      if (value === undefined) return null;
+      if (value === null) return null;
+      const meta = columnMeta.get(columnName);
+      const type = String(meta?.type || '');
+      const udt = String(meta?.udt || '');
+
+      if (type.includes('json') || udt === 'jsonb' || udt === 'json') {
+        if (typeof value === 'string') {
+          try {
+            return JSON.parse(value);
+          } catch {
+            return value;
+          }
+        }
+        return value;
+      }
+
+      if (type === 'boolean' || udt === 'bool') {
+        return Boolean(value);
+      }
+
+      if (
+        type.includes('int') ||
+        type.includes('numeric') ||
+        type.includes('double') ||
+        type.includes('real') ||
+        type.includes('decimal')
+      ) {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : null;
+      }
+
+      if (value && typeof value === 'object') {
+        try {
+          return JSON.stringify(value);
+        } catch {
+          return String(value);
+        }
+      }
+      return String(value);
+    };
+
+    let inserted = 0;
+    let skipped = 0;
+    await client.query('BEGIN');
+    for (const raw of rows) {
+      const row = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+      const pairs = [];
+      for (const [k, v] of Object.entries(row)) {
+        const key = String(k || '').trim();
+        if (!key || !isIdent(key)) continue;
+        if (!columnMeta.has(key)) continue;
+        pairs.push([key, normalizeInsertValue(key, v)]);
+      }
+
+      if (!pairs.length) {
+        skipped += 1;
+        continue;
+      }
+
+      const hasUpdatedBy = pairs.some(([k]) => k === 'updated_by');
+      if (!hasUpdatedBy && columnMeta.has('updated_by')) {
+        pairs.push(['updated_by', updatedBy || 'ui']);
+      }
+      const hasUpdatedAt = pairs.some(([k]) => k === 'updated_at');
+      if (!hasUpdatedAt && columnMeta.has('updated_at')) {
+        pairs.push(['updated_at', new Date().toISOString()]);
+      }
+
+      const colsSql = pairs.map(([k]) => qi(k)).join(', ');
+      const placeholders = pairs.map((_, idx) => `$${idx + 1}`).join(', ');
+      const values = pairs.map(([, v]) => v);
+      await client.query(`INSERT INTO ${qname(schema, table)} (${colsSql}) VALUES (${placeholders})`, values);
+      inserted += 1;
+    }
+    await client.query('COMMIT');
+    return res.json({ ok: true, inserted, skipped });
+  } catch (e) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {}
+    return res.status(500).json({ error: 'api_execution_log_write_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
 tableBuilderRouter.post('/contracts/apply-version', requireDataAdmin, async (req, res) => {
   const schema = String(req.body?.schema || '').trim();
   const table = String(req.body?.table || '').trim();

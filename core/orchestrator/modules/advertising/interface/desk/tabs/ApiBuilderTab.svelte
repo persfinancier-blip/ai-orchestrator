@@ -55,6 +55,7 @@
     id: string;
     alias: string;
     responsePath: string;
+    firstValue: string;
     requestTarget: PaginationParameterTarget;
     requestPath: string;
     applyForAllResponses: boolean;
@@ -131,6 +132,12 @@
     exampleRequest: string;
     parameterDefinitions: ParameterDefinition[];
     dispatchMode: DispatchMode;
+    executionMode: 'sync' | 'async';
+    syncPlanner: 'entity_to_stop' | 'by_wave';
+    asyncConcurrency: number;
+    responseLogEnabled: boolean;
+    responseLogSchema: string;
+    responseLogTable: string;
     groupByAliases: string[];
     bodyItemsPath: string;
     previewRequestLimit: number;
@@ -567,6 +574,12 @@ function formatBytes(bytes: number) {
       exampleRequest: '',
       parameterDefinitions: [],
       dispatchMode: 'single',
+      executionMode: 'sync',
+      syncPlanner: 'entity_to_stop',
+      asyncConcurrency: 3,
+      responseLogEnabled: false,
+      responseLogSchema: 'bronze',
+      responseLogTable: 'wb_ads_raw',
       groupByAliases: [],
       bodyItemsPath: 'items',
       previewRequestLimit: 5,
@@ -719,6 +732,28 @@ function formatBytes(bytes: number) {
       }))
       .filter((f: DataModelFilter) => f.tableId && f.field && dataTableIdSet.has(f.tableId));
     const dispatchMode = toDispatchMode(String(row?.dispatch_mode || executionCfg?.dispatch_mode || 'single'));
+    const executionModeRaw = String(row?.execution_mode || executionCfg?.execution_mode || 'sync').trim().toLowerCase();
+    const executionMode: 'sync' | 'async' = executionModeRaw === 'async' ? 'async' : 'sync';
+    const syncPlannerRaw = String(row?.sync_planner || executionCfg?.sync_planner || 'entity_to_stop').trim().toLowerCase();
+    const syncPlanner: 'entity_to_stop' | 'by_wave' = syncPlannerRaw === 'by_wave' ? 'by_wave' : 'entity_to_stop';
+    const asyncConcurrency = Math.max(
+      1,
+      Math.min(
+        20,
+        Number.isFinite(Number(row?.async_concurrency))
+          ? Number(row?.async_concurrency)
+          : Number(executionCfg?.async_concurrency || 3)
+      )
+    );
+    const responseLogCfg = executionCfg?.response_log && typeof executionCfg.response_log === 'object'
+      ? executionCfg.response_log
+      : {};
+    const responseLogEnabled =
+      (row as any)?.response_log_enabled === undefined
+        ? Boolean((responseLogCfg as any)?.enabled)
+        : Boolean((row as any)?.response_log_enabled);
+    const responseLogSchema = String((row as any)?.response_log_schema || (responseLogCfg as any)?.schema || 'bronze').trim() || 'bronze';
+    const responseLogTable = String((row as any)?.response_log_table || (responseLogCfg as any)?.table || 'wb_ads_raw').trim() || 'wb_ads_raw';
     const bodyItemsPath = String(row?.body_items_path || executionCfg?.body_items_path || 'items').trim() || 'items';
     const previewRequestLimit = Number.isFinite(Number(row?.preview_request_limit))
       ? Number(row?.preview_request_limit)
@@ -824,6 +859,7 @@ function formatBytes(bytes: number) {
         id: String(p?.id || uid()),
         alias: String(p?.alias || `pg_${idx + 1}`).trim(),
         responsePath: String(p?.response_path || p?.responsePath || '').trim(),
+        firstValue: String(p?.first_value || p?.firstValue || '').trim(),
         requestTarget: ['body', 'query', 'header', 'auth'].includes(String(p?.request_target || p?.requestTarget || '').trim())
           ? (String(p?.request_target || p?.requestTarget || '').trim() as PaginationParameterTarget)
           : 'body',
@@ -838,6 +874,7 @@ function formatBytes(bytes: number) {
           id: uid(),
           alias: 'cursor_1',
           responsePath: paginationCursorResPath1Value,
+          firstValue: '',
           requestTarget: legacyTarget,
           requestPath: paginationCursorReqPath1Value,
           applyForAllResponses: true
@@ -848,6 +885,7 @@ function formatBytes(bytes: number) {
           id: uid(),
           alias: 'cursor_2',
           responsePath: paginationCursorResPath2Value,
+          firstValue: '',
           requestTarget: legacyTarget,
           requestPath: paginationCursorReqPath2Value,
           applyForAllResponses: true
@@ -906,6 +944,12 @@ function formatBytes(bytes: number) {
       exampleRequest: exampleRequestValue,
       parameterDefinitions: normalizedDefinitions,
       dispatchMode,
+      executionMode,
+      syncPlanner,
+      asyncConcurrency,
+      responseLogEnabled,
+      responseLogSchema,
+      responseLogTable,
       groupByAliases: normalizedGroupBy,
       bodyItemsPath,
       previewRequestLimit: Math.max(1, Math.min(50, Number(previewRequestLimit || 5))),
@@ -945,6 +989,7 @@ function formatBytes(bytes: number) {
       id: p.id,
       alias: p.alias,
       response_path: p.responsePath,
+      first_value: String(p.firstValue || ''),
       request_target: p.requestTarget,
       request_path: p.requestPath,
       apply_for_all_responses: true
@@ -1028,6 +1073,14 @@ function formatBytes(bytes: number) {
         parameter_definitions: parameterDefinitionsPayload,
         execution: {
           dispatch_mode: sanitizedAliases.groupByAliases.length ? 'group_by' : 'single',
+          execution_mode: d.executionMode || 'sync',
+          sync_planner: d.syncPlanner || 'entity_to_stop',
+          async_concurrency: Math.max(1, Math.min(20, Number(d.asyncConcurrency || 3))),
+          response_log: {
+            enabled: Boolean(d.responseLogEnabled),
+            schema: String(d.responseLogSchema || '').trim(),
+            table: String(d.responseLogTable || '').trim()
+          },
           group_by_aliases: sanitizedAliases.groupByAliases,
           body_items_path: d.bodyItemsPath,
           preview_request_limit: d.previewRequestLimit,
@@ -1493,6 +1546,7 @@ function formatBytes(bytes: number) {
       {
         id: uid(),
         alias: `cursor_${(selected.paginationParameters?.length || 0) + 1}`,
+        firstValue: '',
         requestTarget: 'body',
         requestPath: '',
         responsePath: '',
@@ -2684,6 +2738,7 @@ function formatBytes(bytes: number) {
       id: String(input?.id || uid()),
       alias,
       responsePath: String(input?.responsePath || '').trim(),
+      firstValue: String(input?.firstValue || '').trim(),
       requestTarget: toPaginationParameterTarget(String(input?.requestTarget || 'body').trim()),
       requestPath: requestPathRaw,
       applyForAllResponses: true
@@ -2714,6 +2769,7 @@ function formatBytes(bytes: number) {
             id: uid(),
             alias: 'cursor_1',
             responsePath: draft.paginationCursorResPath1,
+            firstValue: '',
             requestTarget: legacyTarget,
             requestPath: draft.paginationCursorReqPath1,
             applyForAllResponses: true
@@ -2729,6 +2785,7 @@ function formatBytes(bytes: number) {
             id: uid(),
             alias: 'cursor_2',
             responsePath: draft.paginationCursorResPath2,
+            firstValue: '',
             requestTarget: legacyTarget,
             requestPath: draft.paginationCursorReqPath2,
             applyForAllResponses: true
@@ -3141,9 +3198,6 @@ function formatBytes(bytes: number) {
     // This allows keeping extra tables in breadcrumbs without forcing joins.
     const usedTableIds = new Set<string>();
     fields.forEach((f) => {
-      if (f.table_id) usedTableIds.add(f.table_id);
-    });
-    allFilters.forEach((f) => {
       if (f.table_id) usedTableIds.add(f.table_id);
     });
     let tablesForRequest = allTables;
@@ -4618,10 +4672,12 @@ function handleDefinitionInput(value: string) {
     let lastResponseHash = '';
     let sameResponseCount = 0;
     const seenPaginationStates = new Set<string>();
+    let nextIterationReason = 'initial_request';
 
     for (let pageIdx = 0; pageIdx < pagesMax; pageIdx++) {
       const sourceUrl = String(nextUrlOverride || reqPlan?.url || '').trim();
       if (!sourceUrl) throw new Error('Пустой URL в плане отправки');
+      const iterationReason = nextIterationReason;
       const u = new URL(sourceUrl);
       const queryObj: Record<string, any> = {};
       u.searchParams.forEach((v, k) => {
@@ -4633,7 +4689,11 @@ function handleDefinitionInput(value: string) {
       if (draft.paginationEnabled) {
         if (paginationParameters.length) {
           for (const param of paginationParameters) {
-            const value = paginationState[param.id];
+            let value = paginationState[param.id];
+            if ((value === undefined || value === null) && requestCount === 0) {
+              const first = String(param?.firstValue || '').trim();
+              if (first) value = parseStopRuleCompareValue(first);
+            }
             if (value === undefined || value === null) continue;
             applyPaginationValueToRequest(param, value, queryObj, bodyObj, headersObj);
           }
@@ -4679,7 +4739,11 @@ function handleDefinitionInput(value: string) {
       if (paginationParameters.length) {
         const tokenMap: Record<string, any> = {};
         paginationParameters.forEach((param) => {
-          const value = paginationState[param.id];
+          let value = paginationState[param.id];
+          if ((value === undefined || value === null) && requestCount === 0) {
+            const first = String(param?.firstValue || '').trim();
+            if (first) value = parseStopRuleCompareValue(first);
+          }
           if (value !== undefined && value !== null) tokenMap[param.alias] = value;
         });
         if (Object.keys(tokenMap).length) {
@@ -4722,14 +4786,40 @@ function handleDefinitionInput(value: string) {
           headers: { ...requestHeaders },
           query: deepClone(queryObj || {}),
           body: isBodyMethod ? deepClone(bodyObj || {}) : undefined,
-          page: pageIdx + 1
+          page: pageIdx + 1,
+          iteration_reason: iterationReason
         };
         if (reqPlan?.group) sentReq.group = reqPlan.group;
         if (reqPlan?.row_index) sentReq.row_index = reqPlan.row_index;
         sentRequests.push(sentReq);
       }
 
-      const proxied = await runHttpRequestViaServer(finalUrl, init, 60_000);
+      let proxied: any = null;
+      try {
+        proxied = await runHttpRequestViaServer(finalUrl, init, 60_000);
+      } catch (requestError: any) {
+        failed += 1;
+        requestCount += 1;
+        stopReason = `Ошибка запроса: ${requestError?.message ?? String(requestError)}`;
+        responses.push({
+          page: pageIdx + 1,
+          status: 0,
+          error: requestError?.message ?? String(requestError),
+          iteration_reason: iterationReason,
+          decision: 'fail',
+          stop_reason: stopReason,
+          request: {
+            method,
+            url: finalUrl,
+            headers: deepClone(requestHeaders),
+            query: deepClone(queryObj || {}),
+            body: isBodyMethod ? deepClone(bodyObj || {}) : undefined
+          },
+          ...(reqPlan?.group ? { group: reqPlan.group } : {}),
+          ...(reqPlan?.row_index ? { row_index: reqPlan.row_index } : {})
+        });
+        break;
+      }
       lastStatus = Number(proxied?.status || 0);
       const txt = String(proxied?.body_text || '');
       totalSize += txt ? txt.length : 0;
@@ -4754,7 +4844,16 @@ function handleDefinitionInput(value: string) {
       const responseEntry: Record<string, any> = {
         page: pageIdx + 1,
         status: Number(proxied?.status || 0),
-        response: parsed ?? txt
+        response: parsed ?? txt,
+        iteration_reason: iterationReason,
+        decision: 'continue',
+        request: {
+          method,
+          url: finalUrl,
+          headers: deepClone(requestHeaders),
+          query: deepClone(queryObj || {}),
+          body: isBodyMethod ? deepClone(bodyObj || {}) : undefined
+        }
       };
       if (reqPlan?.group) responseEntry.group = reqPlan.group;
       if (reqPlan?.row_index) responseEntry.row_index = reqPlan.row_index;
@@ -4762,12 +4861,14 @@ function handleDefinitionInput(value: string) {
 
       if (!draft.paginationEnabled) {
         stopReason = 'Пагинация отключена';
+        responseEntry.decision = 'stop';
         responseEntry.stop_reason = stopReason;
         break;
       }
 
       if (draft.paginationStopOnHttpError && Number(lastStatus || 0) >= 400) {
         stopReason = `HTTP ошибка ${lastStatus}`;
+        responseEntry.decision = 'fail';
         responseEntry.stop_reason = stopReason;
         break;
       }
@@ -4783,6 +4884,7 @@ function handleDefinitionInput(value: string) {
           total <= limit
         ) {
           stopReason = `Остановка: total (${total}) <= limit (${limit})`;
+          responseEntry.decision = 'stop';
           responseEntry.stop_reason = stopReason;
           break;
         }
@@ -4810,6 +4912,7 @@ function handleDefinitionInput(value: string) {
         });
         if (matched) {
           stopReason = formatPaginationStopRuleReason(matched.rule, matched.actualValue, matched.expectedValue);
+          responseEntry.decision = 'stop';
           responseEntry.stop_reason = stopReason;
           break;
         }
@@ -4817,12 +4920,15 @@ function handleDefinitionInput(value: string) {
 
       let stop = false;
       let pageStopReason = '';
+      let nextReason = 'pagination_values_updated';
       if (paginationParameters.length) {
         let foundValues = 0;
         let updatedValues = 0;
+        const extracted: Record<string, any> = {};
         for (const param of paginationParameters) {
           const value = readPaginationValueFromResponse(parsed, param);
           if (value === undefined || value === null) continue;
+          extracted[param.alias] = value;
           foundValues += 1;
           const prevValue = paginationState[param.id];
           if (prevValue === undefined || prevValue === null || !sameValue(prevValue, value)) {
@@ -4830,6 +4936,7 @@ function handleDefinitionInput(value: string) {
             updatedValues += 1;
           }
         }
+        responseEntry.pagination_values = extracted;
         if (!foundValues && draft.paginationStopOnMissingValue) {
           stop = true;
           pageStopReason = 'Не найдено значение параметров пагинации';
@@ -4845,12 +4952,15 @@ function handleDefinitionInput(value: string) {
             pageStopReason = 'Повторилось состояние пагинации (зацикливание)';
           } else {
             seenPaginationStates.add(stateFingerprint);
+            nextReason = updatedValues > 0 ? 'pagination_values_updated' : 'pagination_values_repeat';
           }
         }
       } else if (draft.paginationStrategy === 'page_number') {
         currentPage += 1;
+        nextReason = 'page_increment';
       } else if (draft.paginationStrategy === 'offset_limit') {
         currentOffset += Number(draft.paginationLimitValue || 100);
+        nextReason = 'offset_increment';
       } else if (draft.paginationStrategy === 'cursor_fields') {
         const v1 = draft.paginationCursorResPath1 ? getByPath(parsed, draft.paginationCursorResPath1) : undefined;
         const v2 = draft.paginationCursorResPath2 ? getByPath(parsed, draft.paginationCursorResPath2) : undefined;
@@ -4874,6 +4984,7 @@ function handleDefinitionInput(value: string) {
               setByPath(bodyCursorState, draft.paginationCursorReqPath2, v2);
             }
           }
+          nextReason = 'cursor_updated';
         }
       } else if (draft.paginationStrategy === 'next_url') {
         const n = draft.paginationNextUrlPath ? getByPath(parsed, draft.paginationNextUrlPath) : undefined;
@@ -4884,6 +4995,7 @@ function handleDefinitionInput(value: string) {
           }
         } else {
           nextUrlOverride = n;
+          nextReason = 'next_url_received';
         }
       } else if (draft.paginationStrategy === 'custom') {
         stop = true;
@@ -4899,9 +5011,14 @@ function handleDefinitionInput(value: string) {
       }
       if (stop) {
         stopReason = pageStopReason || 'Остановка по условию пагинации';
+        responseEntry.decision = 'stop';
         responseEntry.stop_reason = stopReason;
         break;
       }
+
+      responseEntry.decision = 'continue';
+      responseEntry.next_iteration_reason = nextReason;
+      nextIterationReason = nextReason;
 
       if (Number(draft.paginationDelayMs || 0) > 0) {
         await new Promise((resolve) => setTimeout(resolve, Number(draft.paginationDelayMs || 0)));
@@ -4912,6 +5029,7 @@ function handleDefinitionInput(value: string) {
       stopReason = `Достигнут лимит страниц (${pagesMax})`;
       const lastEntry = responses[responses.length - 1];
       if (lastEntry && typeof lastEntry === 'object' && !lastEntry.stop_reason) {
+        lastEntry.decision = 'stop';
         lastEntry.stop_reason = stopReason;
       }
     }
@@ -4925,6 +5043,776 @@ function handleDefinitionInput(value: string) {
       lastStatus,
       stopReason,
       responses
+    };
+  }
+
+  type WaveRuntimeState = {
+    reqPlan: any;
+    method: string;
+    isBodyMethod: boolean;
+    baseHeaders: Record<string, string>;
+    paginationParameters: PaginationParameter[];
+    paginationAliasesLower: Set<string>;
+    paginationState: Record<string, any>;
+    bodyCursorState: any;
+    cursorQueryState: Record<string, any>;
+    nextUrlOverride: string;
+    currentPage: number;
+    currentOffset: number;
+    requestCount: number;
+    success: number;
+    failed: number;
+    totalItems: number;
+    totalSize: number;
+    lastStatus: number;
+    stopReason: string;
+    done: boolean;
+    nextIterationReason: string;
+    lastResponseHash: string;
+    sameResponseCount: number;
+    seenPaginationStates: Set<string>;
+  };
+
+  function initWaveRuntimeState(draft: ApiDraft, reqPlan: any): WaveRuntimeState {
+    const method = String(reqPlan?.method || draft.method || 'GET').toUpperCase();
+    const isBodyMethod = method !== 'GET' && method !== 'DELETE';
+    const paginationParameters = paginationParametersForDraft(draft).filter(
+      (param) => String(param?.responsePath || '').trim() && String(param?.alias || '').trim()
+    );
+    return {
+      reqPlan,
+      method,
+      isBodyMethod,
+      baseHeaders: normalizeRequestHeaders(reqPlan?.headers || {}),
+      paginationParameters,
+      paginationAliasesLower: new Set(
+        paginationParameters.map((param) => String(param?.alias || '').trim().toLowerCase()).filter(Boolean)
+      ),
+      paginationState: {},
+      bodyCursorState: isBodyMethod && reqPlan?.body && typeof reqPlan.body === 'object' ? deepClone(reqPlan.body) : {},
+      cursorQueryState: {},
+      nextUrlOverride: '',
+      currentPage: Number(draft.paginationStartPage || 1),
+      currentOffset: Number(draft.paginationStartPage || 0),
+      requestCount: 0,
+      success: 0,
+      failed: 0,
+      totalItems: 0,
+      totalSize: 0,
+      lastStatus: 0,
+      stopReason: '',
+      done: false,
+      nextIterationReason: 'initial_request',
+      lastResponseHash: '',
+      sameResponseCount: 0,
+      seenPaginationStates: new Set<string>()
+    };
+  }
+
+  async function executeWaveRuntimeStep(
+    draft: ApiDraft,
+    state: WaveRuntimeState,
+    sentRequests: any[],
+    waveNo: number
+  ): Promise<{ entry: any | null; done: boolean; stopReason: string }> {
+    if (state.done) return { entry: null, done: true, stopReason: state.stopReason || '' };
+    const pagesMax = draft.paginationEnabled ? Math.max(1, Number(draft.paginationMaxPages || 1)) : 1;
+    if (state.requestCount >= pagesMax) {
+      state.done = true;
+      state.stopReason = `Достигнут лимит страниц (${pagesMax})`;
+      return { entry: null, done: true, stopReason: state.stopReason };
+    }
+
+    const sourceUrl = String(state.nextUrlOverride || state.reqPlan?.url || '').trim();
+    if (!sourceUrl) throw new Error('Пустой URL в плане отправки');
+    const u = new URL(sourceUrl);
+    const queryObj: Record<string, any> = {};
+    u.searchParams.forEach((v, k) => {
+      queryObj[k] = v;
+    });
+    const bodyObj = state.isBodyMethod ? deepClone(state.bodyCursorState || {}) : undefined;
+    const headersObj: Record<string, any> = { ...state.baseHeaders };
+    const iterationReason = String(state.nextIterationReason || '').trim() || (state.requestCount === 0 ? 'initial_request' : 'wave_iteration');
+    let nextReason = 'pagination_values_updated';
+
+    if (draft.paginationEnabled) {
+      if (state.paginationParameters.length) {
+        for (const param of state.paginationParameters) {
+          let value = state.paginationState[param.id];
+          if ((value === undefined || value === null) && state.requestCount === 0) {
+            const first = String(param?.firstValue || '').trim();
+            if (first) value = parseStopRuleCompareValue(first);
+          }
+          if (value === undefined || value === null) continue;
+          applyPaginationValueToRequest(param, value, queryObj, bodyObj, headersObj);
+        }
+      } else if (draft.paginationStrategy === 'page_number') {
+        const p = draft.paginationPageParam || 'page';
+        if (draft.paginationTarget === 'query') queryObj[p] = state.currentPage;
+        else if (bodyObj) setByPath(bodyObj, p, state.currentPage);
+      } else if (draft.paginationStrategy === 'offset_limit') {
+        const off = draft.paginationPageParam || 'offset';
+        const lim = draft.paginationLimitParam || 'limit';
+        const limVal = Number(draft.paginationLimitValue || 100);
+        if (draft.paginationTarget === 'query') {
+          queryObj[off] = state.currentOffset;
+          queryObj[lim] = limVal;
+        } else if (bodyObj) {
+          setByPath(bodyObj, off, state.currentOffset);
+          setByPath(bodyObj, lim, limVal);
+        }
+      } else if (draft.paginationStrategy === 'cursor_fields') {
+        if (draft.paginationCursorReqPath1) {
+          if (draft.paginationTarget === 'query') {
+            const v = state.cursorQueryState[draft.paginationCursorReqPath1];
+            if (v !== undefined && v !== null) queryObj[draft.paginationCursorReqPath1] = v;
+          } else if (bodyObj) {
+            const v = getByPath(state.bodyCursorState, draft.paginationCursorReqPath1);
+            if (v !== undefined && v !== null) setByPath(bodyObj, draft.paginationCursorReqPath1, v);
+          }
+        }
+        if (draft.paginationCursorReqPath2) {
+          if (draft.paginationTarget === 'query') {
+            const v = state.cursorQueryState[draft.paginationCursorReqPath2];
+            if (v !== undefined && v !== null) queryObj[draft.paginationCursorReqPath2] = v;
+          } else if (bodyObj) {
+            const v = getByPath(state.bodyCursorState, draft.paginationCursorReqPath2);
+            if (v !== undefined && v !== null) setByPath(bodyObj, draft.paginationCursorReqPath2, v);
+          }
+        }
+      }
+    }
+
+    if (state.paginationParameters.length) {
+      const tokenMap: Record<string, any> = {};
+      state.paginationParameters.forEach((param) => {
+        let value = state.paginationState[param.id];
+        if ((value === undefined || value === null) && state.requestCount === 0) {
+          const first = String(param?.firstValue || '').trim();
+          if (first) value = parseStopRuleCompareValue(first);
+        }
+        if (value !== undefined && value !== null) tokenMap[param.alias] = value;
+      });
+      if (Object.keys(tokenMap).length) {
+        applyParametersToValue(headersObj, tokenMap);
+        applyParametersToValue(queryObj, tokenMap);
+        if (bodyObj && typeof bodyObj === 'object') {
+          applyParametersToValue(bodyObj, tokenMap);
+        }
+      }
+      stripUnresolvedPaginationTokens(queryObj, state.paginationAliasesLower);
+      stripUnresolvedPaginationTokens(headersObj, state.paginationAliasesLower);
+      if (bodyObj && typeof bodyObj === 'object') {
+        stripUnresolvedPaginationTokens(bodyObj, state.paginationAliasesLower);
+      }
+    }
+
+    u.search = '';
+    Object.entries(queryObj).forEach(([k, v]) => {
+      if (v === undefined || v === null) return;
+      u.searchParams.set(k, String(v));
+    });
+    const finalUrl = u.toString();
+    const requestHeaders: Record<string, string> = {};
+    Object.entries(headersObj).forEach(([k, v]) => {
+      if (v === undefined || v === null) return;
+      requestHeaders[String(k)] = String(v);
+    });
+    const init: RequestInit = { method: state.method, headers: requestHeaders };
+    if (state.isBodyMethod) init.body = JSON.stringify(bodyObj || {});
+
+    if (sentRequests.length < REQUEST_PREVIEW_MAX) {
+      const sentReq: Record<string, any> = {
+        method: state.method,
+        url: finalUrl,
+        headers: { ...requestHeaders },
+        query: deepClone(queryObj || {}),
+        body: state.isBodyMethod ? deepClone(bodyObj || {}) : undefined,
+        page: state.requestCount + 1,
+        wave: waveNo,
+        iteration_reason: iterationReason
+      };
+      if (state.reqPlan?.group) sentReq.group = state.reqPlan.group;
+      if (state.reqPlan?.row_index) sentReq.row_index = state.reqPlan.row_index;
+      sentRequests.push(sentReq);
+    }
+
+    const startedAt = Date.now();
+    let proxied: any = null;
+    try {
+      proxied = await runHttpRequestViaServer(finalUrl, init, 60_000);
+    } catch (requestError: any) {
+      const durationMs = Date.now() - startedAt;
+      state.failed += 1;
+      state.requestCount += 1;
+      state.done = true;
+      state.stopReason = `Ошибка запроса: ${requestError?.message ?? String(requestError)}`;
+      const failureEntry: Record<string, any> = {
+        page: state.requestCount,
+        status: 0,
+        error: requestError?.message ?? String(requestError),
+        wave: waveNo,
+        iteration_reason: iterationReason,
+        decision: 'fail',
+        stop_reason: state.stopReason,
+        request: {
+          method: state.method,
+          url: finalUrl,
+          headers: deepClone(requestHeaders),
+          query: deepClone(queryObj || {}),
+          body: state.isBodyMethod ? deepClone(bodyObj || {}) : undefined
+        },
+        duration_ms: durationMs
+      };
+      if (state.reqPlan?.group) failureEntry.group = state.reqPlan.group;
+      if (state.reqPlan?.row_index) failureEntry.row_index = state.reqPlan.row_index;
+      return { entry: failureEntry, done: true, stopReason: state.stopReason };
+    }
+    const durationMs = Date.now() - startedAt;
+    state.lastStatus = Number(proxied?.status || 0);
+    const txt = String(proxied?.body_text || '');
+    state.totalSize += txt ? txt.length : 0;
+    const parsed = proxied?.body_json !== undefined
+      ? proxied.body_json
+      : (() => {
+          try {
+            return txt ? JSON.parse(txt) : null;
+          } catch {
+            return null;
+          }
+        })();
+    if (proxied?.ok) state.success += 1;
+    else state.failed += 1;
+    state.totalItems += countPayloadItems(parsed ?? txt);
+    state.requestCount += 1;
+    const currentHash = responseFingerprint(parsed ?? txt);
+    if (currentHash && currentHash === state.lastResponseHash) state.sameResponseCount += 1;
+    else state.sameResponseCount = 1;
+    state.lastResponseHash = currentHash;
+
+    const responseEntry: Record<string, any> = {
+      page: state.requestCount,
+      status: Number(proxied?.status || 0),
+      response: parsed ?? txt,
+      wave: waveNo,
+      iteration_reason: iterationReason,
+      decision: 'continue',
+      request: {
+        method: state.method,
+        url: finalUrl,
+        headers: deepClone(requestHeaders),
+        query: deepClone(queryObj || {}),
+        body: state.isBodyMethod ? deepClone(bodyObj || {}) : undefined
+      },
+      duration_ms: durationMs
+    };
+    if (state.reqPlan?.group) responseEntry.group = state.reqPlan.group;
+    if (state.reqPlan?.row_index) responseEntry.row_index = state.reqPlan.row_index;
+
+    if (!draft.paginationEnabled) {
+      state.done = true;
+      state.stopReason = 'Пагинация отключена';
+      responseEntry.decision = 'stop';
+      responseEntry.stop_reason = state.stopReason;
+      return { entry: responseEntry, done: true, stopReason: state.stopReason };
+    }
+    if (draft.paginationStopOnHttpError && Number(state.lastStatus || 0) >= 400) {
+      state.done = true;
+      state.stopReason = `HTTP ошибка ${state.lastStatus}`;
+      responseEntry.decision = 'fail';
+      responseEntry.stop_reason = state.stopReason;
+      return { entry: responseEntry, done: true, stopReason: state.stopReason };
+    }
+
+    const total = state.paginationParameters.length ? tryReadCursorTotalFromResponse(parsed) : null;
+    const limit = state.paginationParameters.length ? tryReadCursorLimitFromRequest(queryObj, bodyObj) : null;
+    if (total !== null && limit !== null && total <= limit) {
+      state.done = true;
+      state.stopReason = `Остановка: total (${total}) <= limit (${limit})`;
+      responseEntry.decision = 'stop';
+      responseEntry.stop_reason = state.stopReason;
+      return { entry: responseEntry, done: true, stopReason: state.stopReason };
+    }
+
+    const paginationStopRules = paginationStopRulesForDraft(draft).filter((rule) => String(rule?.responsePath || '').trim());
+    if (paginationStopRules.length) {
+      const runtimeTokenMap: Record<string, any> = {};
+      state.paginationParameters.forEach((param) => {
+        const value = state.paginationState[param.id];
+        if (value !== undefined && value !== null) runtimeTokenMap[param.alias] = value;
+      });
+      const contextValues =
+        state.reqPlan?.context_values && typeof state.reqPlan.context_values === 'object'
+          ? { ...state.reqPlan.context_values }
+          : {};
+      const groupValues =
+        state.reqPlan?.group && typeof state.reqPlan.group === 'object'
+          ? { ...state.reqPlan.group }
+          : {};
+      const matched = findMatchedPaginationStopRule(parsed, paginationStopRules, {
+        values: { ...contextValues, ...groupValues, ...runtimeTokenMap },
+        queryObj: queryObj || {},
+        bodyObj: bodyObj || {},
+        headersObj: headersObj || {}
+      });
+      if (matched) {
+        state.done = true;
+        state.stopReason = formatPaginationStopRuleReason(matched.rule, matched.actualValue, matched.expectedValue);
+        responseEntry.decision = 'stop';
+        responseEntry.stop_reason = state.stopReason;
+        return { entry: responseEntry, done: true, stopReason: state.stopReason };
+      }
+    }
+
+    if (state.paginationParameters.length) {
+      let foundValues = 0;
+      let updatedValues = 0;
+      const extracted: Record<string, any> = {};
+      for (const param of state.paginationParameters) {
+        const value = readPaginationValueFromResponse(parsed, param);
+        if (value === undefined || value === null) continue;
+        extracted[param.alias] = value;
+        foundValues += 1;
+        const prev = state.paginationState[param.id];
+        if (prev === undefined || prev === null || !sameValue(prev, value)) {
+          state.paginationState[param.id] = value;
+          updatedValues += 1;
+        }
+      }
+      responseEntry.pagination_values = extracted;
+      if (!foundValues && draft.paginationStopOnMissingValue) {
+        state.done = true;
+        state.stopReason = 'Не найдено значение параметров пагинации';
+        responseEntry.decision = 'stop';
+        responseEntry.stop_reason = state.stopReason;
+        return { entry: responseEntry, done: true, stopReason: state.stopReason };
+      }
+      if (!updatedValues && draft.paginationStopOnMissingValue) {
+        state.done = true;
+        state.stopReason = 'Не найдено новое значение параметров пагинации (значения не изменились)';
+        responseEntry.decision = 'stop';
+        responseEntry.stop_reason = state.stopReason;
+        return { entry: responseEntry, done: true, stopReason: state.stopReason };
+      }
+      if (foundValues) {
+        const fp = JSON.stringify(state.paginationParameters.map((param) => [param.id, state.paginationState[param.id]]));
+        if (state.seenPaginationStates.has(fp)) {
+          state.done = true;
+          state.stopReason = 'Повторилось состояние пагинации (зацикливание)';
+          responseEntry.decision = 'stop';
+          responseEntry.stop_reason = state.stopReason;
+          return { entry: responseEntry, done: true, stopReason: state.stopReason };
+        }
+        state.seenPaginationStates.add(fp);
+        nextReason = updatedValues > 0 ? 'pagination_values_updated' : 'pagination_values_repeat';
+      }
+    } else if (draft.paginationStrategy === 'page_number') {
+      state.currentPage += 1;
+      nextReason = 'page_increment';
+    } else if (draft.paginationStrategy === 'offset_limit') {
+      state.currentOffset += Number(draft.paginationLimitValue || 100);
+      nextReason = 'offset_increment';
+    } else if (draft.paginationStrategy === 'cursor_fields') {
+      const v1 = draft.paginationCursorResPath1 ? getByPath(parsed, draft.paginationCursorResPath1) : undefined;
+      const v2 = draft.paginationCursorResPath2 ? getByPath(parsed, draft.paginationCursorResPath2) : undefined;
+      if (v1 == null && v2 == null) {
+        if (draft.paginationStopOnMissingValue) {
+          state.done = true;
+          state.stopReason = 'Не найдено новое значение курсора';
+          responseEntry.decision = 'stop';
+          responseEntry.stop_reason = state.stopReason;
+          return { entry: responseEntry, done: true, stopReason: state.stopReason };
+        }
+      } else {
+        if (draft.paginationCursorReqPath1) {
+          if (draft.paginationTarget === 'query') {
+            state.cursorQueryState[draft.paginationCursorReqPath1] = v1;
+          } else {
+            setByPath(state.bodyCursorState, draft.paginationCursorReqPath1, v1);
+          }
+        }
+        if (draft.paginationCursorReqPath2) {
+          if (draft.paginationTarget === 'query') {
+            state.cursorQueryState[draft.paginationCursorReqPath2] = v2;
+          } else {
+            setByPath(state.bodyCursorState, draft.paginationCursorReqPath2, v2);
+          }
+        }
+        nextReason = 'cursor_updated';
+      }
+    } else if (draft.paginationStrategy === 'next_url') {
+      const n = draft.paginationNextUrlPath ? getByPath(parsed, draft.paginationNextUrlPath) : undefined;
+      if (!n || typeof n !== 'string') {
+        if (draft.paginationStopOnMissingValue) {
+          state.done = true;
+          state.stopReason = 'Не найден следующий URL для пагинации';
+          responseEntry.decision = 'stop';
+          responseEntry.stop_reason = state.stopReason;
+          return { entry: responseEntry, done: true, stopReason: state.stopReason };
+        }
+      } else {
+        state.nextUrlOverride = n;
+        nextReason = 'next_url_received';
+      }
+    } else if (draft.paginationStrategy === 'custom') {
+      state.done = true;
+      state.stopReason = 'Кастомная стратегия не настроена';
+      responseEntry.decision = 'stop';
+      responseEntry.stop_reason = state.stopReason;
+      return { entry: responseEntry, done: true, stopReason: state.stopReason };
+    } else {
+      state.done = true;
+      state.stopReason = 'Стратегия пагинации не настроена';
+      responseEntry.decision = 'stop';
+      responseEntry.stop_reason = state.stopReason;
+      return { entry: responseEntry, done: true, stopReason: state.stopReason };
+    }
+
+    const sameLimit = Math.max(2, Number(draft.paginationSameResponseLimit || 5));
+    if (draft.paginationStopOnSameResponse && state.sameResponseCount >= sameLimit) {
+      state.done = true;
+      state.stopReason = `Получено ${state.sameResponseCount} одинаковых ответов подряд`;
+      responseEntry.decision = 'stop';
+      responseEntry.stop_reason = state.stopReason;
+      return { entry: responseEntry, done: true, stopReason: state.stopReason };
+    }
+
+    if (state.requestCount >= pagesMax) {
+      state.done = true;
+      state.stopReason = `Достигнут лимит страниц (${pagesMax})`;
+      responseEntry.decision = 'stop';
+      responseEntry.stop_reason = state.stopReason;
+      return { entry: responseEntry, done: true, stopReason: state.stopReason };
+    }
+
+    responseEntry.decision = 'continue';
+    responseEntry.next_iteration_reason = nextReason;
+    state.nextIterationReason = nextReason;
+    if (Number(draft.paginationDelayMs || 0) > 0) {
+      await new Promise((resolve) => setTimeout(resolve, Number(draft.paginationDelayMs || 0)));
+    }
+    return { entry: responseEntry, done: false, stopReason: '' };
+  }
+
+  type ExecutionRunSummary = {
+    requestCount: number;
+    success: number;
+    failed: number;
+    totalItems: number;
+    totalSize: number;
+    lastStatus: number;
+    responses: any[];
+    stopReasons: any[];
+    sentRequests: any[];
+    issues?: Record<string, string>;
+    modeLabel: string;
+    auditRows: any[];
+  };
+
+  function runEntityIdentity(reqPlan: any, index: number) {
+    if (reqPlan?.group && typeof reqPlan.group === 'object') {
+      const entries = Object.entries(reqPlan.group);
+      const label = entries.length ? entries.map(([k, v]) => `${k}=${String(v)}`).join(', ') : `Сущность ${index + 1}`;
+      return {
+        entity_key: JSON.stringify(reqPlan.group),
+        entity_label: label
+      };
+    }
+    if (Number.isFinite(Number(reqPlan?.row_index)) && Number(reqPlan.row_index) > 0) {
+      const rowIndex = Number(reqPlan.row_index);
+      return {
+        entity_key: `row_${rowIndex}`,
+        entity_label: `Строка ${rowIndex}`
+      };
+    }
+    return {
+      entity_key: `entity_${index + 1}`,
+      entity_label: `Сущность ${index + 1}`
+    };
+  }
+
+  function buildExecutionErrorRun(reqPlan: any, message: string) {
+    const msg = String(message || 'Неизвестная ошибка');
+    const fallbackRequest =
+      reqPlan && typeof reqPlan === 'object'
+        ? {
+            method: String(reqPlan?.method || 'GET').toUpperCase(),
+            url: String(reqPlan?.url || ''),
+            headers: normalizeRequestHeaders(reqPlan?.headers || {}),
+            query: {},
+            body: reqPlan?.body && typeof reqPlan.body === 'object' ? deepClone(reqPlan.body) : reqPlan?.body
+          }
+        : null;
+    const entry: Record<string, any> = {
+      page: 1,
+      status: 0,
+      error: msg,
+      decision: 'fail',
+      stop_reason: `Ошибка выполнения: ${msg}`,
+      iteration_reason: 'initial_request'
+    };
+    if (fallbackRequest) entry.request = fallbackRequest;
+    if (reqPlan?.group) entry.group = reqPlan.group;
+    if (reqPlan?.row_index) entry.row_index = reqPlan.row_index;
+    return {
+      requestCount: 1,
+      success: 0,
+      failed: 1,
+      totalItems: 0,
+      totalSize: msg.length,
+      lastStatus: 0,
+      stopReason: `Ошибка выполнения: ${msg}`,
+      responses: [entry]
+    };
+  }
+
+  function runIdForExecution() {
+    return `api_run_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`;
+  }
+
+  function buildAuditRowsFromResponses(
+    runId: string,
+    draft: ApiDraft,
+    reqPlan: any,
+    responses: any[],
+    entityIndex: number
+  ) {
+    const dispatchMode = isGroupedDispatchEnabled(draft) ? 'group_by' : 'single';
+    const identity = runEntityIdentity(reqPlan, entityIndex);
+    const rows: any[] = [];
+    const list = Array.isArray(responses) ? responses : [];
+    for (let i = 0; i < list.length; i += 1) {
+      const entry = list[i] && typeof list[i] === 'object' ? list[i] : {};
+      const requestPayload =
+        entry?.request && typeof entry.request === 'object'
+          ? entry.request
+          : reqPlan && typeof reqPlan === 'object'
+          ? {
+              method: String(reqPlan?.method || draft.method || 'GET').toUpperCase(),
+              url: String(reqPlan?.url || ''),
+              headers: normalizeRequestHeaders(reqPlan?.headers || {}),
+              body: reqPlan?.body && typeof reqPlan.body === 'object' ? deepClone(reqPlan.body) : reqPlan?.body
+            }
+          : null;
+      rows.push({
+        run_id: runId,
+        api_name: String(draft?.name || '').trim(),
+        execution_mode: draft.executionMode || 'sync',
+        sync_planner: draft.syncPlanner || 'entity_to_stop',
+        dispatch_mode: dispatchMode,
+        entity_key: identity.entity_key,
+        entity_label: identity.entity_label,
+        row_index: Number(reqPlan?.row_index || entry?.row_index || 0) || null,
+        wave_no: Number(entry?.wave || 0) || null,
+        page_no: Number(entry?.page || i + 1) || i + 1,
+        iteration_reason: String(entry?.iteration_reason || '').trim() || (i === 0 ? 'initial_request' : 'pagination_values_updated'),
+        decision: String(entry?.decision || '').trim() || 'continue',
+        stop_reason: String(entry?.stop_reason || '').trim() || null,
+        error_message: String(entry?.error || '').trim() || null,
+        status_code: Number.isFinite(Number(entry?.status)) ? Number(entry?.status) : null,
+        request_payload: requestPayload,
+        response_payload: entry?.response ?? null,
+        pagination_values: entry?.pagination_values && typeof entry.pagination_values === 'object' ? entry.pagination_values : {},
+        duration_ms: Number.isFinite(Number(entry?.duration_ms)) ? Number(entry?.duration_ms) : null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      });
+    }
+    return rows;
+  }
+
+  async function writeExecutionAuditRows(draft: ApiDraft, rows: any[]) {
+    if (!draft.responseLogEnabled) return { written: 0, skipped: rows.length };
+    const schema = String(draft.responseLogSchema || '').trim();
+    const table = String(draft.responseLogTable || '').trim();
+    if (!schema || !table) {
+      throw new Error('Для лога ответов API укажи схему и таблицу');
+    }
+    const payloadRows = Array.isArray(rows) ? rows.filter((x) => x && typeof x === 'object') : [];
+    if (!payloadRows.length) return { written: 0, skipped: 0 };
+    const resp = await apiJson<{ ok?: boolean; inserted?: number; skipped?: number }>(`${apiBase}/api-execution-log/write`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({
+        schema,
+        table,
+        rows: payloadRows
+      })
+    });
+    return {
+      written: Number(resp?.inserted || 0),
+      skipped: Number(resp?.skipped || 0)
+    };
+  }
+
+  async function executePlanRequests(
+    draft: ApiDraft,
+    allRequests: any[],
+    modeLabel: string,
+    issues?: Record<string, string>
+  ): Promise<ExecutionRunSummary> {
+    const sentRequests: any[] = [];
+    const responses: any[] = [];
+    const stopReasons: any[] = [];
+    const auditRows: any[] = [];
+    const runId = runIdForExecution();
+    let requestCount = 0;
+    let success = 0;
+    let failed = 0;
+    let totalItems = 0;
+    let totalSize = 0;
+    let lastStatus = 0;
+
+    const planner = draft.executionMode === 'sync' ? draft.syncPlanner || 'entity_to_stop' : 'entity_to_stop';
+    if (draft.executionMode === 'sync' && planner === 'by_wave') {
+      const states = allRequests.map((reqPlan) => initWaveRuntimeState(draft, reqPlan));
+      const finishedStateIds = new Set<number>();
+      let waveNo = 1;
+      while (states.some((state) => !state.done)) {
+        for (let idx = 0; idx < states.length; idx += 1) {
+          const state = states[idx];
+          if (!state || state.done) continue;
+          try {
+            const step = await executeWaveRuntimeStep(draft, state, sentRequests, waveNo);
+            if (step?.entry) {
+              const entry = step.entry;
+              responses.push(entry);
+              requestCount += 1;
+              const status = Number(entry?.status || 0);
+              if (status >= 200 && status < 400) success += 1;
+              else failed += 1;
+              lastStatus = Number.isFinite(status) ? status : lastStatus;
+              totalItems += countPayloadItems(entry?.response ?? entry?.error ?? null);
+              totalSize += JSON.stringify(entry?.response ?? entry?.error ?? '').length;
+              auditRows.push(...buildAuditRowsFromResponses(runId, draft, state.reqPlan, [entry], idx));
+            }
+            if (step?.done && !finishedStateIds.has(idx)) {
+              finishedStateIds.add(idx);
+              stopReasons.push({
+                ...(state.reqPlan?.group ? { group: state.reqPlan.group } : {}),
+                ...(state.reqPlan?.row_index ? { row_index: state.reqPlan.row_index } : {}),
+                stop_reason: step.stopReason || state.stopReason || '',
+                requests: state.requestCount,
+                success: state.success,
+                failed: state.failed,
+                last_status: state.lastStatus
+              });
+            }
+          } catch (e: any) {
+            const fallback = buildExecutionErrorRun(state.reqPlan, e?.message ?? String(e));
+            requestCount += fallback.requestCount;
+            success += fallback.success;
+            failed += fallback.failed;
+            totalItems += fallback.totalItems;
+            totalSize += fallback.totalSize;
+            lastStatus = Number(fallback.lastStatus || lastStatus || 0);
+            responses.push(...fallback.responses);
+            auditRows.push(...buildAuditRowsFromResponses(runId, draft, state.reqPlan, fallback.responses, idx));
+            if (!finishedStateIds.has(idx)) {
+              finishedStateIds.add(idx);
+              stopReasons.push({
+                ...(state.reqPlan?.group ? { group: state.reqPlan.group } : {}),
+                ...(state.reqPlan?.row_index ? { row_index: state.reqPlan.row_index } : {}),
+                stop_reason: fallback.stopReason || '',
+                requests: fallback.requestCount,
+                success: fallback.success,
+                failed: fallback.failed,
+                last_status: fallback.lastStatus
+              });
+            }
+            state.done = true;
+            state.stopReason = fallback.stopReason || 'Ошибка выполнения';
+          }
+        }
+        waveNo += 1;
+      }
+    } else if (draft.executionMode === 'async') {
+      const limit = Math.max(1, Math.min(20, Number(draft.asyncConcurrency || 3)));
+      const results: Array<{ reqPlan: any; run: any; idx: number }> = [];
+      let cursor = 0;
+      const worker = async () => {
+        while (true) {
+          const idx = cursor;
+          cursor += 1;
+          if (idx >= allRequests.length) return;
+          const reqPlan = allRequests[idx];
+          try {
+            const run = await executePlannedRequestWithPagination(draft, reqPlan, sentRequests);
+            results.push({ reqPlan, run, idx });
+          } catch (e: any) {
+            results.push({
+              reqPlan,
+              idx,
+              run: buildExecutionErrorRun(reqPlan, e?.message ?? String(e))
+            });
+          }
+        }
+      };
+      const workers = Array.from({ length: Math.min(limit, Math.max(1, allRequests.length)) }, () => worker());
+      await Promise.all(workers);
+      results
+        .sort((a, b) => a.idx - b.idx)
+        .forEach(({ reqPlan, run, idx }) => {
+          requestCount += Number(run?.requestCount || 0);
+          success += Number(run?.success || 0);
+          failed += Number(run?.failed || 0);
+          totalItems += Number(run?.totalItems || 0);
+          totalSize += Number(run?.totalSize || 0);
+          lastStatus = Number(run?.lastStatus || lastStatus || 0);
+          if (Array.isArray(run?.responses)) responses.push(...run.responses);
+          stopReasons.push({
+            ...(reqPlan?.group ? { group: reqPlan.group } : {}),
+            ...(reqPlan?.row_index ? { row_index: reqPlan.row_index } : {}),
+            stop_reason: run?.stopReason || '',
+            requests: Number(run?.requestCount || 0),
+            success: Number(run?.success || 0),
+            failed: Number(run?.failed || 0),
+            last_status: Number(run?.lastStatus || 0)
+          });
+          auditRows.push(...buildAuditRowsFromResponses(runId, draft, reqPlan, run?.responses || [], idx));
+        });
+    } else {
+      for (let idx = 0; idx < allRequests.length; idx += 1) {
+        const reqPlan = allRequests[idx];
+        let run: any;
+        try {
+          run = await executePlannedRequestWithPagination(draft, reqPlan, sentRequests);
+        } catch (e: any) {
+          run = buildExecutionErrorRun(reqPlan, e?.message ?? String(e));
+        }
+        requestCount += Number(run?.requestCount || 0);
+        success += Number(run?.success || 0);
+        failed += Number(run?.failed || 0);
+        totalItems += Number(run?.totalItems || 0);
+        totalSize += Number(run?.totalSize || 0);
+        lastStatus = Number(run?.lastStatus || lastStatus || 0);
+        if (Array.isArray(run?.responses)) responses.push(...run.responses);
+        stopReasons.push({
+          ...(reqPlan?.group ? { group: reqPlan.group } : {}),
+          ...(reqPlan?.row_index ? { row_index: reqPlan.row_index } : {}),
+          stop_reason: run?.stopReason || '',
+          requests: Number(run?.requestCount || 0),
+          success: Number(run?.success || 0),
+          failed: Number(run?.failed || 0),
+          last_status: Number(run?.lastStatus || 0)
+        });
+        auditRows.push(...buildAuditRowsFromResponses(runId, draft, reqPlan, run?.responses || [], idx));
+      }
+    }
+
+    return {
+      requestCount,
+      success,
+      failed,
+      totalItems,
+      totalSize,
+      lastStatus,
+      responses,
+      stopReasons,
+      sentRequests,
+      issues,
+      modeLabel,
+      auditRows
     };
   }
 
@@ -4953,41 +5841,26 @@ function handleDefinitionInput(value: string) {
         }
 
         const startedAt = Date.now();
-        const sentRequests: any[] = [];
-        let requestCount = 0;
-        let success = 0;
-        let failed = 0;
-        let totalItems = 0;
-        let totalSize = 0;
-        let lastStatus = 0;
-        const responses: any[] = [];
-        const stopReasons: any[] = [];
-        for (const reqPlan of groupedPlan.allRequests) {
-          const run = await executePlannedRequestWithPagination(s, reqPlan, sentRequests);
-          requestCount += run.requestCount;
-          success += run.success;
-          failed += run.failed;
-          totalItems += run.totalItems;
-          totalSize += run.totalSize;
-          lastStatus = Number(run.lastStatus || lastStatus || 0);
-          responses.push(...run.responses);
-          stopReasons.push({
-            group: reqPlan?.group,
-            stop_reason: run.stopReason || '',
-            requests: run.requestCount,
-            success: run.success,
-            failed: run.failed,
-            last_status: run.lastStatus
-          });
+        const execution = await executePlanRequests(s, groupedPlan.allRequests, 'sent_grouped_requests', groupedPlan.issues);
+        let auditLog: { written: number; skipped: number; error?: string } = { written: 0, skipped: 0 };
+        if (s.responseLogEnabled) {
+          try {
+            auditLog = await writeExecutionAuditRows(s, execution.auditRows);
+          } catch (auditError: any) {
+            auditLog = { written: 0, skipped: execution.auditRows.length, error: auditError?.message ?? String(auditError) };
+          }
         }
 
         myApiPreview = JSON.stringify(
           {
-            mode: 'sent_grouped_requests',
-            total_requests: requestCount,
+            mode: execution.modeLabel,
+            execution_mode: s.executionMode || 'sync',
+            sync_planner: s.executionMode === 'sync' ? s.syncPlanner || 'entity_to_stop' : undefined,
+            async_concurrency: s.executionMode === 'async' ? Math.max(1, Number(s.asyncConcurrency || 3)) : undefined,
+            total_requests: execution.requestCount,
             request_groups: groupedPlan.allRequests.length,
-            shown_requests: sentRequests.length,
-            requests: sentRequests,
+            shown_requests: execution.sentRequests.length,
+            requests: execution.sentRequests,
             issues: Object.keys(groupedPlan.issues).length ? groupedPlan.issues : undefined
           },
           null,
@@ -4995,70 +5868,74 @@ function handleDefinitionInput(value: string) {
         );
         myPreviewDirty = false;
         myPreviewApplyMessage =
-          requestCount > sentRequests.length
-            ? `Показаны первые ${sentRequests.length} отправленных запросов из ${requestCount}`
-            : requestCount > 1
-            ? `Показаны отправленные запросы: ${requestCount}`
+          execution.requestCount > execution.sentRequests.length
+            ? `Показаны первые ${execution.sentRequests.length} отправленных запросов из ${execution.requestCount}`
+            : execution.requestCount > 1
+            ? `Показаны отправленные запросы: ${execution.requestCount}`
             : 'Показан отправленный запрос';
 
-        responseStatus = lastStatus;
-        responsePagesCount = requestCount;
-        responsePayloadCount = totalItems;
-        responsePayloadSize = totalSize;
+        responseStatus = execution.lastStatus;
+        responsePagesCount = execution.requestCount;
+        responsePayloadCount = execution.totalItems;
+        responsePayloadSize = execution.totalSize;
         responseTimeMs = Date.now() - startedAt;
         responseText = JSON.stringify(
           {
-            total_requests: requestCount,
+            total_requests: execution.requestCount,
             request_groups: groupedPlan.allRequests.length,
-            success,
-            failed,
-            stop_reasons: stopReasons,
-            responses
+            execution_mode: s.executionMode || 'sync',
+            sync_planner: s.executionMode === 'sync' ? s.syncPlanner || 'entity_to_stop' : undefined,
+            async_concurrency: s.executionMode === 'async' ? Math.max(1, Number(s.asyncConcurrency || 3)) : undefined,
+            success: execution.success,
+            failed: execution.failed,
+            stop_reasons: execution.stopReasons,
+            responses: execution.responses,
+            audit_log: s.responseLogEnabled
+              ? {
+                  schema: s.responseLogSchema,
+                  table: s.responseLogTable,
+                  written: auditLog.written,
+                  skipped: auditLog.skipped,
+                  error: auditLog.error || undefined
+                }
+              : undefined
           },
           null,
           2
         );
-        ok = failed ? `Проверка завершена: успех ${success}, ошибок ${failed}` : `Проверка выполнена, запросов: ${success}`;
+        ok = execution.failed
+          ? `Проверка завершена: успех ${execution.success}, ошибок ${execution.failed}`
+          : `Проверка выполнена, запросов: ${execution.success}`;
+        if (auditLog.error) {
+          ok += ` | Лог не записан: ${auditLog.error}`;
+        } else if (s.responseLogEnabled) {
+          ok += ` | Лог записан: ${auditLog.written}`;
+        }
         return;
       }
       const rowPlan = await buildUngroupedRowRequestPlan(s);
       if (rowPlan.allRequests.length) {
         const startedAt = Date.now();
-        const sentRequests: any[] = [];
-        let requestCount = 0;
-        let success = 0;
-        let failed = 0;
-        let totalItems = 0;
-        let totalSize = 0;
-        let lastStatus = 0;
-        const responses: any[] = [];
-        const stopReasons: any[] = [];
-        for (const reqPlan of rowPlan.allRequests) {
-          const run = await executePlannedRequestWithPagination(s, reqPlan, sentRequests);
-          requestCount += run.requestCount;
-          success += run.success;
-          failed += run.failed;
-          totalItems += run.totalItems;
-          totalSize += run.totalSize;
-          lastStatus = Number(run.lastStatus || lastStatus || 0);
-          responses.push(...run.responses);
-          stopReasons.push({
-            row_index: reqPlan?.row_index,
-            stop_reason: run.stopReason || '',
-            requests: run.requestCount,
-            success: run.success,
-            failed: run.failed,
-            last_status: run.lastStatus
-          });
+        const execution = await executePlanRequests(s, rowPlan.allRequests, 'sent_row_requests', rowPlan.issues);
+        let auditLog: { written: number; skipped: number; error?: string } = { written: 0, skipped: 0 };
+        if (s.responseLogEnabled) {
+          try {
+            auditLog = await writeExecutionAuditRows(s, execution.auditRows);
+          } catch (auditError: any) {
+            auditLog = { written: 0, skipped: execution.auditRows.length, error: auditError?.message ?? String(auditError) };
+          }
         }
 
         myApiPreview = JSON.stringify(
           {
-            mode: 'sent_row_requests',
-            total_requests: requestCount,
+            mode: execution.modeLabel,
+            execution_mode: s.executionMode || 'sync',
+            sync_planner: s.executionMode === 'sync' ? s.syncPlanner || 'entity_to_stop' : undefined,
+            async_concurrency: s.executionMode === 'async' ? Math.max(1, Number(s.asyncConcurrency || 3)) : undefined,
+            total_requests: execution.requestCount,
             request_rows: rowPlan.allRequests.length,
-            shown_requests: sentRequests.length,
-            requests: sentRequests,
+            shown_requests: execution.sentRequests.length,
+            requests: execution.sentRequests,
             issues: Object.keys(rowPlan.issues).length ? rowPlan.issues : undefined
           },
           null,
@@ -5066,30 +5943,49 @@ function handleDefinitionInput(value: string) {
         );
         myPreviewDirty = false;
         myPreviewApplyMessage =
-          requestCount > sentRequests.length
-            ? `Показаны первые ${sentRequests.length} отправленных запросов из ${requestCount}`
-            : requestCount > 1
-            ? `Показаны отправленные запросы: ${requestCount}`
+          execution.requestCount > execution.sentRequests.length
+            ? `Показаны первые ${execution.sentRequests.length} отправленных запросов из ${execution.requestCount}`
+            : execution.requestCount > 1
+            ? `Показаны отправленные запросы: ${execution.requestCount}`
             : 'Показан отправленный запрос';
 
-        responseStatus = lastStatus;
-        responsePagesCount = requestCount;
-        responsePayloadCount = totalItems;
-        responsePayloadSize = totalSize;
+        responseStatus = execution.lastStatus;
+        responsePagesCount = execution.requestCount;
+        responsePayloadCount = execution.totalItems;
+        responsePayloadSize = execution.totalSize;
         responseTimeMs = Date.now() - startedAt;
         responseText = JSON.stringify(
           {
-            total_requests: requestCount,
+            total_requests: execution.requestCount,
             request_rows: rowPlan.allRequests.length,
-            success,
-            failed,
-            stop_reasons: stopReasons,
-            responses
+            execution_mode: s.executionMode || 'sync',
+            sync_planner: s.executionMode === 'sync' ? s.syncPlanner || 'entity_to_stop' : undefined,
+            async_concurrency: s.executionMode === 'async' ? Math.max(1, Number(s.asyncConcurrency || 3)) : undefined,
+            success: execution.success,
+            failed: execution.failed,
+            stop_reasons: execution.stopReasons,
+            responses: execution.responses,
+            audit_log: s.responseLogEnabled
+              ? {
+                  schema: s.responseLogSchema,
+                  table: s.responseLogTable,
+                  written: auditLog.written,
+                  skipped: auditLog.skipped,
+                  error: auditLog.error || undefined
+                }
+              : undefined
           },
           null,
           2
         );
-        ok = failed ? `Проверка завершена: успех ${success}, ошибок ${failed}` : `Проверка выполнена, запросов: ${success}`;
+        ok = execution.failed
+          ? `Проверка завершена: успех ${execution.success}, ошибок ${execution.failed}`
+          : `Проверка выполнена, запросов: ${execution.success}`;
+        if (auditLog.error) {
+          ok += ` | Лог не записан: ${auditLog.error}`;
+        } else if (s.responseLogEnabled) {
+          ok += ` | Лог записан: ${auditLog.written}`;
+        }
         return;
       }
       const authHdr = parseJsonObjectField('Авторизация', s.authJson);
@@ -5179,25 +6075,32 @@ function handleDefinitionInput(value: string) {
         body: s.method === 'GET' || s.method === 'DELETE' ? undefined : bodyObjBase,
         context_values: deepClone(parameterValues || {})
       };
-      const sentRequests: any[] = [];
-      const run = await executePlannedRequestWithPagination(s, reqPlan, sentRequests);
-      const pageCounter = run.requestCount;
-      const pagePayloads = run.responses.map((entry) => entry?.response);
-      const totalSize = run.totalSize;
-      const lastStatus = Number(run.lastStatus || 0);
+      const execution = await executePlanRequests(s, [reqPlan], 'sent_single_request');
+      let auditLog: { written: number; skipped: number; error?: string } = { written: 0, skipped: 0 };
+      if (s.responseLogEnabled) {
+        try {
+          auditLog = await writeExecutionAuditRows(s, execution.auditRows);
+        } catch (auditError: any) {
+          auditLog = { written: 0, skipped: execution.auditRows.length, error: auditError?.message ?? String(auditError) };
+        }
+      }
+      const pageCounter = execution.requestCount;
+      const pagePayloads = execution.responses.map((entry) => entry?.response);
+      const totalSize = execution.totalSize;
+      const lastStatus = Number(execution.lastStatus || 0);
 
       const sentPreviewPayload =
         pageCounter <= 1
           ? {
-              request: sentRequests[0] || null,
+              request: execution.sentRequests[0] || null,
               resolved_parameters: parameterValues,
               parameter_issues: Object.keys(parameterIssues).length ? parameterIssues : undefined
             }
           : {
-              requests: sentRequests,
+              requests: execution.sentRequests,
               request_count: pageCounter,
-              shown_requests: sentRequests.length,
-              truncated: pageCounter > sentRequests.length,
+              shown_requests: execution.sentRequests.length,
+              truncated: pageCounter > execution.sentRequests.length,
               resolved_parameters: parameterValues,
               parameter_issues: Object.keys(parameterIssues).length ? parameterIssues : undefined
             };
@@ -5211,26 +6114,45 @@ function handleDefinitionInput(value: string) {
           : 'Показан последний отправленный запрос';
 
       responseStatus = lastStatus;
-      if (s.paginationEnabled && pagePayloads.length > 1) {
-        responseText = JSON.stringify(
-          { pages: pageCounter, last_status: lastStatus, stop_reason: run.stopReason || '', responses: pagePayloads },
-          null,
-          2
-        );
-      } else if (pagePayloads.length) {
-        const first = pagePayloads[0];
-        responseText = JSON.stringify({ stop_reason: run.stopReason || '', response: first }, null, 2);
-      }
+      responseText = JSON.stringify(
+        {
+          total_requests: execution.requestCount,
+          execution_mode: s.executionMode || 'sync',
+          sync_planner: s.executionMode === 'sync' ? s.syncPlanner || 'entity_to_stop' : undefined,
+          async_concurrency: s.executionMode === 'async' ? Math.max(1, Number(s.asyncConcurrency || 3)) : undefined,
+          success: execution.success,
+          failed: execution.failed,
+          stop_reasons: execution.stopReasons,
+          responses: execution.responses,
+          payloads_only: pagePayloads,
+          audit_log: s.responseLogEnabled
+            ? {
+                schema: s.responseLogSchema,
+                table: s.responseLogTable,
+                written: auditLog.written,
+                skipped: auditLog.skipped,
+                error: auditLog.error || undefined
+              }
+            : undefined
+        },
+        null,
+        2
+      );
       responsePagesCount = pagePayloads.length;
-      responsePayloadCount = run.totalItems;
+      responsePayloadCount = execution.totalItems;
       responsePayloadSize = totalSize;
       responseTimeMs = Date.now() - startTime;
       ok =
-        run.failed > 0
-          ? `Проверка завершена: успех ${run.success}, ошибок ${run.failed}`
+        execution.failed > 0
+          ? `Проверка завершена: успех ${execution.success}, ошибок ${execution.failed}`
           : s.paginationEnabled
           ? `Проверка выполнена, страниц: ${pageCounter}`
           : 'Проверка выполнена';
+      if (auditLog.error) {
+        ok += ` | Лог не записан: ${auditLog.error}`;
+      } else if (s.responseLogEnabled) {
+        ok += ` | Лог записан: ${auditLog.written}`;
+      }
     } catch (e: any) {
       err = toUiErrorMessage(e);
     } finally {
@@ -5624,6 +6546,111 @@ function syncParameterEditorsHeight() {
           value={selected?.description || ''}
           on:input={(e) => mutateSelected((d) => (d.description = e.currentTarget.value))}
         ></textarea>
+
+        <div class="dispatch-box">
+          <div class="response-head field-head">
+            <span>Настройка выполнения API</span>
+          </div>
+          <div class="pagination-grid">
+            <div class="pagination-field">
+              <small>Режим выполнения</small>
+              <select
+                value={selected?.executionMode || 'sync'}
+                on:change={(e) =>
+                  mutateSelected((d) => {
+                    d.executionMode = e.currentTarget.value === 'async' ? 'async' : 'sync';
+                  })}
+              >
+                <option value="sync">Синхронный</option>
+                <option value="async">Асинхронный</option>
+              </select>
+            </div>
+            {#if (selected?.executionMode || 'sync') === 'sync'}
+              <div class="pagination-field">
+                <small>Планировщик синхронного режима</small>
+                <select
+                  value={selected?.syncPlanner || 'entity_to_stop'}
+                  on:change={(e) =>
+                    mutateSelected((d) => {
+                      d.syncPlanner = e.currentTarget.value === 'by_wave' ? 'by_wave' : 'entity_to_stop';
+                    })}
+                >
+                  <option value="entity_to_stop">До остановки сущности</option>
+                  <option value="by_wave">По шагу (волнами)</option>
+                </select>
+              </div>
+            {:else}
+              <div class="pagination-field">
+                <small>Лимит параллелизма (асинхронно)</small>
+                <input
+                  type="number"
+                  min="1"
+                  max="20"
+                  value={selected?.asyncConcurrency || 3}
+                  on:input={(e) =>
+                    mutateSelected((d) => {
+                      d.asyncConcurrency = Math.max(1, Math.min(20, Number(e.currentTarget.value) || 3));
+                    })}
+                />
+              </div>
+            {/if}
+          </div>
+          <p class="hint small-hint">Причины отправки итерации пишутся в лог: initial_request, pagination_values_updated, page_increment, offset_increment, cursor_updated, next_url_received.</p>
+
+          <div class="response-head field-head parameter-subhead">
+            <small>Лог ответов API</small>
+            <label class="pagination-toggle">
+              <input
+                type="checkbox"
+                checked={selected?.responseLogEnabled}
+                on:change={(e) => mutateSelected((d) => (d.responseLogEnabled = e.currentTarget.checked))}
+              />
+              <span>Записывать шаги в таблицу</span>
+            </label>
+          </div>
+          {#if selected?.responseLogEnabled}
+            <div class="pagination-grid">
+              <div class="pagination-field">
+                <small>Схема таблицы лога</small>
+                <input
+                  value={selected?.responseLogSchema || ''}
+                  placeholder="bronze"
+                  on:input={(e) => mutateSelected((d) => (d.responseLogSchema = e.currentTarget.value))}
+                />
+              </div>
+              <div class="pagination-field">
+                <small>Таблица лога</small>
+                <input
+                  value={selected?.responseLogTable || ''}
+                  placeholder="wb_ads_raw"
+                  on:input={(e) => mutateSelected((d) => (d.responseLogTable = e.currentTarget.value))}
+                />
+              </div>
+            </div>
+            <div class="pagination-grid">
+              <div class="pagination-field">
+                <small>Быстрый выбор из подключённых таблиц</small>
+                <select
+                  on:change={(e) => {
+                    const value = String(e.currentTarget.value || '').trim();
+                    if (!value) return;
+                    const [schema, table] = value.split('.');
+                    mutateSelected((d) => {
+                      d.responseLogSchema = schema || d.responseLogSchema;
+                      d.responseLogTable = table || d.responseLogTable;
+                    });
+                  }}
+                >
+                  <option value="">Выбери таблицу</option>
+                  {#each existingTables as et}
+                    <option value={`${et.schema_name}.${et.table_name}`}>{et.schema_name}.{et.table_name}</option>
+                  {/each}
+                </select>
+              </div>
+            </div>
+            <p class="hint small-hint">Рекомендуется таблица Bronze с полями аудита API-запусков. Каждый шаг запроса пишется отдельной строкой.</p>
+          {/if}
+        </div>
 
         <label>
           <div class="response-head field-head">
@@ -6237,6 +7264,14 @@ function syncParameterEditorsHeight() {
                           on:input={(e) => updatePaginationParameter(activePaginationParameter.id, { responsePath: e.currentTarget.value })}
                         />
                       </div>
+                      <div class="pagination-field">
+                        <small>Первое значение (первая волна)</small>
+                        <input
+                          value={activePaginationParameter.firstValue || ''}
+                          placeholder='например: "", 0, null, &#123;&#123;nmID&#125;&#125;'
+                          on:input={(e) => updatePaginationParameter(activePaginationParameter.id, { firstValue: e.currentTarget.value })}
+                        />
+                      </div>
                     </div>
                     <p class="hint small-hint">Используй alias параметра как <code>&#123;&#123;alias&#125;&#125;</code> в Body/Headers/Query/Авторизация.</p>
                   </div>
@@ -6800,7 +7835,7 @@ function syncParameterEditorsHeight() {
   .pagination-param-editor { margin-top:8px; }
   .pagination-param-grid { margin-top:0; }
   .pagination-param-inline-row {
-    grid-template-columns: minmax(180px, 220px) minmax(260px, 1fr) minmax(260px, 1fr);
+    grid-template-columns: minmax(160px, 220px) minmax(220px, 1fr) minmax(220px, 1fr) minmax(220px, 1fr);
     align-items:end;
   }
   .pagination-stop-conditions {
