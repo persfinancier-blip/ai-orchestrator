@@ -240,6 +240,10 @@
   let myPreviewJson: any = null;
   let myPreviewIsJson = false;
   let myPreviewViewMode: 'tree' | 'raw' = 'tree';
+  let myPreviewModeLabel = '-';
+  let myPreviewSourceLabel = '-';
+  let myPreviewTotalRequests: number | null = null;
+  let myPreviewShownRequests: number | null = null;
   let myApiPreviewDraft = '';
   let myPreviewDirty = false;
   let myPreviewApplyMessage = '';
@@ -2967,6 +2971,14 @@ function handleDefinitionInput(value: string) {
     return msg;
   }
 
+  function requestPreviewModeLabel(mode: string) {
+    if (mode === 'preview_before_send') return 'До отправки (предпросмотр)';
+    if (mode === 'sent_grouped_requests') return 'Отправлено с группировкой';
+    if (mode === 'sent_row_requests') return 'Отправлено по строкам';
+    if (!mode) return 'Обычный запрос';
+    return mode;
+  }
+
   function applyBindingRulesToRequest(
     rules: BindingRule[],
     values: Record<string, any>,
@@ -4320,6 +4332,32 @@ function handleDefinitionInput(value: string) {
       }
     }
   }
+  $: {
+    const payload = myPreviewJson && typeof myPreviewJson === 'object' ? myPreviewJson : null;
+    const mode = payload ? String(payload.mode || '').trim() : '';
+    myPreviewModeLabel = payload ? requestPreviewModeLabel(mode) : '-';
+    myPreviewSourceLabel = payload
+      ? mode.startsWith('sent_')
+        ? 'Проверить (запросы уже отправлены)'
+        : 'Предпросмотр (до отправки)'
+      : '-';
+
+    const totalCandidate = payload
+      ? Number(
+          payload.total_requests ??
+            payload.request_count ??
+            (Array.isArray(payload.requests) ? payload.requests.length : payload.request ? 1 : 0)
+        )
+      : NaN;
+    const shownCandidate = payload
+      ? Number(
+          payload.shown_requests ??
+            (Array.isArray(payload.requests) ? payload.requests.length : payload.request ? 1 : 0)
+        )
+      : NaN;
+    myPreviewTotalRequests = Number.isFinite(totalCandidate) && totalCandidate > 0 ? totalCandidate : null;
+    myPreviewShownRequests = Number.isFinite(shownCandidate) && shownCandidate > 0 ? shownCandidate : null;
+  }
   $: authViewMode, tick().then(syncMainTextareasHeight);
   $: headersViewMode, tick().then(syncMainTextareasHeight);
   $: queryViewMode, tick().then(syncMainTextareasHeight);
@@ -4401,19 +4439,35 @@ function syncParameterEditorsHeight() {
       </div>
       <div class="subsec">
         <div class="subttl response-head">
-          <span>Что ушло на сервер</span>
+          <span>Что уйдет/ушло на сервер</span>
           <span class="inline-actions">
-            <button type="button" class="view-toggle" on:click={previewRequestsNow} disabled={checking}>Предпросмотр 5</button>
-            <button type="button" class="view-toggle" on:click={checkApiNow} disabled={checking}>
-              {checking ? 'Проверка...' : 'Обновить'}
+            <button
+              type="button"
+              class="view-toggle"
+              class:active={myPreviewViewMode === 'tree'}
+              on:click={() => (myPreviewViewMode = 'tree')}
+              disabled={!myPreviewIsJson}
+            >
+              Дерево
             </button>
-            {#if myPreviewIsJson}
-              <button type="button" class="view-toggle" on:click={() => (myPreviewViewMode = myPreviewViewMode === 'tree' ? 'raw' : 'tree')}>
-                {myPreviewViewMode === 'tree' ? 'RAW' : 'Дерево'}
-              </button>
-            {/if}
+            <button
+              type="button"
+              class="view-toggle"
+              class:active={myPreviewViewMode === 'raw'}
+              on:click={() => (myPreviewViewMode = 'raw')}
+              disabled={!myPreviewIsJson}
+            >
+              RAW
+            </button>
           </span>
         </div>
+        <div class="statusline">Источник: {myPreviewSourceLabel}</div>
+        <div class="metrics-row">
+          <span>Режим: {myPreviewModeLabel}</span>
+          <span>Всего запросов: {myPreviewTotalRequests ?? '-'}</span>
+          <span>Показано: {myPreviewShownRequests ?? '-'}</span>
+        </div>
+        <p class="hint small-hint">Здесь показывается реальный JSON запроса, который будет отправлен или уже отправлен на сервер.</p>
         {#if myPreviewIsJson && myPreviewViewMode === 'tree'}
           <div class="response-tree-wrap">
             <JsonTreeView node={myPreviewJson} name="request" level={0} />
@@ -4426,7 +4480,7 @@ function syncParameterEditorsHeight() {
           ></textarea>
         {/if}
         {#if !myApiPreviewDraft}
-          <p class="hint small-hint">Нажми «Предпросмотр 5», чтобы увидеть первые реальные запросы до отправки, или «Проверить/Обновить» для запуска.</p>
+          <p class="hint small-hint">Нажми «Что уйдет (превью)» или «Проверить» в строке URL.</p>
         {/if}
         {#if myPreviewApplyMessage}
           <div class="template-parse-note">{myPreviewApplyMessage}</div>
@@ -4458,7 +4512,7 @@ function syncParameterEditorsHeight() {
           />
           <div class="connect-actions">
             <button class="primary" on:click={checkApiNow} disabled={checking}>{checking ? 'Проверка...' : 'Проверить'}</button>
-            <button type="button" class="view-toggle" on:click={previewRequestsNow} disabled={checking}>Предпросмотр 5</button>
+            <button type="button" class="view-toggle" on:click={previewRequestsNow} disabled={checking}>Что уйдет (превью)</button>
           </div>
         </div>
 
@@ -5312,6 +5366,7 @@ function syncParameterEditorsHeight() {
     margin-left:auto;
   }
   .view-toggle { border-radius:10px; border:1px solid #e2e8f0; background:#fff; color:#0f172a; padding:4px 8px; font-size:11px; line-height:1.2; }
+  .view-toggle.active { border-color:#2563eb; color:#1d4ed8; background:#eff6ff; }
   .response-tree-wrap { border:1px solid #e6eaf2; border-radius:12px; background:#fff; padding:8px; min-height:78px; overflow:visible; }
   .template-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
   .statusline { font-size:12px; color:#64748b; margin-bottom:6px; }
