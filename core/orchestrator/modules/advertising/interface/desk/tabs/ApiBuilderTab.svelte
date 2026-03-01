@@ -286,6 +286,7 @@
   let datasetPreviewLoading = false;
   let datasetPreviewError = '';
   let groupByAliasCandidates: string[] = [];
+  let selectedApiAlias = '';
   const PARAMETER_PREVIEW_LIMIT = 5;
   const REQUEST_PREVIEW_MAX = 20;
   const PARAMETER_TOKEN_RE = /\{\{\s*([^{}]+?)\s*\}\}/g;
@@ -1063,6 +1064,12 @@ function formatBytes(bytes: number) {
       ? selected.parameterDefinitions.find((param) => param.id === selectedParameterId) ?? null
       : null;
   $: groupByAliasCandidates = bindingAliasOptions(selected);
+  $: if (groupByAliasCandidates.length && !groupByAliasCandidates.includes(selectedApiAlias)) {
+    selectedApiAlias = groupByAliasCandidates[0] || '';
+  }
+  $: if (!groupByAliasCandidates.length) {
+    selectedApiAlias = '';
+  }
 
   $: if (selected && selectedParameterId && !selected.parameterDefinitions.some((param) => param.id === selectedParameterId)) {
     selectedParameterId = null;
@@ -1849,6 +1856,124 @@ function formatBytes(bytes: number) {
     });
   }
 
+  function normalizeDraggedToken(raw: string) {
+    const src = String(raw || '').trim();
+    if (!src) return '';
+    if (/^\{\{\s*[^{}]+\s*\}\}$/.test(src)) return src;
+    return `{{${src}}}`;
+  }
+
+  function insertTokenAt(raw: string, token: string, start?: number, end?: number) {
+    const base = String(raw || '');
+    if (typeof start === 'number' && typeof end === 'number' && Number.isFinite(start) && Number.isFinite(end)) {
+      return `${base.slice(0, start)}${token}${base.slice(end)}`;
+    }
+    if (!base.trim()) return token;
+    return `${base}${base.endsWith('\n') ? '' : '\n'}${token}`;
+  }
+
+  function aliasChipDragStart(alias: string, event: DragEvent) {
+    if (!event.dataTransfer) return;
+    event.dataTransfer.setData('text/plain', `{{${alias}}}`);
+    event.dataTransfer.effectAllowed = 'copy';
+  }
+
+  function insertAliasTokenToField(field: 'authJson' | 'headersJson' | 'queryJson' | 'bodyJson', alias: string) {
+    const token = normalizeDraggedToken(alias);
+    if (!token) return;
+    mutateSelected((d) => {
+      (d as any)[field] = insertTokenAt((d as any)[field], token);
+    });
+  }
+
+  function dropAliasTokenToField(
+    event: DragEvent,
+    field: 'authJson' | 'headersJson' | 'queryJson' | 'bodyJson',
+    el?: HTMLTextAreaElement | null
+  ) {
+    event.preventDefault();
+    const token = normalizeDraggedToken(String(event.dataTransfer?.getData('text/plain') || ''));
+    if (!token) return;
+    const targetEl = (event.currentTarget as HTMLTextAreaElement) || el || null;
+    const selStart = targetEl?.selectionStart;
+    const selEnd = targetEl?.selectionEnd;
+    mutateSelected((d) => {
+      (d as any)[field] = insertTokenAt((d as any)[field], token, selStart ?? undefined, selEnd ?? undefined);
+    });
+    requestAnimationFrame(() => {
+      if (!targetEl) return;
+      const pos = (selStart ?? String((targetEl as any).value || '').length) + token.length;
+      targetEl.focus();
+      try {
+        targetEl.setSelectionRange(pos, pos);
+      } catch {
+        // ignore
+      }
+    });
+  }
+
+  function hasBindingRule(alias: string, pathMode: 'auth' | 'header' | 'body') {
+    const key = String(alias || '').trim();
+    if (!key || !selected) return false;
+    const rules = Array.isArray(selected.bindingRules) ? selected.bindingRules : [];
+    if (pathMode === 'auth') {
+      return rules.some((r) => r.alias === key && r.target === 'header' && String(r.path || '').trim() === 'Authorization');
+    }
+    if (pathMode === 'header') {
+      return rules.some((r) => r.alias === key && r.target === 'header' && String(r.path || '').trim() !== 'Authorization');
+    }
+    return rules.some((r) => r.alias === key && (r.target === 'body' || r.target === 'body_item'));
+  }
+
+  function setBindingUsage(alias: string, usage: 'auth' | 'header' | 'body', enabled: boolean) {
+    const key = String(alias || '').trim();
+    if (!key) return;
+    mutateSelected((d) => {
+      let rules = Array.isArray(d.bindingRules) ? [...d.bindingRules] : [];
+      if (!enabled) {
+        if (usage === 'auth') {
+          rules = rules.filter((r) => !(r.alias === key && r.target === 'header' && String(r.path || '').trim() === 'Authorization'));
+        } else if (usage === 'header') {
+          rules = rules.filter((r) => !(r.alias === key && r.target === 'header' && String(r.path || '').trim() !== 'Authorization'));
+        } else {
+          rules = rules.filter((r) => !(r.alias === key && (r.target === 'body' || r.target === 'body_item')));
+        }
+        d.bindingRules = rules;
+        return;
+      }
+
+      if (usage === 'auth') {
+        if (!rules.some((r) => r.alias === key && r.target === 'header' && String(r.path || '').trim() === 'Authorization')) {
+          rules.push({ id: uid(), alias: key, target: 'header', path: 'Authorization' });
+        }
+      } else if (usage === 'header') {
+        if (!rules.some((r) => r.alias === key && r.target === 'header' && String(r.path || '').trim() !== 'Authorization')) {
+          rules.push({ id: uid(), alias: key, target: 'header', path: key });
+        }
+      } else {
+        if (!rules.some((r) => r.alias === key && (r.target === 'body' || r.target === 'body_item'))) {
+          rules.push({ id: uid(), alias: key, target: 'body_item', path: key });
+        }
+      }
+      d.bindingRules = rules;
+    });
+  }
+
+  function toggleBindingUsage(alias: string, usage: 'auth' | 'header' | 'body') {
+    const enabled = hasBindingRule(alias, usage);
+    setBindingUsage(alias, usage, !enabled);
+  }
+
+  function isAliasGrouped(alias: string) {
+    if (!selected) return false;
+    return (selected.groupByAliases || []).includes(alias);
+  }
+
+  function hasQueryBinding(alias: string) {
+    if (!selected) return false;
+    return (selected.bindingRules || []).some((r) => r.alias === alias && r.target === 'query');
+  }
+
   function hasDataModelConfigured(draft: ApiDraft | null) {
     if (!draft) return false;
     return Array.isArray(draft.dataTables) && draft.dataTables.length > 0 && Array.isArray(draft.dataFields) && draft.dataFields.length > 0;
@@ -2026,6 +2151,13 @@ function formatBytes(bytes: number) {
     const t = draft.dataTables.find((x) => x.id === tableId);
     if (!t) return [];
     return columnOptionsFor(t.schema, t.table);
+  }
+
+  function aliasSourceLabel(draft: ApiDraft | null, alias: string) {
+    if (!draft || !alias) return 'не найден';
+    const f = (draft.dataFields || []).find((x) => x.alias === alias);
+    if (!f) return 'не найден';
+    return `${tableLabelById(draft, f.tableId)}.${f.field}`;
   }
 
   async function fetchDataModelRows(
@@ -3574,6 +3706,23 @@ function syncParameterEditorsHeight() {
               </button>
             {/if}
           </div>
+          {#if groupByAliasCandidates.length}
+            <div class="field-param-showcase">
+              {#each groupByAliasCandidates as alias}
+                <button
+                  type="button"
+                  class="param-token-chip"
+                  class:active-chip={hasBindingRule(alias, 'auth')}
+                  title="Перетащи в JSON или нажми для включения/выключения в Авторизации"
+                  draggable="true"
+                  on:dragstart={(e) => aliasChipDragStart(alias, e)}
+                  on:click={() => toggleBindingUsage(alias, 'auth')}
+                >
+                  {alias}
+                </button>
+              {/each}
+            </div>
+          {/if}
           {#if authJsonValid && authViewMode === 'tree'}
             <div class="response-tree-wrap"><JsonTreeView node={authJsonTree} name="auth" level={0} /></div>
           {:else}
@@ -3581,6 +3730,8 @@ function syncParameterEditorsHeight() {
               bind:this={authEl}
               value={selected?.authJson || ''}
               on:input={(e) => mutateSelected((d) => (d.authJson = e.currentTarget.value))}
+              on:dragover|preventDefault
+              on:drop={(e) => dropAliasTokenToField(e, 'authJson', authEl)}
             ></textarea>
           {/if}
         </label>
@@ -3649,6 +3800,23 @@ function syncParameterEditorsHeight() {
                 </button>
               {/if}
             </div>
+            {#if groupByAliasCandidates.length}
+              <div class="field-param-showcase">
+                {#each groupByAliasCandidates as alias}
+                  <button
+                    type="button"
+                    class="param-token-chip"
+                    class:active-chip={hasBindingRule(alias, 'header')}
+                    title="Перетащи в JSON или нажми для включения/выключения в Headers"
+                    draggable="true"
+                    on:dragstart={(e) => aliasChipDragStart(alias, e)}
+                    on:click={() => toggleBindingUsage(alias, 'header')}
+                  >
+                    {alias}
+                  </button>
+                {/each}
+              </div>
+            {/if}
             {#if headersJsonValid && headersViewMode === 'tree'}
               <div class="response-tree-wrap"><JsonTreeView node={headersJsonTree} name="headers" level={0} /></div>
             {:else}
@@ -3656,6 +3824,8 @@ function syncParameterEditorsHeight() {
                 bind:this={headersEl}
                 value={selected?.headersJson || ''}
                 on:input={(e) => mutateSelected((d) => (d.headersJson = e.currentTarget.value))}
+                on:dragover|preventDefault
+                on:drop={(e) => dropAliasTokenToField(e, 'headersJson', headersEl)}
               ></textarea>
             {/if}
           </label>
@@ -3668,6 +3838,23 @@ function syncParameterEditorsHeight() {
                 </button>
               {/if}
             </div>
+            {#if groupByAliasCandidates.length}
+              <div class="field-param-showcase">
+                {#each groupByAliasCandidates as alias}
+                  <button
+                    type="button"
+                    class="param-token-chip"
+                    class:active-chip={hasQueryBinding(alias)}
+                    title="Перетащи в JSON или нажми, чтобы вставить токен"
+                    draggable="true"
+                    on:dragstart={(e) => aliasChipDragStart(alias, e)}
+                    on:click={() => insertAliasTokenToField('queryJson', alias)}
+                  >
+                    {alias}
+                  </button>
+                {/each}
+              </div>
+            {/if}
             {#if queryJsonValid && queryViewMode === 'tree'}
               <div class="response-tree-wrap"><JsonTreeView node={queryJsonTree} name="query" level={0} /></div>
             {:else}
@@ -3675,6 +3862,8 @@ function syncParameterEditorsHeight() {
                 bind:this={queryEl}
                 value={selected?.queryJson || ''}
                 on:input={(e) => mutateSelected((d) => (d.queryJson = e.currentTarget.value))}
+                on:dragover|preventDefault
+                on:drop={(e) => dropAliasTokenToField(e, 'queryJson', queryEl)}
               ></textarea>
             {/if}
           </label>
@@ -3689,6 +3878,23 @@ function syncParameterEditorsHeight() {
               </button>
             {/if}
           </div>
+          {#if groupByAliasCandidates.length}
+            <div class="field-param-showcase">
+              {#each groupByAliasCandidates as alias}
+                <button
+                  type="button"
+                  class="param-token-chip"
+                  class:active-chip={hasBindingRule(alias, 'body')}
+                  title="Перетащи в JSON или нажми для включения/выключения в Body"
+                  draggable="true"
+                  on:dragstart={(e) => aliasChipDragStart(alias, e)}
+                  on:click={() => toggleBindingUsage(alias, 'body')}
+                >
+                  {alias}
+                </button>
+              {/each}
+            </div>
+          {/if}
           {#if bodyJsonValid && bodyViewMode === 'tree'}
             <div class="response-tree-wrap"><JsonTreeView node={bodyJsonTree} name="body" level={0} /></div>
           {:else}
@@ -3696,6 +3902,8 @@ function syncParameterEditorsHeight() {
               bind:this={bodyEl}
               value={selected?.bodyJson || ''}
               on:input={(e) => mutateSelected((d) => (d.bodyJson = e.currentTarget.value))}
+              on:dragover|preventDefault
+              on:drop={(e) => dropAliasTokenToField(e, 'bodyJson', bodyEl)}
             ></textarea>
           {/if}
         </label>
@@ -3709,7 +3917,6 @@ function syncParameterEditorsHeight() {
             <div class="response-head field-head parameter-subhead">
               <span>Конструктор данных (таблицы, связи, поля)</span>
               <span class="inline-actions">
-                <button type="button" class="view-toggle" on:click={addDataTable}>Таблица +</button>
                 <button type="button" class="view-toggle" on:click={previewDataModelNow} disabled={datasetPreviewLoading}>
                   {datasetPreviewLoading ? 'Загрузка...' : 'Предпросмотр данных'}
                 </button>
@@ -3717,7 +3924,10 @@ function syncParameterEditorsHeight() {
             </div>
 
             <div class="data-section">
-              <small>Таблицы</small>
+              <div class="response-head field-head parameter-subhead">
+                <small>Таблицы</small>
+                <button type="button" class="view-toggle" on:click={addDataTable}>Таблица +</button>
+              </div>
               {#if selected?.dataTables?.length}
                 <div class="data-list">
                   {#each selected.dataTables as tbl (tbl.id)}
@@ -3919,18 +4129,27 @@ function syncParameterEditorsHeight() {
               <div class="response-head field-head">
                 <span>Параметры (поля результата)</span>
               </div>
-              {#if selected?.dataFields?.length}
-                <div class="api-param-list">
-                  {#each selected.dataFields as field (field.id)}
-                    <div class="api-param-row">
-                      <div class="api-param-main">
-                        <strong>{field.alias}</strong>
-                        <span>{tableLabelById(selected, field.tableId)}.{field.field}</span>
-                      </div>
-                    </div>
+              {#if groupByAliasCandidates.length}
+                <div class="api-crumbs">
+                  {#each groupByAliasCandidates as alias}
+                    <button
+                      type="button"
+                      class="api-crumb"
+                      class:active-crumb={selectedApiAlias === alias}
+                      draggable="true"
+                      on:dragstart={(e) => aliasChipDragStart(alias, e)}
+                      on:click={() => (selectedApiAlias = alias)}
+                    >
+                      {alias}
+                    </button>
                   {/each}
                 </div>
-                <p class="hint small-hint">Слева показаны параметры, которые можно использовать в группировке и подстановке.</p>
+                {#if selectedApiAlias}
+                  <p class="hint small-hint">
+                    Источник: {aliasSourceLabel(selected, selectedApiAlias)}
+                  </p>
+                {/if}
+                <p class="hint small-hint">Перетащи крошку в нужный JSON-блок или выбери справа места использования.</p>
               {:else}
                 <p class="hint">Сначала заполни “Поля результата” в конструкторе данных.</p>
               {/if}
@@ -3953,34 +4172,6 @@ function syncParameterEditorsHeight() {
                   </select>
                 </div>
                 <div class="pagination-field">
-                  <small>Группировать по alias</small>
-                  {#if groupByAliasCandidates.length}
-                    <div class="group-alias-list">
-                      {#each groupByAliasCandidates as alias}
-                        <label class="group-alias-item">
-                          <input
-                            type="checkbox"
-                            checked={Boolean(selected?.groupByAliases?.includes(alias))}
-                            on:change={() => toggleGroupByAlias(alias)}
-                          />
-                          <span>{alias}</span>
-                        </label>
-                      {/each}
-                    </div>
-                    <p class="hint small-hint">Выбрано: {selected?.groupByAliases?.join(', ') || 'ничего'}</p>
-                  {:else}
-                    <p class="hint small-hint">Нет доступных параметров. Сначала добавь поля результата.</p>
-                  {/if}
-                </div>
-                <div class="pagination-field">
-                  <small>Путь массива в body</small>
-                  <input
-                    placeholder="items"
-                    value={selected?.bodyItemsPath || 'items'}
-                    on:input={(e) => mutateSelected((d) => (d.bodyItemsPath = e.currentTarget.value || 'items'))}
-                  />
-                </div>
-                <div class="pagination-field">
                   <small>Лимит предпросмотра</small>
                   <input
                     type="number"
@@ -3993,41 +4184,30 @@ function syncParameterEditorsHeight() {
               </div>
 
               <div class="response-head field-head parameter-subhead">
-                <span>Места использования (подстановка)</span>
-                <button type="button" class="view-toggle" on:click={addBindingRule}>Добавить правило</button>
+                <span>Витрина настроек параметра</span>
               </div>
-              {#if selected?.bindingRules?.length}
-                <div class="binding-list">
-                  {#each selected.bindingRules as rule (rule.id)}
-                    <div class="binding-row">
-                      <select
-                        value={rule.alias}
-                        on:change={(e) => updateBindingRule(rule.id, { alias: e.currentTarget.value })}
-                      >
-                        <option value="">Параметр</option>
-                        {#each bindingAliasOptions(selected) as alias}
-                          <option value={alias}>{alias}</option>
-                        {/each}
-                      </select>
-                      <select
-                        value={rule.target}
-                        on:change={(e) => updateBindingRule(rule.id, { target: toBindingTarget(e.currentTarget.value) })}
-                      >
-                        {#each BINDING_TARGETS as target}
-                          <option value={target.value}>{target.label}</option>
-                        {/each}
-                      </select>
-                      <input
-                        value={rule.path}
-                        placeholder="путь (например Authorization или campaign_id)"
-                        on:input={(e) => updateBindingRule(rule.id, { path: e.currentTarget.value })}
-                      />
-                      <button type="button" class="chip-remove" on:click={() => removeBindingRule(rule.id)}>x</button>
-                    </div>
-                  {/each}
+              {#if selectedApiAlias}
+                <div class="usage-toggle-list">
+                  <label class="usage-toggle-item">
+                    <input type="checkbox" checked={isAliasGrouped(selectedApiAlias)} on:change={() => toggleGroupByAlias(selectedApiAlias)} />
+                    <span>Группировать</span>
+                  </label>
+                  <label class="usage-toggle-item">
+                    <input type="checkbox" checked={hasBindingRule(selectedApiAlias, 'auth')} on:change={() => toggleBindingUsage(selectedApiAlias, 'auth')} />
+                    <span>Авторизация</span>
+                  </label>
+                  <label class="usage-toggle-item">
+                    <input type="checkbox" checked={hasBindingRule(selectedApiAlias, 'header')} on:change={() => toggleBindingUsage(selectedApiAlias, 'header')} />
+                    <span>Headers</span>
+                  </label>
+                  <label class="usage-toggle-item">
+                    <input type="checkbox" checked={hasBindingRule(selectedApiAlias, 'body')} on:change={() => toggleBindingUsage(selectedApiAlias, 'body')} />
+                    <span>Body</span>
+                  </label>
                 </div>
+                <p class="hint small-hint">Выбран параметр: <strong>{selectedApiAlias}</strong></p>
               {:else}
-                <p class="hint">Добавь правила, например: `token -> Header.Authorization`, `campaign_id -> body_item.campaign_id`, `sku -> body_item.sku`.</p>
+                <p class="hint">Выбери крошку параметра слева.</p>
               {/if}
             </div>
           </div>
@@ -4443,6 +4623,20 @@ function syncParameterEditorsHeight() {
   .mapping-actions { margin-top:8px; display:flex; justify-content:flex-end; }
   .desc { width:100%; box-sizing:border-box; margin-top:8px; min-height:56px; resize:vertical; }
   .raw-grid { display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:8px; }
+  .field-param-showcase { margin:8px 0; display:flex; flex-wrap:wrap; gap:6px; }
+  .param-token-chip {
+    width:auto;
+    border:1px dashed #cbd5e1;
+    border-radius:999px;
+    background:#f8fafc;
+    color:#334155;
+    padding:4px 10px;
+    font-size:11px;
+    line-height:1.2;
+    cursor:grab;
+  }
+  .param-token-chip:active { cursor:grabbing; }
+  .param-token-chip.active-chip { border-color:#0f172a; background:#0f172a; color:#fff; }
 
   .storage-meta { margin:0 0 8px; display:flex; align-items:center; gap:6px; font-size:12px; color:#64748b; }
   .link-btn { border:0; background:transparent; color:#0f172a; padding:0; text-decoration:underline; font-size:12px; font-weight:500; }
@@ -4515,20 +4709,38 @@ function syncParameterEditorsHeight() {
   .parameter-subhead { margin-top:12px; }
   .data-builder-box { border:1px solid #e2e8f0; border-radius:12px; padding:10px; background:#fff; margin-top:8px; display:flex; flex-direction:column; gap:10px; }
   .data-section { display:flex; flex-direction:column; gap:6px; }
-  .data-section > small { color:#64748b; font-size:11px; }
   .data-list { display:flex; flex-direction:column; gap:8px; }
   .data-row { display:grid; grid-template-columns: 1.2fr 1fr 1fr auto; gap:8px; align-items:center; }
   .join-row { grid-template-columns: 1fr 1fr 120px 1fr 1fr auto; }
   .api-showcase-grid { margin-top:8px; display:grid; grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.2fr); gap:10px; align-items:start; }
   .api-showcase-col { border:1px solid #e2e8f0; border-radius:12px; background:#fff; padding:10px; }
-  .api-param-list { display:flex; flex-direction:column; gap:8px; margin-top:8px; }
-  .api-param-row { border:1px solid #e2e8f0; border-radius:10px; padding:8px; background:#f8fafc; }
-  .api-param-main { display:flex; flex-direction:column; gap:4px; }
-  .api-param-main strong { font-size:12px; color:#0f172a; }
-  .api-param-main span { font-size:11px; color:#64748b; word-break:break-word; }
-  .group-alias-list { display:flex; flex-wrap:wrap; gap:6px; margin-top:4px; }
-  .group-alias-item { display:inline-flex; align-items:center; gap:6px; border:1px solid #e2e8f0; background:#fff; border-radius:999px; padding:4px 8px; font-size:12px; color:#334155; }
-  .group-alias-item input { width:auto; margin:0; }
+  .api-crumbs { margin-top:8px; display:flex; flex-wrap:wrap; gap:6px; }
+  .api-crumb {
+    width:auto;
+    border:1px solid #cbd5e1;
+    border-radius:999px;
+    background:#fff;
+    color:#334155;
+    font-size:12px;
+    font-weight:600;
+    line-height:1.2;
+    padding:6px 11px;
+    cursor:pointer;
+  }
+  .api-crumb.active-crumb { border-color:#0f172a; background:#0f172a; color:#fff; }
+  .usage-toggle-list { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:8px; }
+  .usage-toggle-item {
+    display:flex;
+    align-items:center;
+    gap:6px;
+    border:1px solid #e2e8f0;
+    border-radius:10px;
+    background:#f8fafc;
+    padding:8px 10px;
+    font-size:12px;
+    color:#334155;
+  }
+  .usage-toggle-item input { width:auto; margin:0; }
   .dataset-preview-table-wrap { overflow:auto; border:1px solid #e2e8f0; border-radius:10px; background:#fff; }
   .dataset-preview-table { width:100%; border-collapse:collapse; min-width:640px; }
   .dataset-preview-table th,
@@ -4536,8 +4748,6 @@ function syncParameterEditorsHeight() {
   .dataset-preview-table th { background:#f8fafc; color:#334155; font-weight:600; position:sticky; top:0; z-index:1; }
   .dataset-preview-table td { max-width:320px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#0f172a; }
   .dispatch-grid { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
-  .binding-list { margin-top:8px; display:flex; flex-direction:column; gap:8px; }
-  .binding-row { display:grid; grid-template-columns: 1fr 220px 1.2fr auto; gap:8px; align-items:center; }
   .pagination-toggle { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#475569; cursor:pointer; }
   .pagination-toggle input { width:auto; }
   .pagination-grid { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
@@ -4550,7 +4760,6 @@ function syncParameterEditorsHeight() {
     .saved-inline-actions { grid-template-columns: 1fr; }
     .api-showcase-grid { grid-template-columns: 1fr; }
     .data-row, .join-row { grid-template-columns: 1fr; }
-    .binding-row { grid-template-columns: 1fr; }
   }
 </style>
 
