@@ -2746,11 +2746,12 @@ function handleDefinitionInput(value: string) {
       );
       if (needFromData.length) {
         try {
-          const resp = await fetchDataModelRows(draft, needFromData, 1, 0);
-          const firstRow = Array.isArray(resp?.rows) && resp.rows.length ? resp.rows[0] : null;
-          if (firstRow) {
+          const resp = await fetchDataModelRows(draft, needFromData, 200, 0);
+          const rows = Array.isArray(resp?.rows) ? resp.rows : [];
+          if (rows.length) {
             needFromData.forEach((alias) => {
-              const value = firstRow[alias];
+              const chosen = pickPreferredAliasValue(rows.map((row: Record<string, any>) => row?.[alias]));
+              const value = chosen.value;
               if (value !== undefined && value !== null) {
                 map[alias] = value;
                 aliases
@@ -2758,6 +2759,9 @@ function handleDefinitionInput(value: string) {
                   .forEach((raw) => {
                     map[raw] = value;
                   });
+                if (chosen.exp && chosen.exp <= Math.floor(Date.now() / 1000) && !issues[alias]) {
+                  issues[alias] = 'выбран JWT-токен с истёкшим сроком действия';
+                }
               } else if (!issues[alias]) {
                 issues[alias] = 'конструктор данных вернул пустое значение';
               }
@@ -2794,6 +2798,39 @@ function handleDefinitionInput(value: string) {
     });
 
     return { map, issues };
+  }
+
+  function extractJwtExp(value: any): number | null {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+    const parts = raw.split('.');
+    if (parts.length < 2) return null;
+    try {
+      const normalized = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+      const decoded = atob(padded);
+      const payload = JSON.parse(decoded);
+      const exp = Number(payload?.exp || 0);
+      return Number.isFinite(exp) && exp > 0 ? exp : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function pickPreferredAliasValue(values: any[]) {
+    const candidates = values.filter((v) => v !== undefined && v !== null);
+    if (!candidates.length) return { value: undefined as any, exp: null as number | null };
+    const jwtCandidates = candidates
+      .map((v) => ({ value: v, exp: extractJwtExp(v) }))
+      .filter((x) => x.exp !== null) as Array<{ value: any; exp: number }>;
+    if (jwtCandidates.length) {
+      jwtCandidates.sort((a, b) => b.exp - a.exp);
+      const nowSec = Math.floor(Date.now() / 1000);
+      const active = jwtCandidates.find((x) => x.exp > nowSec);
+      if (active) return { value: active.value, exp: active.exp };
+      return { value: jwtCandidates[0].value, exp: jwtCandidates[0].exp };
+    }
+    return { value: candidates[0], exp: null };
   }
 
   function toUiErrorMessage(error: any) {
