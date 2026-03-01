@@ -280,7 +280,9 @@
   let definitionTree: any = null;
   let definitionTreeDisplay: any = null;
   let definitionViewMode: 'text' | 'tree' = 'text';
-  let datasetPreviewText = '';
+  let datasetPreviewRows: Array<Record<string, any>> = [];
+  let datasetPreviewColumns: string[] = [];
+  let datasetPreviewHasMore = false;
   let datasetPreviewLoading = false;
   let datasetPreviewError = '';
   const PARAMETER_PREVIEW_LIMIT = 5;
@@ -2086,7 +2088,9 @@ function formatBytes(bytes: number) {
 
   async function previewDataModelNow() {
     datasetPreviewError = '';
-    datasetPreviewText = '';
+    datasetPreviewRows = [];
+    datasetPreviewColumns = [];
+    datasetPreviewHasMore = false;
     if (!selected) {
       datasetPreviewError = 'Выбери API';
       return;
@@ -2098,15 +2102,10 @@ function formatBytes(bytes: number) {
     datasetPreviewLoading = true;
     try {
       const aliases = uniqueAliasList((selected.dataFields || []).map((f) => f.alias));
+      datasetPreviewColumns = aliases;
       const resp = await fetchDataModelRows(selected, aliases, 10, 0);
-      datasetPreviewText = JSON.stringify(
-        {
-          rows: Array.isArray(resp?.rows) ? resp.rows : [],
-          has_more: Boolean(resp?.has_more)
-        },
-        null,
-        2
-      );
+      datasetPreviewRows = Array.isArray(resp?.rows) ? resp.rows : [];
+      datasetPreviewHasMore = Boolean(resp?.has_more);
     } catch (e: any) {
       datasetPreviewError = e?.message ?? String(e);
     } finally {
@@ -3259,6 +3258,10 @@ function handleDefinitionInput(value: string) {
       myApiPreview = '';
       myApiPreviewDraft = '';
       activeResponseFieldRef = '';
+      datasetPreviewRows = [];
+      datasetPreviewColumns = [];
+      datasetPreviewHasMore = false;
+      datasetPreviewError = '';
     }
   }
   $: if (!myPreviewDirty) {
@@ -3861,8 +3864,36 @@ function syncParameterEditorsHeight() {
             {#if datasetPreviewError}
               <p class="definition-error">{datasetPreviewError}</p>
             {/if}
-            {#if datasetPreviewText}
-              <textarea readonly value={datasetPreviewText}></textarea>
+            {#if datasetPreviewColumns.length}
+              <div class="dataset-preview-table-wrap">
+                <table class="dataset-preview-table">
+                  <thead>
+                    <tr>
+                      {#each datasetPreviewColumns as col}
+                        <th>{col}</th>
+                      {/each}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#if datasetPreviewRows.length}
+                      {#each datasetPreviewRows as row}
+                        <tr>
+                          {#each datasetPreviewColumns as col}
+                            <td title={formatParameterRowValue(row, col)}>{formatParameterRowValue(row, col)}</td>
+                          {/each}
+                        </tr>
+                      {/each}
+                    {:else}
+                      <tr>
+                        <td colspan={datasetPreviewColumns.length}>Нет строк по текущим условиям.</td>
+                      </tr>
+                    {/if}
+                  </tbody>
+                </table>
+              </div>
+              <p class="hint small-hint">
+                Показано {datasetPreviewRows.length} строк (макс. 10){datasetPreviewHasMore ? ', есть ещё данные.' : '.'}
+              </p>
             {/if}
           </div>
 
@@ -4738,6 +4769,12 @@ function syncParameterEditorsHeight() {
   .data-list { display:flex; flex-direction:column; gap:8px; }
   .data-row { display:grid; grid-template-columns: 1.2fr 1fr 1fr auto; gap:8px; align-items:center; }
   .join-row { grid-template-columns: 1fr 1fr 120px 1fr 1fr auto; }
+  .dataset-preview-table-wrap { overflow:auto; border:1px solid #e2e8f0; border-radius:10px; background:#fff; }
+  .dataset-preview-table { width:100%; border-collapse:collapse; min-width:640px; }
+  .dataset-preview-table th,
+  .dataset-preview-table td { border-bottom:1px solid #edf2f7; padding:8px; text-align:left; font-size:12px; vertical-align:top; }
+  .dataset-preview-table th { background:#f8fafc; color:#334155; font-weight:600; position:sticky; top:0; z-index:1; }
+  .dataset-preview-table td { max-width:320px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#0f172a; }
   .dispatch-grid { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
   .binding-list { margin-top:8px; display:flex; flex-direction:column; gap:8px; }
   .binding-row { display:grid; grid-template-columns: 1fr 220px 1.2fr auto; gap:8px; align-items:center; }
