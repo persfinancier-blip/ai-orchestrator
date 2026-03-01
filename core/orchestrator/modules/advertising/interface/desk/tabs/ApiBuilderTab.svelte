@@ -2971,6 +2971,20 @@ function handleDefinitionInput(value: string) {
   async function buildGroupedRequestPlan(draft: ApiDraft) {
     const issues: Record<string, string> = {};
     const sanitizedAliases = sanitizeAliasReferences(draft);
+    const authTemplate = parseJsonObjectField('Авторизация', draft.authJson);
+    const headersTemplate = parseJsonObjectField('Headers JSON', draft.headersJson);
+    const queryTemplate = parseJsonObjectField('Query JSON', draft.queryJson);
+    const bodyTemplateRaw = parseJsonAnyField('Body JSON', draft.bodyJson);
+    const bodyTemplate = bodyTemplateRaw && typeof bodyTemplateRaw === 'object' ? bodyTemplateRaw : {};
+    const urlTemplate = `${draft.baseUrl.replace(/\/$/, '')}${draft.path.startsWith('/') ? draft.path : `/${draft.path}`}`;
+    const templateTokenSet = new Set<string>();
+    collectParameterTokens(urlTemplate, templateTokenSet);
+    collectParameterTokens(authTemplate, templateTokenSet);
+    collectParameterTokens(headersTemplate, templateTokenSet);
+    collectParameterTokens(queryTemplate, templateTokenSet);
+    collectParameterTokens(bodyTemplate, templateTokenSet);
+    const templateAliases = uniqueAliasList(Array.from(templateTokenSet));
+
     const bindingRules = (Array.isArray(sanitizedAliases.bindingRules) ? sanitizedAliases.bindingRules : [])
       .map((rule) => ({
         id: String(rule?.id || uid()),
@@ -2979,9 +2993,6 @@ function handleDefinitionInput(value: string) {
         path: String(rule?.path || '').trim()
       }))
       .filter((rule) => rule.alias && rule.path);
-    if (!bindingRules.length) {
-      throw new Error('Добавь хотя бы одно правило подстановки');
-    }
     let groupByAliases = uniqueAliasList(sanitizedAliases.groupByAliases || []);
     if (!groupByAliases.length) {
       const scalarAliases = uniqueAliasList(
@@ -2989,7 +3000,11 @@ function handleDefinitionInput(value: string) {
           .filter((rule) => rule.target !== 'body_item')
           .map((rule) => rule.alias)
       );
-      groupByAliases = scalarAliases.length ? scalarAliases : uniqueAliasList(bindingRules.map((rule) => rule.alias));
+      const ruleAliases = uniqueAliasList(bindingRules.map((rule) => rule.alias));
+      groupByAliases = scalarAliases.length ? scalarAliases : ruleAliases;
+      if (!groupByAliases.length && templateAliases.length) {
+        groupByAliases = [templateAliases[0]];
+      }
       if (groupByAliases.length) {
         issues.auto_grouping = `автогруппировка по alias: ${groupByAliases.join(', ')}`;
       }
@@ -3003,7 +3018,8 @@ function handleDefinitionInput(value: string) {
 
     const requiredAliases = uniqueAliasList([
       ...groupByAliases,
-      ...bindingRules.map((rule) => rule.alias)
+      ...bindingRules.map((rule) => rule.alias),
+      ...templateAliases
     ]);
     const dataset = hasDataModelConfigured(draft)
       ? await loadDataModelRowsForAliases(draft, requiredAliases)
