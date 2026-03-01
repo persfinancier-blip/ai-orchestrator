@@ -2121,6 +2121,36 @@ function formatBytes(bytes: number) {
     }
   }
 
+  function readNumberByPath(obj: any, path: string): number | null {
+    const value = getByPath(obj, path);
+    if (value === undefined || value === null) return null;
+    const num = Number(value);
+    return Number.isFinite(num) ? num : null;
+  }
+
+  function tryReadCursorTotalFromResponse(payload: any): number | null {
+    const candidates = ['cursor.total', 'pagination.total', 'meta.total', 'total'];
+    for (const path of candidates) {
+      const n = readNumberByPath(payload, path);
+      if (n !== null) return n;
+    }
+    return null;
+  }
+
+  function tryReadCursorLimitFromRequest(queryObj: Record<string, any>, bodyObj: any): number | null {
+    const bodyCandidates = ['settings.cursor.limit', 'cursor.limit', 'limit'];
+    for (const path of bodyCandidates) {
+      const n = readNumberByPath(bodyObj, path);
+      if (n !== null) return n;
+    }
+    const queryCandidates = ['limit', 'cursor.limit'];
+    for (const path of queryCandidates) {
+      const n = readNumberByPath(queryObj, path);
+      if (n !== null) return n;
+    }
+    return null;
+  }
+
   function resolveAbsoluteUrl(urlText: string, draft: ApiDraft) {
     const raw = String(urlText || '').trim();
     if (!raw) return fullUrl(draft);
@@ -4587,6 +4617,7 @@ function handleDefinitionInput(value: string) {
     const responses: any[] = [];
     let lastResponseHash = '';
     let sameResponseCount = 0;
+    const seenPaginationStates = new Set<string>();
 
     for (let pageIdx = 0; pageIdx < pagesMax; pageIdx++) {
       const sourceUrl = String(nextUrlOverride || reqPlan?.url || '').trim();
@@ -4741,6 +4772,22 @@ function handleDefinitionInput(value: string) {
         break;
       }
 
+      if (paginationParameters.length) {
+        const total = tryReadCursorTotalFromResponse(parsed);
+        const limit = tryReadCursorLimitFromRequest(queryObj, bodyObj);
+        if (
+          total !== null &&
+          limit !== null &&
+          Number.isFinite(total) &&
+          Number.isFinite(limit) &&
+          total <= limit
+        ) {
+          stopReason = `Остановка: total (${total}) <= limit (${limit})`;
+          responseEntry.stop_reason = stopReason;
+          break;
+        }
+      }
+
       if (paginationStopRules.length) {
         const runtimeTokenMap: Record<string, any> = {};
         paginationParameters.forEach((param) => {
@@ -4789,6 +4836,16 @@ function handleDefinitionInput(value: string) {
         } else if (!updatedValues && draft.paginationStopOnMissingValue) {
           stop = true;
           pageStopReason = 'Не найдено новое значение параметров пагинации (значения не изменились)';
+        } else if (foundValues) {
+          const stateFingerprint = JSON.stringify(
+            paginationParameters.map((param) => [param.id, paginationState[param.id]])
+          );
+          if (seenPaginationStates.has(stateFingerprint)) {
+            stop = true;
+            pageStopReason = 'Повторилось состояние пагинации (зацикливание)';
+          } else {
+            seenPaginationStates.add(stateFingerprint);
+          }
         }
       } else if (draft.paginationStrategy === 'page_number') {
         currentPage += 1;
