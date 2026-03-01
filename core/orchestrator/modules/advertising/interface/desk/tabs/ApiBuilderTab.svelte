@@ -2671,9 +2671,19 @@ function handleDefinitionInput(value: string) {
 
   async function resolveRuntimeAliasValues(draft: ApiDraft, requestedAliases: string[]) {
     const aliases = uniqueAliasList(requestedAliases);
-    const { map: baseMap, issues } = await resolveParameterValues(draft.parameterDefinitions || []);
-    const map: Record<string, any> = { ...(baseMap || {}) };
-    if (!aliases.length) return { map, issues };
+    if (!aliases.length) return { map: {}, issues: {} as Record<string, string> };
+
+    const definitions = Array.isArray(draft.parameterDefinitions) ? draft.parameterDefinitions : [];
+    const requestedLower = new Set(aliases.map((a) => a.toLowerCase()));
+    const matchedDefinitions = definitions.filter((param) => requestedLower.has(String(param?.alias || '').trim().toLowerCase()));
+    const { map: baseMap, issues } = await resolveParameterValues(matchedDefinitions);
+    const map: Record<string, any> = {};
+    aliases.forEach((alias) => {
+      const found = findAliasInMap(baseMap, alias);
+      if (found.found && found.value !== undefined && found.value !== null) {
+        map[alias] = found.value;
+      }
+    });
 
     const missing = aliases.filter((alias) => !findAliasInMap(map, alias).found);
     if (!missing.length || !hasDataModelConfigured(draft)) return { map, issues };
@@ -2697,7 +2707,14 @@ function handleDefinitionInput(value: string) {
       if (firstRow) {
         needFromData.forEach((alias) => {
           const value = firstRow[alias];
-          if (value !== undefined && value !== null) map[alias] = value;
+          if (value !== undefined && value !== null) {
+            map[alias] = value;
+            missing
+              .filter((raw) => raw.toLowerCase() === alias.toLowerCase())
+              .forEach((raw) => {
+                map[raw] = value;
+              });
+          }
           else if (!issues[alias]) issues[alias] = 'конструктор данных вернул пустое значение';
         });
       } else {
@@ -2713,6 +2730,14 @@ function handleDefinitionInput(value: string) {
     }
 
     return { map, issues };
+  }
+
+  function toUiErrorMessage(error: any) {
+    const msg = error?.message ?? String(error);
+    if (/failed to fetch/i.test(String(msg))) {
+      return 'Не удалось выполнить запрос из браузера (CORS/сеть). Предпросмотр корректный, но отправка из UI-браузера заблокирована.';
+    }
+    return msg;
   }
 
   function applyBindingRulesToRequest(
@@ -3627,7 +3652,7 @@ function handleDefinitionInput(value: string) {
       responseTimeMs = Date.now() - startTime;
       ok = s.paginationEnabled ? `Проверка выполнена, страниц: ${pageCounter}` : 'Проверка выполнена';
     } catch (e: any) {
-      err = e?.message ?? String(e);
+      err = toUiErrorMessage(e);
     } finally {
       checking = false;
     }
