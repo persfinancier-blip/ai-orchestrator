@@ -95,6 +95,10 @@
     paginationNextUrlPath: string;
     paginationMaxPages: number;
     paginationDelayMs: number;
+    paginationStopOnMissingValue: boolean;
+    paginationStopOnSameResponse: boolean;
+    paginationSameResponseLimit: number;
+    paginationStopOnHttpError: boolean;
     paginationParameters: PaginationParameter[];
     pickedPaths: string[];
     responseTargets: Array<{
@@ -497,6 +501,10 @@ function formatBytes(bytes: number) {
       paginationNextUrlPath: 'next',
       paginationMaxPages: 3,
       paginationDelayMs: 0,
+      paginationStopOnMissingValue: true,
+      paginationStopOnSameResponse: true,
+      paginationSameResponseLimit: 5,
+      paginationStopOnHttpError: true,
       paginationCustomStrategy: '',
       paginationParameters: [],
       pickedPaths: [],
@@ -703,6 +711,38 @@ function formatBytes(bytes: number) {
     const paginationCustomStrategyValue = String(
       row?.pagination_custom_strategy || pagination?.custom_strategy || ''
     );
+    const stopConditions = pagination?.stop_conditions && typeof pagination.stop_conditions === 'object'
+      ? pagination.stop_conditions
+      : {};
+    const paginationStopOnMissingRaw =
+      (row as any)?.pagination_stop_on_missing_value ?? (stopConditions as any)?.on_missing_pagination_value;
+    const paginationStopOnSameRaw =
+      (row as any)?.pagination_stop_on_same_response ?? (stopConditions as any)?.on_same_response;
+    const paginationSameResponseLimitRaw =
+      (row as any)?.pagination_same_response_limit ?? (stopConditions as any)?.same_response_limit;
+    const paginationStopOnHttpErrorRaw =
+      (row as any)?.pagination_stop_on_http_error ?? (stopConditions as any)?.on_http_error;
+    const paginationStopOnMissingValue =
+      paginationStopOnMissingRaw === undefined || paginationStopOnMissingRaw === null
+        ? true
+        : Boolean(paginationStopOnMissingRaw);
+    const paginationStopOnSameResponse =
+      paginationStopOnSameRaw === undefined || paginationStopOnSameRaw === null
+        ? true
+        : Boolean(paginationStopOnSameRaw);
+    const paginationSameResponseLimit = Math.max(
+      2,
+      Math.min(
+        50,
+        Number.isFinite(Number(paginationSameResponseLimitRaw))
+          ? Number(paginationSameResponseLimitRaw)
+          : 5
+      )
+    );
+    const paginationStopOnHttpError =
+      paginationStopOnHttpErrorRaw === undefined || paginationStopOnHttpErrorRaw === null
+        ? true
+        : Boolean(paginationStopOnHttpErrorRaw);
     const paginationParamsRaw = Array.isArray(pagination?.parameters)
       ? pagination.parameters
       : Array.isArray((mapping as any)?.pagination_parameters)
@@ -782,6 +822,10 @@ function formatBytes(bytes: number) {
       paginationNextUrlPath: paginationNextUrlPathValue,
       paginationMaxPages: paginationMaxPagesValue,
       paginationDelayMs: paginationDelayMsValue,
+      paginationStopOnMissingValue,
+      paginationStopOnSameResponse,
+      paginationSameResponseLimit,
+      paginationStopOnHttpError,
       paginationCustomStrategy: paginationCustomStrategyValue,
       paginationParameters: normalizedPaginationParameters,
       pickedPaths: pickedPathsSource.map((x: any) => String(x || '').trim()).filter(Boolean),
@@ -870,6 +914,12 @@ function formatBytes(bytes: number) {
         next_url_path: d.paginationNextUrlPath,
         max_pages: d.paginationMaxPages,
         delay_ms: d.paginationDelayMs,
+        stop_conditions: {
+          on_missing_pagination_value: Boolean(d.paginationStopOnMissingValue),
+          on_same_response: Boolean(d.paginationStopOnSameResponse),
+          same_response_limit: Math.max(2, Number(d.paginationSameResponseLimit || 5)),
+          on_http_error: Boolean(d.paginationStopOnHttpError)
+        },
         custom_strategy: d.paginationCustomStrategy,
         parameters: paginationParametersPayload
       },
@@ -1394,43 +1444,11 @@ function formatBytes(bytes: number) {
     });
   }
 
-  function applyPaginationResponsePickToActive() {
-    if (!selected) return;
-    const path = String(paginationCursorResponsePick || '').trim();
+  function setPaginationResponsePick(value: string) {
+    const path = String(value || '').trim();
+    paginationCursorResponsePick = path;
     if (!path || !activePaginationParameterId) return;
     updatePaginationParameter(activePaginationParameterId, { responsePath: path });
-    ok = 'Путь из ответа подставлен в активный параметр пагинации';
-  }
-
-  function autoPickPaginationResponsePathForActive() {
-    if (!selected) return;
-    if (!activePaginationParameterId) {
-      err = 'Сначала выбери параметр пагинации';
-      return;
-    }
-    if (!paginationCursorResponsePathOptions.length) {
-      err = 'Сначала выполни Проверить, чтобы получить тестовый JSON-ответ с курсором';
-      return;
-    }
-    const preferred = paginationCursorResponsePathOptions.filter(Boolean);
-    const byKeyWeight = (path: string) => {
-      const low = path.toLowerCase();
-      const key = low.split('.').slice(-1)[0] || low;
-      let score = 0;
-      if (low.includes('cursor')) score += 5;
-      if (/next|after|before|updated|update|ts|time/.test(key)) score += 4;
-      if (/id|nmid|nm_id|last|offset/.test(key)) score += 3;
-      return score;
-    };
-    const sorted = [...preferred].sort((a, b) => byKeyWeight(b) - byKeyWeight(a));
-    const best = sorted[0] || '';
-    if (!best) {
-      err = 'Не удалось подобрать курсорные поля в ответе';
-      return;
-    }
-    updatePaginationParameter(activePaginationParameterId, { responsePath: best });
-    paginationCursorResponsePick = best;
-    ok = `Путь выбран автоматически: ${best}`;
   }
 
   function addPickedPathFromPicker() {
@@ -4166,6 +4184,7 @@ function handleDefinitionInput(value: string) {
     totalItems: number;
     totalSize: number;
     lastStatus: number;
+    stopReason: string;
     responses: any[];
   }> {
     const method = String(reqPlan?.method || draft.method || 'GET').toUpperCase();
@@ -4191,6 +4210,7 @@ function handleDefinitionInput(value: string) {
     let totalItems = 0;
     let totalSize = 0;
     let lastStatus = 0;
+    let stopReason = '';
     const responses: any[] = [];
     let lastResponseHash = '';
     let sameResponseCount = 0;
@@ -4336,9 +4356,20 @@ function handleDefinitionInput(value: string) {
       if (reqPlan?.row_index) responseEntry.row_index = reqPlan.row_index;
       responses.push(responseEntry);
 
-      if (!draft.paginationEnabled) break;
+      if (!draft.paginationEnabled) {
+        stopReason = 'Пагинация отключена';
+        responseEntry.stop_reason = stopReason;
+        break;
+      }
+
+      if (draft.paginationStopOnHttpError && Number(lastStatus || 0) >= 400) {
+        stopReason = `HTTP ошибка ${lastStatus}`;
+        responseEntry.stop_reason = stopReason;
+        break;
+      }
 
       let stop = false;
+      let pageStopReason = '';
       if (paginationParameters.length) {
         let updated = 0;
         for (const param of paginationParameters) {
@@ -4347,7 +4378,10 @@ function handleDefinitionInput(value: string) {
           paginationState[param.id] = value;
           updated += 1;
         }
-        if (!updated) stop = true;
+        if (!updated && draft.paginationStopOnMissingValue) {
+          stop = true;
+          pageStopReason = 'Не найдено новое значение параметров пагинации';
+        }
       } else if (draft.paginationStrategy === 'page_number') {
         currentPage += 1;
       } else if (draft.paginationStrategy === 'offset_limit') {
@@ -4356,7 +4390,10 @@ function handleDefinitionInput(value: string) {
         const v1 = draft.paginationCursorResPath1 ? getByPath(parsed, draft.paginationCursorResPath1) : undefined;
         const v2 = draft.paginationCursorResPath2 ? getByPath(parsed, draft.paginationCursorResPath2) : undefined;
         if (v1 == null && v2 == null) {
-          stop = true;
+          if (draft.paginationStopOnMissingValue) {
+            stop = true;
+            pageStopReason = 'Не найдено новое значение курсора';
+          }
         } else {
           if (draft.paginationCursorReqPath1) {
             if (draft.paginationTarget === 'query') {
@@ -4376,22 +4413,41 @@ function handleDefinitionInput(value: string) {
       } else if (draft.paginationStrategy === 'next_url') {
         const n = draft.paginationNextUrlPath ? getByPath(parsed, draft.paginationNextUrlPath) : undefined;
         if (!n || typeof n !== 'string') {
-          stop = true;
+          if (draft.paginationStopOnMissingValue) {
+            stop = true;
+            pageStopReason = 'Не найден следующий URL для пагинации';
+          }
         } else {
           nextUrlOverride = n;
         }
       } else if (draft.paginationStrategy === 'custom') {
         stop = true;
+        pageStopReason = 'Кастомная стратегия не настроена';
       } else {
         stop = true;
+        pageStopReason = 'Стратегия пагинации не настроена';
       }
-      if (!stop && draft.paginationEnabled && sameResponseCount >= 5) {
+      const sameLimit = Math.max(2, Number(draft.paginationSameResponseLimit || 5));
+      if (!stop && draft.paginationEnabled && draft.paginationStopOnSameResponse && sameResponseCount >= sameLimit) {
         stop = true;
+        pageStopReason = `Получено ${sameResponseCount} одинаковых ответов подряд`;
       }
-      if (stop) break;
+      if (stop) {
+        stopReason = pageStopReason || 'Остановка по условию пагинации';
+        responseEntry.stop_reason = stopReason;
+        break;
+      }
 
       if (Number(draft.paginationDelayMs || 0) > 0) {
         await new Promise((resolve) => setTimeout(resolve, Number(draft.paginationDelayMs || 0)));
+      }
+    }
+
+    if (!stopReason && draft.paginationEnabled && requestCount >= pagesMax) {
+      stopReason = `Достигнут лимит страниц (${pagesMax})`;
+      const lastEntry = responses[responses.length - 1];
+      if (lastEntry && typeof lastEntry === 'object' && !lastEntry.stop_reason) {
+        lastEntry.stop_reason = stopReason;
       }
     }
 
@@ -4402,6 +4458,7 @@ function handleDefinitionInput(value: string) {
       totalItems,
       totalSize,
       lastStatus,
+      stopReason,
       responses
     };
   }
@@ -4439,6 +4496,7 @@ function handleDefinitionInput(value: string) {
         let totalSize = 0;
         let lastStatus = 0;
         const responses: any[] = [];
+        const stopReasons: any[] = [];
         for (const reqPlan of groupedPlan.allRequests) {
           const run = await executePlannedRequestWithPagination(s, reqPlan, sentRequests);
           requestCount += run.requestCount;
@@ -4448,6 +4506,14 @@ function handleDefinitionInput(value: string) {
           totalSize += run.totalSize;
           lastStatus = Number(run.lastStatus || lastStatus || 0);
           responses.push(...run.responses);
+          stopReasons.push({
+            group: reqPlan?.group,
+            stop_reason: run.stopReason || '',
+            requests: run.requestCount,
+            success: run.success,
+            failed: run.failed,
+            last_status: run.lastStatus
+          });
         }
 
         myApiPreview = JSON.stringify(
@@ -4481,6 +4547,7 @@ function handleDefinitionInput(value: string) {
             request_groups: groupedPlan.allRequests.length,
             success,
             failed,
+            stop_reasons: stopReasons,
             responses
           },
           null,
@@ -4500,6 +4567,7 @@ function handleDefinitionInput(value: string) {
         let totalSize = 0;
         let lastStatus = 0;
         const responses: any[] = [];
+        const stopReasons: any[] = [];
         for (const reqPlan of rowPlan.allRequests) {
           const run = await executePlannedRequestWithPagination(s, reqPlan, sentRequests);
           requestCount += run.requestCount;
@@ -4509,6 +4577,14 @@ function handleDefinitionInput(value: string) {
           totalSize += run.totalSize;
           lastStatus = Number(run.lastStatus || lastStatus || 0);
           responses.push(...run.responses);
+          stopReasons.push({
+            row_index: reqPlan?.row_index,
+            stop_reason: run.stopReason || '',
+            requests: run.requestCount,
+            success: run.success,
+            failed: run.failed,
+            last_status: run.lastStatus
+          });
         }
 
         myApiPreview = JSON.stringify(
@@ -4542,6 +4618,7 @@ function handleDefinitionInput(value: string) {
             request_rows: rowPlan.allRequests.length,
             success,
             failed,
+            stop_reasons: stopReasons,
             responses
           },
           null,
@@ -4669,10 +4746,14 @@ function handleDefinitionInput(value: string) {
 
       responseStatus = lastStatus;
       if (s.paginationEnabled && pagePayloads.length > 1) {
-        responseText = JSON.stringify({ pages: pageCounter, last_status: lastStatus, responses: pagePayloads }, null, 2);
+        responseText = JSON.stringify(
+          { pages: pageCounter, last_status: lastStatus, stop_reason: run.stopReason || '', responses: pagePayloads },
+          null,
+          2
+        );
       } else if (pagePayloads.length) {
         const first = pagePayloads[0];
-        responseText = typeof first === 'string' ? first : JSON.stringify(first, null, 2);
+        responseText = JSON.stringify({ stop_reason: run.stopReason || '', response: first }, null, 2);
       }
       responsePagesCount = pagePayloads.length;
       responsePayloadCount = run.totalItems;
@@ -4750,6 +4831,13 @@ function handleDefinitionInput(value: string) {
     } else if (!paginationCursorResponsePathOptions.includes(paginationCursorResponsePick)) {
       paginationCursorResponsePick = paginationCursorResponsePathOptions[0] || '';
     }
+  }
+  $: if (
+    activePaginationParameter &&
+    !String(activePaginationParameter.responsePath || '').trim() &&
+    String(paginationCursorResponsePick || '').trim()
+  ) {
+    updatePaginationParameter(activePaginationParameter.id, { responsePath: paginationCursorResponsePick });
   }
   $: {
     const txt = unwrapCodeFence(String(selected?.exampleRequest || '')).trim();
@@ -4985,7 +5073,6 @@ function syncParameterEditorsHeight() {
             </button>
           {/if}
         </div>
-        <div class="statusline">status: {responseStatus || '-'}</div>
         <div class="metrics-row">
           <span>Страницы: {responsePagesCount || '-'}</span>
           <span>Записей: {responsePayloadCount || '-'}</span>
@@ -5003,26 +5090,11 @@ function syncParameterEditorsHeight() {
       <div class="subsec">
         <div class="subttl response-head">
           <span>Что уйдет/ушло на сервер</span>
-          <span class="inline-actions">
-            <button
-              type="button"
-              class="view-toggle"
-              class:active={myPreviewViewMode === 'tree'}
-              on:click={() => (myPreviewViewMode = 'tree')}
-              disabled={!myPreviewIsJson}
-            >
-              Дерево
+          {#if myPreviewIsJson}
+            <button type="button" class="view-toggle" on:click={() => (myPreviewViewMode = myPreviewViewMode === 'tree' ? 'raw' : 'tree')}>
+              {myPreviewViewMode === 'tree' ? 'RAW' : 'Дерево'}
             </button>
-            <button
-              type="button"
-              class="view-toggle"
-              class:active={myPreviewViewMode === 'raw'}
-              on:click={() => (myPreviewViewMode = 'raw')}
-              disabled={!myPreviewIsJson}
-            >
-              RAW
-            </button>
-          </span>
+          {/if}
         </div>
         <div class="statusline">Источник: {myPreviewSourceLabel}</div>
         <div class="metrics-row">
@@ -5115,6 +5187,8 @@ function syncParameterEditorsHeight() {
             <div class="response-tree-wrap"><JsonTreeView node={authJsonTree} name="auth" level={0} /></div>
           {:else}
             <textarea
+              class="json-code-editor"
+              spellcheck="false"
               bind:this={authEl}
               value={selected?.authJson || ''}
               on:input={(e) => mutateSelected((d) => (d.authJson = e.currentTarget.value))}
@@ -5207,6 +5281,8 @@ function syncParameterEditorsHeight() {
               <div class="response-tree-wrap"><JsonTreeView node={headersJsonTree} name="headers" level={0} /></div>
             {:else}
               <textarea
+                class="json-code-editor"
+                spellcheck="false"
                 bind:this={headersEl}
                 value={selected?.headersJson || ''}
                 on:input={(e) => mutateSelected((d) => (d.headersJson = e.currentTarget.value))}
@@ -5243,6 +5319,8 @@ function syncParameterEditorsHeight() {
               <div class="response-tree-wrap"><JsonTreeView node={queryJsonTree} name="query" level={0} /></div>
             {:else}
               <textarea
+                class="json-code-editor"
+                spellcheck="false"
                 bind:this={queryEl}
                 value={selected?.queryJson || ''}
                 on:input={(e) => mutateSelected((d) => (d.queryJson = e.currentTarget.value))}
@@ -5281,6 +5359,8 @@ function syncParameterEditorsHeight() {
             <div class="response-tree-wrap"><JsonTreeView node={bodyJsonTree} name="body" level={0} /></div>
           {:else}
             <textarea
+              class="json-code-editor"
+              spellcheck="false"
               bind:this={bodyEl}
               value={selected?.bodyJson || ''}
               on:input={(e) => mutateSelected((d) => (d.bodyJson = e.currentTarget.value))}
@@ -5440,9 +5520,21 @@ function syncParameterEditorsHeight() {
               {#if selected?.dataFilters?.length}
                 <div class="crumb-strip">
                   {#each selected.dataFilters as f (f.id)}
-                    <button type="button" class="entity-crumb" class:active-crumb={activeDataFilterId === f.id} on:click={() => (activeDataFilterId = f.id)}>
-                      {filterCrumbLabel(selected, f)}
-                    </button>
+                    <div class="entity-crumb-wrap" class:active-crumb-wrap={activeDataFilterId === f.id}>
+                      <button type="button" class="entity-crumb" on:click={() => (activeDataFilterId = f.id)}>
+                        {filterCrumbLabel(selected, f)}
+                      </button>
+                      <button
+                        type="button"
+                        class="entity-crumb-remove"
+                        class:active-crumb-remove={activeDataFilterId === f.id}
+                        title="Удалить фильтр"
+                        aria-label="Удалить фильтр"
+                        on:click|stopPropagation={() => removeDataFilter(f.id)}
+                      >
+                        ×
+                      </button>
+                    </div>
                   {/each}
                 </div>
                 {@const activeFilter = selected.dataFilters.find((f) => f.id === activeDataFilterId)}
@@ -5646,7 +5738,7 @@ function syncParameterEditorsHeight() {
                     <div class="rule-card-head">
                       <small>Настройка параметра</small>
                     </div>
-                    <div class="pagination-grid pagination-param-grid">
+                    <div class="pagination-grid pagination-param-grid pagination-param-inline-row">
                       <div class="pagination-field">
                         <small>Короткое название</small>
                         <input
@@ -5655,8 +5747,22 @@ function syncParameterEditorsHeight() {
                           on:input={(e) => updatePaginationParameter(activePaginationParameter.id, { alias: e.currentTarget.value })}
                         />
                       </div>
-                    </div>
-                    <div class="pagination-grid pagination-param-grid">
+                      <div class="pagination-field">
+                        <small>Выбор пути в ответе</small>
+                        <select
+                          value={paginationCursorResponsePick}
+                          disabled={!paginationCursorResponsePathOptions.length}
+                          on:change={(e) => setPaginationResponsePick(e.currentTarget.value)}
+                        >
+                          {#if !paginationCursorResponsePathOptions.length}
+                            <option value="">Нет путей из тестового ответа</option>
+                          {:else}
+                            {#each paginationCursorResponsePathOptions as opt}
+                              <option value={opt}>{opt}</option>
+                            {/each}
+                          {/if}
+                        </select>
+                      </div>
                       <div class="pagination-field">
                         <small>Путь в ответе</small>
                         <input
@@ -5665,33 +5771,6 @@ function syncParameterEditorsHeight() {
                           on:input={(e) => updatePaginationParameter(activePaginationParameter.id, { responsePath: e.currentTarget.value })}
                         />
                       </div>
-                    </div>
-                    <div class="pagination-helper-row">
-                      <select bind:value={paginationCursorResponsePick} disabled={!paginationCursorResponsePathOptions.length}>
-                        {#if !paginationCursorResponsePathOptions.length}
-                          <option value="">Нет путей из тестового ответа</option>
-                        {:else}
-                          {#each paginationCursorResponsePathOptions as opt}
-                            <option value={opt}>{opt}</option>
-                          {/each}
-                        {/if}
-                      </select>
-                      <button
-                        type="button"
-                        class="view-toggle"
-                        on:click={applyPaginationResponsePickToActive}
-                        disabled={!paginationCursorResponsePathOptions.length || !activePaginationParameterId}
-                      >
-                        Подставить
-                      </button>
-                      <button
-                        type="button"
-                        class="view-toggle"
-                        on:click={autoPickPaginationResponsePathForActive}
-                        disabled={!paginationCursorResponsePathOptions.length || !activePaginationParameterId}
-                      >
-                        Автовыбор
-                      </button>
                     </div>
                     <p class="hint small-hint">Используй alias параметра как <code>&#123;&#123;alias&#125;&#125;</code> в Body/Headers/Query/Авторизация.</p>
                   </div>
@@ -5725,7 +5804,23 @@ function syncParameterEditorsHeight() {
                   />
                 </div>
               </div>
-              <p class="hint small-hint">Защита включена: если подряд пришло 5 одинаковых ответов, пагинация останавливается.</p>
+              <div class="pagination-stop-conditions">
+                <label><input type="checkbox" checked={selected?.paginationStopOnMissingValue} on:change={(e) => mutateSelected((d) => (d.paginationStopOnMissingValue = e.currentTarget.checked))} /> Остановка, если не найдено новое значение пагинации</label>
+                <label><input type="checkbox" checked={selected?.paginationStopOnHttpError} on:change={(e) => mutateSelected((d) => (d.paginationStopOnHttpError = e.currentTarget.checked))} /> Остановка при HTTP ошибке</label>
+                <label><input type="checkbox" checked={selected?.paginationStopOnSameResponse} on:change={(e) => mutateSelected((d) => (d.paginationStopOnSameResponse = e.currentTarget.checked))} /> Остановка при одинаковых ответах подряд</label>
+                <div class="pagination-stop-limit">
+                  <small>Порог одинаковых ответов</small>
+                  <input
+                    type="number"
+                    min="2"
+                    max="50"
+                    value={selected?.paginationSameResponseLimit || 5}
+                    on:input={(e) => mutateSelected((d) => (d.paginationSameResponseLimit = Math.max(2, Math.min(50, Number(e.currentTarget.value) || 5))))}
+                    disabled={!selected?.paginationStopOnSameResponse}
+                  />
+                </div>
+              </div>
+              <p class="hint small-hint">Причина остановки показывается в результате проверки для каждого запроса.</p>
             </div>
           {:else}
             <p class="hint">Пагинация отключена. Включи переключатель, затем добавь параметры через «Параметр +».</p>
@@ -6090,11 +6185,10 @@ function syncParameterEditorsHeight() {
     color:inherit;
     padding:6px 4px 6px 10px;
   }
-  .entity-crumb.active-crumb { border-color:#0f172a; background:#0f172a; color:#fff; }
   .entity-crumb-remove {
     width:20px;
     height:20px;
-    border:1px solid #fecaca;
+    border:0;
     border-radius:999px;
     background:#fff;
     color:#b91c1c;
@@ -6106,7 +6200,7 @@ function syncParameterEditorsHeight() {
     padding:0;
   }
   .entity-crumb-remove.active-crumb-remove {
-    border-color:rgba(255,255,255,.25);
+    border:0;
     background:rgba(255,255,255,.12);
     color:#f8fafc;
   }
@@ -6187,15 +6281,39 @@ function syncParameterEditorsHeight() {
   .pagination-field small { display:block; margin-bottom:4px; font-size:11px; color:#64748b; }
   .pagination-param-editor { margin-top:8px; }
   .pagination-param-grid { margin-top:0; }
-  .pagination-helper-row {
-    margin-top:6px;
-    display:grid;
-    grid-template-columns: 1fr auto auto;
-    gap:6px;
-    align-items:center;
+  .pagination-param-inline-row {
+    grid-template-columns: minmax(180px, 220px) minmax(260px, 1fr) minmax(260px, 1fr);
+    align-items:end;
   }
-  .pagination-helper-row select {
-    min-width:0;
+  .pagination-stop-conditions {
+    margin-top:8px;
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+  }
+  .pagination-stop-conditions label {
+    display:flex;
+    align-items:center;
+    gap:8px;
+    font-size:12px;
+    color:#334155;
+  }
+  .pagination-stop-conditions input[type='checkbox'] {
+    width:auto;
+  }
+  .pagination-stop-limit {
+    display:grid;
+    grid-template-columns: 1fr 140px;
+    gap:8px;
+    align-items:end;
+  }
+  .json-code-editor {
+    font-family: "Cascadia Mono", Consolas, "SFMono-Regular", Menlo, Monaco, monospace;
+    font-size:12px;
+    line-height:1.45;
+    white-space:pre;
+    tab-size:2;
+    min-height:150px;
   }
   .definition-error { margin:0; font-size:11px; color:#b91c1c; }
   @media (max-width: 900px) {
@@ -6204,6 +6322,10 @@ function syncParameterEditorsHeight() {
     .raw-grid { grid-template-columns: 1fr; }
     .saved-inline-actions { grid-template-columns: 1fr; }
     .data-row, .table-rule-row, .join-rule-row, .filter-rule-row, .param-row { grid-template-columns: 1fr; }
+    .pagination-param-inline-row,
+    .pagination-stop-limit {
+      grid-template-columns: 1fr;
+    }
   }
 </style>
 
