@@ -3282,6 +3282,134 @@ function handleDefinitionInput(value: string) {
     };
   }
 
+  async function buildUngroupedRowRequestPlan(draft: ApiDraft) {
+    const issues: Record<string, string> = {};
+    const sanitizedAliases = sanitizeAliasReferences(draft);
+    const authTemplate = parseJsonObjectField('Авторизация', draft.authJson);
+    const headersTemplate = parseJsonObjectField('Headers JSON', draft.headersJson);
+    const queryTemplate = parseJsonObjectField('Query JSON', draft.queryJson);
+    const bodyTemplateRaw = parseJsonAnyField('Body JSON', draft.bodyJson);
+    const bodyTemplate = bodyTemplateRaw && typeof bodyTemplateRaw === 'object' ? bodyTemplateRaw : {};
+    const urlTemplate = `${draft.baseUrl.replace(/\/$/, '')}${draft.path.startsWith('/') ? draft.path : `/${draft.path}`}`;
+    const templateTokenSet = new Set<string>();
+    collectParameterTokens(urlTemplate, templateTokenSet);
+    collectParameterTokens(authTemplate, templateTokenSet);
+    collectParameterTokens(headersTemplate, templateTokenSet);
+    collectParameterTokens(queryTemplate, templateTokenSet);
+    collectParameterTokens(bodyTemplate, templateTokenSet);
+    const templateAliases = uniqueAliasList(Array.from(templateTokenSet));
+    const bindingRules = (Array.isArray(sanitizedAliases.bindingRules) ? sanitizedAliases.bindingRules : [])
+      .map((rule) => ({
+        id: String(rule?.id || uid()),
+        alias: String(rule?.alias || '').trim(),
+        target: toBindingTarget(String(rule?.target || 'body_item')),
+        path: String(rule?.path || '').trim()
+      }))
+      .filter((rule) => rule.alias && rule.path);
+
+    if (sanitizedAliases.removedAliases.length) {
+      issues.removed_aliases = `удалены неактуальные алиасы: ${sanitizedAliases.removedAliases.join(', ')}`;
+    }
+
+    const requiredAliases = uniqueAliasList([
+      ...bindingRules.map((rule) => rule.alias),
+      ...templateAliases
+    ]);
+    if (!requiredAliases.length) {
+      return {
+        allRequests: [] as any[],
+        previewRequests: [] as any[],
+        issues
+      };
+    }
+
+    const dataset = hasDataModelConfigured(draft)
+      ? await loadDataModelRowsForAliases(draft, requiredAliases)
+      : await loadParameterRowsForAliases(draft.parameterDefinitions, requiredAliases);
+    Object.assign(issues, dataset.issues);
+    if (!dataset.rows.length) {
+      const issueEntries = Object.entries(issues);
+      if (issueEntries.length) {
+        const details = issueEntries
+          .slice(0, 5)
+          .map(([k, v]) => `${k}: ${v}`)
+          .join('; ');
+        throw new Error(`Нет строк для отправки по списку. Причины: ${details}`);
+      }
+      if (hasDataModelConfigured(draft)) {
+        throw new Error(
+          `Конструктор данных вернул 0 строк. Проверь Параметры/Связи/Фильтры и "Предпросмотр данных". Нужные поля: ${requiredAliases.join(', ')}`
+        );
+      }
+      throw new Error(
+        `Витрина параметров вернула 0 строк. Для отправки по списку параметры должны быть из одной таблицы и с совместимыми условиями. Нужные поля: ${requiredAliases.join(', ')}`
+      );
+    }
+
+    let oauthAuthValue = '';
+    if (draft.authMode === 'oauth2_client_credentials') {
+      if (!draft.oauth2TokenUrl || !draft.oauth2ClientId || !draft.oauth2ClientSecret) {
+        throw new Error('OAuth2: заполни token URL, client_id и client_secret');
+      }
+      const tokenData = await getOAuthToken(draft);
+      oauthAuthValue = `${tokenData.tokenType} ${tokenData.token}`;
+    }
+
+    const plans: Array<any> = [];
+    const knownAliasesLower = new Set(bindingAliasOptions(draft).map((x) => x.toLowerCase()));
+    for (let rowIndex = 0; rowIndex < dataset.rows.length; rowIndex++) {
+      const row = (dataset.rows[rowIndex] || {}) as Record<string, any>;
+      const authHdr = parseJsonObjectField('Авторизация', draft.authJson);
+      if (oauthAuthValue) {
+        authHdr.Authorization = oauthAuthValue;
+      }
+      const hdr = parseJsonObjectField('Headers JSON', draft.headersJson);
+      const queryObj = parseJsonObjectField('Query JSON', draft.queryJson);
+      const bodyBaseRaw = parseJsonAnyField('Body JSON', draft.bodyJson);
+      const bodyObj = bodyBaseRaw && typeof bodyBaseRaw === 'object' ? deepClone(bodyBaseRaw) : {};
+
+      applyBindingRulesToRequest(bindingRules, row, authHdr, hdr, queryObj, bodyObj);
+      applyParametersToValue(authHdr, row);
+      applyParametersToValue(hdr, row);
+      applyParametersToValue(queryObj, row);
+      applyParametersToValue(bodyObj, row);
+
+      let url = `${draft.baseUrl.replace(/\/$/, '')}${draft.path.startsWith('/') ? draft.path : `/${draft.path}`}`;
+      url = replaceParameterTokens(url, row);
+      const u = new URL(url);
+      Object.entries(queryObj || {}).forEach(([k, v]) => u.searchParams.set(k, String(v)));
+      url = u.toString();
+
+      const unresolvedTokens = new Set<string>();
+      collectParameterTokens(url, unresolvedTokens);
+      collectParameterTokens(authHdr, unresolvedTokens);
+      collectParameterTokens(hdr, unresolvedTokens);
+      collectParameterTokens(queryObj, unresolvedTokens);
+      collectParameterTokens(bodyObj, unresolvedTokens);
+      if (unresolvedTokens.size) {
+        const detail = Array.from(unresolvedTokens).map((alias) => {
+          if (!knownAliasesLower.has(alias.toLowerCase())) return `${alias} (нет параметра с таким alias)`;
+          return `${alias} (значение не вычислено в строке ${rowIndex + 1})`;
+        });
+        throw new Error(`Не удалось подставить параметры в отправке по списку: ${detail.join(', ')}`);
+      }
+
+      plans.push({
+        row_index: rowIndex + 1,
+        method: draft.method,
+        url,
+        headers: { 'Content-Type': 'application/json', ...authHdr, ...hdr },
+        body: draft.method === 'GET' || draft.method === 'DELETE' ? undefined : bodyObj
+      });
+    }
+
+    return {
+      allRequests: plans,
+      previewRequests: plans.slice(0, Math.max(1, Number(draft.previewRequestLimit || 5))),
+      issues
+    };
+  }
+
   async function previewRequestsNow() {
     err = '';
     ok = '';
@@ -3308,6 +3436,23 @@ function handleDefinitionInput(value: string) {
         );
         myPreviewDirty = false;
         myPreviewApplyMessage = `Показано ${groupedPlan.previewRequests.length} из ${groupedPlan.allRequests.length} запросов перед отправкой`;
+        return;
+      }
+      const rowPlan = await buildUngroupedRowRequestPlan(s);
+      if (rowPlan.allRequests.length) {
+        myApiPreview = JSON.stringify(
+          {
+            mode: 'preview_before_send',
+            total_requests: rowPlan.allRequests.length,
+            shown_requests: rowPlan.previewRequests.length,
+            requests: rowPlan.previewRequests,
+            issues: Object.keys(rowPlan.issues).length ? rowPlan.issues : undefined
+          },
+          null,
+          2
+        );
+        myPreviewDirty = false;
+        myPreviewApplyMessage = `Показано ${rowPlan.previewRequests.length} из ${rowPlan.allRequests.length} запросов перед отправкой`;
         return;
       }
 
@@ -3683,6 +3828,79 @@ function handleDefinitionInput(value: string) {
         responseText = JSON.stringify(
           {
             total_requests: groupedPlan.allRequests.length,
+            success,
+            failed,
+            responses
+          },
+          null,
+          2
+        );
+        ok = failed ? `Проверка завершена: успех ${success}, ошибок ${failed}` : `Проверка выполнена, запросов: ${success}`;
+        return;
+      }
+      const rowPlan = await buildUngroupedRowRequestPlan(s);
+      if (rowPlan.allRequests.length) {
+        myApiPreview = JSON.stringify(
+          {
+            mode: 'sent_row_requests',
+            total_requests: rowPlan.allRequests.length,
+            shown_requests: rowPlan.previewRequests.length,
+            requests: rowPlan.previewRequests,
+            issues: Object.keys(rowPlan.issues).length ? rowPlan.issues : undefined
+          },
+          null,
+          2
+        );
+        myPreviewDirty = false;
+        myPreviewApplyMessage =
+          rowPlan.allRequests.length > rowPlan.previewRequests.length
+            ? `Перед отправкой показаны первые ${rowPlan.previewRequests.length} запросов из ${rowPlan.allRequests.length}`
+            : `Перед отправкой показаны ${rowPlan.previewRequests.length} запросов`;
+
+        const startedAt = Date.now();
+        let success = 0;
+        let failed = 0;
+        let totalItems = 0;
+        let totalSize = 0;
+        let lastStatus = 0;
+        const responses: any[] = [];
+        for (const reqPlan of rowPlan.allRequests) {
+          const init: RequestInit = {
+            method: reqPlan.method,
+            headers: reqPlan.headers
+          };
+          if (reqPlan.method !== 'GET' && reqPlan.method !== 'DELETE') {
+            init.body = JSON.stringify(reqPlan.body || {});
+          }
+          const proxied = await runHttpRequestViaServer(reqPlan.url, init, 60_000);
+          lastStatus = Number(proxied?.status || 0);
+          const txt = String(proxied?.body_text || '');
+          totalSize += txt ? txt.length : 0;
+          const parsed = proxied?.body_json !== undefined ? proxied.body_json : (() => {
+            try {
+              return txt ? JSON.parse(txt) : null;
+            } catch {
+              return null;
+            }
+          })();
+          if (proxied?.ok) success += 1;
+          else failed += 1;
+          totalItems += countPayloadItems(parsed ?? txt);
+          responses.push({
+            row_index: reqPlan.row_index,
+            status: Number(proxied?.status || 0),
+            response: parsed ?? txt
+          });
+        }
+
+        responseStatus = lastStatus;
+        responsePagesCount = rowPlan.allRequests.length;
+        responsePayloadCount = totalItems;
+        responsePayloadSize = totalSize;
+        responseTimeMs = Date.now() - startedAt;
+        responseText = JSON.stringify(
+          {
+            total_requests: rowPlan.allRequests.length,
             success,
             failed,
             responses
