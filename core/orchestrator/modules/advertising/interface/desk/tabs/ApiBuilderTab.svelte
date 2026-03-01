@@ -3898,388 +3898,114 @@ function syncParameterEditorsHeight() {
           </div>
 
           <div class="response-head field-head parameter-subhead">
-            <span>Витрина параметров (совместимость)</span>
+            <span>Витрина API</span>
           </div>
 
-          <div class="parameter-panel">
-            <div class="parameter-list-panel no-border">
-              <div class="parameter-list-header">
-                <span class="parameter-list-title">Параметры</span>
-                <button class="icon-btn plus-dark" type="button" title="Добавить параметр" on:click={addParameterDefinition}>+</button>
+          <div class="api-showcase-grid">
+            <div class="api-showcase-col api-showcase-left">
+              <div class="response-head field-head">
+                <span>Параметры (поля результата)</span>
               </div>
-              {#if selected?.parameterDefinitions?.length}
-                <div class="parameter-crumbs">
-                  {#each selected.parameterDefinitions as param (param.id)}
-                    <button
-                      type="button"
-                      class="parameter-crumb"
-                      class:active-crumb={selectedParameterId === param.id}
-                      draggable="true"
-                      on:dragstart={(e) => parameterCardDragStart(param, e)}
-                      on:click={() => setActiveParameter(param.id)}
-                      title={parameterConditionSummary(param.conditions?.[0] || {})}
-                    >
-                      {#if selectedParameterId === param.id}
-                        <span class="crumb-indicator active-indicator"></span>
-                      {/if}
-                      <span class="crumb-label">{param.alias}</span>
-                      <span
-                        role="button"
-                        tabindex="-1"
-                        class="crumb-close"
-                        aria-label="Удалить параметр"
-                        on:click|stopPropagation={() => removeParameterDefinition(param.id)}
+              {#if selected?.dataFields?.length}
+                <div class="api-param-list">
+                  {#each selected.dataFields as field (field.id)}
+                    <div class="api-param-row">
+                      <div class="api-param-main">
+                        <strong>{field.alias}</strong>
+                        <span>{tableLabelById(selected, field.tableId)}.{field.field}</span>
+                      </div>
+                    </div>
+                  {/each}
+                </div>
+                <p class="hint small-hint">Слева показаны параметры, которые можно использовать в группировке и подстановке.</p>
+              {:else}
+                <p class="hint">Сначала заполни “Поля результата” в конструкторе данных.</p>
+              {/if}
+            </div>
+
+            <div class="api-showcase-col api-showcase-right">
+              <div class="response-head field-head">
+                <span>Настройка отправки</span>
+              </div>
+              <div class="dispatch-grid">
+                <div class="pagination-field">
+                  <small>Режим</small>
+                  <select
+                    value={selected?.dispatchMode || 'single'}
+                    on:change={(e) => mutateSelected((d) => (d.dispatchMode = toDispatchMode(e.currentTarget.value)))}
+                  >
+                    {#each DISPATCH_MODES as mode}
+                      <option value={mode.value}>{mode.label}</option>
+                    {/each}
+                  </select>
+                </div>
+                <div class="pagination-field">
+                  <small>Группировать по alias</small>
+                  <input
+                    placeholder="например: client_id"
+                    value={selected?.groupByAliases?.join(', ') || ''}
+                    on:input={(e) => updateGroupByAliases(e.currentTarget.value)}
+                  />
+                </div>
+                <div class="pagination-field">
+                  <small>Путь массива в body</small>
+                  <input
+                    placeholder="items"
+                    value={selected?.bodyItemsPath || 'items'}
+                    on:input={(e) => mutateSelected((d) => (d.bodyItemsPath = e.currentTarget.value || 'items'))}
+                  />
+                </div>
+                <div class="pagination-field">
+                  <small>Лимит предпросмотра</small>
+                  <input
+                    type="number"
+                    min="1"
+                    max="50"
+                    value={selected?.previewRequestLimit || 5}
+                    on:input={(e) => mutateSelected((d) => (d.previewRequestLimit = Math.max(1, Math.min(50, Number(e.currentTarget.value) || 5))))}
+                  />
+                </div>
+              </div>
+
+              <div class="response-head field-head parameter-subhead">
+                <span>Места использования (подстановка)</span>
+                <button type="button" class="view-toggle" on:click={addBindingRule}>Добавить правило</button>
+              </div>
+              {#if selected?.bindingRules?.length}
+                <div class="binding-list">
+                  {#each selected.bindingRules as rule (rule.id)}
+                    <div class="binding-row">
+                      <select
+                        value={rule.alias}
+                        on:change={(e) => updateBindingRule(rule.id, { alias: e.currentTarget.value })}
                       >
-                        ×
-                      </span>
-                    </button>
+                        <option value="">Параметр</option>
+                        {#each bindingAliasOptions(selected) as alias}
+                          <option value={alias}>{alias}</option>
+                        {/each}
+                      </select>
+                      <select
+                        value={rule.target}
+                        on:change={(e) => updateBindingRule(rule.id, { target: toBindingTarget(e.currentTarget.value) })}
+                      >
+                        {#each BINDING_TARGETS as target}
+                          <option value={target.value}>{target.label}</option>
+                        {/each}
+                      </select>
+                      <input
+                        value={rule.path}
+                        placeholder="путь (например Authorization или campaign_id)"
+                        on:input={(e) => updateBindingRule(rule.id, { path: e.currentTarget.value })}
+                      />
+                      <button type="button" class="chip-remove" on:click={() => removeBindingRule(rule.id)}>x</button>
+                    </div>
                   {/each}
                 </div>
               {:else}
-                <p class="hint">Добавь параметр, чтобы сформировать значение.</p>
-              {/if}
-            </div>
-            <div class="parameter-editor no-border">
-              {#if activeParameter}
-                <div class="parameter-editor-inner">
-                  <textarea
-                    class="parameter-alias autoheight"
-                    rows="1"
-                    bind:this={aliasParamEl}
-                    placeholder="Псевдоним параметра"
-                    value={activeParameter.alias}
-                    on:input={(e) => {
-                      definitionDirty = false;
-                      updateParameterDefinition(activeParameter.id, { alias: e.currentTarget.value });
-                      tick().then(syncParameterEditorsHeight);
-                    }}
-                  ></textarea>
-                  <div class="subttl response-head field-head">
-                    <span>Предпросмотр параметра</span>
-                    <span class="inline-actions parameter-preview-controls">
-                      <button
-                        type="button"
-                        class="icon-btn refresh-btn"
-                        aria-label="Обновить"
-                        title="Обновить"
-                        on:click={loadParameterPreview}
-                        disabled={parameterPreviewLoading}
-                      >
-                        ↻
-                      </button>
-                      <button
-                        type="button"
-                        class="icon-btn danger"
-                        aria-label="Очистить предпросмотр"
-                        title="Очистить предпросмотр"
-                        on:click={clearParameterPreview}
-                      >
-                        ×
-                      </button>
-                    </span>
-                  </div>
-                  <div class="parameter-preview-block">
-                    {#if parameterPreviewLoading}
-                      <p class="hint">Загружаем строки из таблицы...</p>
-                    {:else if parameterPreviewError}
-                      <p class="definition-error">{parameterPreviewError}</p>
-                    {:else if !parameterPreviewRows.length}
-                      <!-- пусто -->
-                    {:else}
-                      <div class="parameter-preview-list">
-                        {#each parameterPreviewRows as row, idx}
-                          <div class="preview-row">
-                            <span class="row-index">{idx + 1}</span>
-                            <span class="row-value">{formatParameterRowValue(row, activeParameter.sourceField)}</span>
-                          </div>
-                        {/each}
-                      </div>
-                      <p class="hint small-hint">Показано {parameterPreviewRows.length} строк (макс. {PARAMETER_PREVIEW_LIMIT}).</p>
-                    {/if}
-                  </div>
-                  <div class="definition-section">
-                    <div class="subttl response-head field-head">
-                      <span>Описание параметра</span>
-                      <span class="inline-actions">
-                        <button
-                          type="button"
-                          class="view-toggle"
-                          on:click={toggleDefinitionViewMode}
-                        >
-                          {definitionViewMode === 'tree' ? 'RAW' : 'Дерево'}
-                        </button>
-                      </span>
-                    </div>
-                    {#if definitionViewMode === 'text'}
-                      <textarea
-                        class="parameter-definition autoheight"
-                        bind:this={definitionParamEl}
-                        placeholder="Определи параметр (например: FIELD('tokens.token'))"
-                        value={definitionDraft}
-                        on:input={(e) => handleDefinitionInput(e.currentTarget.value)}
-                      ></textarea>
-                    {:else}
-                      {#if definitionTree}
-                        <div class="response-tree-wrap">
-                          <JsonTreeView node={definitionTreeDisplay || definitionTree} name="definition" level={0} />
-                        </div>
-                      {:else}
-                        <p class="hint small-hint">Введите JSON — появится дерево описания.</p>
-                      {/if}
-                    {/if}
-                  </div>
-                  {#if definitionError}
-                    <p class="definition-error">{definitionError}</p>
-                  {/if}
-                  <div class="parameter-source-row">
-                    <select
-                      value={`${activeParameter.sourceSchema}.${activeParameter.sourceTable}`}
-                      on:change={(e) => {
-                        const [schema, table] = String(e.currentTarget.value || '').split('.');
-                        definitionDirty = false;
-                        updateParameterDefinition(activeParameter.id, {
-                          sourceSchema: schema || '',
-                          sourceTable: table || '',
-                          sourceField: ''
-                        });
-                        ensureColumnsFor(schema, table);
-                      }}
-                    >
-                      <option value="">Таблица</option>
-                      {#each existingTables as tbl}
-                        <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
-                      {/each}
-                    </select>
-                    <select
-                      value={activeParameter.sourceField}
-                      on:change={(e) => {
-                        definitionDirty = false;
-                        updateParameterDefinition(activeParameter.id, { sourceField: e.currentTarget.value });
-                      }}
-                    >
-                      <option value="">Колонка</option>
-                      {#if activeParameter.sourceSchema && activeParameter.sourceTable}
-                        {#each columnOptionsFor(activeParameter.sourceSchema, activeParameter.sourceTable) as field}
-                          <option value={field}>{field}</option>
-                        {/each}
-                      {/if}
-                    </select>
-                  </div>
-                  <div class="parameter-conditions">
-                    <div class="conditions-header">
-                      <span>Условия фильтрации</span>
-                      <button
-                        class="tiny-btn"
-                        type="button"
-                        on:click={() => {
-                          definitionDirty = false;
-                          addCondition(activeParameter.id);
-                        }}
-                      >
-                        Добавить условие
-                      </button>
-                    </div>
-                    {#each activeParameter.conditions as cond (cond.id)}
-                      <div class="condition-card">
-                        <div class="condition-row">
-                          <select
-                            value={`${cond.schema}.${cond.table}`}
-                            on:change={(e) => {
-                              const [schema, table] = String(e.currentTarget.value || '').split('.');
-                              definitionDirty = false;
-                              updateCondition(activeParameter.id, cond.id, { schema: schema || '', table: table || '', field: '' });
-                              ensureColumnsFor(schema, table);
-                            }}
-                          >
-                            <option value="">Таблица</option>
-                            {#each existingTables as tbl}
-                              <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
-                            {/each}
-                          </select>
-                          <select
-                            value={cond.field}
-                            on:change={(e) => {
-                              definitionDirty = false;
-                              updateCondition(activeParameter.id, cond.id, { field: e.currentTarget.value });
-                            }}
-                          >
-                            <option value="">Колонка</option>
-                            {#if cond.schema && cond.table}
-                              {#each columnOptionsFor(cond.schema, cond.table) as field}
-                                <option value={field}>{field}</option>
-                              {/each}
-                            {/if}
-                          </select>
-                          <select
-                            value={cond.operator}
-                            on:change={(e) => {
-                              definitionDirty = false;
-                              updateCondition(activeParameter.id, cond.id, { operator: e.currentTarget.value });
-                            }}
-                          >
-                            {#each getOperatorsForColumn(cond.field, cond.schema, cond.table) as op}
-                              <option value={op.value}>{op.label}</option>
-                            {/each}
-                          </select>
-                          <button class="chip-remove" type="button" on:click={() => removeCondition(activeParameter.id, cond.id)}>x</button>
-                        </div>
-                        <div class="compare-mode-row">
-                          {#each CONDITION_COMPARE_MODES as mode}
-                            <label>
-                              <input
-                                type="radio"
-                                name={`compareMode-${cond.id}`}
-                                value={mode.value}
-                                checked={cond.compareMode === mode.value}
-                                on:change={(e) => {
-                                  definitionDirty = false;
-                                  updateCondition(activeParameter.id, cond.id, { compareMode: parseCompareModeValue(e.currentTarget.value) });
-                                }}
-                              />
-                              <span>{mode.label}</span>
-                            </label>
-                          {/each}
-                        </div>
-                        {#if cond.compareMode === 'value'}
-                          <input
-                            class="condition-value"
-                            placeholder="Значение"
-                            value={cond.compareValue}
-                            on:input={(e) => {
-                              definitionDirty = false;
-                              updateCondition(activeParameter.id, cond.id, { compareValue: e.currentTarget.value });
-                            }}
-                          />
-                        {:else}
-                          <div class="compare-column-row">
-                            <select
-                              value={compareColumnTableValue(cond)}
-                              on:change={(e) => {
-                                const [schema, table] = String(e.currentTarget.value || '').split('.');
-                                const column = columnOptionsFor(schema, table)[0] || '';
-                                updateCondition(activeParameter.id, cond.id, {
-                                  compareColumn: column ? `${schema}.${table}.${column}` : '',
-                                  compareValue: ''
-                                });
-                                ensureColumnsFor(schema, table);
-                              }}
-                            >
-                              <option value="">Таблица</option>
-                              {#each existingTables as tbl}
-                                <option value={`${tbl.schema_name}.${tbl.table_name}`}>{tbl.schema_name}.{tbl.table_name}</option>
-                              {/each}
-                            </select>
-                            {#if compareColumnTableValue(cond)}
-                              <select
-                                value={compareColumnFieldValue(cond)}
-                                on:change={(e) => {
-                                  const [schema, table] = compareColumnTableValue(cond).split('.');
-                                  const column = e.currentTarget.value;
-                                  updateCondition(activeParameter.id, cond.id, { compareColumn: column ? `${schema}.${table}.${column}` : '' });
-                                }}
-                              >
-                                <option value="">Колонка</option>
-                                {#each compareColumnOptions(cond) as column}
-                                  <option value={column}>{column}</option>
-                                {/each}
-                              </select>
-                            {:else}
-                              <select disabled>
-                                <option>Сначала выбери таблицу</option>
-                              </select>
-                            {/if}
-                          </div>
-                        {/if}
-                      </div>
-                    {/each}
-                  </div>
-                </div>
-              {:else}
-                <p class="hint">Выбери параметр в списке, чтобы настроить источник и условия.</p>
+                <p class="hint">Добавь правила, например: `token -> Header.Authorization`, `campaign_id -> body_item.campaign_id`, `sku -> body_item.sku`.</p>
               {/if}
             </div>
           </div>
-
-          <div class="response-head field-head parameter-subhead">
-            <span>Правила отправки</span>
-          </div>
-          <div class="dispatch-grid">
-            <div class="pagination-field">
-              <small>Режим</small>
-              <select
-                value={selected?.dispatchMode || 'single'}
-                on:change={(e) => mutateSelected((d) => (d.dispatchMode = toDispatchMode(e.currentTarget.value)))}
-              >
-                {#each DISPATCH_MODES as mode}
-                  <option value={mode.value}>{mode.label}</option>
-                {/each}
-              </select>
-            </div>
-            <div class="pagination-field">
-              <small>Группировать по alias</small>
-              <input
-                placeholder="например: client_id"
-                value={selected?.groupByAliases?.join(', ') || ''}
-                on:input={(e) => updateGroupByAliases(e.currentTarget.value)}
-              />
-            </div>
-            <div class="pagination-field">
-              <small>Путь массива в body</small>
-              <input
-                placeholder="items"
-                value={selected?.bodyItemsPath || 'items'}
-                on:input={(e) => mutateSelected((d) => (d.bodyItemsPath = e.currentTarget.value || 'items'))}
-              />
-            </div>
-            <div class="pagination-field">
-              <small>Лимит предпросмотра</small>
-              <input
-                type="number"
-                min="1"
-                max="50"
-                value={selected?.previewRequestLimit || 5}
-                on:input={(e) => mutateSelected((d) => (d.previewRequestLimit = Math.max(1, Math.min(50, Number(e.currentTarget.value) || 5))))}
-              />
-            </div>
-          </div>
-
-          <div class="response-head field-head parameter-subhead">
-            <span>Правила подстановки</span>
-            <button type="button" class="view-toggle" on:click={addBindingRule}>Добавить правило</button>
-          </div>
-          {#if selected?.bindingRules?.length}
-            <div class="binding-list">
-              {#each selected.bindingRules as rule (rule.id)}
-                <div class="binding-row">
-                  <select
-                    value={rule.alias}
-                    on:change={(e) => updateBindingRule(rule.id, { alias: e.currentTarget.value })}
-                  >
-                    <option value="">Параметр</option>
-                    {#each bindingAliasOptions(selected) as alias}
-                      <option value={alias}>{alias}</option>
-                    {/each}
-                  </select>
-                  <select
-                    value={rule.target}
-                    on:change={(e) => updateBindingRule(rule.id, { target: toBindingTarget(e.currentTarget.value) })}
-                  >
-                    {#each BINDING_TARGETS as target}
-                      <option value={target.value}>{target.label}</option>
-                    {/each}
-                  </select>
-                  <input
-                    value={rule.path}
-                    placeholder="путь (например Authorization или campaign_id)"
-                    on:input={(e) => updateBindingRule(rule.id, { path: e.currentTarget.value })}
-                  />
-                  <button type="button" class="chip-remove" on:click={() => removeBindingRule(rule.id)}>x</button>
-                </div>
-              {/each}
-            </div>
-          {:else}
-            <p class="hint">Добавь правила, например: `token -> Header.Authorization`, `campaign_id -> body_item.campaign_id`, `sku -> body_item.sku`.</p>
-          {/if}
         </div>
 
         <div class="pagination-box">
@@ -4761,7 +4487,6 @@ function syncParameterEditorsHeight() {
   .auth-mode-buttons + .oauth-grid + .hint { margin-top:0; }
   .pagination-box { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#f8fafc; }
   .dispatch-box { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#f8fafc; }
-  .parameter-management-box .parameter-panel { margin-top:8px; }
   .parameter-subhead { margin-top:12px; }
   .data-builder-box { border:1px solid #e2e8f0; border-radius:12px; padding:10px; background:#fff; margin-top:8px; display:flex; flex-direction:column; gap:10px; }
   .data-section { display:flex; flex-direction:column; gap:6px; }
@@ -4769,6 +4494,13 @@ function syncParameterEditorsHeight() {
   .data-list { display:flex; flex-direction:column; gap:8px; }
   .data-row { display:grid; grid-template-columns: 1.2fr 1fr 1fr auto; gap:8px; align-items:center; }
   .join-row { grid-template-columns: 1fr 1fr 120px 1fr 1fr auto; }
+  .api-showcase-grid { margin-top:8px; display:grid; grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.2fr); gap:10px; align-items:start; }
+  .api-showcase-col { border:1px solid #e2e8f0; border-radius:12px; background:#fff; padding:10px; }
+  .api-param-list { display:flex; flex-direction:column; gap:8px; margin-top:8px; }
+  .api-param-row { border:1px solid #e2e8f0; border-radius:10px; padding:8px; background:#f8fafc; }
+  .api-param-main { display:flex; flex-direction:column; gap:4px; }
+  .api-param-main strong { font-size:12px; color:#0f172a; }
+  .api-param-main span { font-size:11px; color:#64748b; word-break:break-word; }
   .dataset-preview-table-wrap { overflow:auto; border:1px solid #e2e8f0; border-radius:10px; background:#fff; }
   .dataset-preview-table { width:100%; border-collapse:collapse; min-width:640px; }
   .dataset-preview-table th,
@@ -4782,97 +4514,13 @@ function syncParameterEditorsHeight() {
   .pagination-toggle input { width:auto; }
   .pagination-grid { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
   .pagination-field small { display:block; margin-bottom:4px; font-size:11px; color:#64748b; }
-  .parameter-panel { margin-top:10px; border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; display:grid; gap:12px; }
-  .parameter-list-panel { padding:0; background:transparent; }
-  .parameter-list-panel.no-border { border:none; }
-  .parameter-list-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; font-weight:500; font-size:12px; color:#64748b; }
-  .parameter-list-title { font-size:12px; color:#64748b; line-height:1.2; }
-  .parameter-crumbs { display:flex; flex-wrap:wrap; gap:6px; }
-  .parameter-crumb {
-    border-radius:999px;
-    border:none;
-    padding:4px 10px;
-    background:#0f172a;
-    color:#fff;
-    font-size:12px;
-    display:inline-flex;
-    align-items:center;
-    gap:6px;
-  }
-  .parameter-crumb.active-crumb {
-    background:#fff;
-    color:#0f172a;
-    border:1px solid #e2e8f0;
-    box-shadow:0 1px 2px rgba(15,23,42,.08);
-  }
-  .crumb-indicator {
-    width:8px;
-    height:8px;
-    border-radius:50%;
-    background:#0f172a;
-  }
-  .parameter-crumb:not(.active-crumb) .crumb-indicator {
-    display:none;
-  }
-  .crumb-label {
-    flex:1;
-    text-align:left;
-  }
-  .crumb-close {
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    width:16px;
-    height:16px;
-    border-radius:50%;
-    font-size:14px;
-    line-height:1;
-    margin-left:4px;
-    background:transparent;
-  }
-  .parameter-crumb:not(.active-crumb) .crumb-close {
-    color:#f8fafc;
-  }
-  .parameter-crumb.active-crumb .crumb-close {
-    color:#b91c1c;
-  }
-  .parameter-editor { border:1px solid #e6eaf2; border-radius:12px; padding:12px; background:#fff; min-height:200px; }
-  .parameter-editor.no-border {
-    border:none;
-    padding:0;
-    background:transparent;
-  }
-  .parameter-editor-inner { display:flex; flex-direction:column; gap:8px; }
-  .parameter-alias, .parameter-definition { width:100%; }
-  .parameter-alias { font-weight:600; font-size:14px; padding:8px; }
-  .parameter-definition { min-height:60px; resize:none; }
-  .autoheight { min-height:40px; overflow:hidden; resize:none; }
-  .parameter-definition-hint { font-size:11px; color:#64748b; }
-  .parameter-source-row { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:8px; }
-  .parameter-conditions { border:1px solid #e6eaf2; border-radius:10px; padding:10px; background:#f8fafc; }
-  .conditions-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
-  .condition-card { border:1px solid #dfe7f3; border-radius:10px; padding:8px; background:#fff; margin-bottom:8px; }
-  .condition-row, .compare-column-row { display:grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap:6px; align-items:center; margin-bottom:6px; }
-  .compare-mode-row { display:flex; gap:12px; font-size:12px; }
-  .condition-value { width:100%; }
-  .tiny-btn { border:0; background:transparent; font-size:12px; color:#0f172a; cursor:pointer; }
   .definition-error { margin:0; font-size:11px; color:#b91c1c; }
-  .parameter-preview-block { border:none; border-radius:12px; padding:10px; background:#fff; width:min(100%, calc(100% - 24px)); max-width:calc(100% - 24px); box-sizing:border-box; margin:0 auto; display:flex; flex-direction:column; gap:8px; }
-  @media (max-width: 708px) {
-    .parameter-preview-block { width:100%; max-width:100%; }
-  }
-  .parameter-preview-controls { gap:6px; justify-content:flex-end; }
-  .definition-section .inline-actions { justify-content:flex-end; }
-  .icon-btn.refresh-btn { color:#16a34a; font-weight:400; }
-  .parameter-preview-list { display:flex; flex-direction:column; gap:6px; }
-  .preview-row { display:flex; gap:8px; align-items:flex-start; }
-  .row-index { font-weight:600; width:32px; text-align:right; color:#475569; }
-  .row-value { flex:1; word-break:break-word; }
   @media (max-width: 900px) {
     .connect-row { grid-template-columns: 1fr; }
     .connect-actions { justify-content:flex-start; flex-wrap:wrap; }
     .raw-grid { grid-template-columns: 1fr; }
     .saved-inline-actions { grid-template-columns: 1fr; }
+    .api-showcase-grid { grid-template-columns: 1fr; }
     .data-row, .join-row { grid-template-columns: 1fr; }
     .binding-row { grid-template-columns: 1fr; }
   }
