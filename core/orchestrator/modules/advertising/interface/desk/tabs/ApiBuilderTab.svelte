@@ -136,8 +136,8 @@
     { value: 'body_item', label: 'Body: элемент массива' }
   ];
   const DATA_JOIN_TYPES: Array<{ value: 'inner' | 'left'; label: string }> = [
-    { value: 'inner', label: 'INNER' },
-    { value: 'left', label: 'LEFT' }
+    { value: 'inner', label: 'Только совпавшие' },
+    { value: 'left', label: 'Оставить все из основной' }
   ];
   const DATA_FILTER_OPERATORS: Array<{ value: string; label: string }> = [
     { value: 'equals', label: '=' },
@@ -3724,7 +3724,7 @@ function syncParameterEditorsHeight() {
 
             <div class="data-section">
               <div class="response-head field-head parameter-subhead">
-                <small>Связи JOIN</small>
+                <small>Связи таблиц</small>
                 <button type="button" class="view-toggle" on:click={addDataJoin}>Связь +</button>
               </div>
               {#if selected?.dataJoins?.length}
@@ -3738,13 +3738,13 @@ function syncParameterEditorsHeight() {
                           ensureDataTableColumnsLoaded(e.currentTarget.value);
                         }}
                       >
-                        <option value="">Левая таблица</option>
+                        <option value="">Основная таблица</option>
                         {#each selected.dataTables as t}
                           <option value={t.id}>{tableLabelById(selected, t.id)}</option>
                         {/each}
                       </select>
                       <select value={j.leftField} on:change={(e) => updateDataJoin(j.id, { leftField: e.currentTarget.value })}>
-                        <option value="">Левый ключ</option>
+                        <option value="">Ключ из основной таблицы</option>
                         {#each tableColumnsById(selected, j.leftTableId) as col}
                           <option value={col}>{col}</option>
                         {/each}
@@ -3761,13 +3761,13 @@ function syncParameterEditorsHeight() {
                           ensureDataTableColumnsLoaded(e.currentTarget.value);
                         }}
                       >
-                        <option value="">Правая таблица</option>
+                        <option value="">Подключаемая таблица</option>
                         {#each selected.dataTables as t}
                           <option value={t.id}>{tableLabelById(selected, t.id)}</option>
                         {/each}
                       </select>
                       <select value={j.rightField} on:change={(e) => updateDataJoin(j.id, { rightField: e.currentTarget.value })}>
-                        <option value="">Правый ключ</option>
+                        <option value="">Ключ из подключаемой таблицы</option>
                         {#each tableColumnsById(selected, j.rightTableId) as col}
                           <option value={col}>{col}</option>
                         {/each}
