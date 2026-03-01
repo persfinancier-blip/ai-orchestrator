@@ -303,6 +303,9 @@
   let datasetPreviewTimer: ReturnType<typeof setTimeout> | null = null;
   let datasetPreviewRequestSeq = 0;
   let datasetPreviewSignature = '';
+  let activeDataTableId = '';
+  let activeDataJoinId = '';
+  let activeDataFilterId = '';
   let groupByAliasCandidates: string[] = [];
   const PARAMETER_PREVIEW_LIMIT = 5;
   const REQUEST_PREVIEW_MAX = 20;
@@ -1131,6 +1134,27 @@ function formatBytes(bytes: number) {
         d.dataFilters = normalized;
       });
     }
+  }
+  $: if (selected?.dataTables?.length) {
+    if (!selected.dataTables.some((t) => t.id === activeDataTableId)) {
+      activeDataTableId = selected.dataTables[0].id;
+    }
+  } else {
+    activeDataTableId = '';
+  }
+  $: if (selected?.dataJoins?.length) {
+    if (!selected.dataJoins.some((j) => j.id === activeDataJoinId)) {
+      activeDataJoinId = selected.dataJoins[0].id;
+    }
+  } else {
+    activeDataJoinId = '';
+  }
+  $: if (selected?.dataFilters?.length) {
+    if (!selected.dataFilters.some((f) => f.id === activeDataFilterId)) {
+      activeDataFilterId = selected.dataFilters[0].id;
+    }
+  } else {
+    activeDataFilterId = '';
   }
 
   $: if (selected && selectedParameterId && !selected.parameterDefinitions.some((param) => param.id === selectedParameterId)) {
@@ -2094,6 +2118,7 @@ function formatBytes(bytes: number) {
         }
       ];
     });
+    activeDataTableId = tableId;
     if (fallback?.schema_name && fallback?.table_name) ensureColumnsFor(fallback.schema_name, fallback.table_name);
   }
 
@@ -2122,6 +2147,7 @@ function formatBytes(bytes: number) {
       d.dataFilters = d.dataFilters.filter((f) => f.tableId !== tableId);
       d.previewColumns = d.previewColumns.filter((c) => c.tableId !== tableId);
     });
+    if (activeDataTableId === tableId) activeDataTableId = '';
   }
 
   function addDataJoin() {
@@ -2135,10 +2161,11 @@ function formatBytes(bytes: number) {
     const left = tables[0]?.id || '';
     const right = tables[1]?.id || tables[0]?.id || '';
     mutateSelected((d) => {
+      const joinId = uid();
       d.dataJoins = [
         ...(Array.isArray(d.dataJoins) ? d.dataJoins : []),
         {
-          id: uid(),
+          id: joinId,
           leftTableId: left,
           leftField: '',
           rightTableId: right,
@@ -2146,6 +2173,7 @@ function formatBytes(bytes: number) {
           joinType: 'inner'
         }
       ];
+      activeDataJoinId = joinId;
     });
     if (left) ensureDataTableColumnsLoaded(left);
     if (right) ensureDataTableColumnsLoaded(right);
@@ -2173,6 +2201,7 @@ function formatBytes(bytes: number) {
     mutateSelected((d) => {
       d.dataJoins = d.dataJoins.filter((j) => j.id !== joinId);
     });
+    if (activeDataJoinId === joinId) activeDataJoinId = '';
   }
 
   function addDataFilter() {
@@ -2184,16 +2213,18 @@ function formatBytes(bytes: number) {
     }
     err = '';
     mutateSelected((d) => {
+      const filterId = uid();
       d.dataFilters = [
         ...(Array.isArray(d.dataFilters) ? d.dataFilters : []),
         {
-          id: uid(),
+          id: filterId,
           tableId,
           field: '',
           operator: 'equals',
           compareValue: ''
         }
       ];
+      activeDataFilterId = filterId;
     });
     ensureDataTableColumnsLoaded(tableId);
   }
@@ -2208,6 +2239,7 @@ function formatBytes(bytes: number) {
     mutateSelected((d) => {
       d.dataFilters = d.dataFilters.filter((f) => f.id !== filterId);
     });
+    if (activeDataFilterId === filterId) activeDataFilterId = '';
   }
 
   function updateDataFilterTableRef(filterId: string, value: string) {
@@ -2326,6 +2358,34 @@ function formatBytes(bytes: number) {
     const t = draft.dataTables.find((x) => x.id === tableId);
     if (!t) return [];
     return columnOptionsFor(t.schema, t.table);
+  }
+
+  function tableAliasById(draft: ApiDraft | null, tableId: string) {
+    if (!draft) return '';
+    const t = draft.dataTables.find((x) => x.id === tableId);
+    if (!t) return '';
+    return String(t.alias || `${t.schema}.${t.table}`).trim();
+  }
+
+  function tableAddressById(draft: ApiDraft | null, tableId: string) {
+    if (!draft) return '';
+    const t = draft.dataTables.find((x) => x.id === tableId);
+    if (!t) return '';
+    return `${t.schema}.${t.table}`;
+  }
+
+  function joinCrumbLabel(draft: ApiDraft | null, join: DataModelJoin) {
+    const leftTbl = tableAliasById(draft, join.leftTableId) || 'таблица';
+    const rightTbl = tableAliasById(draft, join.rightTableId) || 'таблица';
+    const leftField = String(join.leftField || '?');
+    const rightField = String(join.rightField || '?');
+    return `${leftTbl}.${leftField} = ${rightTbl}.${rightField}`;
+  }
+
+  function filterCrumbLabel(draft: ApiDraft | null, filter: DataModelFilter) {
+    const tbl = tableAliasById(draft, filter.tableId) || 'таблица';
+    const fld = String(filter.field || '?');
+    return `${tbl}.${fld}`;
   }
 
   function dataFilterFieldKind(filter: DataModelFilter): 'text' | 'number' | 'boolean' | 'date' {
@@ -4475,7 +4535,7 @@ function syncParameterEditorsHeight() {
 
           <div class="data-builder-box">
             <div class="response-head field-head parameter-subhead">
-              <span>Конструктор данных (параметры, связи, фильтры)</span>
+              <span>Конструктор данных (таблицы, связи, фильтры, показатели)</span>
               <span class="inline-actions">
                 <label class="preview-limit-inline">
                   <small>Лимит предпросмотра</small>
@@ -4496,20 +4556,32 @@ function syncParameterEditorsHeight() {
                 <button type="button" class="view-toggle" on:click={addDataTable}>Таблица +</button>
               </div>
               {#if selected?.dataTables?.length}
-                <div class="data-list">
+                <div class="crumb-strip">
                   {#each selected.dataTables as tbl (tbl.id)}
-                    <div class="data-row table-row">
-                      <select value={`${tbl.schema}.${tbl.table}`} on:change={(e) => updateDataTableRef(tbl.id, e.currentTarget.value)}>
+                    <button type="button" class="entity-crumb" class:active-crumb={activeDataTableId === tbl.id} on:click={() => (activeDataTableId = tbl.id)}>
+                      {tbl.alias || `${tbl.schema}.${tbl.table}`}
+                    </button>
+                  {/each}
+                </div>
+                {@const activeTable = selected.dataTables.find((tbl) => tbl.id === activeDataTableId)}
+                {#if activeTable}
+                  <div class="rule-card">
+                    <div class="rule-card-head">
+                      <small>Правила выбора таблицы</small>
+                      <button type="button" class="chip-remove" on:click={() => removeDataTable(activeTable.id)}>x</button>
+                    </div>
+                    <div class="data-row table-rule-row">
+                      <select value={`${activeTable.schema}.${activeTable.table}`} on:change={(e) => updateDataTableRef(activeTable.id, e.currentTarget.value)}>
                         <option value="">Таблица</option>
                         {#each existingTables as et}
                           <option value={`${et.schema_name}.${et.table_name}`}>{et.schema_name}.{et.table_name}</option>
                         {/each}
                       </select>
-                      <input value={tbl.alias} placeholder="alias таблицы" on:input={(e) => updateDataTableAlias(tbl.id, e.currentTarget.value)} />
-                      <button type="button" class="chip-remove" on:click={() => removeDataTable(tbl.id)}>x</button>
+                      <input value={activeTable.alias} placeholder="Краткое наименование" on:input={(e) => updateDataTableAlias(activeTable.id, e.currentTarget.value)} />
+                      <input value={tableAddressById(selected, activeTable.id)} readonly />
                     </div>
-                  {/each}
-                </div>
+                  </div>
+                {/if}
               {:else}
                 <p class="hint">Сначала добавь таблицы, с которыми будешь работать.</p>
               {/if}
@@ -4521,42 +4593,54 @@ function syncParameterEditorsHeight() {
                 <button type="button" class="view-toggle" on:click={addDataJoin}>Связь +</button>
               </div>
               {#if selected?.dataJoins?.length}
-                <div class="data-list">
+                <div class="crumb-strip">
                   {#each selected.dataJoins as j (j.id)}
-                    <div class="data-row join-row">
-                      <select value={j.leftTableId} on:change={(e) => updateDataJoinTableRef(j.id, 'left', e.currentTarget.value)}>
-                        <option value="">Левая таблица</option>
+                    <button type="button" class="entity-crumb" class:active-crumb={activeDataJoinId === j.id} on:click={() => (activeDataJoinId = j.id)}>
+                      {joinCrumbLabel(selected, j)}
+                    </button>
+                  {/each}
+                </div>
+                {@const activeJoin = selected.dataJoins.find((j) => j.id === activeDataJoinId)}
+                {#if activeJoin}
+                  <div class="rule-card">
+                    <div class="rule-card-head">
+                      <small>Правила связи</small>
+                      <button type="button" class="chip-remove" on:click={() => removeDataJoin(activeJoin.id)}>x</button>
+                    </div>
+                    <div class="data-row join-rule-row">
+                      <select value={activeJoin.leftTableId} on:change={(e) => updateDataJoinTableRef(activeJoin.id, 'left', e.currentTarget.value)}>
+                        <option value="">Таблица (краткое наименование)</option>
                         {#each selected.dataTables as t}
-                          <option value={t.id}>{t.schema}.{t.table}</option>
+                          <option value={t.id}>{t.alias || `${t.schema}.${t.table}`}</option>
                         {/each}
                       </select>
-                      <select value={j.leftField} on:change={(e) => updateDataJoin(j.id, { leftField: e.currentTarget.value })}>
-                        <option value="">Ключ слева</option>
-                        {#each tableColumnsById(selected, j.leftTableId) as col}
+                      <select value={activeJoin.leftField} on:change={(e) => updateDataJoin(activeJoin.id, { leftField: e.currentTarget.value })}>
+                        <option value="">Поле сопоставления</option>
+                        {#each tableColumnsById(selected, activeJoin.leftTableId) as col}
                           <option value={col}>{col}</option>
                         {/each}
                       </select>
-                      <select value={j.joinType} on:change={(e) => updateDataJoin(j.id, { joinType: e.currentTarget.value === 'left' ? 'left' : 'inner' })}>
+                      <input value="=" readonly />
+                      <select value={activeJoin.rightTableId} on:change={(e) => updateDataJoinTableRef(activeJoin.id, 'right', e.currentTarget.value)}>
+                        <option value="">Другая таблица (краткое наименование)</option>
+                        {#each selected.dataTables as t}
+                          <option value={t.id}>{t.alias || `${t.schema}.${t.table}`}</option>
+                        {/each}
+                      </select>
+                      <select value={activeJoin.rightField} on:change={(e) => updateDataJoin(activeJoin.id, { rightField: e.currentTarget.value })}>
+                        <option value="">Поле параметра</option>
+                        {#each tableColumnsById(selected, activeJoin.rightTableId) as col}
+                          <option value={col}>{col}</option>
+                        {/each}
+                      </select>
+                      <select value={activeJoin.joinType} on:change={(e) => updateDataJoin(activeJoin.id, { joinType: e.currentTarget.value === 'left' ? 'left' : 'inner' })}>
                         {#each DATA_JOIN_TYPES as jt}
                           <option value={jt.value}>{jt.label}</option>
                         {/each}
                       </select>
-                      <select value={j.rightTableId} on:change={(e) => updateDataJoinTableRef(j.id, 'right', e.currentTarget.value)}>
-                        <option value="">Правая таблица</option>
-                        {#each selected.dataTables as t}
-                          <option value={t.id}>{t.schema}.{t.table}</option>
-                        {/each}
-                      </select>
-                      <select value={j.rightField} on:change={(e) => updateDataJoin(j.id, { rightField: e.currentTarget.value })}>
-                        <option value="">Ключ справа</option>
-                        {#each tableColumnsById(selected, j.rightTableId) as col}
-                          <option value={col}>{col}</option>
-                        {/each}
-                      </select>
-                      <button type="button" class="chip-remove" on:click={() => removeDataJoin(j.id)}>x</button>
                     </div>
-                  {/each}
-                </div>
+                  </div>
+                {/if}
               {:else}
                 <p class="hint">После выбора таблиц добавь связи по ключевым колонкам.</p>
               {/if}
@@ -4568,39 +4652,50 @@ function syncParameterEditorsHeight() {
                 <button type="button" class="view-toggle" on:click={addDataFilter}>Фильтр +</button>
               </div>
               {#if selected?.dataFilters?.length}
-                <div class="data-list">
+                <div class="crumb-strip">
                   {#each selected.dataFilters as f (f.id)}
-                    <div class="data-row filter-row">
-                      <select value={f.tableId} on:change={(e) => updateDataFilterTableRef(f.id, e.currentTarget.value)}>
-                        <option value="">Таблица</option>
+                    <button type="button" class="entity-crumb" class:active-crumb={activeDataFilterId === f.id} on:click={() => (activeDataFilterId = f.id)}>
+                      {filterCrumbLabel(selected, f)}
+                    </button>
+                  {/each}
+                </div>
+                {@const activeFilter = selected.dataFilters.find((f) => f.id === activeDataFilterId)}
+                {#if activeFilter}
+                  <div class="rule-card">
+                    <div class="rule-card-head">
+                      <small>Правила фильтрации</small>
+                      <button type="button" class="chip-remove" on:click={() => removeDataFilter(activeFilter.id)}>x</button>
+                    </div>
+                    <div class="data-row filter-rule-row">
+                      <select value={activeFilter.tableId} on:change={(e) => updateDataFilterTableRef(activeFilter.id, e.currentTarget.value)}>
+                        <option value="">Краткое наименование таблицы</option>
                         {#each selected.dataTables as t}
-                          <option value={t.id}>{t.schema}.{t.table}</option>
+                          <option value={t.id}>{t.alias || `${t.schema}.${t.table}`}</option>
                         {/each}
                       </select>
-                      <select value={f.field} on:change={(e) => updateDataFilter(f.id, { field: e.currentTarget.value })}>
-                        <option value="">Колонка</option>
-                        {#each tableColumnsById(selected, f.tableId) as col}
+                      <select value={activeFilter.field} on:change={(e) => updateDataFilter(activeFilter.id, { field: e.currentTarget.value })}>
+                        <option value="">Поле</option>
+                        {#each tableColumnsById(selected, activeFilter.tableId) as col}
                           <option value={col}>{col}</option>
                         {/each}
                       </select>
-                      <select value={f.operator} on:change={(e) => updateDataFilter(f.id, { operator: e.currentTarget.value })}>
-                        {#each dataFilterOperatorsFor(f) as op}
+                      <select value={activeFilter.operator} on:change={(e) => updateDataFilter(activeFilter.id, { operator: e.currentTarget.value })}>
+                        {#each dataFilterOperatorsFor(activeFilter) as op}
                           <option value={op.value}>{op.label}</option>
                         {/each}
                       </select>
-                      {#if isBooleanDataFilter(f)}
-                        <select value={f.compareValue} on:change={(e) => updateDataFilter(f.id, { compareValue: e.currentTarget.value })}>
-                          <option value="">Значение</option>
+                      {#if isBooleanDataFilter(activeFilter)}
+                        <select value={activeFilter.compareValue} on:change={(e) => updateDataFilter(activeFilter.id, { compareValue: e.currentTarget.value })}>
+                          <option value="">Условие</option>
                           <option value="true">true</option>
                           <option value="false">false</option>
                         </select>
                       {:else}
-                        <input value={f.compareValue} placeholder="значение" on:input={(e) => updateDataFilter(f.id, { compareValue: e.currentTarget.value })} />
+                        <input value={activeFilter.compareValue} placeholder="Условие" on:input={(e) => updateDataFilter(activeFilter.id, { compareValue: e.currentTarget.value })} />
                       {/if}
-                      <button type="button" class="chip-remove" on:click={() => removeDataFilter(f.id)}>x</button>
                     </div>
-                  {/each}
-                </div>
+                  </div>
+                {/if}
               {:else}
                 <p class="hint">Фильтры применяются после связей и перед выбором показателей.</p>
               {/if}
@@ -5230,10 +5325,24 @@ function syncParameterEditorsHeight() {
   .data-section { display:flex; flex-direction:column; gap:6px; }
   .data-list { display:flex; flex-direction:column; gap:8px; }
   .data-row { display:grid; gap:8px; align-items:center; }
-  .table-row { grid-template-columns: 1.3fr 1fr auto; }
+  .crumb-strip { display:flex; flex-wrap:wrap; gap:6px; }
+  .entity-crumb {
+    width:auto;
+    border:1px solid #cbd5e1;
+    border-radius:999px;
+    background:#fff;
+    color:#334155;
+    padding:6px 10px;
+    font-size:12px;
+    line-height:1.2;
+  }
+  .entity-crumb.active-crumb { border-color:#0f172a; background:#0f172a; color:#fff; }
+  .rule-card { border:1px solid #e2e8f0; border-radius:10px; background:#fff; padding:8px; display:flex; flex-direction:column; gap:8px; }
+  .rule-card-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .table-rule-row { grid-template-columns: 1.2fr 1fr 1fr; }
+  .join-rule-row { grid-template-columns: 1fr 1fr 80px 1fr 1fr 1fr; }
+  .filter-rule-row { grid-template-columns: 1.2fr 1fr 1fr 1fr; }
   .param-row { grid-template-columns: 1.2fr 1fr 1fr 140px 72px auto; }
-  .filter-row { grid-template-columns: 1.2fr 1fr 120px 1fr auto; }
-  .join-row { grid-template-columns: 1fr 1fr 120px 1fr 1fr auto; }
   .preview-column-row { grid-template-columns: 1.2fr 1fr 1fr auto; }
   .preview-config-wrap { border:1px dashed #dbe3ef; border-radius:10px; padding:8px; background:#fff; }
   .preview-columns-head { margin-bottom:6px; }
@@ -5283,7 +5392,7 @@ function syncParameterEditorsHeight() {
     .connect-actions { justify-content:flex-start; flex-wrap:wrap; }
     .raw-grid { grid-template-columns: 1fr; }
     .saved-inline-actions { grid-template-columns: 1fr; }
-    .data-row, .table-row, .param-row, .filter-row, .join-row, .preview-column-row { grid-template-columns: 1fr; }
+    .data-row, .table-rule-row, .join-rule-row, .filter-rule-row, .param-row, .preview-column-row { grid-template-columns: 1fr; }
   }
 </style>
 
