@@ -5,6 +5,7 @@
   type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   type DispatchMode = 'single' | 'group_by';
   type BindingTarget = 'header' | 'query' | 'body' | 'body_item';
+  type PaginationParameterTarget = 'body' | 'query' | 'header' | 'auth';
   export let apiBase: string;
   export let apiJson: <T = any>(url: string, init?: RequestInit) => Promise<T>;
   export let headers: () => Record<string, string>;
@@ -50,6 +51,15 @@
     compareValue: string;
   };
 
+  type PaginationParameter = {
+    id: string;
+    alias: string;
+    responsePath: string;
+    requestTarget: PaginationParameterTarget;
+    requestPath: string;
+    applyForAllResponses: boolean;
+  };
+
   type ApiDraft = {
     localId: string;
     storeId?: number;
@@ -85,6 +95,7 @@
     paginationNextUrlPath: string;
     paginationMaxPages: number;
     paginationDelayMs: number;
+    paginationParameters: PaginationParameter[];
     pickedPaths: string[];
     responseTargets: Array<{
       id: string;
@@ -267,6 +278,8 @@
   let paginationArrayPathPick = '';
   let paginationCursorResponsePathOptions: string[] = [];
   let paginationCursorResponsePick = '';
+  let activePaginationParameterId = '';
+  let activePaginationParameter: PaginationParameter | null = null;
   let oauthTokenCache: Record<string, { token: string; tokenType: string; expiresAt: number }> = {};
   let selectedParameterId: string | null = null;
   let aliasParamEl: HTMLTextAreaElement | null = null;
@@ -316,6 +329,10 @@
 
   function toBindingTarget(v: string): BindingTarget {
     return v === 'header' || v === 'query' || v === 'body' || v === 'body_item' ? v : 'body_item';
+  }
+
+  function toPaginationParameterTarget(v: string): PaginationParameterTarget {
+    return v === 'query' || v === 'header' || v === 'auth' ? (v as PaginationParameterTarget) : 'body';
   }
 
   function tryObj(v: any): any {
@@ -468,6 +485,7 @@ function formatBytes(bytes: number) {
       paginationMaxPages: 3,
       paginationDelayMs: 0,
       paginationCustomStrategy: '',
+      paginationParameters: [],
       pickedPaths: [],
       responseTargets: [],
       description: '',
@@ -672,6 +690,51 @@ function formatBytes(bytes: number) {
     const paginationCustomStrategyValue = String(
       row?.pagination_custom_strategy || pagination?.custom_strategy || ''
     );
+    const paginationParamsRaw = Array.isArray(pagination?.parameters)
+      ? pagination.parameters
+      : Array.isArray((mapping as any)?.pagination_parameters)
+      ? (mapping as any).pagination_parameters
+      : [];
+    const normalizedPaginationParameters: PaginationParameter[] = paginationParamsRaw
+      .map((p: any, idx: number) => ({
+        id: String(p?.id || uid()),
+        alias: String(p?.alias || `pg_${idx + 1}`).trim(),
+        responsePath: String(p?.response_path || p?.responsePath || '').trim(),
+        requestTarget: ['body', 'query', 'header', 'auth'].includes(String(p?.request_target || p?.requestTarget || '').trim())
+          ? (String(p?.request_target || p?.requestTarget || '').trim() as PaginationParameterTarget)
+          : 'body',
+        requestPath: String(p?.request_path || p?.requestPath || '').trim(),
+        applyForAllResponses: Boolean(
+          p?.apply_for_all_responses ??
+            p?.applyForAllResponses ??
+            p?.same_for_all_responses ??
+            p?.sameForAllResponses
+        )
+      }))
+      .filter((p: PaginationParameter) => p.alias);
+    if (!normalizedPaginationParameters.length) {
+      const legacyTarget: PaginationParameterTarget = paginationTargetValue === 'query' ? 'query' : 'body';
+      if (paginationCursorResPath1Value || paginationCursorReqPath1Value) {
+        normalizedPaginationParameters.push({
+          id: uid(),
+          alias: 'cursor_1',
+          responsePath: paginationCursorResPath1Value,
+          requestTarget: legacyTarget,
+          requestPath: paginationCursorReqPath1Value,
+          applyForAllResponses: true
+        });
+      }
+      if (paginationCursorResPath2Value || paginationCursorReqPath2Value) {
+        normalizedPaginationParameters.push({
+          id: uid(),
+          alias: 'cursor_2',
+          responsePath: paginationCursorResPath2Value,
+          requestTarget: legacyTarget,
+          requestPath: paginationCursorReqPath2Value,
+          applyForAllResponses: true
+        });
+      }
+    }
 
     return {
       ...d,
@@ -712,6 +775,7 @@ function formatBytes(bytes: number) {
       paginationMaxPages: paginationMaxPagesValue,
       paginationDelayMs: paginationDelayMsValue,
       paginationCustomStrategy: paginationCustomStrategyValue,
+      paginationParameters: normalizedPaginationParameters,
       pickedPaths: pickedPathsSource.map((x: any) => String(x || '').trim()).filter(Boolean),
       responseTargets: normalizedTargets,
       description: String(row?.description || legacy?.description || ''),
@@ -735,61 +799,82 @@ function formatBytes(bytes: number) {
   ) {
     const sanitizedAliases = sanitizeAliasReferences(d);
     const firstTarget = d.responseTargets.find((t) => t.schema && t.table);
-  const parameterDefinitionsPayload = d.parameterDefinitions.map((pd) => ({
-    id: pd.id,
-    alias: pd.alias,
-    definition: pd.definition,
-    source_schema: pd.sourceSchema,
-    source_table: pd.sourceTable,
-    source_field: pd.sourceField,
-    conditions: pd.conditions.map((cond) => ({
-      id: cond.id,
-      schema: cond.schema,
-      table: cond.table,
-      field: cond.field,
-      operator: cond.operator,
-      compare_mode: cond.compareMode,
-      compare_value: cond.compareValue,
-      compare_column: cond.compareColumn
-    }))
-  }));
+    const parameterDefinitionsPayload = d.parameterDefinitions.map((pd) => ({
+      id: pd.id,
+      alias: pd.alias,
+      definition: pd.definition,
+      source_schema: pd.sourceSchema,
+      source_table: pd.sourceTable,
+      source_field: pd.sourceField,
+      conditions: pd.conditions.map((cond) => ({
+        id: cond.id,
+        schema: cond.schema,
+        table: cond.table,
+        field: cond.field,
+        operator: cond.operator,
+        compare_mode: cond.compareMode,
+        compare_value: cond.compareValue,
+        compare_column: cond.compareColumn
+      }))
+    }));
+    const paginationParametersPayload = paginationParametersForDraft(d).map((p) => ({
+      id: p.id,
+      alias: p.alias,
+      response_path: p.responsePath,
+      request_target: p.requestTarget,
+      request_path: p.requestPath,
+      apply_for_all_responses: Boolean(p.applyForAllResponses)
+    }));
+    const legacyCursorParams = paginationParametersPayload.filter((p) => p.response_path || p.request_path);
+    const cursor1 = legacyCursorParams[0];
+    const cursor2 = legacyCursorParams[1];
+    const paginationTargetLegacy =
+      cursor1?.request_target === 'query' || cursor2?.request_target === 'query'
+        ? 'query'
+        : d.paginationTarget;
+    const paginationStrategyLegacy =
+      d.paginationEnabled && paginationParametersPayload.length
+        ? 'cursor_fields'
+        : d.paginationStrategy || 'cursor_fields';
 
-  return {
-    id: d.storeId || undefined,
-    api_name: d.name,
-    method: d.method,
-    base_url: d.baseUrl,
-    path: d.path,
-    headers_json: parsed?.headersJson ?? tryObj(d.headersJson),
-    query_json: parsed?.queryJson ?? tryObj(d.queryJson),
+    return {
+      id: d.storeId || undefined,
+      api_name: d.name,
+      method: d.method,
+      base_url: d.baseUrl,
+      path: d.path,
+      headers_json: parsed?.headersJson ?? tryObj(d.headersJson),
+      query_json: parsed?.queryJson ?? tryObj(d.queryJson),
       body_json: parsed?.bodyJson ?? tryObj(d.bodyJson),
       pagination_json: {
         enabled: d.paginationEnabled,
-        strategy: d.paginationStrategy,
-        target: d.paginationTarget,
+        strategy: paginationStrategyLegacy,
+        target: paginationTargetLegacy,
         data_path: d.paginationDataPath,
         page_param: d.paginationPageParam,
         start_page: d.paginationStartPage,
         limit_param: d.paginationLimitParam,
         limit_value: d.paginationLimitValue,
-        cursor_req_path_1: d.paginationCursorReqPath1,
-        cursor_req_path_2: d.paginationCursorReqPath2,
-        cursor_res_path_1: d.paginationCursorResPath1,
-        cursor_res_path_2: d.paginationCursorResPath2,
+        cursor_req_path_1: cursor1?.request_path || d.paginationCursorReqPath1,
+        cursor_req_path_2: cursor2?.request_path || d.paginationCursorReqPath2,
+        cursor_res_path_1: cursor1?.response_path || d.paginationCursorResPath1,
+        cursor_res_path_2: cursor2?.response_path || d.paginationCursorResPath2,
         next_url_path: d.paginationNextUrlPath,
         max_pages: d.paginationMaxPages,
         delay_ms: d.paginationDelayMs,
-        custom_strategy: d.paginationCustomStrategy
+        custom_strategy: d.paginationCustomStrategy,
+        parameters: paginationParametersPayload
       },
       target_schema: firstTarget?.schema || '',
       target_table: firstTarget?.table || '',
       mapping_json: {
         exampleRequest: d.exampleRequest,
-      response_targets: d.responseTargets,
-      picked_paths: d.pickedPaths,
-      oauth2:
-        d.authMode === 'oauth2_client_credentials'
-          ? {
+        response_targets: d.responseTargets,
+        picked_paths: d.pickedPaths,
+        pagination_parameters: paginationParametersPayload,
+        oauth2:
+          d.authMode === 'oauth2_client_credentials'
+            ? {
                 mode: d.authMode,
                 token_url: d.oauth2TokenUrl,
                 client_id: d.oauth2ClientId,
@@ -798,95 +883,95 @@ function formatBytes(bytes: number) {
                 token_field: d.oauth2TokenField || 'access_token',
                 expires_field: d.oauth2ExpiresField || 'expires_in',
                 token_type_field: d.oauth2TokenTypeField || 'token_type'
-          }
-        : { mode: 'manual' },
-      auth_json: parsed?.authJson ?? tryObj(d.authJson),
-      parameter_definitions: parameterDefinitionsPayload,
-      execution: {
-        dispatch_mode: sanitizedAliases.groupByAliases.length ? 'group_by' : 'single',
-        group_by_aliases: sanitizedAliases.groupByAliases,
-        body_items_path: d.bodyItemsPath,
-        preview_request_limit: d.previewRequestLimit,
-        data_model: {
-          tables: d.dataTables.map((t) => ({
-            id: t.id,
-            schema: t.schema,
-            table: t.table,
-            alias: t.alias
-          })),
-          joins: d.dataJoins.map((j) => ({
-            id: j.id,
-            left_table_id: j.leftTableId,
-            left_field: j.leftField,
-            right_table_id: j.rightTableId,
-            right_field: j.rightField,
-            join_type: j.joinType
-          })),
-          fields: d.dataFields.map((f) => ({
-            id: f.id,
-            table_id: f.tableId,
-            field: f.field,
-            alias: f.alias,
-            group_by: Boolean(f.grouped)
-          })),
-          filters: d.dataFilters.map((f) => ({
-            id: f.id,
-            table_id: f.tableId,
-            field: f.field,
-            operator: f.operator,
-            compare_value: f.compareValue
+            }
+            : { mode: 'manual' },
+        auth_json: parsed?.authJson ?? tryObj(d.authJson),
+        parameter_definitions: parameterDefinitionsPayload,
+        execution: {
+          dispatch_mode: sanitizedAliases.groupByAliases.length ? 'group_by' : 'single',
+          group_by_aliases: sanitizedAliases.groupByAliases,
+          body_items_path: d.bodyItemsPath,
+          preview_request_limit: d.previewRequestLimit,
+          data_model: {
+            tables: d.dataTables.map((t) => ({
+              id: t.id,
+              schema: t.schema,
+              table: t.table,
+              alias: t.alias
+            })),
+            joins: d.dataJoins.map((j) => ({
+              id: j.id,
+              left_table_id: j.leftTableId,
+              left_field: j.leftField,
+              right_table_id: j.rightTableId,
+              right_field: j.rightField,
+              join_type: j.joinType
+            })),
+            fields: d.dataFields.map((f) => ({
+              id: f.id,
+              table_id: f.tableId,
+              field: f.field,
+              alias: f.alias,
+              group_by: Boolean(f.grouped)
+            })),
+            filters: d.dataFilters.map((f) => ({
+              id: f.id,
+              table_id: f.tableId,
+              field: f.field,
+              operator: f.operator,
+              compare_value: f.compareValue
+            }))
+          },
+          binding_rules: sanitizedAliases.bindingRules.map((rule) => ({
+            id: rule.id,
+            alias: rule.alias,
+            target: rule.target,
+            path: rule.path
           }))
         },
-        binding_rules: sanitizedAliases.bindingRules.map((rule) => ({
-          id: rule.id,
-          alias: rule.alias,
-          target: rule.target,
-          path: rule.path
-        }))
-      }
-    },
-    auth_mode: d.authMode,
-    auth_json: parsed?.authJson ?? tryObj(d.authJson),
-    oauth2_token_url: d.oauth2TokenUrl,
-    oauth2_client_id: d.oauth2ClientId,
-    oauth2_client_secret: d.oauth2ClientSecret,
-    oauth2_grant_type: d.oauth2GrantType,
-    oauth2_token_field: d.oauth2TokenField,
-    oauth2_expires_field: d.oauth2ExpiresField,
-    oauth2_token_type_field: d.oauth2TokenTypeField,
-    parameter_definitions: parameterDefinitionsPayload,
-    dispatch_mode: sanitizedAliases.groupByAliases.length ? 'group_by' : 'single',
-    group_by_aliases: sanitizedAliases.groupByAliases,
-    body_items_path: d.bodyItemsPath,
-    preview_request_limit: d.previewRequestLimit,
-    binding_rules: sanitizedAliases.bindingRules.map((rule) => ({
-      id: rule.id,
-      alias: rule.alias,
-      target: rule.target,
-      path: rule.path
-    })),
-    response_targets: d.responseTargets,
-    picked_paths: d.pickedPaths,
-    example_request: d.exampleRequest,
-    pagination_enabled: d.paginationEnabled,
-    pagination_strategy: d.paginationStrategy,
-    pagination_target: d.paginationTarget,
-    pagination_data_path: d.paginationDataPath,
-    pagination_page_param: d.paginationPageParam,
-    pagination_start_page: d.paginationStartPage,
-    pagination_limit_param: d.paginationLimitParam,
-    pagination_limit_value: d.paginationLimitValue,
-    pagination_cursor_req_path_1: d.paginationCursorReqPath1,
-    pagination_cursor_req_path_2: d.paginationCursorReqPath2,
-    pagination_cursor_res_path_1: d.paginationCursorResPath1,
-    pagination_cursor_res_path_2: d.paginationCursorResPath2,
-    pagination_next_url_path: d.paginationNextUrlPath,
-    pagination_max_pages: d.paginationMaxPages,
-    pagination_delay_ms: d.paginationDelayMs,
-    pagination_custom_strategy: d.paginationCustomStrategy,
-    description: d.description,
-    is_active: true
-  };
+      },
+      auth_mode: d.authMode,
+      auth_json: parsed?.authJson ?? tryObj(d.authJson),
+      oauth2_token_url: d.oauth2TokenUrl,
+      oauth2_client_id: d.oauth2ClientId,
+      oauth2_client_secret: d.oauth2ClientSecret,
+      oauth2_grant_type: d.oauth2GrantType,
+      oauth2_token_field: d.oauth2TokenField,
+      oauth2_expires_field: d.oauth2ExpiresField,
+      oauth2_token_type_field: d.oauth2TokenTypeField,
+      parameter_definitions: parameterDefinitionsPayload,
+      dispatch_mode: sanitizedAliases.groupByAliases.length ? 'group_by' : 'single',
+      group_by_aliases: sanitizedAliases.groupByAliases,
+      body_items_path: d.bodyItemsPath,
+      preview_request_limit: d.previewRequestLimit,
+      binding_rules: sanitizedAliases.bindingRules.map((rule) => ({
+        id: rule.id,
+        alias: rule.alias,
+        target: rule.target,
+        path: rule.path
+      })),
+      response_targets: d.responseTargets,
+      picked_paths: d.pickedPaths,
+      example_request: d.exampleRequest,
+      pagination_enabled: d.paginationEnabled,
+      pagination_strategy: paginationStrategyLegacy,
+      pagination_target: paginationTargetLegacy,
+      pagination_data_path: d.paginationDataPath,
+      pagination_page_param: d.paginationPageParam,
+      pagination_start_page: d.paginationStartPage,
+      pagination_limit_param: d.paginationLimitParam,
+      pagination_limit_value: d.paginationLimitValue,
+      pagination_cursor_req_path_1: cursor1?.request_path || d.paginationCursorReqPath1,
+      pagination_cursor_req_path_2: cursor2?.request_path || d.paginationCursorReqPath2,
+      pagination_cursor_res_path_1: cursor1?.response_path || d.paginationCursorResPath1,
+      pagination_cursor_res_path_2: cursor2?.response_path || d.paginationCursorResPath2,
+      pagination_next_url_path: d.paginationNextUrlPath,
+      pagination_max_pages: d.paginationMaxPages,
+      pagination_delay_ms: d.paginationDelayMs,
+      pagination_custom_strategy: d.paginationCustomStrategy,
+      description: d.description,
+      is_active: true
+    };
   }
 
   function parseQualifiedTable(value: string): { schema: string; table: string } {
@@ -1075,7 +1160,14 @@ function formatBytes(bytes: number) {
     selected && selectedParameterId
       ? selected.parameterDefinitions.find((param) => param.id === selectedParameterId) ?? null
       : null;
-  $: groupByAliasCandidates = bindingAliasOptions(selected);
+  $: groupByAliasCandidates = selected
+    ? uniqueAliasList([
+        ...bindingAliasOptions(selected),
+        ...(Array.isArray(selected.paginationParameters)
+          ? selected.paginationParameters.map((p) => String(p?.alias || '').trim()).filter(Boolean)
+          : [])
+      ])
+    : [];
   $: if (selected) {
     const groupedFromFields = uniqueAliasList(
       (selected.dataFields || [])
@@ -1126,14 +1218,17 @@ function formatBytes(bytes: number) {
   } else {
     activeDataFilterId = '';
   }
-  $: if (selected?.paginationEnabled) {
-    if (selected.paginationStrategy !== 'cursor_fields' || selected.paginationTarget !== 'body') {
-      mutateSelected((d) => {
-        d.paginationStrategy = 'cursor_fields';
-        d.paginationTarget = 'body';
-      });
+  $: if (selected?.paginationParameters?.length) {
+    if (!selected.paginationParameters.some((param) => param.id === activePaginationParameterId)) {
+      activePaginationParameterId = selected.paginationParameters[0].id;
     }
+  } else {
+    activePaginationParameterId = '';
   }
+  $: activePaginationParameter =
+    selected && activePaginationParameterId
+      ? selected.paginationParameters.find((param) => param.id === activePaginationParameterId) ?? null
+      : null;
 
   $: if (selected && selectedParameterId && !selected.parameterDefinitions.some((param) => param.id === selectedParameterId)) {
     selectedParameterId = null;
@@ -1311,24 +1406,67 @@ function formatBytes(bytes: number) {
     ok = `Путь к данным выбран автоматически: ${picked}`;
   }
 
-  function applyCursorResponsePick(slot: 1 | 2) {
-    if (!selected) return;
-    const path = String(paginationCursorResponsePick || '').trim();
-    if (!path) return;
-    mutateSelected((d) => {
-      if (slot === 1) d.paginationCursorResPath1 = path;
-      else d.paginationCursorResPath2 = path;
-    });
-    ok = slot === 1 ? 'Cursor response path 1 заполнен из тестового ответа' : 'Cursor response path 2 заполнен из тестового ответа';
+  function setActivePaginationParameter(id: string) {
+    activePaginationParameterId = id;
   }
 
-  function autoPickCursorResponsePaths() {
+  function addPaginationParameter() {
     if (!selected) return;
+    const next = normalizePaginationParameter(
+      {
+        id: uid(),
+        alias: `cursor_${(selected.paginationParameters?.length || 0) + 1}`,
+        requestTarget: 'body',
+        requestPath: '',
+        responsePath: '',
+        applyForAllResponses: true
+      },
+      `cursor_${(selected.paginationParameters?.length || 0) + 1}`
+    );
+    mutateSelected((d) => {
+      d.paginationEnabled = true;
+      d.paginationStrategy = 'cursor_fields';
+      d.paginationTarget = 'body';
+      d.paginationParameters = [...(Array.isArray(d.paginationParameters) ? d.paginationParameters : []), next];
+    });
+    activePaginationParameterId = next.id;
+  }
+
+  function removePaginationParameter(id: string) {
+    if (!selected) return;
+    mutateSelected((d) => {
+      d.paginationParameters = (Array.isArray(d.paginationParameters) ? d.paginationParameters : []).filter((p) => p.id !== id);
+    });
+  }
+
+  function updatePaginationParameter(id: string, updates: Partial<PaginationParameter>) {
+    if (!selected) return;
+    mutateSelected((d) => {
+      d.paginationParameters = (Array.isArray(d.paginationParameters) ? d.paginationParameters : []).map((p) =>
+        p.id === id ? normalizePaginationParameter({ ...p, ...updates }, p.alias || 'cursor') : p
+      );
+    });
+  }
+
+  function applyPaginationResponsePickToActive() {
+    if (!selected) return;
+    const path = String(paginationCursorResponsePick || '').trim();
+    if (!path || !activePaginationParameterId) return;
+    updatePaginationParameter(activePaginationParameterId, { responsePath: path });
+    ok = 'Путь из ответа подставлен в активный параметр пагинации';
+  }
+
+  function autoPickPaginationResponsePathForActive() {
+    if (!selected) return;
+    if (!activePaginationParameterId) {
+      err = 'Сначала выбери параметр пагинации';
+      return;
+    }
     if (!paginationCursorResponsePathOptions.length) {
       err = 'Сначала выполни Проверить, чтобы получить тестовый JSON-ответ с курсором';
       return;
     }
-    const preferred = paginationCursorResponsePathOptions;
+    const preferred = paginationCursorResponsePathOptions.filter(Boolean);
     const byKeyWeight = (path: string) => {
       const low = path.toLowerCase();
       const key = low.split('.').slice(-1)[0] || low;
@@ -1339,19 +1477,14 @@ function formatBytes(bytes: number) {
       return score;
     };
     const sorted = [...preferred].sort((a, b) => byKeyWeight(b) - byKeyWeight(a));
-    const first = sorted[0] || '';
-    const second = sorted.find((p) => p !== first) || '';
-    if (!first) {
+    const best = sorted[0] || '';
+    if (!best) {
       err = 'Не удалось подобрать курсорные поля в ответе';
       return;
     }
-    mutateSelected((d) => {
-      d.paginationCursorResPath1 = first;
-      if (second) d.paginationCursorResPath2 = second;
-    });
-    ok = second
-      ? `Курсорные поля выбраны: ${first}; ${second}`
-      : `Курсорное поле выбрано: ${first}`;
+    updatePaginationParameter(activePaginationParameterId, { responsePath: best });
+    paginationCursorResponsePick = best;
+    ok = `Путь выбран автоматически: ${best}`;
   }
 
   function addPickedPathFromPicker() {
@@ -1615,6 +1748,91 @@ function formatBytes(bytes: number) {
       cur = cur[p as any];
     }
     cur[parts[parts.length - 1] as any] = value;
+  }
+
+  function stripGroupedResponsePrefix(path: string) {
+    const raw = String(path || '').trim();
+    if (!raw) return '';
+    return raw
+      .replace(/^responses\[\d+\]\.response\.?/, '')
+      .replace(/^responses\[\d+\]\.?/, '')
+      .replace(/^response\./, '');
+  }
+
+  function readPaginationValueFromResponse(payload: any, param: PaginationParameter) {
+    const rawPath = String(param?.responsePath || '').trim();
+    if (!rawPath) return undefined;
+    const direct = getByPath(payload, rawPath);
+    if (direct !== undefined && direct !== null) return direct;
+
+    if (!param.applyForAllResponses) return direct;
+
+    const strippedPath = stripGroupedResponsePrefix(rawPath);
+    if (strippedPath && strippedPath !== rawPath) {
+      const strippedValue = getByPath(payload, strippedPath);
+      if (strippedValue !== undefined && strippedValue !== null) return strippedValue;
+    }
+
+    const responses = Array.isArray(payload?.responses) ? payload.responses : [];
+    if (!responses.length) return direct;
+    const candidatePaths = uniqueAliasList(
+      [strippedPath, rawPath]
+        .map((path) => String(path || '').trim())
+        .filter(Boolean)
+        .map((path) => stripGroupedResponsePrefix(path))
+        .filter(Boolean)
+    );
+    for (const entry of responses) {
+      const source = entry && typeof entry === 'object' && 'response' in entry ? entry.response : entry;
+      for (const path of candidatePaths) {
+        const value = path ? getByPath(source, path) : source;
+        if (value !== undefined && value !== null) return value;
+      }
+    }
+    return direct;
+  }
+
+  function applyPaginationValueToRequest(
+    param: PaginationParameter,
+    value: any,
+    queryObj: Record<string, any>,
+    bodyObj: any,
+    headersObj: Record<string, any>
+  ) {
+    const path = String(param?.requestPath || '').trim();
+    if (!path || value === undefined || value === null) return;
+    const target = toPaginationParameterTarget(String(param?.requestTarget || 'body'));
+    if (target === 'query') {
+      setByPath(queryObj, path, value);
+      return;
+    }
+    if (target === 'body') {
+      if (bodyObj && typeof bodyObj === 'object') {
+        setByPath(bodyObj, path, value);
+      }
+      return;
+    }
+    headersObj[path] = value;
+  }
+
+  function stableJsonStringify(value: any): string {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value);
+    if (Array.isArray(value)) return `[${value.map((item) => stableJsonStringify(item)).join(',')}]`;
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${stableJsonStringify(value[k])}`).join(',')}}`;
+  }
+
+  function responseFingerprint(value: any): string {
+    if (typeof value === 'string') return value;
+    try {
+      return stableJsonStringify(value);
+    } catch {
+      try {
+        return JSON.stringify(value);
+      } catch {
+        return String(value);
+      }
+    }
   }
 
   function resolveAbsoluteUrl(urlText: string, draft: ApiDraft) {
@@ -2140,6 +2358,61 @@ function formatBytes(bytes: number) {
   function hasDataModelConfigured(draft: ApiDraft | null) {
     if (!draft) return false;
     return Array.isArray(draft.dataFields) && draft.dataFields.some((f) => String(f?.tableId || '').trim() && String(f?.field || '').trim() && String(f?.alias || '').trim());
+  }
+
+  function normalizePaginationParameter(input: Partial<PaginationParameter> | null | undefined, fallbackAlias = 'cursor'): PaginationParameter {
+    const aliasRaw = String(input?.alias || '').trim();
+    const requestPathRaw = String(input?.requestPath || '').trim();
+    const alias = aliasRaw || requestPathRaw || fallbackAlias;
+    return {
+      id: String(input?.id || uid()),
+      alias,
+      responsePath: String(input?.responsePath || '').trim(),
+      requestTarget: toPaginationParameterTarget(String(input?.requestTarget || 'body').trim()),
+      requestPath: requestPathRaw,
+      applyForAllResponses: Boolean(input?.applyForAllResponses)
+    };
+  }
+
+  function paginationParametersForDraft(draft: ApiDraft | null): PaginationParameter[] {
+    if (!draft) return [];
+    const direct = (Array.isArray(draft.paginationParameters) ? draft.paginationParameters : [])
+      .map((p, idx) => normalizePaginationParameter(p, `cursor_${idx + 1}`))
+      .filter((p) => p.alias);
+    if (direct.length) return direct;
+    const legacyTarget: PaginationParameterTarget = draft.paginationTarget === 'query' ? 'query' : 'body';
+    const legacy: PaginationParameter[] = [];
+    if (draft.paginationCursorResPath1 || draft.paginationCursorReqPath1) {
+      legacy.push(
+        normalizePaginationParameter(
+          {
+            id: uid(),
+            alias: 'cursor_1',
+            responsePath: draft.paginationCursorResPath1,
+            requestTarget: legacyTarget,
+            requestPath: draft.paginationCursorReqPath1,
+            applyForAllResponses: true
+          },
+          'cursor_1'
+        )
+      );
+    }
+    if (draft.paginationCursorResPath2 || draft.paginationCursorReqPath2) {
+      legacy.push(
+        normalizePaginationParameter(
+          {
+            id: uid(),
+            alias: 'cursor_2',
+            responsePath: draft.paginationCursorResPath2,
+            requestTarget: legacyTarget,
+            requestPath: draft.paginationCursorReqPath2,
+            applyForAllResponses: true
+          },
+          'cursor_2'
+        )
+      );
+    }
+    return legacy;
   }
 
   function bindingAliasOptions(draft: ApiDraft | null) {
@@ -3888,8 +4161,12 @@ function handleDefinitionInput(value: string) {
     responses: any[];
   }> {
     const method = String(reqPlan?.method || draft.method || 'GET').toUpperCase();
-    const baseHeaders = normalizeRequestHeaders(reqPlan?.headers || {});
     const isBodyMethod = method !== 'GET' && method !== 'DELETE';
+    const baseHeaders = normalizeRequestHeaders(reqPlan?.headers || {});
+    const paginationParameters = paginationParametersForDraft(draft).filter(
+      (param) => String(param?.responsePath || '').trim() && String(param?.requestPath || '').trim()
+    );
+    const paginationState: Record<string, any> = {};
     let bodyCursorState = isBodyMethod && reqPlan?.body && typeof reqPlan.body === 'object' ? deepClone(reqPlan.body) : {};
     let cursorQueryState: Record<string, any> = {};
     let nextUrlOverride = '';
@@ -3904,6 +4181,8 @@ function handleDefinitionInput(value: string) {
     let totalSize = 0;
     let lastStatus = 0;
     const responses: any[] = [];
+    let lastResponseHash = '';
+    let sameResponseCount = 0;
 
     for (let pageIdx = 0; pageIdx < pagesMax; pageIdx++) {
       const sourceUrl = String(nextUrlOverride || reqPlan?.url || '').trim();
@@ -3914,41 +4193,65 @@ function handleDefinitionInput(value: string) {
         queryObj[k] = v;
       });
       const bodyObj = isBodyMethod ? deepClone(bodyCursorState || {}) : undefined;
+      const headersObj: Record<string, any> = { ...baseHeaders };
 
       if (draft.paginationEnabled) {
-        if (draft.paginationStrategy === 'page_number') {
-          const p = draft.paginationPageParam || 'page';
-          if (draft.paginationTarget === 'query') queryObj[p] = currentPage;
-          else if (bodyObj) setByPath(bodyObj, p, currentPage);
-        } else if (draft.paginationStrategy === 'offset_limit') {
-          const off = draft.paginationPageParam || 'offset';
-          const lim = draft.paginationLimitParam || 'limit';
-          const limVal = Number(draft.paginationLimitValue || 100);
-          if (draft.paginationTarget === 'query') {
-            queryObj[off] = currentOffset;
-            queryObj[lim] = limVal;
-          } else if (bodyObj) {
-            setByPath(bodyObj, off, currentOffset);
-            setByPath(bodyObj, lim, limVal);
+        if (paginationParameters.length) {
+          for (const param of paginationParameters) {
+            const value = paginationState[param.id];
+            if (value === undefined || value === null) continue;
+            applyPaginationValueToRequest(param, value, queryObj, bodyObj, headersObj);
           }
-        } else if (draft.paginationStrategy === 'cursor_fields') {
-          if (draft.paginationCursorReqPath1) {
+        } else {
+          if (draft.paginationStrategy === 'page_number') {
+            const p = draft.paginationPageParam || 'page';
+            if (draft.paginationTarget === 'query') queryObj[p] = currentPage;
+            else if (bodyObj) setByPath(bodyObj, p, currentPage);
+          } else if (draft.paginationStrategy === 'offset_limit') {
+            const off = draft.paginationPageParam || 'offset';
+            const lim = draft.paginationLimitParam || 'limit';
+            const limVal = Number(draft.paginationLimitValue || 100);
             if (draft.paginationTarget === 'query') {
-              const v = cursorQueryState[draft.paginationCursorReqPath1];
-              if (v !== undefined && v !== null) queryObj[draft.paginationCursorReqPath1] = v;
+              queryObj[off] = currentOffset;
+              queryObj[lim] = limVal;
             } else if (bodyObj) {
-              const v = getByPath(bodyCursorState, draft.paginationCursorReqPath1);
-              if (v !== undefined && v !== null) setByPath(bodyObj, draft.paginationCursorReqPath1, v);
+              setByPath(bodyObj, off, currentOffset);
+              setByPath(bodyObj, lim, limVal);
+            }
+          } else if (draft.paginationStrategy === 'cursor_fields') {
+            if (draft.paginationCursorReqPath1) {
+              if (draft.paginationTarget === 'query') {
+                const v = cursorQueryState[draft.paginationCursorReqPath1];
+                if (v !== undefined && v !== null) queryObj[draft.paginationCursorReqPath1] = v;
+              } else if (bodyObj) {
+                const v = getByPath(bodyCursorState, draft.paginationCursorReqPath1);
+                if (v !== undefined && v !== null) setByPath(bodyObj, draft.paginationCursorReqPath1, v);
+              }
+            }
+            if (draft.paginationCursorReqPath2) {
+              if (draft.paginationTarget === 'query') {
+                const v = cursorQueryState[draft.paginationCursorReqPath2];
+                if (v !== undefined && v !== null) queryObj[draft.paginationCursorReqPath2] = v;
+              } else if (bodyObj) {
+                const v = getByPath(bodyCursorState, draft.paginationCursorReqPath2);
+                if (v !== undefined && v !== null) setByPath(bodyObj, draft.paginationCursorReqPath2, v);
+              }
             }
           }
-          if (draft.paginationCursorReqPath2) {
-            if (draft.paginationTarget === 'query') {
-              const v = cursorQueryState[draft.paginationCursorReqPath2];
-              if (v !== undefined && v !== null) queryObj[draft.paginationCursorReqPath2] = v;
-            } else if (bodyObj) {
-              const v = getByPath(bodyCursorState, draft.paginationCursorReqPath2);
-              if (v !== undefined && v !== null) setByPath(bodyObj, draft.paginationCursorReqPath2, v);
-            }
+        }
+      }
+
+      if (paginationParameters.length) {
+        const tokenMap: Record<string, any> = {};
+        paginationParameters.forEach((param) => {
+          const value = paginationState[param.id];
+          if (value !== undefined && value !== null) tokenMap[param.alias] = value;
+        });
+        if (Object.keys(tokenMap).length) {
+          applyParametersToValue(headersObj, tokenMap);
+          applyParametersToValue(queryObj, tokenMap);
+          if (bodyObj && typeof bodyObj === 'object') {
+            applyParametersToValue(bodyObj, tokenMap);
           }
         }
       }
@@ -3959,9 +4262,14 @@ function handleDefinitionInput(value: string) {
         u.searchParams.set(k, String(v));
       });
       const finalUrl = u.toString();
+      const requestHeaders: Record<string, string> = {};
+      Object.entries(headersObj).forEach(([k, v]) => {
+        if (v === undefined || v === null) return;
+        requestHeaders[String(k)] = String(v);
+      });
       const init: RequestInit = {
         method,
-        headers: baseHeaders
+        headers: requestHeaders
       };
       if (isBodyMethod) {
         init.body = JSON.stringify(bodyObj || {});
@@ -3971,7 +4279,7 @@ function handleDefinitionInput(value: string) {
         const sentReq: Record<string, any> = {
           method,
           url: finalUrl,
-          headers: { ...baseHeaders },
+          headers: { ...requestHeaders },
           query: deepClone(queryObj || {}),
           body: isBodyMethod ? deepClone(bodyObj || {}) : undefined,
           page: pageIdx + 1
@@ -3998,6 +4306,10 @@ function handleDefinitionInput(value: string) {
       else failed += 1;
       totalItems += countPayloadItems(parsed ?? txt);
       requestCount += 1;
+      const currentHash = responseFingerprint(parsed ?? txt);
+      if (currentHash && currentHash === lastResponseHash) sameResponseCount += 1;
+      else sameResponseCount = 1;
+      lastResponseHash = currentHash;
 
       const responseEntry: Record<string, any> = {
         page: pageIdx + 1,
@@ -4017,7 +4329,16 @@ function handleDefinitionInput(value: string) {
       }
 
       let stop = false;
-      if (draft.paginationStrategy === 'page_number') {
+      if (paginationParameters.length) {
+        let updated = 0;
+        for (const param of paginationParameters) {
+          const value = readPaginationValueFromResponse(parsed, param);
+          if (value === undefined || value === null) continue;
+          paginationState[param.id] = value;
+          updated += 1;
+        }
+        if (!updated) stop = true;
+      } else if (draft.paginationStrategy === 'page_number') {
         currentPage += 1;
       } else if (draft.paginationStrategy === 'offset_limit') {
         currentOffset += Number(draft.paginationLimitValue || 100);
@@ -4052,6 +4373,9 @@ function handleDefinitionInput(value: string) {
       } else if (draft.paginationStrategy === 'custom') {
         stop = true;
       } else {
+        stop = true;
+      }
+      if (!stop && draft.paginationEnabled && sameResponseCount >= 5) {
         stop = true;
       }
       if (stop) break;
@@ -4265,136 +4589,43 @@ function handleDefinitionInput(value: string) {
       }
       applyBindingRulesToRequest(sanitizedAliases.bindingRules, parameterValues, authHdr, hdr, queryObjBase, bodyObjBase);
 
-      let nextUrlOverride = '';
-      const pagesMax = s.paginationEnabled ? Math.max(1, Number(s.paginationMaxPages || 1)) : 1;
       const startTime = Date.now();
-      let totalSize = 0;
-      const pagePayloads: any[] = [];
-      let lastStatus = 0;
-      let pageCounter = 0;
-      let currentPage = Number(s.paginationStartPage || 1);
-      let currentOffset = Number(s.paginationStartPage || 0);
-      const sentRequests: any[] = [];
-
-      for (let pageIdx = 0; pageIdx < pagesMax; pageIdx++) {
-        const queryObj = JSON.parse(JSON.stringify(queryObjBase || {}));
-        const bodyObj = JSON.parse(JSON.stringify(bodyObjBase || {}));
-
-        if (s.paginationEnabled) {
-          if (s.paginationStrategy === 'page_number') {
-            const p = s.paginationPageParam || 'page';
-            if (s.paginationTarget === 'query') queryObj[p] = currentPage;
-            else setByPath(bodyObj, p, currentPage);
-          } else if (s.paginationStrategy === 'offset_limit') {
-            const off = s.paginationPageParam || 'offset';
-            const lim = s.paginationLimitParam || 'limit';
-            const limVal = Number(s.paginationLimitValue || 100);
-            if (s.paginationTarget === 'query') {
-              queryObj[off] = currentOffset;
-              queryObj[lim] = limVal;
-            } else {
-              setByPath(bodyObj, off, currentOffset);
-              setByPath(bodyObj, lim, limVal);
-            }
-          }
-        }
-
-        let url = nextUrlOverride || `${s.baseUrl.replace(/\/$/, '')}${s.path.startsWith('/') ? s.path : `/${s.path}`}`;
-        if (hasParameterValues) {
-          url = replaceParameterTokens(url, parameterValues);
-        }
-        const u = new URL(url);
-        for (const [k, v] of Object.entries(queryObj || {})) u.searchParams.set(k, String(v));
-        url = u.toString();
-
-        const unresolvedTokens = new Set<string>();
-        collectParameterTokens(url, unresolvedTokens);
-        collectParameterTokens(authHdr, unresolvedTokens);
-        collectParameterTokens(hdr, unresolvedTokens);
-        collectParameterTokens(queryObj, unresolvedTokens);
-        collectParameterTokens(bodyObj, unresolvedTokens);
-        if (unresolvedTokens.size) {
-          const detail = Array.from(unresolvedTokens).map((alias) => {
-            const issueByAlias = findAliasInMap(parameterIssues, alias);
-            if (issueByAlias.found) return `${alias} (${issueByAlias.value})`;
-            if (!knownAliasesLower.has(alias.toLowerCase())) return `${alias} (нет параметра с таким alias)`;
-            return `${alias} (значение не вычислено)`;
-          });
-          throw new Error(`Не удалось подставить параметры: ${detail.join(', ')}`);
-        }
-
-        const init: RequestInit = {
-          method: s.method,
-          headers: { 'Content-Type': 'application/json', ...authHdr, ...hdr }
-        };
-        if (s.method !== 'GET' && s.method !== 'DELETE') {
-          init.body = JSON.stringify(bodyObj || {});
-        }
-        if (sentRequests.length < REQUEST_PREVIEW_MAX) {
-          sentRequests.push({
-            page: pageIdx + 1,
-            method: s.method,
-            url,
-            headers: { 'Content-Type': 'application/json', ...authHdr, ...hdr },
-            query: JSON.parse(JSON.stringify(queryObj || {})),
-            body: s.method === 'GET' || s.method === 'DELETE' ? undefined : JSON.parse(JSON.stringify(bodyObj || {}))
-          });
-        }
-
-        const proxied = await runHttpRequestViaServer(url, init, 60_000);
-        lastStatus = Number(proxied?.status || 0);
-        const txt = String(proxied?.body_text || '');
-        const parsed = proxied?.body_json !== undefined ? proxied.body_json : (() => {
-          try {
-            return txt ? JSON.parse(txt) : null;
-          } catch {
-            return null;
-          }
-        })();
-        totalSize += txt ? txt.length : 0;
-        pagePayloads.push(parsed ?? txt);
-        pageCounter += 1;
-        responseStatus = lastStatus;
-        responseText = txt;
-
-        if (!s.paginationEnabled) break;
-
-        const dataPath = String(s.paginationDataPath || '').trim();
-        if (dataPath && parsed) {
-          const items = getByPath(parsed, dataPath);
-          if (Array.isArray(items) && items.length === 0) break;
-        }
-
-        if (s.paginationStrategy === 'page_number') {
-          currentPage += 1;
-        } else if (s.paginationStrategy === 'offset_limit') {
-          currentOffset += Number(s.paginationLimitValue || 100);
-        } else if (s.paginationStrategy === 'cursor_fields') {
-          const v1 = s.paginationCursorResPath1 ? getByPath(parsed, s.paginationCursorResPath1) : undefined;
-          const v2 = s.paginationCursorResPath2 ? getByPath(parsed, s.paginationCursorResPath2) : undefined;
-          if (v1 == null && v2 == null) break;
-          if (s.paginationCursorReqPath1) {
-            if (s.paginationTarget === 'query') queryObjBase[s.paginationCursorReqPath1] = v1;
-            else setByPath(bodyObjBase, s.paginationCursorReqPath1, v1);
-          }
-          if (s.paginationCursorReqPath2) {
-            if (s.paginationTarget === 'query') queryObjBase[s.paginationCursorReqPath2] = v2;
-            else setByPath(bodyObjBase, s.paginationCursorReqPath2, v2);
-          }
-        } else if (s.paginationStrategy === 'next_url') {
-          const n = s.paginationNextUrlPath ? getByPath(parsed, s.paginationNextUrlPath) : undefined;
-          if (!n || typeof n !== 'string') break;
-          nextUrlOverride = n;
-        } else if (s.paginationStrategy === 'custom') {
-          break;
-        } else {
-          break;
-        }
-
-        if (Number(s.paginationDelayMs || 0) > 0) {
-          await new Promise((resolve) => setTimeout(resolve, Number(s.paginationDelayMs || 0)));
-        }
+      let url = `${s.baseUrl.replace(/\/$/, '')}${s.path.startsWith('/') ? s.path : `/${s.path}`}`;
+      if (hasParameterValues) {
+        url = replaceParameterTokens(url, parameterValues);
       }
+      const u = new URL(url);
+      Object.entries(queryObjBase || {}).forEach(([k, v]) => u.searchParams.set(k, String(v)));
+      url = u.toString();
+
+      const unresolvedTokens = new Set<string>();
+      collectParameterTokens(url, unresolvedTokens);
+      collectParameterTokens(authHdr, unresolvedTokens);
+      collectParameterTokens(hdr, unresolvedTokens);
+      collectParameterTokens(queryObjBase, unresolvedTokens);
+      collectParameterTokens(bodyObjBase, unresolvedTokens);
+      if (unresolvedTokens.size) {
+        const detail = Array.from(unresolvedTokens).map((alias) => {
+          const issueByAlias = findAliasInMap(parameterIssues, alias);
+          if (issueByAlias.found) return `${alias} (${issueByAlias.value})`;
+          if (!knownAliasesLower.has(alias.toLowerCase())) return `${alias} (нет параметра с таким alias)`;
+          return `${alias} (значение не вычислено)`;
+        });
+        throw new Error(`Не удалось подставить параметры: ${detail.join(', ')}`);
+      }
+
+      const reqPlan = {
+        method: s.method,
+        url,
+        headers: { 'Content-Type': 'application/json', ...authHdr, ...hdr },
+        body: s.method === 'GET' || s.method === 'DELETE' ? undefined : bodyObjBase
+      };
+      const sentRequests: any[] = [];
+      const run = await executePlannedRequestWithPagination(s, reqPlan, sentRequests);
+      const pageCounter = run.requestCount;
+      const pagePayloads = run.responses.map((entry) => entry?.response);
+      const totalSize = run.totalSize;
+      const lastStatus = Number(run.lastStatus || 0);
 
       const sentPreviewPayload =
         pageCounter <= 1
@@ -4420,14 +4651,23 @@ function handleDefinitionInput(value: string) {
           ? `Показаны отправленные запросы по страницам: ${pageCounter}`
           : 'Показан последний отправленный запрос';
 
+      responseStatus = lastStatus;
       if (s.paginationEnabled && pagePayloads.length > 1) {
-        responseText = JSON.stringify({ pages: pageCounter, last_status: lastStatus, samples: pagePayloads }, null, 2);
+        responseText = JSON.stringify({ pages: pageCounter, last_status: lastStatus, responses: pagePayloads }, null, 2);
+      } else if (pagePayloads.length) {
+        const first = pagePayloads[0];
+        responseText = typeof first === 'string' ? first : JSON.stringify(first, null, 2);
       }
       responsePagesCount = pagePayloads.length;
-      responsePayloadCount = pagePayloads.reduce((sum, item) => sum + countPayloadItems(item), 0);
+      responsePayloadCount = run.totalItems;
       responsePayloadSize = totalSize;
       responseTimeMs = Date.now() - startTime;
-      ok = s.paginationEnabled ? `Проверка выполнена, страниц: ${pageCounter}` : 'Проверка выполнена';
+      ok =
+        run.failed > 0
+          ? `Проверка завершена: успех ${run.success}, ошибок ${run.failed}`
+          : s.paginationEnabled
+          ? `Проверка выполнена, страниц: ${pageCounter}`
+          : 'Проверка выполнена';
     } catch (e: any) {
       err = toUiErrorMessage(e);
     } finally {
@@ -4496,7 +4736,10 @@ function handleDefinitionInput(value: string) {
     const cursorFirst = all.filter((p) => p.toLowerCase().includes('cursor'));
     const rest = all.filter((p) => !p.toLowerCase().includes('cursor'));
     paginationCursorResponsePathOptions = [...new Set([...cursorFirst, ...rest])];
-    if (!paginationCursorResponsePathOptions.includes(paginationCursorResponsePick)) {
+    const activePath = String(activePaginationParameter?.responsePath || '').trim();
+    if (activePath && paginationCursorResponsePathOptions.includes(activePath)) {
+      paginationCursorResponsePick = activePath;
+    } else if (!paginationCursorResponsePathOptions.includes(paginationCursorResponsePick)) {
       paginationCursorResponsePick = paginationCursorResponsePathOptions[0] || '';
     }
   }
@@ -5354,7 +5597,7 @@ function syncParameterEditorsHeight() {
 
         <div class="pagination-box">
           <div class="response-head field-head">
-            <span>Мастер пагинации</span>
+            <span>Параметры пагинации</span>
             <label class="pagination-toggle">
               <input
                 type="checkbox"
@@ -5365,23 +5608,90 @@ function syncParameterEditorsHeight() {
             </label>
           </div>
           {#if selected?.paginationEnabled}
-            <div class="pagination-wizard">
-              <div class="pagination-step">
-                <div class="pagination-step-title">1. Правила чтения ответа и подстановки в body</div>
-                <div class="pagination-grid">
-                  <div class="pagination-field">
-                    <small>Путь к массиву в ответе</small>
-                    <input
-                      placeholder="Например: cards"
-                      value={selected?.paginationDataPath || ''}
-                      on:input={(e) => mutateSelected((d) => (d.paginationDataPath = e.currentTarget.value))}
-                    />
+            <div class="data-section">
+              <div class="response-head field-head parameter-subhead">
+                <small>Хлебные крошки параметров</small>
+                <button type="button" class="view-toggle" on:click={addPaginationParameter}>Параметр +</button>
+              </div>
+              {#if selected?.paginationParameters?.length}
+                <div class="crumb-strip">
+                  {#each selected.paginationParameters as param (param.id)}
+                    <div class="entity-crumb-wrap" class:active-crumb-wrap={activePaginationParameterId === param.id}>
+                      <button type="button" class="entity-crumb" on:click={() => setActivePaginationParameter(param.id)}>
+                        {param.alias || 'параметр'}
+                      </button>
+                      <button
+                        type="button"
+                        class="entity-crumb-remove"
+                        class:active-crumb-remove={activePaginationParameterId === param.id}
+                        title="Удалить параметр"
+                        aria-label="Удалить параметр"
+                        on:click|stopPropagation={() => removePaginationParameter(param.id)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  {/each}
+                </div>
+                {#if activePaginationParameter}
+                  <div class="rule-card pagination-param-editor">
+                    <div class="rule-card-head">
+                      <small>Настройка параметра</small>
+                    </div>
+                    <div class="pagination-grid pagination-param-grid">
+                      <div class="pagination-field">
+                        <small>Короткое название</small>
+                        <input
+                          value={activePaginationParameter.alias}
+                          placeholder="cursor_updated_at"
+                          on:input={(e) => updatePaginationParameter(activePaginationParameter.id, { alias: e.currentTarget.value })}
+                        />
+                      </div>
+                      <div class="pagination-field">
+                        <small>Куда подставлять</small>
+                        <select
+                          value={activePaginationParameter.requestTarget}
+                          on:change={(e) => updatePaginationParameter(activePaginationParameter.id, { requestTarget: toPaginationParameterTarget(e.currentTarget.value) })}
+                        >
+                          <option value="body">Body JSON</option>
+                          <option value="query">Query JSON</option>
+                          <option value="header">Headers JSON</option>
+                          <option value="auth">Авторизация</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="pagination-grid pagination-param-grid">
+                      <div class="pagination-field">
+                        <small>Путь в ответе</small>
+                        <input
+                          value={activePaginationParameter.responsePath}
+                          placeholder="cursor.updatedAt"
+                          on:input={(e) => updatePaginationParameter(activePaginationParameter.id, { responsePath: e.currentTarget.value })}
+                        />
+                      </div>
+                      <div class="pagination-field">
+                        <small>Путь в запросе</small>
+                        <input
+                          value={activePaginationParameter.requestPath}
+                          placeholder="settings.cursor.updatedAt"
+                          on:input={(e) => updatePaginationParameter(activePaginationParameter.id, { requestPath: e.currentTarget.value })}
+                        />
+                      </div>
+                    </div>
+                    <label class="pagination-param-check">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(activePaginationParameter.applyForAllResponses)}
+                        on:change={(e) => updatePaginationParameter(activePaginationParameter.id, { applyForAllResponses: e.currentTarget.checked })}
+                      />
+                      <span>Одинаковая для всех ответов в группировке</span>
+                    </label>
                     <div class="pagination-helper-row">
-                      <select bind:value={paginationArrayPathPick} disabled={!paginationArrayPathOptions.length}>
-                        {#if !paginationArrayPathOptions.length}
-                          <option value="">Нет массивов в тестовом ответе</option>
+                      <select bind:value={paginationCursorResponsePick} disabled={!paginationCursorResponsePathOptions.length}>
+                        {#if !paginationCursorResponsePathOptions.length}
+                          <option value="">Нет путей из тестового ответа</option>
                         {:else}
-                          {#each paginationArrayPathOptions as opt}
+                          {#each paginationCursorResponsePathOptions as opt}
                             <option value={opt}>{opt}</option>
                           {/each}
                         {/if}
@@ -5389,64 +5699,46 @@ function syncParameterEditorsHeight() {
                       <button
                         type="button"
                         class="view-toggle"
-                        on:click={applyPickedPaginationArrayPath}
-                        disabled={!paginationArrayPathOptions.length}
+                        on:click={applyPaginationResponsePickToActive}
+                        disabled={!paginationCursorResponsePathOptions.length || !activePaginationParameterId}
                       >
                         Подставить
                       </button>
                       <button
                         type="button"
                         class="view-toggle"
-                        on:click={autoPickPaginationArrayPath}
-                        disabled={!paginationArrayPathOptions.length}
+                        on:click={autoPickPaginationResponsePathForActive}
+                        disabled={!paginationCursorResponsePathOptions.length || !activePaginationParameterId}
                       >
                         Автовыбор
                       </button>
                     </div>
-                    <p class="hint small-hint">Когда массив пустой, пагинация остановится.</p>
+                    <p class="hint small-hint">Автовыбор берет путь из тестового ответа и вставляет его в активный параметр.</p>
                   </div>
-                </div>
-                <div class="pagination-grid">
-                  <div class="pagination-field">
-                    <small>Из ответа: путь 1</small>
-                    <input
-                      value={selected?.paginationCursorResPath1 || ''}
-                      on:input={(e) => mutateSelected((d) => (d.paginationCursorResPath1 = e.currentTarget.value))}
-                    />
-                  </div>
-                  <div class="pagination-field">
-                    <small>В body: путь 1</small>
-                    <input
-                      placeholder="settings.cursor.updatedAt"
-                      value={selected?.paginationCursorReqPath1 || ''}
-                      on:input={(e) => mutateSelected((d) => (d.paginationCursorReqPath1 = e.currentTarget.value))}
-                    />
-                  </div>
-                </div>
-                <div class="pagination-grid">
-                  <div class="pagination-field">
-                    <small>Из ответа: путь 2 (опционально)</small>
-                    <input
-                      value={selected?.paginationCursorResPath2 || ''}
-                      on:input={(e) => mutateSelected((d) => (d.paginationCursorResPath2 = e.currentTarget.value))}
-                    />
-                  </div>
-                  <div class="pagination-field">
-                    <small>В body: путь 2 (опционально)</small>
-                    <input
-                      placeholder="settings.cursor.nmID"
-                      value={selected?.paginationCursorReqPath2 || ''}
-                      on:input={(e) => mutateSelected((d) => (d.paginationCursorReqPath2 = e.currentTarget.value))}
-                    />
-                  </div>
-                </div>
-                <div class="pagination-cursor-helper">
+                {/if}
+              {:else}
+                <p class="hint">Добавь параметр пагинации. Для каждого параметра укажи путь в ответе и путь подстановки в запрос.</p>
+              {/if}
+            </div>
+
+            <div class="data-section">
+              <div class="response-head field-head parameter-subhead">
+                <small>Путь к данным в ответе</small>
+              </div>
+              <div class="pagination-grid">
+                <div class="pagination-field">
+                  <small>Путь к массиву (остановка, когда массив пустой)</small>
+                  <input
+                    placeholder="cards"
+                    value={selected?.paginationDataPath || ''}
+                    on:input={(e) => mutateSelected((d) => (d.paginationDataPath = e.currentTarget.value))}
+                  />
                   <div class="pagination-helper-row">
-                    <select bind:value={paginationCursorResponsePick} disabled={!paginationCursorResponsePathOptions.length}>
-                      {#if !paginationCursorResponsePathOptions.length}
-                        <option value="">Нет подходящих путей в тестовом ответе</option>
+                    <select bind:value={paginationArrayPathPick} disabled={!paginationArrayPathOptions.length}>
+                      {#if !paginationArrayPathOptions.length}
+                        <option value="">Нет массивов в тестовом ответе</option>
                       {:else}
-                        {#each paginationCursorResponsePathOptions as opt}
+                        {#each paginationArrayPathOptions as opt}
                           <option value={opt}>{opt}</option>
                         {/each}
                       {/if}
@@ -5454,62 +5746,52 @@ function syncParameterEditorsHeight() {
                     <button
                       type="button"
                       class="view-toggle"
-                      on:click={() => applyCursorResponsePick(1)}
-                      disabled={!paginationCursorResponsePathOptions.length}
+                      on:click={applyPickedPaginationArrayPath}
+                      disabled={!paginationArrayPathOptions.length}
                     >
-                      В «Из ответа 1»
+                      Подставить
                     </button>
                     <button
                       type="button"
                       class="view-toggle"
-                      on:click={() => applyCursorResponsePick(2)}
-                      disabled={!paginationCursorResponsePathOptions.length}
+                      on:click={autoPickPaginationArrayPath}
+                      disabled={!paginationArrayPathOptions.length}
                     >
-                      В «Из ответа 2»
+                      Автовыбор
                     </button>
-                  </div>
-                  <div class="pagination-cursor-actions">
-                    <button
-                      type="button"
-                      class="view-toggle"
-                      on:click={autoPickCursorResponsePaths}
-                      disabled={!paginationCursorResponsePathOptions.length}
-                    >
-                      Автоподбор из ответа
-                    </button>
-                  </div>
-                </div>
-                <p class="hint small-hint">Это единая настройка: из ответа берем курсоры и подставляем их в body следующего запроса.</p>
-              </div>
-
-              <div class="pagination-step">
-                <div class="pagination-step-title">2. Лимиты и безопасность</div>
-                <div class="pagination-grid">
-                  <div class="pagination-field">
-                    <small>Макс. страниц</small>
-                    <input
-                      type="number"
-                      min="1"
-                      value={selected?.paginationMaxPages || 1}
-                      on:input={(e) => mutateSelected((d) => (d.paginationMaxPages = Number(e.currentTarget.value) || 1))}
-                    />
-                  </div>
-                  <div class="pagination-field">
-                    <small>Delay между запросами (мс)</small>
-                    <input
-                      type="number"
-                      min="0"
-                      value={selected?.paginationDelayMs || 0}
-                      on:input={(e) => mutateSelected((d) => (d.paginationDelayMs = Number(e.currentTarget.value) || 0))}
-                    />
                   </div>
                 </div>
               </div>
             </div>
-            <p class="hint">Логика одна: берем значения из ответа и подставляем в body следующего запроса.</p>
-            <p class="hint small-hint">Стратегия фиксирована: последовательная пагинация по курсорам в body.</p>
+
+            <div class="data-section">
+              <div class="response-head field-head parameter-subhead">
+                <small>Лимиты и безопасность</small>
+              </div>
+              <div class="pagination-grid">
+                <div class="pagination-field">
+                  <small>Макс. страниц</small>
+                  <input
+                    type="number"
+                    min="1"
+                    value={selected?.paginationMaxPages || 1}
+                    on:input={(e) => mutateSelected((d) => (d.paginationMaxPages = Number(e.currentTarget.value) || 1))}
+                  />
+                </div>
+                <div class="pagination-field">
+                  <small>Пауза между запросами (мс)</small>
+                  <input
+                    type="number"
+                    min="0"
+                    value={selected?.paginationDelayMs || 0}
+                    on:input={(e) => mutateSelected((d) => (d.paginationDelayMs = Number(e.currentTarget.value) || 0))}
+                  />
+                </div>
+              </div>
+              <p class="hint small-hint">Защита включена: если подряд пришло 5 одинаковых ответов, пагинация останавливается.</p>
+            </div>
           {:else}
-            <p class="hint">Пагинация отключена. При включении появится пошаговый мастер.</p>
+            <p class="hint">Пагинация отключена. Включи переключатель, затем добавь параметры через «Параметр +».</p>
           {/if}
         </div>
 
@@ -5964,26 +6246,19 @@ function syncParameterEditorsHeight() {
   .empty-preview-state { min-height:96px; display:flex; flex-direction:column; align-items:flex-start; justify-content:center; gap:8px; padding:10px; }
   .pagination-toggle { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#475569; cursor:pointer; }
   .pagination-toggle input { width:auto; }
-  .pagination-wizard {
-    margin-top:10px;
-    display:flex;
-    flex-direction:column;
-    gap:10px;
-  }
-  .pagination-step {
-    border:1px solid #e2e8f0;
-    border-radius:10px;
-    background:#fff;
-    padding:10px;
-  }
-  .pagination-step-title {
-    font-size:12px;
-    font-weight:600;
-    color:#334155;
-    margin-bottom:6px;
-  }
   .pagination-grid { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
   .pagination-field small { display:block; margin-bottom:4px; font-size:11px; color:#64748b; }
+  .pagination-param-editor { margin-top:8px; }
+  .pagination-param-grid { margin-top:0; }
+  .pagination-param-check {
+    margin-top:8px;
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    font-size:12px;
+    color:#334155;
+  }
+  .pagination-param-check input { width:auto; }
   .pagination-helper-row {
     margin-top:6px;
     display:grid;
@@ -5993,16 +6268,6 @@ function syncParameterEditorsHeight() {
   }
   .pagination-helper-row select {
     min-width:0;
-  }
-  .pagination-cursor-helper {
-    margin-top:6px;
-    display:flex;
-    flex-direction:column;
-    gap:6px;
-  }
-  .pagination-cursor-actions {
-    display:flex;
-    justify-content:flex-end;
   }
   .definition-error { margin:0; font-size:11px; color:#b91c1c; }
   @media (max-width: 900px) {
