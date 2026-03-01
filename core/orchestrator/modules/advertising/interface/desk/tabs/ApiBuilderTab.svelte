@@ -50,13 +50,6 @@
     compareValue: string;
   };
 
-  type DataModelPreviewColumn = {
-    id: string;
-    tableId: string;
-    field: string;
-    alias: string;
-  };
-
   type ApiDraft = {
     localId: string;
     storeId?: number;
@@ -111,7 +104,6 @@
     dataJoins: DataModelJoin[];
     dataFields: DataModelField[];
     dataFilters: DataModelFilter[];
-    previewColumns: DataModelPreviewColumn[];
   };
 
   type ParameterCondition = {
@@ -495,8 +487,7 @@ function formatBytes(bytes: number) {
       dataTables: [],
       dataJoins: [],
       dataFields: [],
-      dataFilters: [],
-      previewColumns: []
+      dataFilters: []
     };
   }
 
@@ -640,14 +631,6 @@ function formatBytes(bytes: number) {
         compareValue: String(f?.compare_value || f?.compareValue || '').trim()
       }))
       .filter((f: DataModelFilter) => f.tableId && f.field && dataTableIdSet.has(f.tableId));
-    const normalizedPreviewColumns = (Array.isArray(dataModelCfg?.preview_columns) ? dataModelCfg.preview_columns : [])
-      .map((c: any, idx: number) => ({
-        id: String(c?.id || `pc${idx}`),
-        tableId: String(c?.table_id || c?.tableId || '').trim(),
-        field: String(c?.field || '').trim(),
-        alias: String(c?.alias || c?.field || `preview_${idx + 1}`).trim()
-      }))
-      .filter((c: DataModelPreviewColumn) => c.tableId && c.field && c.alias && dataTableIdSet.has(c.tableId));
     const dispatchMode = toDispatchMode(String(row?.dispatch_mode || executionCfg?.dispatch_mode || 'single'));
     const bodyItemsPath = String(row?.body_items_path || executionCfg?.body_items_path || 'items').trim() || 'items';
     const previewRequestLimit = Number.isFinite(Number(row?.preview_request_limit))
@@ -748,8 +731,7 @@ function formatBytes(bytes: number) {
       dataTables: normalizedDataTables,
       dataJoins: normalizedDataJoins,
       dataFields: normalizedDataFields,
-      dataFilters: normalizedDataFilters,
-      previewColumns: normalizedPreviewColumns
+      dataFilters: normalizedDataFilters
     };
   }
 
@@ -859,12 +841,6 @@ function formatBytes(bytes: number) {
             field: f.field,
             operator: f.operator,
             compare_value: f.compareValue
-          })),
-          preview_columns: d.previewColumns.map((c) => ({
-            id: c.id,
-            table_id: c.tableId,
-            field: c.field,
-            alias: c.alias
           }))
         },
         binding_rules: sanitizedAliases.bindingRules.map((rule) => ({
@@ -2145,7 +2121,6 @@ function formatBytes(bytes: number) {
       d.dataJoins = d.dataJoins.filter((j) => j.leftTableId !== tableId && j.rightTableId !== tableId);
       d.dataFields = d.dataFields.filter((f) => f.tableId !== tableId);
       d.dataFilters = d.dataFilters.filter((f) => f.tableId !== tableId);
-      d.previewColumns = d.previewColumns.filter((c) => c.tableId !== tableId);
     });
     if (activeDataTableId === tableId) activeDataTableId = '';
   }
@@ -2307,50 +2282,6 @@ function formatBytes(bytes: number) {
       items.splice(nextIdx, 0, item);
       d.dataFields = items;
     });
-  }
-
-  function addPreviewColumn() {
-    if (!selected) return;
-    const tableId = selected.dataTables[0]?.id || '';
-    if (!tableId) {
-      err = 'Сначала добавь таблицы для работы.';
-      return;
-    }
-    err = '';
-    mutateSelected((d) => {
-      const idx = (d.previewColumns?.length || 0) + 1;
-      d.previewColumns = [
-        ...(Array.isArray(d.previewColumns) ? d.previewColumns : []),
-        {
-          id: uid(),
-          tableId,
-          field: '',
-          alias: `preview_${idx}`
-        }
-      ];
-    });
-    ensureDataTableColumnsLoaded(tableId);
-  }
-
-  function updatePreviewColumn(columnId: string, patch: Partial<DataModelPreviewColumn>) {
-    mutateSelected((d) => {
-      d.previewColumns = d.previewColumns.map((c) => (c.id === columnId ? { ...c, ...patch } : c));
-    });
-  }
-
-  function removePreviewColumn(columnId: string) {
-    mutateSelected((d) => {
-      d.previewColumns = d.previewColumns.filter((c) => c.id !== columnId);
-    });
-  }
-
-  function effectivePreviewColumns(draft: ApiDraft | null) {
-    if (!draft) return [] as DataModelPreviewColumn[];
-    const configured = (draft.previewColumns || []).filter((c) => c.tableId && c.field && c.alias);
-    if (configured.length) return configured;
-    return (draft.dataFields || [])
-      .filter((f) => f.tableId && f.field && f.alias)
-      .map((f) => ({ id: `from_field_${f.id}`, tableId: f.tableId, field: f.field, alias: f.alias }));
   }
 
   function tableColumnsById(draft: ApiDraft | null, tableId: string) {
@@ -2522,10 +2453,12 @@ function formatBytes(bytes: number) {
       datasetPreviewError = 'Добавь хотя бы одну таблицу.';
       return;
     }
-    const previewCols = effectivePreviewColumns(selected);
+    const previewCols = (selected.dataFields || [])
+      .filter((f) => String(f?.tableId || '').trim() && String(f?.field || '').trim() && String(f?.alias || '').trim())
+      .map((f) => ({ id: f.id, tableId: f.tableId, field: f.field, alias: f.alias }));
     if (!previewCols.length) {
       datasetPreviewColumns = [];
-      datasetPreviewError = 'Добавь хотя бы одну колонку предпросмотра.';
+      datasetPreviewError = 'Добавь хотя бы один показатель для работы.';
       return;
     }
     datasetPreviewLoading = true;
@@ -2560,12 +2493,6 @@ function formatBytes(bytes: number) {
       alias: f.alias,
       grouped: Boolean(f.grouped)
     }));
-    const previewColumns = (draft.previewColumns || []).map((c) => ({
-      id: c.id,
-      tableId: c.tableId,
-      field: c.field,
-      alias: c.alias
-    }));
     const joins = (draft.dataJoins || []).map((j) => ({
       id: j.id,
       leftTableId: j.leftTableId,
@@ -2581,7 +2508,7 @@ function formatBytes(bytes: number) {
       operator: f.operator,
       compareValue: f.compareValue
     }));
-    return JSON.stringify({ tables, fields, previewColumns, joins, filters });
+    return JSON.stringify({ tables, fields, joins, filters });
   }
 
   function handlePaginationStrategyChange(value: string) {
@@ -4747,43 +4674,6 @@ function syncParameterEditorsHeight() {
                 <span class="hint small-hint">{datasetPreviewLoading ? 'Обновляется...' : 'Обновляется автоматически'}</span>
               </div>
 
-              <div class="preview-config-wrap">
-                <div class="response-head field-head preview-columns-head">
-                  <small>Колонки предпросмотра</small>
-                  <button type="button" class="view-toggle" on:click={addPreviewColumn}>Колонка +</button>
-                </div>
-                {#if selected?.previewColumns?.length}
-                  <div class="data-list">
-                    {#each selected.previewColumns as c (c.id)}
-                      <div class="data-row preview-column-row">
-                        <select
-                          value={c.tableId}
-                          on:change={(e) => {
-                            updatePreviewColumn(c.id, { tableId: e.currentTarget.value, field: '' });
-                            ensureDataTableColumnsLoaded(e.currentTarget.value);
-                          }}
-                        >
-                          <option value="">Таблица</option>
-                          {#each selected.dataTables as t}
-                            <option value={t.id}>{t.schema}.{t.table}</option>
-                          {/each}
-                        </select>
-                        <select value={c.field} on:change={(e) => updatePreviewColumn(c.id, { field: e.currentTarget.value })}>
-                          <option value="">Колонка</option>
-                          {#each tableColumnsById(selected, c.tableId) as col}
-                            <option value={col}>{col}</option>
-                          {/each}
-                        </select>
-                        <input value={c.alias} placeholder="Название колонки в превью" on:input={(e) => updatePreviewColumn(c.id, { alias: e.currentTarget.value })} />
-                        <button type="button" class="chip-remove" on:click={() => removePreviewColumn(c.id)}>x</button>
-                      </div>
-                    {/each}
-                  </div>
-                {:else}
-                  <p class="hint small-hint">Если колонки превью не заданы, используются «Показатели для работы».</p>
-                {/if}
-              </div>
-
               {#if datasetPreviewError}
                 <p class="definition-error">{datasetPreviewError}</p>
               {/if}
@@ -4815,7 +4705,7 @@ function syncParameterEditorsHeight() {
                   </table>
                 {:else}
                   <div class="empty-preview-state">
-                    <p class="hint">Добавь колонки предпросмотра через «Колонка +».</p>
+                    <p class="hint">Добавь показатели для работы, чтобы увидеть предпросмотр.</p>
                   </div>
                 {/if}
               </div>
@@ -5343,9 +5233,6 @@ function syncParameterEditorsHeight() {
   .join-rule-row { grid-template-columns: 1fr 1fr 80px 1fr 1fr 1fr; }
   .filter-rule-row { grid-template-columns: 1.2fr 1fr 1fr 1fr; }
   .param-row { grid-template-columns: 1.2fr 1fr 1fr 140px 72px auto; }
-  .preview-column-row { grid-template-columns: 1.2fr 1fr 1fr auto; }
-  .preview-config-wrap { border:1px dashed #dbe3ef; border-radius:10px; padding:8px; background:#fff; }
-  .preview-columns-head { margin-bottom:6px; }
   .group-flag {
     display:flex;
     align-items:center;
@@ -5392,7 +5279,7 @@ function syncParameterEditorsHeight() {
     .connect-actions { justify-content:flex-start; flex-wrap:wrap; }
     .raw-grid { grid-template-columns: 1fr; }
     .saved-inline-actions { grid-template-columns: 1fr; }
-    .data-row, .table-rule-row, .join-rule-row, .filter-rule-row, .param-row, .preview-column-row { grid-template-columns: 1fr; }
+    .data-row, .table-rule-row, .join-rule-row, .filter-rule-row, .param-row { grid-template-columns: 1fr; }
   }
 </style>
 
