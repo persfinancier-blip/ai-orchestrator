@@ -257,6 +257,8 @@
   let api_storage_table = 'api_configs_store';
   let api_storage_picker_open = false;
   let api_storage_pick_value = '';
+  let response_log_picker_open = false;
+  let response_log_pick_value = '';
 
   let loading = false;
   let saving = false;
@@ -1173,6 +1175,61 @@ function formatBytes(bytes: number) {
 
   function formatQualifiedTable(schema: string, table: string): string {
     return schema && table ? `${schema}.${table}` : '';
+  }
+
+  function responseLogQualifiedTable(draft: ApiDraft | null): string {
+    if (!draft) return '';
+    return formatQualifiedTable(String(draft.responseLogSchema || '').trim(), String(draft.responseLogTable || '').trim());
+  }
+
+  function toggleResponseLogPicker() {
+    response_log_picker_open = !response_log_picker_open;
+    response_log_pick_value = responseLogQualifiedTable(selected);
+  }
+
+  function toggleResponseLogEnabled() {
+    mutateSelected((d) => {
+      d.responseLogEnabled = !Boolean(d.responseLogEnabled);
+      if (
+        d.responseLogEnabled &&
+        (!String(d.responseLogSchema || '').trim() || !String(d.responseLogTable || '').trim()) &&
+        Array.isArray(existingTables) &&
+        existingTables.length
+      ) {
+        d.responseLogSchema = String(existingTables[0].schema_name || '').trim();
+        d.responseLogTable = String(existingTables[0].table_name || '').trim();
+      }
+    });
+  }
+
+  function isConnectedTable(schema: string, table: string) {
+    const s = String(schema || '').trim();
+    const t = String(table || '').trim();
+    if (!s || !t) return false;
+    return existingTables.some(
+      (item) => String(item?.schema_name || '').trim() === s && String(item?.table_name || '').trim() === t
+    );
+  }
+
+  function applyResponseLogChoice() {
+    err = '';
+    const [schema, table] = String(response_log_pick_value || '').split('.');
+    const schemaTrimmed = String(schema || '').trim();
+    const tableTrimmed = String(table || '').trim();
+    if (!schemaTrimmed || !tableTrimmed) {
+      err = 'Выбери таблицу лога из списка подключённых.';
+      return;
+    }
+    const hasTarget = isConnectedTable(schemaTrimmed, tableTrimmed);
+    if (!hasTarget) {
+      err = 'Таблица лога должна быть из списка подключённых таблиц.';
+      return;
+    }
+    mutateSelected((d) => {
+      d.responseLogSchema = schemaTrimmed;
+      d.responseLogTable = tableTrimmed;
+    });
+    response_log_picker_open = false;
   }
 
   function tableCacheKey(schema: string, table: string) {
@@ -6116,6 +6173,8 @@ function handleDefinitionInput(value: string) {
       myPreviewApplyMessage = '';
       myApiPreview = '';
       myApiPreviewDraft = '';
+      response_log_picker_open = false;
+      response_log_pick_value = responseLogQualifiedTable(selected);
       activeResponseFieldRef = '';
       datasetPreviewRows = [];
       datasetPreviewColumns = [];
@@ -6125,6 +6184,19 @@ function handleDefinitionInput(value: string) {
   }
   $: if (!myPreviewDirty) {
     myApiPreviewDraft = myApiPreview;
+  }
+  $: if (selected?.responseLogEnabled) {
+    const currentSchema = String(selected.responseLogSchema || '').trim();
+    const currentTable = String(selected.responseLogTable || '').trim();
+    if (existingTables.length && !isConnectedTable(currentSchema, currentTable)) {
+      const fallback = existingTables[0];
+      if (fallback) {
+        mutateSelected((d) => {
+          d.responseLogSchema = String(fallback.schema_name || '').trim();
+          d.responseLogTable = String(fallback.table_name || '').trim();
+        });
+      }
+    }
   }
   $: {
     const txt = String(responseText || '').trim();
@@ -6507,6 +6579,7 @@ function syncParameterEditorsHeight() {
                 <option value="sync">Синхронный</option>
                 <option value="async">Асинхронный</option>
               </select>
+              <p class="hint small-hint">Синхронный: обрабатывает сущности последовательно. Проще контролировать и разбирать ошибки.</p>
             </div>
             {#if (selected?.executionMode || 'sync') === 'sync'}
               <div class="pagination-field">
@@ -6521,6 +6594,11 @@ function syncParameterEditorsHeight() {
                   <option value="entity_to_stop">До остановки сущности</option>
                   <option value="by_wave">По шагу (волнами)</option>
                 </select>
+                {#if (selected?.syncPlanner || 'entity_to_stop') === 'entity_to_stop'}
+                  <p class="hint small-hint">До остановки сущности: сначала полностью одна сущность, потом следующая.</p>
+                {:else}
+                  <p class="hint small-hint">По шагу (волнами): шаг 1 по всем сущностям, потом шаг 2 и так далее.</p>
+                {/if}
               </div>
             {:else}
               <div class="pagination-field">
@@ -6535,62 +6613,54 @@ function syncParameterEditorsHeight() {
                       d.asyncConcurrency = Math.max(1, Math.min(20, Number(e.currentTarget.value) || 3));
                     })}
                 />
+                <p class="hint small-hint">Сколько сущностей запускать одновременно. Внутри одной сущности страницы всегда идут по порядку.</p>
               </div>
             {/if}
           </div>
+          {#if (selected?.executionMode || 'sync') === 'async'}
+            <p class="hint small-hint">Асинхронный: несколько сущностей выполняются параллельно для ускорения.</p>
+          {/if}
           <p class="hint small-hint">Причины отправки итерации пишутся в лог: initial_request, pagination_values_updated, page_increment, offset_increment, cursor_updated, next_url_received.</p>
 
           <div class="response-head field-head parameter-subhead">
             <small>Лог ответов API</small>
-            <label class="pagination-toggle">
-              <input
-                type="checkbox"
-                checked={selected?.responseLogEnabled}
-                on:change={(e) => mutateSelected((d) => (d.responseLogEnabled = e.currentTarget.checked))}
-              />
-              <span>Записывать шаги в таблицу</span>
-            </label>
+            <button
+              type="button"
+              class="group-toggle"
+              class:active-group-toggle={Boolean(selected?.responseLogEnabled)}
+              on:click={toggleResponseLogEnabled}
+              aria-pressed={Boolean(selected?.responseLogEnabled)}
+            >
+              <span>{selected?.responseLogEnabled ? 'Лог включен (пишется)' : 'Лог выключен (не пишется)'}</span>
+              {#if Boolean(selected?.responseLogEnabled)}
+                <span class="group-toggle-indicator"></span>
+              {/if}
+            </button>
           </div>
           {#if selected?.responseLogEnabled}
-            <div class="pagination-grid">
-              <div class="pagination-field">
-                <small>Схема таблицы лога</small>
-                <input
-                  value={selected?.responseLogSchema || ''}
-                  placeholder="bronze"
-                  on:input={(e) => mutateSelected((d) => (d.responseLogSchema = e.currentTarget.value))}
-                />
-              </div>
-              <div class="pagination-field">
-                <small>Таблица лога</small>
-                <input
-                  value={selected?.responseLogTable || ''}
-                  placeholder="wb_ads_raw"
-                  on:input={(e) => mutateSelected((d) => (d.responseLogTable = e.currentTarget.value))}
-                />
-              </div>
+            <div class="storage-meta">
+              <span>Хранятся в таблице:</span>
+              <button
+                class="link-btn"
+                type="button"
+                on:click={toggleResponseLogPicker}
+              >
+                {responseLogQualifiedTable(selected) || 'выбери таблицу'}
+              </button>
             </div>
-            <div class="pagination-grid">
-              <div class="pagination-field">
-                <small>Быстрый выбор из подключённых таблиц</small>
-                <select
-                  on:change={(e) => {
-                    const value = String(e.currentTarget.value || '').trim();
-                    if (!value) return;
-                    const [schema, table] = value.split('.');
-                    mutateSelected((d) => {
-                      d.responseLogSchema = schema || d.responseLogSchema;
-                      d.responseLogTable = table || d.responseLogTable;
-                    });
-                  }}
-                >
-                  <option value="">Выбери таблицу</option>
+            {#if response_log_picker_open}
+              <div class="storage-picker">
+                <select bind:value={response_log_pick_value}>
+                  {#if response_log_pick_value && !existingTables.some((t) => `${t.schema_name}.${t.table_name}` === response_log_pick_value)}
+                    <option value={response_log_pick_value}>{response_log_pick_value}</option>
+                  {/if}
                   {#each existingTables as et}
                     <option value={`${et.schema_name}.${et.table_name}`}>{et.schema_name}.{et.table_name}</option>
                   {/each}
                 </select>
+                <button type="button" on:click={applyResponseLogChoice} disabled={!response_log_pick_value}>Подключить</button>
               </div>
-            </div>
+            {/if}
             <p class="hint small-hint">Рекомендуется таблица Bronze с полями аудита API-запусков. Каждый шаг запроса пишется отдельной строкой.</p>
           {/if}
         </div>
