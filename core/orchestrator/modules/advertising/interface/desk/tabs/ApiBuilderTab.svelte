@@ -125,10 +125,6 @@
     conditions: ParameterCondition[];
   };
   const AUTH_MODE_OAUTH2 = 'oauth2_client_credentials';
-  const DISPATCH_MODES: Array<{ value: DispatchMode; label: string }> = [
-    { value: 'single', label: 'Один запрос' },
-    { value: 'group_by', label: 'Группировать по ключу' }
-  ];
   const BINDING_TARGETS: Array<{ value: BindingTarget; label: string }> = [
     { value: 'header', label: 'Header' },
     { value: 'query', label: 'Query' },
@@ -792,7 +788,7 @@ function formatBytes(bytes: number) {
       auth_json: parsed?.authJson ?? tryObj(d.authJson),
       parameter_definitions: parameterDefinitionsPayload,
       execution: {
-        dispatch_mode: d.dispatchMode,
+        dispatch_mode: isGroupedDispatchEnabled(d) ? 'group_by' : 'single',
         group_by_aliases: d.groupByAliases,
         body_items_path: d.bodyItemsPath,
         preview_request_limit: d.previewRequestLimit,
@@ -843,7 +839,7 @@ function formatBytes(bytes: number) {
     oauth2_expires_field: d.oauth2ExpiresField,
     oauth2_token_type_field: d.oauth2TokenTypeField,
     parameter_definitions: parameterDefinitionsPayload,
-    dispatch_mode: d.dispatchMode,
+    dispatch_mode: isGroupedDispatchEnabled(d) ? 'group_by' : 'single',
     group_by_aliases: d.groupByAliases,
     body_items_path: d.bodyItemsPath,
     preview_request_limit: d.previewRequestLimit,
@@ -1856,6 +1852,11 @@ function formatBytes(bytes: number) {
     });
   }
 
+  function isGroupedDispatchEnabled(draft: ApiDraft | null) {
+    if (!draft) return false;
+    return uniqueAliasList(draft.groupByAliases || []).length > 0;
+  }
+
   function normalizeDraggedToken(raw: string) {
     const src = String(raw || '').trim();
     if (!src) return '';
@@ -1876,14 +1877,6 @@ function formatBytes(bytes: number) {
     if (!event.dataTransfer) return;
     event.dataTransfer.setData('text/plain', `{{${alias}}}`);
     event.dataTransfer.effectAllowed = 'copy';
-  }
-
-  function insertAliasTokenToField(field: 'authJson' | 'headersJson' | 'queryJson' | 'bodyJson', alias: string) {
-    const token = normalizeDraggedToken(alias);
-    if (!token) return;
-    mutateSelected((d) => {
-      (d as any)[field] = insertTokenAt((d as any)[field], token);
-    });
   }
 
   function dropAliasTokenToField(
@@ -1912,7 +1905,7 @@ function formatBytes(bytes: number) {
     });
   }
 
-  function hasBindingRule(alias: string, pathMode: 'auth' | 'header' | 'body') {
+  function hasBindingRule(alias: string, pathMode: 'auth' | 'header' | 'query' | 'body') {
     const key = String(alias || '').trim();
     if (!key || !selected) return false;
     const rules = Array.isArray(selected.bindingRules) ? selected.bindingRules : [];
@@ -1922,10 +1915,13 @@ function formatBytes(bytes: number) {
     if (pathMode === 'header') {
       return rules.some((r) => r.alias === key && r.target === 'header' && String(r.path || '').trim() !== 'Authorization');
     }
+    if (pathMode === 'query') {
+      return rules.some((r) => r.alias === key && r.target === 'query');
+    }
     return rules.some((r) => r.alias === key && (r.target === 'body' || r.target === 'body_item'));
   }
 
-  function setBindingUsage(alias: string, usage: 'auth' | 'header' | 'body', enabled: boolean) {
+  function setBindingUsage(alias: string, usage: 'auth' | 'header' | 'query' | 'body', enabled: boolean) {
     const key = String(alias || '').trim();
     if (!key) return;
     mutateSelected((d) => {
@@ -1935,6 +1931,8 @@ function formatBytes(bytes: number) {
           rules = rules.filter((r) => !(r.alias === key && r.target === 'header' && String(r.path || '').trim() === 'Authorization'));
         } else if (usage === 'header') {
           rules = rules.filter((r) => !(r.alias === key && r.target === 'header' && String(r.path || '').trim() !== 'Authorization'));
+        } else if (usage === 'query') {
+          rules = rules.filter((r) => !(r.alias === key && r.target === 'query'));
         } else {
           rules = rules.filter((r) => !(r.alias === key && (r.target === 'body' || r.target === 'body_item')));
         }
@@ -1950,6 +1948,10 @@ function formatBytes(bytes: number) {
         if (!rules.some((r) => r.alias === key && r.target === 'header' && String(r.path || '').trim() !== 'Authorization')) {
           rules.push({ id: uid(), alias: key, target: 'header', path: key });
         }
+      } else if (usage === 'query') {
+        if (!rules.some((r) => r.alias === key && r.target === 'query')) {
+          rules.push({ id: uid(), alias: key, target: 'query', path: key });
+        }
       } else {
         if (!rules.some((r) => r.alias === key && (r.target === 'body' || r.target === 'body_item'))) {
           rules.push({ id: uid(), alias: key, target: 'body_item', path: key });
@@ -1959,7 +1961,7 @@ function formatBytes(bytes: number) {
     });
   }
 
-  function toggleBindingUsage(alias: string, usage: 'auth' | 'header' | 'body') {
+  function toggleBindingUsage(alias: string, usage: 'auth' | 'header' | 'query' | 'body') {
     const enabled = hasBindingRule(alias, usage);
     setBindingUsage(alias, usage, !enabled);
   }
@@ -1967,11 +1969,6 @@ function formatBytes(bytes: number) {
   function isAliasGrouped(alias: string) {
     if (!selected) return false;
     return (selected.groupByAliases || []).includes(alias);
-  }
-
-  function hasQueryBinding(alias: string) {
-    if (!selected) return false;
-    return (selected.bindingRules || []).some((r) => r.alias === alias && r.target === 'query');
   }
 
   function hasDataModelConfigured(draft: ApiDraft | null) {
@@ -2826,7 +2823,7 @@ function handleDefinitionInput(value: string) {
     try {
       applyUrlInput(requestInput);
       const s = byRef(selectedRef) || selected;
-      if (s.dispatchMode === 'group_by') {
+      if (isGroupedDispatchEnabled(s)) {
         const groupedPlan = await buildGroupedRequestPlan(s);
         myApiPreview = JSON.stringify(
           {
@@ -3115,7 +3112,7 @@ function handleDefinitionInput(value: string) {
     try {
       applyUrlInput(requestInput);
       const s = byRef(selectedRef) || selected;
-      if (s.dispatchMode === 'group_by') {
+      if (isGroupedDispatchEnabled(s)) {
         const groupedPlan = await buildGroupedRequestPlan(s);
         myApiPreview = JSON.stringify(
           {
@@ -3844,11 +3841,11 @@ function syncParameterEditorsHeight() {
                   <button
                     type="button"
                     class="param-token-chip"
-                    class:active-chip={hasQueryBinding(alias)}
-                    title="Перетащи в JSON или нажми, чтобы вставить токен"
+                    class:active-chip={hasBindingRule(alias, 'query')}
+                    title="Перетащи в JSON или нажми для включения/выключения в Query"
                     draggable="true"
                     on:dragstart={(e) => aliasChipDragStart(alias, e)}
-                    on:click={() => insertAliasTokenToField('queryJson', alias)}
+                    on:click={() => toggleBindingUsage(alias, 'query')}
                   >
                     {alias}
                   </button>
@@ -4159,29 +4156,7 @@ function syncParameterEditorsHeight() {
               <div class="response-head field-head">
                 <span>Настройка отправки</span>
               </div>
-              <div class="dispatch-grid">
-                <div class="pagination-field">
-                  <small>Режим</small>
-                  <select
-                    value={selected?.dispatchMode || 'single'}
-                    on:change={(e) => mutateSelected((d) => (d.dispatchMode = toDispatchMode(e.currentTarget.value)))}
-                  >
-                    {#each DISPATCH_MODES as mode}
-                      <option value={mode.value}>{mode.label}</option>
-                    {/each}
-                  </select>
-                </div>
-                <div class="pagination-field">
-                  <small>Лимит предпросмотра</small>
-                  <input
-                    type="number"
-                    min="1"
-                    max="50"
-                    value={selected?.previewRequestLimit || 5}
-                    on:input={(e) => mutateSelected((d) => (d.previewRequestLimit = Math.max(1, Math.min(50, Number(e.currentTarget.value) || 5))))}
-                  />
-                </div>
-              </div>
+              <p class="hint small-hint">Режим отправки определяется автоматически: если у параметра включена галочка “Группировать”, отправка будет групповой.</p>
 
               <div class="response-head field-head parameter-subhead">
                 <span>Витрина настроек параметра</span>
@@ -4201,6 +4176,10 @@ function syncParameterEditorsHeight() {
                     <span>Headers</span>
                   </label>
                   <label class="usage-toggle-item">
+                    <input type="checkbox" checked={hasBindingRule(selectedApiAlias, 'query')} on:change={() => toggleBindingUsage(selectedApiAlias, 'query')} />
+                    <span>Query</span>
+                  </label>
+                  <label class="usage-toggle-item">
                     <input type="checkbox" checked={hasBindingRule(selectedApiAlias, 'body')} on:change={() => toggleBindingUsage(selectedApiAlias, 'body')} />
                     <span>Body</span>
                   </label>
@@ -4209,6 +4188,16 @@ function syncParameterEditorsHeight() {
               {:else}
                 <p class="hint">Выбери крошку параметра слева.</p>
               {/if}
+              <div class="pagination-field preview-limit-field">
+                <small>Лимит предпросмотра</small>
+                <input
+                  type="number"
+                  min="1"
+                  max="50"
+                  value={selected?.previewRequestLimit || 5}
+                  on:input={(e) => mutateSelected((d) => (d.previewRequestLimit = Math.max(1, Math.min(50, Number(e.currentTarget.value) || 5))))}
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -4747,7 +4736,6 @@ function syncParameterEditorsHeight() {
   .dataset-preview-table td { border-bottom:1px solid #edf2f7; padding:8px; text-align:left; font-size:12px; vertical-align:top; }
   .dataset-preview-table th { background:#f8fafc; color:#334155; font-weight:600; position:sticky; top:0; z-index:1; }
   .dataset-preview-table td { max-width:320px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#0f172a; }
-  .dispatch-grid { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
   .pagination-toggle { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#475569; cursor:pointer; }
   .pagination-toggle input { width:auto; }
   .pagination-grid { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
