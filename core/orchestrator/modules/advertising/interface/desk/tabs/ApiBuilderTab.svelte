@@ -1534,18 +1534,20 @@ function formatBytes(bytes: number) {
 
   function paginationStopRulePathOptionsFor(current: string) {
     const fromPreview = Array.isArray(paginationCursorResponsePathOptions) ? paginationCursorResponsePathOptions : [];
+    const fromAllResponsePaths = Array.isArray(responsePathOptions) ? responsePathOptions : [];
     const fromPicked = Array.isArray(selected?.pickedPaths) ? selected?.pickedPaths : [];
-    const base = uniqueAliasList([...fromPreview, ...fromPicked].map((path) => String(path || '').trim()).filter(Boolean));
+    const base = uniqueAliasList([...fromPreview, ...fromAllResponsePaths, ...fromPicked].map((path) => String(path || '').trim()).filter(Boolean));
     if (current && !base.includes(current)) return [current, ...base];
     return base;
   }
 
   function addPaginationStopRule() {
     if (!selected) return;
+    const defaultPath = paginationStopRulePathOptionsFor('')[0] || '';
     const next = normalizePaginationStopRule(
       {
         id: uid(),
-        responsePath: '',
+        responsePath: defaultPath,
         operator: 'equals',
         compareValue: ''
       }
@@ -1966,21 +1968,73 @@ function formatBytes(bytes: number) {
     }
   }
 
+  type PaginationStopRuleEvalContext = {
+    values: Record<string, any>;
+    queryObj: Record<string, any>;
+    bodyObj: any;
+    headersObj: Record<string, any>;
+  };
+
+  function resolveStopRuleTokenValue(tokenRaw: string, context: PaginationStopRuleEvalContext) {
+    const token = String(tokenRaw || '').trim();
+    if (!token) return undefined;
+    const lower = token.toLowerCase();
+
+    if (lower.startsWith('request.body.')) return getByPath(context.bodyObj, token.slice('request.body.'.length));
+    if (lower.startsWith('body.')) return getByPath(context.bodyObj, token.slice('body.'.length));
+    if (lower.startsWith('request.query.')) return getByPath(context.queryObj, token.slice('request.query.'.length));
+    if (lower.startsWith('query.')) return getByPath(context.queryObj, token.slice('query.'.length));
+    if (lower.startsWith('request.headers.')) return getByPath(context.headersObj, token.slice('request.headers.'.length));
+    if (lower.startsWith('request.header.')) return getByPath(context.headersObj, token.slice('request.header.'.length));
+    if (lower.startsWith('headers.')) return getByPath(context.headersObj, token.slice('headers.'.length));
+    if (lower.startsWith('header.')) return getByPath(context.headersObj, token.slice('header.'.length));
+    if (lower.startsWith('group.')) return getByPath(context.values, token.slice('group.'.length));
+
+    const fromAlias = findAliasInMap(context.values, token);
+    if (fromAlias.found) return fromAlias.value;
+    const fromPath = getByPath(context.values, token);
+    if (fromPath !== undefined) return fromPath;
+    return undefined;
+  }
+
+  function resolveStopRuleCompareValue(rule: PaginationStopRule, context: PaginationStopRuleEvalContext): any {
+    const raw = String(rule.compareValue || '');
+    if (!raw.trim()) return '';
+
+    const exact = raw.match(PARAMETER_TOKEN_EXACT_RE);
+    if (exact?.[1]) {
+      const resolved = resolveStopRuleTokenValue(String(exact[1] || ''), context);
+      if (resolved !== undefined) return resolved;
+    }
+
+    const replaced = raw.replace(PARAMETER_TOKEN_RE, (match, aliasRaw) => {
+      const resolved = resolveStopRuleTokenValue(String(aliasRaw || ''), context);
+      if (resolved === undefined || resolved === null) return match;
+      if (typeof resolved === 'string') return resolved;
+      if (typeof resolved === 'object') return JSON.stringify(resolved);
+      return String(resolved);
+    });
+    return parseStopRuleCompareValue(replaced);
+  }
+
   function paginationStopOperatorLabel(op: PaginationStopOperator) {
     const found = PAGINATION_STOP_OPERATORS.find((item) => item.value === op);
     return found?.label || op;
   }
 
-  function evaluatePaginationStopRule(rule: PaginationStopRule, actualValue: any) {
+  function evaluatePaginationStopRule(
+    rule: PaginationStopRule,
+    actualValue: any,
+    context: PaginationStopRuleEvalContext
+  ) {
     const op = rule.operator;
-    const compareRaw = String(rule.compareValue || '');
-    const expected = parseStopRuleCompareValue(compareRaw);
+    const expected = resolveStopRuleCompareValue(rule, context);
 
     if (op === 'is_empty') return isPaginationStopValueEmpty(actualValue);
     if (op === 'not_empty') return !isPaginationStopValueEmpty(actualValue);
 
     if (op === 'contains' || op === 'not_contains') {
-      const needle = String(compareRaw || '').trim().toLowerCase();
+      const needle = String(expected ?? '').trim().toLowerCase();
       let contains = false;
       if (needle) {
         if (Array.isArray(actualValue)) {
@@ -1994,7 +2048,7 @@ function formatBytes(bytes: number) {
 
     if (op === 'gt' || op === 'gte' || op === 'lt' || op === 'lte') {
       const left = toNumberOrNull(actualValue);
-      const right = toNumberOrNull(compareRaw);
+      const right = toNumberOrNull(expected);
       if (left === null || right === null) return false;
       if (op === 'gt') return left > right;
       if (op === 'gte') return left >= right;
@@ -2019,22 +2073,29 @@ function formatBytes(bytes: number) {
     return false;
   }
 
-  function formatPaginationStopRuleReason(rule: PaginationStopRule, actualValue: any) {
+  function formatPaginationStopRuleReason(rule: PaginationStopRule, actualValue: any, resolvedCompareValue: any) {
     const left = String(rule.responsePath || '?');
     const opLabel = paginationStopOperatorLabel(rule.operator);
     if (paginationStopOperatorNeedsValue(rule.operator)) {
-      return `Сработало условие: ${left} ${opLabel} ${String(rule.compareValue || '')} (текущее: ${stringValueForContains(actualValue)})`;
+      const originalRight = String(rule.compareValue || '');
+      const resolvedRight = stringValueForContains(resolvedCompareValue);
+      const rightPart =
+        originalRight.includes('{{') && resolvedRight
+          ? `${originalRight} => ${resolvedRight}`
+          : originalRight || resolvedRight;
+      return `Сработало условие: ${left} ${opLabel} ${rightPart} (текущее: ${stringValueForContains(actualValue)})`;
     }
     return `Сработало условие: ${left} ${opLabel}`;
   }
 
-  function findMatchedPaginationStopRule(payload: any, rules: PaginationStopRule[]) {
+  function findMatchedPaginationStopRule(payload: any, rules: PaginationStopRule[], context: PaginationStopRuleEvalContext) {
     for (const rule of rules) {
       const path = String(rule?.responsePath || '').trim();
       if (!path) continue;
       const actualValue = readPaginationStopRuleValueFromResponse(payload, rule);
-      if (evaluatePaginationStopRule(rule, actualValue)) {
-        return { rule, actualValue };
+      const expectedValue = resolveStopRuleCompareValue(rule, context);
+      if (evaluatePaginationStopRule(rule, actualValue, context)) {
+        return { rule, actualValue, expectedValue };
       }
     }
     return null;
@@ -3681,6 +3742,13 @@ function handleDefinitionInput(value: string) {
     return JSON.parse(JSON.stringify(value));
   }
 
+  function stripInternalPlanFields(plan: any) {
+    if (!plan || typeof plan !== 'object') return plan;
+    const copy = { ...plan };
+    delete (copy as any).context_values;
+    return copy;
+  }
+
   function sameValue(a: any, b: any) {
     if (a === b) return true;
     return JSON.stringify(a) === JSON.stringify(b);
@@ -3968,6 +4036,7 @@ function handleDefinitionInput(value: string) {
       plans.push({
         group: group.key,
         rows_in_group: group.rows.length,
+        context_values: deepClone(groupFirstMap),
         method: draft.method,
         url,
         headers: { 'Content-Type': 'application/json', ...authHdr, ...hdr },
@@ -3977,7 +4046,7 @@ function handleDefinitionInput(value: string) {
 
     return {
       allRequests: plans,
-      previewRequests: plans.slice(0, Math.max(1, Number(draft.previewRequestLimit || 5))),
+      previewRequests: plans.slice(0, Math.max(1, Number(draft.previewRequestLimit || 5))).map(stripInternalPlanFields),
       issues
     };
   }
@@ -4103,6 +4172,7 @@ function handleDefinitionInput(value: string) {
 
       plans.push({
         row_index: rowIndex + 1,
+        context_values: deepClone(row),
         method: draft.method,
         url,
         headers: { 'Content-Type': 'application/json', ...authHdr, ...hdr },
@@ -4112,7 +4182,7 @@ function handleDefinitionInput(value: string) {
 
     return {
       allRequests: plans,
-      previewRequests: plans.slice(0, Math.max(1, Number(draft.previewRequestLimit || 5))),
+      previewRequests: plans.slice(0, Math.max(1, Number(draft.previewRequestLimit || 5))).map(stripInternalPlanFields),
       issues
     };
   }
@@ -4650,9 +4720,27 @@ function handleDefinitionInput(value: string) {
       }
 
       if (paginationStopRules.length) {
-        const matched = findMatchedPaginationStopRule(parsed, paginationStopRules);
+        const runtimeTokenMap: Record<string, any> = {};
+        paginationParameters.forEach((param) => {
+          const value = paginationState[param.id];
+          if (value !== undefined && value !== null) runtimeTokenMap[param.alias] = value;
+        });
+        const contextValues =
+          reqPlan?.context_values && typeof reqPlan.context_values === 'object'
+            ? { ...reqPlan.context_values }
+            : {};
+        const groupValues =
+          reqPlan?.group && typeof reqPlan.group === 'object'
+            ? { ...reqPlan.group }
+            : {};
+        const matched = findMatchedPaginationStopRule(parsed, paginationStopRules, {
+          values: { ...contextValues, ...groupValues, ...runtimeTokenMap },
+          queryObj: queryObj || {},
+          bodyObj: bodyObj || {},
+          headersObj: headersObj || {}
+        });
         if (matched) {
-          stopReason = formatPaginationStopRuleReason(matched.rule, matched.actualValue);
+          stopReason = formatPaginationStopRuleReason(matched.rule, matched.actualValue, matched.expectedValue);
           responseEntry.stop_reason = stopReason;
           break;
         }
@@ -5001,7 +5089,8 @@ function handleDefinitionInput(value: string) {
         method: s.method,
         url,
         headers: { 'Content-Type': 'application/json', ...authHdr, ...hdr },
-        body: s.method === 'GET' || s.method === 'DELETE' ? undefined : bodyObjBase
+        body: s.method === 'GET' || s.method === 'DELETE' ? undefined : bodyObjBase,
+        context_values: deepClone(parameterValues || {})
       };
       const sentRequests: any[] = [];
       const run = await executePlannedRequestWithPagination(s, reqPlan, sentRequests);
@@ -6149,7 +6238,7 @@ function syncParameterEditorsHeight() {
                         </select>
                         <input
                           value={rule.compareValue}
-                          placeholder="Значение"
+                          placeholder={"Значение или {{alias}} / {{body.path}}"}
                           on:input={(e) => updatePaginationStopRule(rule.id, { compareValue: e.currentTarget.value })}
                           disabled={!paginationStopOperatorNeedsValue(rule.operator)}
                         />
@@ -6160,6 +6249,7 @@ function syncParameterEditorsHeight() {
                 {:else}
                   <p class="hint">Добавь условие, если нужно останавливать пагинацию по значению в ответе.</p>
                 {/if}
+                <p class="hint small-hint">Поддержка параметров: <code>&#123;&#123;alias&#125;&#125;</code>, <code>&#123;&#123;body.path&#125;&#125;</code>, <code>&#123;&#123;query.path&#125;&#125;</code>, <code>&#123;&#123;headers.Name&#125;&#125;</code>.</p>
               </div>
               <p class="hint small-hint">Причина остановки показывается в результате проверки для каждого запроса.</p>
             </div>
