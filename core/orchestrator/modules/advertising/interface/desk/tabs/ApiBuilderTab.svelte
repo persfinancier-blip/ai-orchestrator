@@ -4749,16 +4749,24 @@ function handleDefinitionInput(value: string) {
       let stop = false;
       let pageStopReason = '';
       if (paginationParameters.length) {
-        let updated = 0;
+        let foundValues = 0;
+        let updatedValues = 0;
         for (const param of paginationParameters) {
           const value = readPaginationValueFromResponse(parsed, param);
           if (value === undefined || value === null) continue;
-          paginationState[param.id] = value;
-          updated += 1;
+          foundValues += 1;
+          const prevValue = paginationState[param.id];
+          if (prevValue === undefined || prevValue === null || !sameValue(prevValue, value)) {
+            paginationState[param.id] = value;
+            updatedValues += 1;
+          }
         }
-        if (!updated && draft.paginationStopOnMissingValue) {
+        if (!foundValues && draft.paginationStopOnMissingValue) {
           stop = true;
-          pageStopReason = 'Не найдено новое значение параметров пагинации';
+          pageStopReason = 'Не найдено значение параметров пагинации';
+        } else if (!updatedValues && draft.paginationStopOnMissingValue) {
+          stop = true;
+          pageStopReason = 'Не найдено новое значение параметров пагинации (значения не изменились)';
         }
       } else if (draft.paginationStrategy === 'page_number') {
         currentPage += 1;
