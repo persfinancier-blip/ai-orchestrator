@@ -78,6 +78,19 @@
     addDays: number;
     addMonths: number;
     formatPreset: DateFormatPreset;
+    grouped?: boolean;
+  };
+
+  type DataApiParameterSourceType = 'system' | 'input' | 'output';
+
+  type DataApiParameter = {
+    id: string;
+    sourceApiRef: string;
+    sourceApiStoreId?: number;
+    sourceType: DataApiParameterSourceType;
+    sourceKey: string;
+    alias: string;
+    grouped?: boolean;
   };
 
   type PaginationParameter = {
@@ -179,6 +192,7 @@
     dataFields: DataModelField[];
     dataFilters: DataModelFilter[];
     dataDateParams: DataDateParameter[];
+    dataApiParams: DataApiParameter[];
   };
 
   type ParameterCondition = {
@@ -400,12 +414,14 @@
   let datasetPreviewTimer: ReturnType<typeof setTimeout> | null = null;
   let datasetPreviewRequestSeq = 0;
   let datasetPreviewSignature = '';
+  let apiResponseCache: Record<string, any> = {};
   let activeDataTableId = '';
   let activeDataJoinId = '';
   let activeDataFilterId = '';
   let groupByAliasCandidates: string[] = [];
   const PARAMETER_PREVIEW_LIMIT = 5;
   const REQUEST_PREVIEW_MAX = 20;
+  const FILTER_SCOPE_ALIAS = '__alias__';
   const PARAMETER_TOKEN_RE = /\{\{\s*([^{}]+?)\s*\}\}/g;
   const PARAMETER_TOKEN_EXACT_RE = /^\{\{\s*([^{}]+?)\s*\}\}$/;
 
@@ -648,7 +664,8 @@ function formatBytes(bytes: number) {
       dataJoins: [],
       dataFields: [],
       dataFilters: [],
-      dataDateParams: []
+      dataDateParams: [],
+      dataApiParams: []
     };
   }
 
@@ -782,7 +799,7 @@ function formatBytes(bytes: number) {
           Boolean(f?.group_by ?? f?.groupBy) ||
           normalizedGroupBySet.has(String(f?.alias || '').trim().toLowerCase()),
         dateMode:
-          String((f?.date_mode ?? f?.dateMode ?? f?.date_transform?.enabled ? 'process' : 'raw') || 'raw').toLowerCase() ===
+          String((f?.date_mode ?? f?.dateMode ?? (f?.date_transform?.enabled ? 'process' : 'raw')) || 'raw').toLowerCase() ===
           'process'
             ? 'process'
             : 'raw',
@@ -808,7 +825,7 @@ function formatBytes(bytes: number) {
         operator: String(f?.operator || 'equals').trim(),
         compareValue: String(f?.compare_value || f?.compareValue || '').trim()
       }))
-      .filter((f: DataModelFilter) => f.tableId && f.field && dataTableIdSet.has(f.tableId));
+      .filter((f: DataModelFilter) => f.tableId && f.field && (f.tableId === FILTER_SCOPE_ALIAS || dataTableIdSet.has(f.tableId)));
     const dataDateParamsRaw = Array.isArray(dataModelCfg?.date_parameters)
       ? dataModelCfg.date_parameters
       : Array.isArray((mapping as any)?.data_date_parameters)
@@ -827,12 +844,36 @@ function formatBytes(bytes: number) {
             anchorPreset: String(p?.anchor_preset || p?.anchorPreset || p?.anchor || 'raw') as DateAnchorPreset,
             addDays: Number(p?.add_days ?? p?.addDays ?? 0),
             addMonths: Number(p?.add_months ?? p?.addMonths ?? 0),
-            formatPreset: String(p?.format_preset || p?.formatPreset || p?.format || 'yyyy_mm_dd') as DateFormatPreset
+            formatPreset: String(p?.format_preset || p?.formatPreset || p?.format || 'yyyy_mm_dd') as DateFormatPreset,
+            grouped: Boolean(p?.grouped)
           },
           idx + 1
         )
       )
       .filter((p: DataDateParameter) => String(p.alias || '').trim());
+    const dataApiParamsRaw = Array.isArray(dataModelCfg?.api_parameters)
+      ? dataModelCfg.api_parameters
+      : Array.isArray((mapping as any)?.data_api_parameters)
+      ? (mapping as any).data_api_parameters
+      : Array.isArray((row as any)?.data_api_parameters)
+      ? (row as any).data_api_parameters
+      : [];
+    const normalizedDataApiParams = dataApiParamsRaw
+      .map((p: any, idx: number) =>
+        normalizeDataApiParameter(
+          {
+            id: String(p?.id || ''),
+            sourceApiRef: String(p?.source_api_ref || p?.sourceApiRef || ''),
+            sourceApiStoreId: Number(p?.source_api_id ?? p?.sourceApiStoreId ?? 0),
+            sourceType: String(p?.source_type || p?.sourceType || 'system') as DataApiParameterSourceType,
+            sourceKey: String(p?.source_key || p?.sourceKey || ''),
+            alias: String(p?.alias || `api_param_${idx + 1}`),
+            grouped: Boolean(p?.grouped)
+          },
+          idx + 1
+        )
+      )
+      .filter((p: DataApiParameter) => String(p.alias || '').trim());
     const dispatchMode = toDispatchMode(String(row?.dispatch_mode || executionCfg?.dispatch_mode || 'single'));
     const executionModeRaw = String(row?.execution_mode || executionCfg?.execution_mode || 'sync').trim().toLowerCase();
     const executionMode: 'sync' | 'async' = executionModeRaw === 'async' ? 'async' : 'sync';
@@ -1085,7 +1126,8 @@ function formatBytes(bytes: number) {
       dataJoins: normalizedDataJoins,
       dataFields: normalizedDataFields,
       dataFilters: normalizedDataFilters,
-      dataDateParams: normalizedDataDateParams
+      dataDateParams: normalizedDataDateParams,
+      dataApiParams: normalizedDataApiParams
     };
   }
 
@@ -1130,7 +1172,17 @@ function formatBytes(bytes: number) {
       anchor_preset: p.anchorPreset,
       add_days: Number(p.addDays || 0),
       add_months: Number(p.addMonths || 0),
-      format_preset: p.formatPreset
+      format_preset: p.formatPreset,
+      grouped: Boolean(p.grouped)
+    }));
+    const dataApiParametersPayload = dataApiParametersForDraft(d).map((p) => ({
+      id: p.id,
+      source_api_ref: p.sourceApiRef,
+      source_api_id: Number(p.sourceApiStoreId || 0) || null,
+      source_type: p.sourceType,
+      source_key: p.sourceKey,
+      alias: p.alias,
+      grouped: Boolean(p.grouped)
     }));
     const paginationStopRulesPayload = paginationStopRulesForDraft(d)
       .filter((rule) => String(rule.responsePath || '').trim())
@@ -1269,7 +1321,8 @@ function formatBytes(bytes: number) {
               operator: f.operator,
               compare_value: f.compareValue
             })),
-            date_parameters: dataDateParametersPayload
+            date_parameters: dataDateParametersPayload,
+            api_parameters: dataApiParametersPayload
           },
           binding_rules: sanitizedAliases.bindingRules.map((rule) => ({
             id: rule.id,
@@ -1321,6 +1374,7 @@ function formatBytes(bytes: number) {
       pagination_delay_ms: d.paginationDelayMs,
       pagination_custom_strategy: d.paginationCustomStrategy,
       data_date_parameters: dataDateParametersPayload,
+      data_api_parameters: dataApiParametersPayload,
       description: d.description,
       is_active: true
     };
@@ -1612,12 +1666,19 @@ function formatBytes(bytes: number) {
       ])
     : [];
   $: if (selected) {
-    const groupedFromFields = uniqueAliasList(
-      (selected.dataFields || [])
-        .filter((f) => Boolean(f?.grouped))
-        .map((f) => String(f?.alias || '').trim())
-        .filter(Boolean)
-    );
+    const groupedTable = (selected.dataFields || [])
+      .filter((f) => Boolean(f?.grouped))
+      .map((f) => String(f?.alias || '').trim())
+      .filter(Boolean);
+    const groupedDates = dataDateParametersForDraft(selected)
+      .filter((p) => Boolean(p?.grouped))
+      .map((p) => String(p?.alias || '').trim())
+      .filter(Boolean);
+    const groupedApi = dataApiParametersForDraft(selected)
+      .filter((p) => Boolean(p?.grouped))
+      .map((p) => String(p?.alias || '').trim())
+      .filter(Boolean);
+    const groupedFromFields = uniqueAliasList([...groupedTable, ...groupedDates, ...groupedApi]);
     const groupedStored = uniqueAliasList((selected.groupByAliases || []).map((x) => String(x || '').trim()).filter(Boolean));
     if (JSON.stringify(groupedFromFields) !== JSON.stringify(groupedStored)) {
       mutateSelected((d) => {
@@ -2954,7 +3015,10 @@ function formatBytes(bytes: number) {
     const hasDateParams =
       Array.isArray(draft.dataDateParams) &&
       draft.dataDateParams.some((p) => String(p?.alias || '').trim());
-    return Boolean(hasTableFields || hasDateParams);
+    const hasApiParams =
+      Array.isArray(draft.dataApiParams) &&
+      draft.dataApiParams.some((p) => String(p?.alias || '').trim() && (String(p?.sourceApiRef || '').trim() || Number(p?.sourceApiStoreId || 0) > 0));
+    return Boolean(hasTableFields || hasDateParams || hasApiParams);
   }
 
   function pad2(v: number) {
@@ -3073,8 +3137,110 @@ function formatBytes(bytes: number) {
       anchorPreset,
       addDays: Number.isFinite(Number(input?.addDays)) ? Number(input?.addDays) : 0,
       addMonths: Number.isFinite(Number(input?.addMonths)) ? Number(input?.addMonths) : 0,
-      formatPreset
+      formatPreset,
+      grouped: Boolean(input?.grouped)
     };
+  }
+
+  function normalizeDataApiParameter(input: Partial<DataApiParameter> | null | undefined, idx = 1): DataApiParameter {
+    const sourceTypeRaw = String(input?.sourceType || '').trim().toLowerCase();
+    const sourceType: DataApiParameterSourceType =
+      sourceTypeRaw === 'input' || sourceTypeRaw === 'output' ? (sourceTypeRaw as DataApiParameterSourceType) : 'system';
+    const storeId = Number.isFinite(Number(input?.sourceApiStoreId)) ? Number(input?.sourceApiStoreId) : 0;
+    const sourceApiRefRaw = String(input?.sourceApiRef || '').trim();
+    const sourceApiRef = sourceApiRefRaw || (storeId > 0 ? `db:${Math.trunc(storeId)}` : '');
+    return {
+      id: String(input?.id || uid()),
+      sourceApiRef,
+      sourceApiStoreId: storeId > 0 ? storeId : undefined,
+      sourceType,
+      sourceKey: String(input?.sourceKey || '').trim(),
+      alias: String(input?.alias || `api_param_${idx}`).trim(),
+      grouped: Boolean(input?.grouped)
+    };
+  }
+
+  function dataApiParametersForDraft(draft: ApiDraft | null): DataApiParameter[] {
+    if (!draft) return [];
+    return (Array.isArray(draft.dataApiParams) ? draft.dataApiParams : [])
+      .map((p, idx) => normalizeDataApiParameter(p, idx + 1))
+      .filter((p) => String(p.alias || '').trim());
+  }
+
+  function sourceDraftByRefOrStoreId(sourceApiRef: string, sourceApiStoreId?: number): ApiDraft | null {
+    const refRaw = String(sourceApiRef || '').trim();
+    if (refRaw) {
+      const by = byRef(refRaw);
+      if (by) return by;
+    }
+    const storeId = Number(sourceApiStoreId || 0);
+    if (storeId > 0) {
+      return drafts.find((d) => Number(d?.storeId || 0) === storeId) || null;
+    }
+    return null;
+  }
+
+  function apiSourceDraftOptions(current: ApiDraft | null) {
+    return (Array.isArray(drafts) ? drafts : [])
+      .filter((d) => d && (!current || refOf(d) !== refOf(current)))
+      .map((d) => ({
+        ref: refOf(d),
+        storeId: Number(d?.storeId || 0) || null,
+        label: String(d?.name || '').trim() || `API ${d?.storeId || d?.localId || ''}`
+      }));
+  }
+
+  function apiSystemFieldOptions() {
+    return [
+      { key: 'api_name', label: 'Название API' },
+      { key: 'method', label: 'HTTP метод' },
+      { key: 'base_url', label: 'Base URL' },
+      { key: 'path', label: 'Path' },
+      { key: 'auth_mode', label: 'Режим авторизации' },
+      { key: 'execution_mode', label: 'Режим выполнения' },
+      { key: 'sync_planner', label: 'Планировщик sync' },
+      { key: 'async_concurrency', label: 'Лимит async' }
+    ];
+  }
+
+  function sourceDraftInputAliases(source: ApiDraft | null) {
+    if (!source) return [];
+    const defs = uniqueAliasList(
+      (Array.isArray(source.parameterDefinitions) ? source.parameterDefinitions : [])
+        .map((p) => String(p?.alias || '').trim())
+        .filter(Boolean)
+    );
+    const data = uniqueAliasList(
+      (Array.isArray(source.dataFields) ? source.dataFields : [])
+        .map((f) => String(f?.alias || '').trim())
+        .filter(Boolean)
+    );
+    const dates = uniqueAliasList(dataDateParametersForDraft(source).map((p) => String(p?.alias || '').trim()).filter(Boolean));
+    return uniqueAliasList([...defs, ...data, ...dates]);
+  }
+
+  function sourceDraftOutputPaths(source: ApiDraft | null): string[] {
+    if (!source) return [];
+    const fromPicked = uniqueAliasList((Array.isArray(source.pickedPaths) ? source.pickedPaths : []).map((p) => String(p || '').trim()).filter(Boolean));
+    const fromCache: string[] = [];
+    const cached = apiResponseCache[refOf(source)];
+    if (cached !== undefined) {
+      collectResponsePaths(cached, '', fromCache);
+    }
+    return uniqueAliasList([...fromPicked, ...fromCache].map((x) => String(x || '').trim()).filter(Boolean));
+  }
+
+  function resolveApiSystemValue(source: ApiDraft, sourceKey: string) {
+    const key = String(sourceKey || '').trim().toLowerCase();
+    if (key === 'api_name') return source.name;
+    if (key === 'method') return source.method;
+    if (key === 'base_url') return source.baseUrl;
+    if (key === 'path') return source.path;
+    if (key === 'auth_mode') return source.authMode;
+    if (key === 'execution_mode') return source.executionMode;
+    if (key === 'sync_planner') return source.syncPlanner;
+    if (key === 'async_concurrency') return source.asyncConcurrency;
+    return '';
   }
 
   function toDateAnchorPreset(value: string): DateAnchorPreset {
@@ -3269,11 +3435,14 @@ function formatBytes(bytes: number) {
     const fromDateParams = dataDateParametersForDraft(draft)
       .map((p) => String(p?.alias || '').trim())
       .filter(Boolean);
+    const fromApiParams = dataApiParametersForDraft(draft)
+      .map((p) => String(p?.alias || '').trim())
+      .filter(Boolean);
     const fromDefinitions = (Array.isArray(draft.parameterDefinitions) ? draft.parameterDefinitions : [])
       .map((p) => String(p?.alias || '').trim())
       .filter(Boolean);
-    if (fromDataModel.length || fromDateParams.length) {
-      return uniqueAliasList([...fromDataModel, ...fromDateParams]);
+    if (fromDataModel.length || fromDateParams.length || fromApiParams.length) {
+      return uniqueAliasList([...fromDataModel, ...fromDateParams, ...fromApiParams]);
     }
     return uniqueAliasList(fromDefinitions);
   }
@@ -3304,10 +3473,19 @@ function formatBytes(bytes: number) {
       .filter((f) => Boolean(f?.grouped))
       .map((f) => canonicalAlias(String(f?.alias || '')))
       .filter(Boolean);
+    const groupByFromDates = dataDateParametersForDraft(draft)
+      .filter((p) => Boolean(p?.grouped))
+      .map((p) => canonicalAlias(String(p?.alias || '')))
+      .filter(Boolean);
+    const groupByFromApi = dataApiParametersForDraft(draft)
+      .filter((p) => Boolean(p?.grouped))
+      .map((p) => canonicalAlias(String(p?.alias || '')))
+      .filter(Boolean);
     const groupByLegacy = (Array.isArray(draft.groupByAliases) ? draft.groupByAliases : [])
       .map(canonicalAlias)
       .filter(Boolean);
-    const groupByAliases = uniqueAliasList(groupByFromFields.length ? groupByFromFields : groupByLegacy);
+    const groupedAuto = uniqueAliasList([...groupByFromFields, ...groupByFromDates, ...groupByFromApi]);
+    const groupByAliases = uniqueAliasList(groupedAuto.length ? groupedAuto : groupByLegacy);
     const seenRules = new Set<string>();
     const bindingRules = (Array.isArray(draft.bindingRules) ? draft.bindingRules : [])
       .map((rule) => ({
@@ -3440,11 +3618,7 @@ function formatBytes(bytes: number) {
 
   function addDataFilter() {
     if (!selected) return;
-    const tableId = selected.dataTables[0]?.id || '';
-    if (!tableId) {
-      err = 'Сначала добавь таблицы для работы.';
-      return;
-    }
+    const tableId = selected.dataTables[0]?.id || FILTER_SCOPE_ALIAS;
     err = '';
     mutateSelected((d) => {
       const filterId = uid();
@@ -3460,7 +3634,7 @@ function formatBytes(bytes: number) {
       ];
       activeDataFilterId = filterId;
     });
-    ensureDataTableColumnsLoaded(tableId);
+    if (tableId !== FILTER_SCOPE_ALIAS) ensureDataTableColumnsLoaded(tableId);
   }
 
   function updateDataFilter(filterId: string, patch: Partial<DataModelFilter>) {
@@ -3483,7 +3657,7 @@ function formatBytes(bytes: number) {
         f.id === filterId ? { ...f, tableId, field: '', operator: 'equals', compareValue: '' } : f
       );
     });
-    if (tableId) ensureDataTableColumnsLoaded(tableId);
+    if (tableId && tableId !== FILTER_SCOPE_ALIAS) ensureDataTableColumnsLoaded(tableId);
   }
 
   function addDataField() {
@@ -3560,7 +3734,8 @@ function formatBytes(bytes: number) {
           anchorPreset: 'raw',
           addDays: 0,
           addMonths: 0,
-          formatPreset: 'yyyy_mm_dd'
+          formatPreset: 'yyyy_mm_dd',
+          grouped: false
         },
         idx
       );
@@ -3585,6 +3760,62 @@ function formatBytes(bytes: number) {
   function dateParamPreviewValue(param: DataDateParameter) {
     const computed = computeDateParameterValue(param);
     return computed.error ? `Ошибка: ${computed.error}` : computed.value;
+  }
+
+  function addDataApiParam() {
+    if (!selected) return;
+    const options = apiSourceDraftOptions(selected);
+    const first = options[0];
+    const idx = (Array.isArray(selected.dataApiParams) ? selected.dataApiParams.length : 0) + 1;
+    const initial = normalizeDataApiParameter(
+      {
+        id: uid(),
+        sourceApiRef: String(first?.ref || ''),
+        sourceApiStoreId: Number(first?.storeId || 0) || undefined,
+        sourceType: 'system',
+        sourceKey: 'api_name',
+        alias: `api_${idx}`,
+        grouped: false
+      },
+      idx
+    );
+    mutateSelected((d) => {
+      d.dataApiParams = [...(Array.isArray(d.dataApiParams) ? d.dataApiParams : []), initial];
+    });
+  }
+
+  function updateDataApiParam(paramId: string, patch: Partial<DataApiParameter>) {
+    mutateSelected((d) => {
+      d.dataApiParams = (Array.isArray(d.dataApiParams) ? d.dataApiParams : []).map((p, idx) =>
+        p.id === paramId ? normalizeDataApiParameter({ ...p, ...patch }, idx + 1) : p
+      );
+    });
+  }
+
+  function removeDataApiParam(paramId: string) {
+    mutateSelected((d) => {
+      d.dataApiParams = (Array.isArray(d.dataApiParams) ? d.dataApiParams : []).filter((p) => p.id !== paramId);
+    });
+  }
+
+  function apiParamSourceTypeOptions() {
+    return [
+      { value: 'system', label: 'Системные поля' },
+      { value: 'input', label: 'Входные параметры API' },
+      { value: 'output', label: 'Выходные параметры API' }
+    ] as Array<{ value: DataApiParameterSourceType; label: string }>;
+  }
+
+  function apiParamSourceKeyOptions(param: DataApiParameter): Array<{ value: string; label: string }> {
+    const source = sourceDraftByRefOrStoreId(param.sourceApiRef, param.sourceApiStoreId);
+    if (!source) return [];
+    if (param.sourceType === 'system') {
+      return apiSystemFieldOptions().map((x) => ({ value: x.key, label: x.label }));
+    }
+    if (param.sourceType === 'output') {
+      return sourceDraftOutputPaths(source).map((path) => ({ value: path, label: path }));
+    }
+    return sourceDraftInputAliases(source).map((alias) => ({ value: alias, label: alias }));
   }
 
   function tableColumnsById(draft: ApiDraft | null, tableId: string) {
@@ -3617,12 +3848,16 @@ function formatBytes(bytes: number) {
   }
 
   function filterCrumbLabel(draft: ApiDraft | null, filter: DataModelFilter) {
+    if (String(filter?.tableId || '').trim() === FILTER_SCOPE_ALIAS) {
+      return `Итог.${String(filter.field || '?')}`;
+    }
     const tbl = tableAliasById(draft, filter.tableId) || 'таблица';
     const fld = String(filter.field || '?');
     return `${tbl}.${fld}`;
   }
 
   function dataFilterFieldKind(filter: DataModelFilter): 'text' | 'number' | 'boolean' | 'date' {
+    if (String(filter?.tableId || '').trim() === FILTER_SCOPE_ALIAS) return 'text';
     if (!selected) return 'text';
     const t = (selected.dataTables || []).find((x) => x.id === filter.tableId);
     if (!t || !filter.field) return 'text';
@@ -3648,6 +3883,63 @@ function formatBytes(bytes: number) {
 
   function isBooleanDataFilter(filter: DataModelFilter) {
     return dataFilterFieldKind(filter) === 'boolean';
+  }
+
+  function isAliasDataFilter(filter: DataModelFilter) {
+    return String(filter?.tableId || '').trim() === FILTER_SCOPE_ALIAS;
+  }
+
+  function aliasOptionsForFilters(draft: ApiDraft | null) {
+    return bindingAliasOptions(draft);
+  }
+
+  function compareFilterValues(operator: string, left: any, rightRaw: string) {
+    const op = String(operator || '').trim();
+    const leftText = left === null || left === undefined ? '' : String(left);
+    const rightText = String(rightRaw || '');
+    if (op === 'equals') return leftText === rightText;
+    if (op === 'not_equals') return leftText !== rightText;
+    if (op === 'contains') return leftText.toLowerCase().includes(rightText.toLowerCase());
+    if (op === 'starts_with') return leftText.toLowerCase().startsWith(rightText.toLowerCase());
+    if (op === 'ends_with') return leftText.toLowerCase().endsWith(rightText.toLowerCase());
+    if (op === 'gt' || op === 'lt') {
+      const leftNum = Number(left);
+      const rightNum = Number(rightRaw);
+      if (Number.isFinite(leftNum) && Number.isFinite(rightNum)) {
+        return op === 'gt' ? leftNum > rightNum : leftNum < rightNum;
+      }
+      const leftDate = parseDateValueFromTable(left);
+      const rightDate = parseDateValueFromTable(rightRaw);
+      if (leftDate && rightDate) {
+        return op === 'gt' ? leftDate.getTime() > rightDate.getTime() : leftDate.getTime() < rightDate.getTime();
+      }
+      return op === 'gt' ? leftText > rightText : leftText < rightText;
+    }
+    if (op === 'before' || op === 'after') {
+      const leftDate = parseDateValueFromTable(left);
+      const rightDate = parseDateValueFromTable(rightRaw);
+      if (leftDate && rightDate) {
+        return op === 'before' ? leftDate.getTime() < rightDate.getTime() : leftDate.getTime() > rightDate.getTime();
+      }
+      return op === 'before' ? leftText < rightText : leftText > rightText;
+    }
+    return true;
+  }
+
+  function applyAliasFiltersToRows(rows: Array<Record<string, any>>, filters: DataModelFilter[]) {
+    const source = Array.isArray(rows) ? rows : [];
+    const activeFilters = (Array.isArray(filters) ? filters : [])
+      .filter((f) => isAliasDataFilter(f))
+      .filter((f) => String(f.field || '').trim())
+      .filter((f) => String(f.operator || '').trim());
+    if (!activeFilters.length) return source;
+    return source.filter((row) =>
+      activeFilters.every((filter) => {
+        const found = findAliasInMap(row || {}, filter.field);
+        const value = found.found ? found.value : undefined;
+        return compareFilterValues(filter.operator, value, String(filter.compareValue || ''));
+      })
+    );
   }
 
   async function fetchDataModelRows(
@@ -3694,6 +3986,7 @@ function formatBytes(bytes: number) {
       operator: String(f.operator || '').trim(),
       compare_value: String(f.compareValue || '')
     }));
+    const localAliasFilters = (draft.dataFilters || []).filter((f) => isAliasDataFilter(f));
     const fields = fieldSpecs
       .map((f) => ({
         id: String(f.id || uid()),
@@ -3712,7 +4005,7 @@ function formatBytes(bytes: number) {
     });
     let tablesForRequest = allTables;
     let joinsForRequest = allJoins;
-    let filtersForRequest = allFilters;
+    let filtersForRequest = allFilters.filter((f) => String(f.table_id || '').trim() !== FILTER_SCOPE_ALIAS);
     if (usedTableIds.size <= 1 && usedTableIds.size > 0) {
       tablesForRequest = allTables.filter((t) => usedTableIds.has(t.id));
       joinsForRequest = [];
@@ -3732,23 +4025,180 @@ function formatBytes(bytes: number) {
         offset
       })
     });
-    const rows = applyDataFieldTransformsToRows(draft, Array.isArray(resp?.rows) ? resp.rows : []);
+    let rows = applyDataFieldTransformsToRows(draft, Array.isArray(resp?.rows) ? resp.rows : []);
+    rows = applyAliasFiltersToRows(rows, localAliasFilters);
     return {
       ...(resp || {}),
       rows
     };
   }
 
+  function mergeRowsWithCap(
+    leftRows: Array<Record<string, any>>,
+    rightRows: Array<Record<string, any>>,
+    cap = 5000
+  ): Array<Record<string, any>> {
+    const left = Array.isArray(leftRows) && leftRows.length ? leftRows : [{}];
+    const right = Array.isArray(rightRows) && rightRows.length ? rightRows : [{}];
+    const out: Array<Record<string, any>> = [];
+    for (const l of left) {
+      for (const r of right) {
+        out.push({ ...(l || {}), ...(r || {}) });
+        if (out.length >= cap) return out;
+      }
+    }
+    return out;
+  }
+
+  function joinRowsByKeysWithCap(
+    baseRows: Array<Record<string, any>>,
+    apiRows: Array<Record<string, any>>,
+    keys: string[],
+    cap = 5000
+  ): Array<Record<string, any>> {
+    const out: Array<Record<string, any>> = [];
+    const normalizedKeys = uniqueAliasList((keys || []).map((k) => String(k || '').trim()).filter(Boolean));
+    if (!normalizedKeys.length) return mergeRowsWithCap(baseRows, apiRows, cap);
+    const indexed = new Map<string, Array<Record<string, any>>>();
+    for (const row of apiRows || []) {
+      const key = JSON.stringify(
+        normalizedKeys.map((k) => {
+          const found = findAliasInMap(row || {}, k);
+          return found.found ? found.value : null;
+        })
+      );
+      const bucket = indexed.get(key) || [];
+      bucket.push(row || {});
+      indexed.set(key, bucket);
+    }
+    for (const row of baseRows || []) {
+      const key = JSON.stringify(
+        normalizedKeys.map((k) => {
+          const found = findAliasInMap(row || {}, k);
+          return found.found ? found.value : null;
+        })
+      );
+      const matches = indexed.get(key) || [];
+      if (!matches.length) continue;
+      for (const match of matches) {
+        out.push({ ...(row || {}), ...(match || {}) });
+        if (out.length >= cap) return out;
+      }
+    }
+    return out;
+  }
+
+  async function loadApiSourceRowsForAliases(
+    draft: ApiDraft,
+    aliases: string[],
+    visited: Set<string> = new Set<string>()
+  ): Promise<{ rows: Array<Record<string, any>>; issues: Record<string, string> }> {
+    const requested = uniqueAliasList((aliases || []).map((a) => String(a || '').trim()).filter(Boolean));
+    const params = dataApiParametersForDraft(draft).filter((p) => String(p.alias || '').trim());
+    const issues: Record<string, string> = {};
+    if (!requested.length || !params.length) return { rows: [], issues };
+    const needed = params.filter((p) => requested.some((a) => a.toLowerCase() === String(p.alias || '').trim().toLowerCase()));
+    if (!needed.length) return { rows: [], issues };
+
+    const bySource = new Map<string, DataApiParameter[]>();
+    needed.forEach((p) => {
+      if (!String(p.sourceKey || '').trim()) {
+        issues[p.alias] = 'не выбран параметр источника';
+        return;
+      }
+      const source = sourceDraftByRefOrStoreId(p.sourceApiRef, p.sourceApiStoreId);
+      if (!source) {
+        issues[p.alias] = 'источник API не найден';
+        return;
+      }
+      const key = refOf(source);
+      const list = bySource.get(key) || [];
+      list.push(p);
+      bySource.set(key, list);
+    });
+    const sourceRowsList: Array<Array<Record<string, any>>> = [];
+    for (const [sourceRef, sourceParams] of bySource.entries()) {
+      const source = byRef(sourceRef) || null;
+      if (!source) continue;
+      if (visited.has(sourceRef)) {
+        sourceParams.forEach((p) => {
+          if (!issues[p.alias]) issues[p.alias] = 'обнаружен циклический источник API';
+        });
+        continue;
+      }
+      const systemParams = sourceParams.filter((p) => p.sourceType === 'system');
+      const inputParams = sourceParams.filter((p) => p.sourceType === 'input');
+      const outputParams = sourceParams.filter((p) => p.sourceType === 'output');
+
+      const sourceRows: Array<Record<string, any>> = [];
+      if (inputParams.length) {
+        const needAliases = uniqueAliasList(inputParams.map((p) => p.sourceKey).filter(Boolean));
+        const loaded = await loadDataModelRowsForAliases(source, needAliases, new Set<string>([...Array.from(visited), sourceRef]));
+        if (Object.keys(loaded.issues || {}).length) {
+          inputParams.forEach((p) => {
+            const keyIssue = findAliasInMap(loaded.issues, p.sourceKey);
+            if (keyIssue.found && !issues[p.alias]) issues[p.alias] = String(keyIssue.value || '');
+          });
+        }
+        (loaded.rows || []).forEach((row) => {
+          const out: Record<string, any> = {};
+          inputParams.forEach((p) => {
+            const found = findAliasInMap(row || {}, p.sourceKey);
+            if (found.found) out[p.alias] = found.value;
+          });
+          sourceRows.push(out);
+        });
+      }
+      if (!sourceRows.length) sourceRows.push({});
+
+      systemParams.forEach((p) => {
+        const value = resolveApiSystemValue(source, p.sourceKey);
+        sourceRows.forEach((row) => {
+          row[p.alias] = value;
+        });
+      });
+
+      if (outputParams.length) {
+        const cached = apiResponseCache[sourceRef];
+        outputParams.forEach((p) => {
+          const path = String(p.sourceKey || '').trim();
+          const value = path ? getByPath(cached, path) : undefined;
+          if (value === undefined && !issues[p.alias]) {
+            issues[p.alias] = 'для выходного параметра нет значения (запусти источник API и выбери путь)';
+          }
+          sourceRows.forEach((row) => {
+            row[p.alias] = value;
+          });
+        });
+      }
+      sourceRowsList.push(sourceRows);
+    }
+
+    let merged: Array<Record<string, any>> = [{}];
+    sourceRowsList.forEach((rows) => {
+      const common = uniqueAliasList(
+        Object.keys(merged[0] || {}).filter((k) => Object.prototype.hasOwnProperty.call(rows[0] || {}, k))
+      );
+      merged = common.length ? joinRowsByKeysWithCap(merged, rows, common) : mergeRowsWithCap(merged, rows);
+      if (!merged.length) merged = [{}];
+    });
+
+    return { rows: merged.filter((r) => Object.keys(r || {}).length > 0), issues };
+  }
+
   async function loadDataModelRowsForAliases(
     draft: ApiDraft,
-    aliases: string[]
+    aliases: string[],
+    visited: Set<string> = new Set<string>()
   ): Promise<{ rows: Array<Record<string, any>>; issues: Record<string, string> }> {
     const issues: Record<string, string> = {};
+    const aliasFilters = (draft.dataFilters || []).filter((f) => isAliasDataFilter(f));
     if (!hasDataModelConfigured(draft)) return { rows: [], issues };
     const aliasesRequested = uniqueAliasList(aliases);
     const dataAliases = uniqueAliasList((draft.dataFields || []).map((f) => String(f.alias || '').trim()).filter(Boolean));
     const dateAliases = uniqueAliasList(dataDateParametersForDraft(draft).map((p) => String(p.alias || '').trim()).filter(Boolean));
-    const available = new Set([...dataAliases, ...dateAliases]);
+    const apiAliases = uniqueAliasList(dataApiParametersForDraft(draft).map((p) => String(p.alias || '').trim()).filter(Boolean));
+    const available = new Set([...dataAliases, ...dateAliases, ...apiAliases]);
     aliasesRequested.forEach((alias) => {
       if (!available.has(alias)) issues[alias] = 'alias не найден в конструкторе данных';
     });
@@ -3761,27 +4211,43 @@ function formatBytes(bytes: number) {
     if (Object.keys(issues).length) return { rows: [], issues };
     const dateMap = dateResolved.map;
     const hasDataAlias = aliasesRequested.some((alias) => dataAliases.includes(alias));
-    if (!hasDataAlias) {
-      return { rows: [dateMap], issues };
-    }
 
     const allRows: Array<Record<string, any>> = [];
-    const limit = 1000;
-    let offset = 0;
-    while (offset <= 100000) {
-      const onlyDataAliases = aliasesRequested.filter((alias) => dataAliases.includes(alias));
-      const resp = await fetchDataModelRows(draft, onlyDataAliases, limit, offset);
-      const rows = Array.isArray(resp?.rows) ? resp.rows : [];
-      if (!rows.length) break;
-      const merged = rows.map((row) => ({ ...row, ...dateMap }));
-      allRows.push(...merged);
-      offset += rows.length;
-      if (!resp?.has_more || rows.length < limit) break;
+    if (hasDataAlias) {
+      const limit = 1000;
+      let offset = 0;
+      while (offset <= 100000) {
+        const onlyDataAliases = aliasesRequested.filter((alias) => dataAliases.includes(alias));
+        const resp = await fetchDataModelRows(draft, onlyDataAliases, limit, offset);
+        const rows = Array.isArray(resp?.rows) ? resp.rows : [];
+        if (!rows.length) break;
+        const merged = rows.map((row) => ({ ...row, ...dateMap }));
+        allRows.push(...merged);
+        offset += rows.length;
+        if (!resp?.has_more || rows.length < limit) break;
+      }
+    } else {
+      allRows.push({ ...dateMap });
     }
     if (!allRows.length && Object.keys(dateMap).length) {
       allRows.push({ ...dateMap });
     }
-    return { rows: allRows, issues };
+
+    const apiNeededAliases = aliasesRequested.filter((alias) => apiAliases.includes(alias));
+    if (!apiNeededAliases.length) return { rows: applyAliasFiltersToRows(allRows, aliasFilters), issues };
+    const nextVisited = new Set<string>([...Array.from(visited), refOf(draft)]);
+    const apiLoaded = await loadApiSourceRowsForAliases(draft, apiNeededAliases, nextVisited);
+    Object.entries(apiLoaded.issues || {}).forEach(([k, v]) => {
+      if (!issues[k]) issues[k] = String(v || '');
+    });
+    const apiRows = Array.isArray(apiLoaded.rows) ? apiLoaded.rows : [];
+    if (!apiRows.length) return { rows: applyAliasFiltersToRows(allRows, aliasFilters), issues };
+    if (!allRows.length) return { rows: applyAliasFiltersToRows(apiRows, aliasFilters), issues };
+    const commonKeys = uniqueAliasList(
+      Object.keys(allRows[0] || {}).filter((k) => Object.prototype.hasOwnProperty.call(apiRows[0] || {}, k))
+    );
+    const rows = commonKeys.length ? joinRowsByKeysWithCap(allRows, apiRows, commonKeys) : mergeRowsWithCap(allRows, apiRows);
+    return { rows: applyAliasFiltersToRows(rows, aliasFilters), issues };
   }
 
   async function previewDataModelNow() {
@@ -3794,16 +4260,18 @@ function formatBytes(bytes: number) {
       return;
     }
     const dateParams = dataDateParametersForDraft(selected);
-    if (!selected.dataTables?.length && !dateParams.length) {
+    const apiParams = dataApiParametersForDraft(selected);
+    if (!selected.dataTables?.length && !dateParams.length && !apiParams.length) {
       datasetPreviewColumns = [];
-      datasetPreviewError = 'Добавь хотя бы одну таблицу.';
+      datasetPreviewError = 'Добавь источник данных: таблицы, даты или API-шаблоны.';
       return;
     }
     const previewCols = (selected.dataFields || [])
       .filter((f) => String(f?.tableId || '').trim() && String(f?.field || '').trim() && String(f?.alias || '').trim())
       .map((f) => ({ id: f.id, tableId: f.tableId, field: f.field, alias: f.alias }));
     const dateAliases = uniqueAliasList(dateParams.map((p) => String(p.alias || '').trim()).filter(Boolean));
-    if (!previewCols.length && !dateAliases.length) {
+    const apiAliases = uniqueAliasList(apiParams.map((p) => String(p.alias || '').trim()).filter(Boolean));
+    if (!previewCols.length && !dateAliases.length && !apiAliases.length) {
       datasetPreviewColumns = [];
       datasetPreviewError = 'Добавь хотя бы один показатель для работы.';
       return;
@@ -3812,28 +4280,20 @@ function formatBytes(bytes: number) {
     try {
       const aliases = uniqueAliasList([
         ...previewCols.map((f) => String(f?.alias || '').trim()).filter(Boolean),
-        ...dateAliases
+        ...dateAliases,
+        ...apiAliases
       ]);
       if (requestId !== datasetPreviewRequestSeq) return;
       datasetPreviewColumns = aliases;
-      const dateResolved = resolveDateAliasValues(selected, aliases);
-      if (Object.keys(dateResolved.issues).length) {
-        datasetPreviewError = Object.entries(dateResolved.issues)
+      const loaded = await loadDataModelRowsForAliases(selected, aliases);
+      if (Object.keys(loaded.issues || {}).length) {
+        datasetPreviewError = Object.entries(loaded.issues || {})
           .map(([k, v]) => `${k}: ${v}`)
           .join('; ');
       }
-      const dateMap = dateResolved.map;
-      if (!previewCols.length) {
-        datasetPreviewRows = [dateMap];
-        datasetPreviewHasMore = false;
-      } else {
-        const dataAliases = uniqueAliasList(previewCols.map((f) => String(f?.alias || '').trim()).filter(Boolean));
-        const resp = await fetchDataModelRowsByFields(selected, previewCols, dataAliases, 10, 0);
-        if (requestId !== datasetPreviewRequestSeq) return;
-        const rows = Array.isArray(resp?.rows) ? resp.rows : [];
-        datasetPreviewRows = rows.map((row) => ({ ...row, ...dateMap }));
-        datasetPreviewHasMore = Boolean(resp?.has_more);
-      }
+      const rows = Array.isArray(loaded?.rows) ? loaded.rows : [];
+      datasetPreviewRows = rows.slice(0, 10);
+      datasetPreviewHasMore = rows.length > 10;
     } catch (e: any) {
       if (requestId !== datasetPreviewRequestSeq) return;
       datasetPreviewError = e?.message ?? String(e);
@@ -3885,9 +4345,19 @@ function formatBytes(bytes: number) {
       anchorPreset: p.anchorPreset,
       addDays: p.addDays,
       addMonths: p.addMonths,
-      formatPreset: p.formatPreset
+      formatPreset: p.formatPreset,
+      grouped: Boolean(p.grouped)
     }));
-    return JSON.stringify({ tables, fields, joins, filters, dateParams });
+    const apiParams = dataApiParametersForDraft(draft).map((p) => ({
+      id: p.id,
+      sourceApiRef: p.sourceApiRef,
+      sourceApiStoreId: Number(p.sourceApiStoreId || 0) || 0,
+      sourceType: p.sourceType,
+      sourceKey: p.sourceKey,
+      alias: p.alias,
+      grouped: Boolean(p.grouped)
+    }));
+    return JSON.stringify({ tables, fields, joins, filters, dateParams, apiParams });
   }
 
   function serializeParameterDefinition(param: ParameterDefinition) {
@@ -4270,7 +4740,10 @@ function handleDefinitionInput(value: string) {
       if (!issues[k]) issues[k] = v;
     });
 
-    const dataAliases = uniqueAliasList((draft.dataFields || []).map((f) => String(f?.alias || '').trim()).filter(Boolean));
+    const dataAliases = uniqueAliasList([
+      ...(draft.dataFields || []).map((f) => String(f?.alias || '').trim()).filter(Boolean),
+      ...dataApiParametersForDraft(draft).map((p) => String(p?.alias || '').trim()).filter(Boolean)
+    ]);
     const dataAliasByLower = new Map<string, string>();
     dataAliases.forEach((alias) => {
       const key = alias.toLowerCase();
@@ -4285,8 +4758,11 @@ function handleDefinitionInput(value: string) {
       );
       if (needFromData.length) {
         try {
-          const resp = await fetchDataModelRows(draft, needFromData, 200, 0);
-          const rows = Array.isArray(resp?.rows) ? resp.rows : [];
+          const loaded = await loadDataModelRowsForAliases(draft, needFromData);
+          const rows = Array.isArray(loaded?.rows) ? loaded.rows : [];
+          Object.entries(loaded?.issues || {}).forEach(([k, v]) => {
+            if (!issues[k]) issues[k] = String(v || '');
+          });
           if (rows.length) {
             needFromData.forEach((alias) => {
               const chosen = pickPreferredAliasValue(rows.map((row: Record<string, any>) => row?.[alias]));
@@ -4961,6 +5437,7 @@ function handleDefinitionInput(value: string) {
             ...uniqueAliasList((s.parameterDefinitions || []).map((p) => String(p?.alias || '').trim()).filter(Boolean)),
             ...uniqueAliasList((s.dataFields || []).map((f) => String(f?.alias || '').trim()).filter(Boolean)),
             ...uniqueAliasList(dataDateParametersForDraft(s).map((p) => String(p?.alias || '').trim()).filter(Boolean)),
+            ...uniqueAliasList(dataApiParametersForDraft(s).map((p) => String(p?.alias || '').trim()).filter(Boolean)),
             ...Array.from(paginationAliasesLower)
           ].map((x) => x.toLowerCase())
         );
@@ -6454,8 +6931,7 @@ function handleDefinitionInput(value: string) {
         responsePayloadCount = execution.totalItems;
         responsePayloadSize = execution.totalSize;
         responseTimeMs = Date.now() - startedAt;
-        responseText = JSON.stringify(
-          {
+        const groupedResponsePayload = {
             total_requests: execution.requestCount,
             request_groups: groupedPlan.allRequests.length,
             execution_mode: s.executionMode || 'sync',
@@ -6475,10 +6951,9 @@ function handleDefinitionInput(value: string) {
                   error: auditLog.error || undefined
                 }
               : undefined
-          },
-          null,
-          2
-        );
+          };
+        responseText = JSON.stringify(groupedResponsePayload, null, 2);
+        apiResponseCache = { ...apiResponseCache, [refOf(s)]: groupedResponsePayload };
         ok = execution.failed
           ? `Проверка завершена: успех ${execution.success}, ошибок ${execution.failed}`
           : `Проверка выполнена, запросов: ${execution.success}`;
@@ -6531,8 +7006,7 @@ function handleDefinitionInput(value: string) {
         responsePayloadCount = execution.totalItems;
         responsePayloadSize = execution.totalSize;
         responseTimeMs = Date.now() - startedAt;
-        responseText = JSON.stringify(
-          {
+        const rowResponsePayload = {
             total_requests: execution.requestCount,
             request_rows: rowPlan.allRequests.length,
             execution_mode: s.executionMode || 'sync',
@@ -6552,10 +7026,9 @@ function handleDefinitionInput(value: string) {
                   error: auditLog.error || undefined
                 }
               : undefined
-          },
-          null,
-          2
-        );
+          };
+        responseText = JSON.stringify(rowResponsePayload, null, 2);
+        apiResponseCache = { ...apiResponseCache, [refOf(s)]: rowResponsePayload };
         ok = execution.failed
           ? `Проверка завершена: успех ${execution.success}, ошибок ${execution.failed}`
           : `Проверка выполнена, запросов: ${execution.success}`;
@@ -6596,9 +7069,14 @@ function handleDefinitionInput(value: string) {
           .map((p) => String(p?.alias || '').trim())
           .filter(Boolean)
       );
+      const apiModelAliases = uniqueAliasList(
+        dataApiParametersForDraft(s)
+          .map((p) => String(p?.alias || '').trim())
+          .filter(Boolean)
+      );
       const paginationAliasesLower = paginationAliasLowerSet(s);
       const knownAliasesLower = new Set(
-        [...definitionAliases, ...dataModelAliases, ...dateModelAliases, ...Array.from(paginationAliasesLower)].map((x) =>
+        [...definitionAliases, ...dataModelAliases, ...dateModelAliases, ...apiModelAliases, ...Array.from(paginationAliasesLower)].map((x) =>
           x.toLowerCase()
         )
       );
@@ -6699,8 +7177,7 @@ function handleDefinitionInput(value: string) {
           : 'Показан последний отправленный запрос';
 
       responseStatus = lastStatus;
-      responseText = JSON.stringify(
-        {
+      const singleResponsePayload = {
           total_requests: execution.requestCount,
           execution_mode: s.executionMode || 'sync',
           sync_planner: s.executionMode === 'sync' ? s.syncPlanner || 'entity_to_stop' : undefined,
@@ -6720,10 +7197,9 @@ function handleDefinitionInput(value: string) {
                 error: auditLog.error || undefined
               }
             : undefined
-        },
-        null,
-        2
-      );
+        };
+      responseText = JSON.stringify(singleResponsePayload, null, 2);
+      apiResponseCache = { ...apiResponseCache, [refOf(s)]: singleResponsePayload };
       responsePagesCount = pagePayloads.length;
       responsePayloadCount = execution.totalItems;
       responsePayloadSize = totalSize;
@@ -7660,15 +8136,23 @@ function syncParameterEditorsHeight() {
                     <div class="data-row filter-rule-row">
                       <select value={activeFilter.tableId} on:change={(e) => updateDataFilterTableRef(activeFilter.id, e.currentTarget.value)}>
                         <option value="">Краткое наименование таблицы</option>
+                        <option value={FILTER_SCOPE_ALIAS}>Итоговые параметры (таблицы/даты/API)</option>
                         {#each selected.dataTables as t}
                           <option value={t.id}>{t.alias || `${t.schema}.${t.table}`}</option>
                         {/each}
                       </select>
                       <select value={activeFilter.field} on:change={(e) => updateDataFilter(activeFilter.id, { field: e.currentTarget.value })}>
-                        <option value="">Поле</option>
-                        {#each tableColumnsById(selected, activeFilter.tableId) as col}
-                          <option value={col}>{col}</option>
-                        {/each}
+                        {#if isAliasDataFilter(activeFilter)}
+                          <option value="">Alias параметра</option>
+                          {#each aliasOptionsForFilters(selected) as aliasOpt}
+                            <option value={aliasOpt}>{aliasOpt}</option>
+                          {/each}
+                        {:else}
+                          <option value="">Поле</option>
+                          {#each tableColumnsById(selected, activeFilter.tableId) as col}
+                            <option value={col}>{col}</option>
+                          {/each}
+                        {/if}
                       </select>
                       <select value={activeFilter.operator} on:change={(e) => updateDataFilter(activeFilter.id, { operator: e.currentTarget.value })}>
                         {#each dataFilterOperatorsFor(activeFilter) as op}
@@ -7692,196 +8176,295 @@ function syncParameterEditorsHeight() {
               {/if}
             </div>
 
-            <div class="data-section">
-              <div class="response-head field-head parameter-subhead">
-                <small>Показатели для работы</small>
-                <button type="button" class="view-toggle" on:click={addDataField}>Показатель +</button>
-              </div>
-              {#if selected?.dataFields?.length}
-                <div class="data-list">
-                  {#each selected.dataFields as f, idx (f.id)}
-                    <div class="rule-card">
-                      <div class="data-row param-row">
-                        <select value={f.tableId} on:change={(e) => updateDataFieldTableRef(f.id, e.currentTarget.value)}>
-                          <option value="">Таблица</option>
-                          {#each selected.dataTables as t}
-                            <option value={t.id}>{t.schema}.{t.table}</option>
-                          {/each}
-                        </select>
-                        <select value={f.field} on:change={(e) => updateDataField(f.id, { field: e.currentTarget.value })}>
-                          <option value="">Колонка</option>
-                          {#each tableColumnsById(selected, f.tableId) as col}
-                            <option value={col}>{col}</option>
-                          {/each}
-                        </select>
-                        <input value={f.alias} placeholder="Название параметра (alias)" on:input={(e) => updateDataField(f.id, { alias: e.currentTarget.value })} />
-                        <button
-                          type="button"
-                          class="group-toggle"
-                          class:active-group-toggle={Boolean(f.grouped)}
-                          on:click={() => updateDataField(f.id, { grouped: !Boolean(f.grouped) })}
-                          aria-pressed={Boolean(f.grouped)}
-                        >
-                          <span>Группировать</span>
-                          {#if Boolean(f.grouped)}
-                            <span class="group-toggle-indicator" aria-hidden="true"></span>
-                          {/if}
-                        </button>
-                        <button
-                          type="button"
-                          class="group-toggle group-toggle-sm"
-                          class:active-group-toggle={String(f.dateMode || 'raw') === 'process'}
-                          on:click={() =>
-                            updateDataField(f.id, {
-                              dateMode: String(f.dateMode || 'raw') === 'process' ? 'raw' : 'process'
-                            })}
-                          aria-pressed={String(f.dateMode || 'raw') === 'process'}
-                        >
-                          <span>{String(f.dateMode || 'raw') === 'process' ? 'Дата из таблицы: обработка' : 'Дата из таблицы: как есть'}</span>
-                          {#if String(f.dateMode || 'raw') === 'process'}
-                            <span class="group-toggle-indicator" aria-hidden="true"></span>
-                          {/if}
-                        </button>
-                        <div class="row-order-actions">
+            <div class="parameter-sources-grid">
+              <div class="source-card">
+                <div class="response-head field-head parameter-subhead">
+                  <small>Параметры из таблиц</small>
+                  <button type="button" class="view-toggle" on:click={addDataField}>Таблица +</button>
+                </div>
+                {#if selected?.dataFields?.length}
+                  <div class="data-list">
+                    {#each selected.dataFields as f, idx (f.id)}
+                      <div class="rule-card">
+                        <div class="data-row param-row">
+                          <select value={f.tableId} on:change={(e) => updateDataFieldTableRef(f.id, e.currentTarget.value)}>
+                            <option value="">Таблица</option>
+                            {#each selected.dataTables as t}
+                              <option value={t.id}>{t.schema}.{t.table}</option>
+                            {/each}
+                          </select>
+                          <select value={f.field} on:change={(e) => updateDataField(f.id, { field: e.currentTarget.value })}>
+                            <option value="">Колонка</option>
+                            {#each tableColumnsById(selected, f.tableId) as col}
+                              <option value={col}>{col}</option>
+                            {/each}
+                          </select>
+                          <input value={f.alias} placeholder="Название параметра (alias)" on:input={(e) => updateDataField(f.id, { alias: e.currentTarget.value })} />
                           <button
                             type="button"
-                            class="row-icon-btn"
-                            title="Поднять выше"
-                            aria-label="Поднять выше"
-                            on:click={() => moveDataField(f.id, -1)}
-                            disabled={idx === 0}
+                            class="group-toggle"
+                            class:active-group-toggle={Boolean(f.grouped)}
+                            on:click={() => updateDataField(f.id, { grouped: !Boolean(f.grouped) })}
+                            aria-pressed={Boolean(f.grouped)}
                           >
-                            ▲
+                            <span>Группировать</span>
+                            {#if Boolean(f.grouped)}
+                              <span class="group-toggle-indicator" aria-hidden="true"></span>
+                            {/if}
                           </button>
                           <button
                             type="button"
-                            class="row-icon-btn"
-                            title="Опустить ниже"
-                            aria-label="Опустить ниже"
-                            on:click={() => moveDataField(f.id, 1)}
-                            disabled={idx === selected.dataFields.length - 1}
-                          >
-                            ▼
-                          </button>
-                        </div>
-                        <button type="button" class="chip-remove" on:click={() => removeDataField(f.id)}>x</button>
-                      </div>
-                      {#if String(f.dateMode || 'raw') === 'process'}
-                        <div class="data-row field-date-row">
-                          <select
-                            value={toDateAnchorPreset(String(f.dateAnchorPreset || 'raw'))}
-                            on:change={(e) =>
+                            class="group-toggle group-toggle-sm"
+                            class:active-group-toggle={String(f.dateMode || 'raw') === 'process'}
+                            on:click={() =>
                               updateDataField(f.id, {
-                                dateAnchorPreset: toDateAnchorPreset(e.currentTarget.value)
+                                dateMode: String(f.dateMode || 'raw') === 'process' ? 'raw' : 'process'
                               })}
+                            aria-pressed={String(f.dateMode || 'raw') === 'process'}
                           >
+                            <span>{String(f.dateMode || 'raw') === 'process' ? 'Дата: обработка' : 'Дата: как есть'}</span>
+                            {#if String(f.dateMode || 'raw') === 'process'}
+                              <span class="group-toggle-indicator" aria-hidden="true"></span>
+                            {/if}
+                          </button>
+                          <div class="row-order-actions">
+                            <button
+                              type="button"
+                              class="row-icon-btn"
+                              title="Поднять выше"
+                              aria-label="Поднять выше"
+                              on:click={() => moveDataField(f.id, -1)}
+                              disabled={idx === 0}
+                            >
+                              ▲
+                            </button>
+                            <button
+                              type="button"
+                              class="row-icon-btn"
+                              title="Опустить ниже"
+                              aria-label="Опустить ниже"
+                              on:click={() => moveDataField(f.id, 1)}
+                              disabled={idx === selected.dataFields.length - 1}
+                            >
+                              ▼
+                            </button>
+                          </div>
+                          <button type="button" class="chip-remove" on:click={() => removeDataField(f.id)}>x</button>
+                        </div>
+                        {#if String(f.dateMode || 'raw') === 'process'}
+                          <div class="data-row field-date-row">
+                            <select
+                              value={toDateAnchorPreset(String(f.dateAnchorPreset || 'raw'))}
+                              on:change={(e) =>
+                                updateDataField(f.id, {
+                                  dateAnchorPreset: toDateAnchorPreset(e.currentTarget.value)
+                                })}
+                            >
+                              {#each DATE_ANCHOR_PRESETS as opt}
+                                <option value={opt.value}>{opt.label}</option>
+                              {/each}
+                            </select>
+                            <input
+                              type="number"
+                              value={f.dateAddDays || 0}
+                              placeholder="+/- дни"
+                              on:input={(e) =>
+                                updateDataField(f.id, {
+                                  dateAddDays: Number(e.currentTarget.value) || 0
+                                })}
+                            />
+                            <input
+                              type="number"
+                              value={f.dateAddMonths || 0}
+                              placeholder="+/- месяцы"
+                              on:input={(e) =>
+                                updateDataField(f.id, {
+                                  dateAddMonths: Number(e.currentTarget.value) || 0
+                                })}
+                            />
+                            <select
+                              value={toDateFormatPreset(String(f.dateFormatPreset || 'yyyy_mm_dd'))}
+                              on:change={(e) =>
+                                updateDataField(f.id, {
+                                  dateFormatPreset: toDateFormatPreset(e.currentTarget.value)
+                                })}
+                            >
+                              {#each DATE_FORMAT_PRESETS as fmt}
+                                <option value={fmt.value}>{fmt.label}</option>
+                              {/each}
+                            </select>
+                          </div>
+                        {/if}
+                      </div>
+                    {/each}
+                  </div>
+                {:else}
+                  <p class="hint">Добавь параметры из таблиц.</p>
+                {/if}
+              </div>
+
+              <div class="source-card">
+                <div class="response-head field-head parameter-subhead">
+                  <small>Параметры из дат</small>
+                  <button type="button" class="view-toggle" on:click={addDataDateParam}>Дата +</button>
+                </div>
+                {#if selected?.dataDateParams?.length}
+                  <div class="data-list">
+                    {#each selected.dataDateParams as p (p.id)}
+                      <div class="rule-card">
+                        <div class="rule-card-head">
+                          <small>{p.alias || 'date_param'}</small>
+                          <button type="button" class="chip-remove" title="Удалить параметр даты" on:click={() => removeDataDateParam(p.id)}>x</button>
+                        </div>
+                        <div class="data-row date-param-row">
+                          <input
+                            value={p.alias}
+                            placeholder="Короткое название (alias)"
+                            on:input={(e) => updateDataDateParam(p.id, { alias: e.currentTarget.value })}
+                          />
+                          <select value={p.basePreset} on:change={(e) => updateDataDateParam(p.id, { basePreset: e.currentTarget.value === 'custom' ? 'custom' : 'today' })}>
+                            {#each DATE_BASE_PRESETS as opt}
+                              <option value={opt.value}>{opt.label}</option>
+                            {/each}
+                          </select>
+                          <input
+                            type="text"
+                            value={p.customDate}
+                            placeholder="Свободная дата: 2024-03-01 или 2024-03-01T00:00:00"
+                            disabled={p.basePreset !== 'custom'}
+                            on:input={(e) => updateDataDateParam(p.id, { customDate: e.currentTarget.value })}
+                          />
+                          <select value={p.anchorPreset} on:change={(e) => updateDataDateParam(p.id, { anchorPreset: toDateAnchorPreset(e.currentTarget.value) })}>
                             {#each DATE_ANCHOR_PRESETS as opt}
                               <option value={opt.value}>{opt.label}</option>
                             {/each}
                           </select>
                           <input
                             type="number"
-                            value={f.dateAddDays || 0}
+                            value={p.addDays || 0}
                             placeholder="+/- дни"
-                            on:input={(e) =>
-                              updateDataField(f.id, {
-                                dateAddDays: Number(e.currentTarget.value) || 0
-                              })}
+                            on:input={(e) => updateDataDateParam(p.id, { addDays: Number(e.currentTarget.value) || 0 })}
                           />
                           <input
                             type="number"
-                            value={f.dateAddMonths || 0}
+                            value={p.addMonths || 0}
                             placeholder="+/- месяцы"
-                            on:input={(e) =>
-                              updateDataField(f.id, {
-                                dateAddMonths: Number(e.currentTarget.value) || 0
-                              })}
+                            on:input={(e) => updateDataDateParam(p.id, { addMonths: Number(e.currentTarget.value) || 0 })}
                           />
-                          <select
-                            value={toDateFormatPreset(String(f.dateFormatPreset || 'yyyy_mm_dd'))}
-                            on:change={(e) =>
-                              updateDataField(f.id, {
-                                dateFormatPreset: toDateFormatPreset(e.currentTarget.value)
-                              })}
-                          >
+                          <select value={p.formatPreset} on:change={(e) => updateDataDateParam(p.id, { formatPreset: toDateFormatPreset(e.currentTarget.value) })}>
                             {#each DATE_FORMAT_PRESETS as fmt}
                               <option value={fmt.value}>{fmt.label}</option>
                             {/each}
                           </select>
+                          <button
+                            type="button"
+                            class="group-toggle group-toggle-sm"
+                            class:active-group-toggle={Boolean(p.grouped)}
+                            on:click={() => updateDataDateParam(p.id, { grouped: !Boolean(p.grouped) })}
+                            aria-pressed={Boolean(p.grouped)}
+                          >
+                            <span>Группировать</span>
+                            {#if Boolean(p.grouped)}
+                              <span class="group-toggle-indicator"></span>
+                            {/if}
+                          </button>
                         </div>
-                      {/if}
-                    </div>
-                  {/each}
+                        <p class="hint small-hint">Превью значения: <code>{dateParamPreviewValue(p)}</code></p>
+                      </div>
+                    {/each}
+                  </div>
+                {:else}
+                  <p class="hint">Добавь параметры дат через «Дата +».</p>
+                {/if}
+              </div>
+
+              <div class="source-card">
+                <div class="response-head field-head parameter-subhead">
+                  <small>Параметры из шаблонов API</small>
+                  <button type="button" class="view-toggle" on:click={addDataApiParam}>API +</button>
                 </div>
-              {:else}
-                <p class="hint">Добавь показатели, которые пойдут в подстановку API.</p>
-              {/if}
-              <p class="hint small-hint">Приоритет группировки: сверху вниз по строкам показателей.</p>
+                {#if apiSourceDraftOptions(selected).length === 0}
+                  <p class="hint">Нет доступных API-шаблонов. Создай и сохрани минимум один API.</p>
+                {:else if selected?.dataApiParams?.length}
+                  <div class="data-list">
+                    {#each selected.dataApiParams as p (p.id)}
+                      {@const sourceDraft = sourceDraftByRefOrStoreId(p.sourceApiRef, p.sourceApiStoreId)}
+                      <div class="rule-card">
+                        <div class="data-row api-param-row">
+                          <select
+                            value={p.sourceApiRef}
+                            on:change={(e) => {
+                              const refValue = e.currentTarget.value;
+                              const picked = apiSourceDraftOptions(selected).find((x) => x.ref === refValue);
+                              updateDataApiParam(p.id, {
+                                sourceApiRef: refValue,
+                                sourceApiStoreId: Number(picked?.storeId || 0) || undefined,
+                                sourceKey: ''
+                              });
+                            }}
+                          >
+                            <option value="">Шаблон API</option>
+                            {#each apiSourceDraftOptions(selected) as opt}
+                              <option value={opt.ref}>{opt.label}</option>
+                            {/each}
+                          </select>
+                          <select
+                            value={p.sourceType}
+                            on:change={(e) =>
+                              updateDataApiParam(p.id, {
+                                sourceType:
+                                  e.currentTarget.value === 'input'
+                                    ? 'input'
+                                    : e.currentTarget.value === 'output'
+                                    ? 'output'
+                                    : 'system',
+                                sourceKey: ''
+                              })}
+                          >
+                            {#each apiParamSourceTypeOptions() as t}
+                              <option value={t.value}>{t.label}</option>
+                            {/each}
+                          </select>
+                          <select value={p.sourceKey} on:change={(e) => updateDataApiParam(p.id, { sourceKey: e.currentTarget.value })}>
+                            <option value="">{p.sourceType === 'output' ? 'Путь из ответа API' : 'Параметр источника'}</option>
+                            {#each apiParamSourceKeyOptions(p) as keyOpt}
+                              <option value={keyOpt.value}>{keyOpt.label}</option>
+                            {/each}
+                          </select>
+                          <input
+                            value={p.alias}
+                            placeholder="Alias"
+                            on:input={(e) => updateDataApiParam(p.id, { alias: e.currentTarget.value })}
+                          />
+                          <button
+                            type="button"
+                            class="group-toggle group-toggle-sm"
+                            class:active-group-toggle={Boolean(p.grouped)}
+                            on:click={() => updateDataApiParam(p.id, { grouped: !Boolean(p.grouped) })}
+                            aria-pressed={Boolean(p.grouped)}
+                          >
+                            <span>Группировать</span>
+                            {#if Boolean(p.grouped)}
+                              <span class="group-toggle-indicator"></span>
+                            {/if}
+                          </button>
+                          <button type="button" class="chip-remove" on:click={() => removeDataApiParam(p.id)}>x</button>
+                        </div>
+                        {#if p.sourceType === 'output' && sourceDraft}
+                          <p class="hint small-hint">
+                            Для выходных параметров используется последний ответ API-шаблона. Сначала запусти источник <code>{sourceDraft.name}</code>.
+                          </p>
+                        {/if}
+                      </div>
+                    {/each}
+                  </div>
+                {:else}
+                  <p class="hint">Добавь параметры из других API через «API +».</p>
+                {/if}
+              </div>
             </div>
 
-            <div class="data-section">
-              <div class="response-head field-head parameter-subhead">
-                <small>Параметры из даты</small>
-                <button type="button" class="view-toggle" on:click={addDataDateParam}>Дата +</button>
-              </div>
-              {#if selected?.dataDateParams?.length}
-                <div class="data-list">
-                  {#each selected.dataDateParams as p (p.id)}
-                    <div class="rule-card">
-                      <div class="rule-card-head">
-                        <small>{p.alias || 'date_param'}</small>
-                        <button type="button" class="chip-remove" title="Удалить параметр даты" on:click={() => removeDataDateParam(p.id)}>x</button>
-                      </div>
-                      <div class="data-row date-param-row">
-                        <input
-                          value={p.alias}
-                          placeholder="Короткое название (alias)"
-                          on:input={(e) => updateDataDateParam(p.id, { alias: e.currentTarget.value })}
-                        />
-                        <select value={p.basePreset} on:change={(e) => updateDataDateParam(p.id, { basePreset: e.currentTarget.value === 'custom' ? 'custom' : 'today' })}>
-                          {#each DATE_BASE_PRESETS as opt}
-                            <option value={opt.value}>{opt.label}</option>
-                          {/each}
-                        </select>
-                        <input
-                          type="text"
-                          value={p.customDate}
-                          placeholder="Свободная дата: 2024-03-01 или 2024-03-01T00:00:00"
-                          disabled={p.basePreset !== 'custom'}
-                          on:input={(e) => updateDataDateParam(p.id, { customDate: e.currentTarget.value })}
-                        />
-                        <select value={p.anchorPreset} on:change={(e) => updateDataDateParam(p.id, { anchorPreset: toDateAnchorPreset(e.currentTarget.value) })}>
-                          {#each DATE_ANCHOR_PRESETS as opt}
-                            <option value={opt.value}>{opt.label}</option>
-                          {/each}
-                        </select>
-                        <input
-                          type="number"
-                          value={p.addDays || 0}
-                          placeholder="+/- дни"
-                          on:input={(e) => updateDataDateParam(p.id, { addDays: Number(e.currentTarget.value) || 0 })}
-                        />
-                        <input
-                          type="number"
-                          value={p.addMonths || 0}
-                          placeholder="+/- месяцы"
-                          on:input={(e) => updateDataDateParam(p.id, { addMonths: Number(e.currentTarget.value) || 0 })}
-                        />
-                        <select value={p.formatPreset} on:change={(e) => updateDataDateParam(p.id, { formatPreset: toDateFormatPreset(e.currentTarget.value) })}>
-                          {#each DATE_FORMAT_PRESETS as fmt}
-                            <option value={fmt.value}>{fmt.label}</option>
-                          {/each}
-                        </select>
-                      </div>
-                      <p class="hint small-hint">Превью значения: <code>{dateParamPreviewValue(p)}</code></p>
-                    </div>
-                  {/each}
-                </div>
-                <p class="hint small-hint">Форматы поддерживают: <code>YYYY-MM-DD</code>, <code>YYYY-MM-DDTHH:MM:SSZ</code>, <code>RFC3339 (+03:00)</code> и ISO.</p>
-              {:else}
-                <p class="hint">Добавь параметры дат через «Дата +», чтобы подставлять периоды и метки времени.</p>
-              {/if}
-            </div>
+            <p class="hint small-hint">Группировка работает одинаково для параметров из таблиц, дат и API-шаблонов.</p>
 
             <div class="data-section">
               <div class="response-head field-head parameter-subhead">
@@ -8499,6 +9082,19 @@ function syncParameterEditorsHeight() {
   .parameter-subhead { margin-top:12px; }
   .data-builder-box { border:1px solid #e2e8f0; border-radius:12px; padding:10px; background:#fff; margin-top:8px; display:flex; flex-direction:column; gap:10px; }
   .data-section { display:flex; flex-direction:column; gap:6px; }
+  .parameter-sources-grid {
+    display:grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+    gap:10px;
+    align-items:start;
+  }
+  .source-card {
+    border:1px solid #e2e8f0;
+    border-radius:10px;
+    background:#fff;
+    padding:8px;
+    min-height:100%;
+  }
   .data-list { display:flex; flex-direction:column; gap:8px; }
   .data-row { display:grid; gap:8px; align-items:center; }
   .crumb-strip { display:flex; flex-wrap:wrap; gap:6px; }
@@ -8556,6 +9152,7 @@ function syncParameterEditorsHeight() {
   .param-row { grid-template-columns: 1.2fr 1fr 1fr 140px 220px 72px auto; }
   .field-date-row { grid-template-columns: 1fr 140px 140px 1fr; align-items:end; }
   .date-param-row { grid-template-columns: 180px 160px minmax(220px, 1fr) 170px 120px 120px minmax(220px, 1fr); }
+  .api-param-row { grid-template-columns: 1fr 200px 1fr 180px 130px auto; }
   .group-toggle {
     display:flex;
     align-items:center;
@@ -8692,7 +9289,8 @@ function syncParameterEditorsHeight() {
     .connect-actions { justify-content:flex-start; flex-wrap:wrap; }
     .raw-grid { grid-template-columns: 1fr; }
     .saved-inline-actions { grid-template-columns: 1fr; }
-    .data-row, .table-rule-row, .join-rule-row, .filter-rule-row, .param-row, .field-date-row, .date-param-row { grid-template-columns: 1fr; }
+    .parameter-sources-grid { grid-template-columns: 1fr; }
+    .data-row, .table-rule-row, .join-rule-row, .filter-rule-row, .param-row, .field-date-row, .date-param-row, .api-param-row { grid-template-columns: 1fr; }
     .pagination-limit-toggles,
     .pagination-limit-values {
       max-width:100%;
