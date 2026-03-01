@@ -51,6 +51,30 @@
     compareValue: string;
   };
 
+  type DateBasePreset = 'today' | 'custom';
+  type DateAnchorPreset =
+    | 'raw'
+    | 'start_of_day'
+    | 'end_of_day'
+    | 'start_of_week'
+    | 'end_of_week'
+    | 'start_of_month'
+    | 'end_of_month'
+    | 'start_of_year'
+    | 'end_of_year';
+  type DateFormatPreset = 'yyyy_mm_dd' | 'datetime_utc_z' | 'datetime_msk' | 'rfc3339_msk' | 'iso8601';
+
+  type DataDateParameter = {
+    id: string;
+    alias: string;
+    basePreset: DateBasePreset;
+    customDate: string;
+    anchorPreset: DateAnchorPreset;
+    addDays: number;
+    addMonths: number;
+    formatPreset: DateFormatPreset;
+  };
+
   type PaginationParameter = {
     id: string;
     alias: string;
@@ -115,6 +139,7 @@
     paginationNextUrlPath: string;
     paginationUseMaxPages: boolean;
     paginationMaxPages: number;
+    paginationUseDelay: boolean;
     paginationDelayMs: number;
     paginationStopOnMissingValue: boolean;
     paginationStopOnSameResponse: boolean;
@@ -148,6 +173,7 @@
     dataJoins: DataModelJoin[];
     dataFields: DataModelField[];
     dataFilters: DataModelFilter[];
+    dataDateParams: DataDateParameter[];
   };
 
   type ParameterCondition = {
@@ -199,6 +225,28 @@
       { value: 'after', label: 'позже' }
     ]
   };
+  const DATE_BASE_PRESETS: Array<{ value: DateBasePreset; label: string }> = [
+    { value: 'today', label: 'Сегодня' },
+    { value: 'custom', label: 'Свободная дата' }
+  ];
+  const DATE_ANCHOR_PRESETS: Array<{ value: DateAnchorPreset; label: string }> = [
+    { value: 'raw', label: 'Как есть' },
+    { value: 'start_of_day', label: 'Начало дня' },
+    { value: 'end_of_day', label: 'Конец дня' },
+    { value: 'start_of_week', label: 'Начало недели' },
+    { value: 'end_of_week', label: 'Конец недели' },
+    { value: 'start_of_month', label: 'Начало месяца' },
+    { value: 'end_of_month', label: 'Конец месяца' },
+    { value: 'start_of_year', label: 'Начало года' },
+    { value: 'end_of_year', label: 'Конец года' }
+  ];
+  const DATE_FORMAT_PRESETS: Array<{ value: DateFormatPreset; label: string; example: string }> = [
+    { value: 'yyyy_mm_dd', label: 'YYYY-MM-DD', example: '2024-03-01' },
+    { value: 'datetime_utc_z', label: 'YYYY-MM-DDTHH:MM:SSZ (UTC)', example: '2024-08-01T23:59:59Z' },
+    { value: 'datetime_msk', label: 'YYYY-MM-DDTHH:MM:SS (МСК)', example: '2024-08-01T23:59:59' },
+    { value: 'rfc3339_msk', label: 'RFC3339 (+03:00)', example: '2019-06-20T00:00:00+03:00' },
+    { value: 'iso8601', label: 'ISO 8601 (с миллисекундами)', example: '2024-08-01T23:59:59.000Z' }
+  ];
   const PAGINATION_STOP_OPERATORS: Array<{ value: PaginationStopOperator; label: string }> = [
     { value: 'equals', label: 'равно' },
     { value: 'not_equals', label: 'не равно' },
@@ -565,6 +613,7 @@ function formatBytes(bytes: number) {
       paginationNextUrlPath: 'next',
       paginationUseMaxPages: true,
       paginationMaxPages: 3,
+      paginationUseDelay: false,
       paginationDelayMs: 0,
       paginationStopOnMissingValue: true,
       paginationStopOnSameResponse: true,
@@ -593,7 +642,8 @@ function formatBytes(bytes: number) {
       dataTables: [],
       dataJoins: [],
       dataFields: [],
-      dataFilters: []
+      dataFilters: [],
+      dataDateParams: []
     };
   }
 
@@ -737,6 +787,30 @@ function formatBytes(bytes: number) {
         compareValue: String(f?.compare_value || f?.compareValue || '').trim()
       }))
       .filter((f: DataModelFilter) => f.tableId && f.field && dataTableIdSet.has(f.tableId));
+    const dataDateParamsRaw = Array.isArray(dataModelCfg?.date_parameters)
+      ? dataModelCfg.date_parameters
+      : Array.isArray((mapping as any)?.data_date_parameters)
+      ? (mapping as any).data_date_parameters
+      : Array.isArray((row as any)?.data_date_parameters)
+      ? (row as any).data_date_parameters
+      : [];
+    const normalizedDataDateParams = dataDateParamsRaw
+      .map((p: any, idx: number) =>
+        normalizeDataDateParameter(
+          {
+            id: String(p?.id || ''),
+            alias: String(p?.alias || `date_${idx + 1}`),
+            basePreset: String(p?.base_preset || p?.basePreset || p?.base || 'today') as DateBasePreset,
+            customDate: String(p?.custom_date || p?.customDate || ''),
+            anchorPreset: String(p?.anchor_preset || p?.anchorPreset || p?.anchor || 'raw') as DateAnchorPreset,
+            addDays: Number(p?.add_days ?? p?.addDays ?? 0),
+            addMonths: Number(p?.add_months ?? p?.addMonths ?? 0),
+            formatPreset: String(p?.format_preset || p?.formatPreset || p?.format || 'yyyy_mm_dd') as DateFormatPreset
+          },
+          idx + 1
+        )
+      )
+      .filter((p: DataDateParameter) => String(p.alias || '').trim());
     const dispatchMode = toDispatchMode(String(row?.dispatch_mode || executionCfg?.dispatch_mode || 'single'));
     const executionModeRaw = String(row?.execution_mode || executionCfg?.execution_mode || 'sync').trim().toLowerCase();
     const executionMode: 'sync' | 'async' = executionModeRaw === 'async' ? 'async' : 'sync';
@@ -817,6 +891,14 @@ function formatBytes(bytes: number) {
     const paginationDelayMsValue = Number.isFinite(Number(row?.pagination_delay_ms))
       ? Number(row?.pagination_delay_ms)
       : Number(pagination?.delay_ms || 0);
+    const paginationUseDelayRaw =
+      (row as any)?.pagination_use_delay ??
+      (pagination as any)?.use_delay ??
+      (pagination as any)?.delay_enabled;
+    const paginationUseDelay =
+      paginationUseDelayRaw === undefined || paginationUseDelayRaw === null
+        ? Number(paginationDelayMsValue || 0) > 0
+        : Boolean(paginationUseDelayRaw);
     const paginationCustomStrategyValue = String(
       row?.pagination_custom_strategy || pagination?.custom_strategy || ''
     );
@@ -951,6 +1033,7 @@ function formatBytes(bytes: number) {
       paginationNextUrlPath: paginationNextUrlPathValue,
       paginationUseMaxPages,
       paginationMaxPages: paginationMaxPagesValue,
+      paginationUseDelay,
       paginationDelayMs: paginationDelayMsValue,
       paginationStopOnMissingValue,
       paginationStopOnSameResponse,
@@ -979,7 +1062,8 @@ function formatBytes(bytes: number) {
       dataTables: normalizedDataTables,
       dataJoins: normalizedDataJoins,
       dataFields: normalizedDataFields,
-      dataFilters: normalizedDataFilters
+      dataFilters: normalizedDataFilters,
+      dataDateParams: normalizedDataDateParams
     };
   }
 
@@ -1015,6 +1099,16 @@ function formatBytes(bytes: number) {
       request_target: p.requestTarget,
       request_path: p.requestPath,
       apply_for_all_responses: true
+    }));
+    const dataDateParametersPayload = dataDateParametersForDraft(d).map((p) => ({
+      id: p.id,
+      alias: p.alias,
+      base_preset: p.basePreset,
+      custom_date: p.customDate,
+      anchor_preset: p.anchorPreset,
+      add_days: Number(p.addDays || 0),
+      add_months: Number(p.addMonths || 0),
+      format_preset: p.formatPreset
     }));
     const paginationStopRulesPayload = paginationStopRulesForDraft(d)
       .filter((rule) => String(rule.responsePath || '').trim())
@@ -1061,6 +1155,7 @@ function formatBytes(bytes: number) {
         next_url_path: d.paginationNextUrlPath,
         use_max_pages: Boolean(d.paginationUseMaxPages),
         max_pages: d.paginationMaxPages,
+        use_delay: Boolean(d.paginationUseDelay),
         delay_ms: d.paginationDelayMs,
         stop_conditions: {
           on_missing_pagination_value: Boolean(d.paginationStopOnMissingValue),
@@ -1136,7 +1231,8 @@ function formatBytes(bytes: number) {
               field: f.field,
               operator: f.operator,
               compare_value: f.compareValue
-            }))
+            })),
+            date_parameters: dataDateParametersPayload
           },
           binding_rules: sanitizedAliases.bindingRules.map((rule) => ({
             id: rule.id,
@@ -1184,8 +1280,10 @@ function formatBytes(bytes: number) {
       pagination_next_url_path: d.paginationNextUrlPath,
       pagination_use_max_pages: Boolean(d.paginationUseMaxPages),
       pagination_max_pages: d.paginationMaxPages,
+      pagination_use_delay: Boolean(d.paginationUseDelay),
       pagination_delay_ms: d.paginationDelayMs,
       pagination_custom_strategy: d.paginationCustomStrategy,
+      data_date_parameters: dataDateParametersPayload,
       description: d.description,
       is_active: true
     };
@@ -1234,6 +1332,12 @@ function formatBytes(bytes: number) {
   function togglePaginationUseMaxPages() {
     mutateSelected((d) => {
       d.paginationUseMaxPages = !Boolean(d.paginationUseMaxPages);
+    });
+  }
+
+  function togglePaginationUseDelay() {
+    mutateSelected((d) => {
+      d.paginationUseDelay = !Boolean(d.paginationUseDelay);
     });
   }
 
@@ -2807,7 +2911,189 @@ function formatBytes(bytes: number) {
 
   function hasDataModelConfigured(draft: ApiDraft | null) {
     if (!draft) return false;
-    return Array.isArray(draft.dataFields) && draft.dataFields.some((f) => String(f?.tableId || '').trim() && String(f?.field || '').trim() && String(f?.alias || '').trim());
+    const hasTableFields =
+      Array.isArray(draft.dataFields) &&
+      draft.dataFields.some((f) => String(f?.tableId || '').trim() && String(f?.field || '').trim() && String(f?.alias || '').trim());
+    const hasDateParams =
+      Array.isArray(draft.dataDateParams) &&
+      draft.dataDateParams.some((p) => String(p?.alias || '').trim());
+    return Boolean(hasTableFields || hasDateParams);
+  }
+
+  function pad2(v: number) {
+    return String(v).padStart(2, '0');
+  }
+
+  function parseDateInput(raw: string): Date | null {
+    const src = String(raw || '').trim();
+    if (!src) return null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(src)) {
+      const [y, m, d] = src.split('-').map((x) => Number(x));
+      return new Date(Date.UTC(y, (m || 1) - 1, d || 1, 0, 0, 0, 0));
+    }
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(src)) {
+      const [datePart, timePart] = src.split('T');
+      const [y, m, d] = datePart.split('-').map((x) => Number(x));
+      const [hh, mm, ss] = timePart.split(':').map((x) => Number(x));
+      return new Date(Date.UTC(y, (m || 1) - 1, d || 1, hh || 0, mm || 0, ss || 0, 0));
+    }
+    const parsed = new Date(src);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed;
+  }
+
+  function shiftDateByMonthsUtc(base: Date, deltaMonths: number) {
+    if (!deltaMonths) return new Date(base.getTime());
+    const d = new Date(base.getTime());
+    const day = d.getUTCDate();
+    d.setUTCDate(1);
+    d.setUTCMonth(d.getUTCMonth() + deltaMonths);
+    const maxDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+    d.setUTCDate(Math.min(day, maxDay));
+    return d;
+  }
+
+  function applyDateAnchorPreset(base: Date, anchor: DateAnchorPreset) {
+    const d = new Date(base.getTime());
+    switch (anchor) {
+      case 'start_of_day':
+        d.setUTCHours(0, 0, 0, 0);
+        return d;
+      case 'end_of_day':
+        d.setUTCHours(23, 59, 59, 0);
+        return d;
+      case 'start_of_week': {
+        d.setUTCHours(0, 0, 0, 0);
+        const day = d.getUTCDay();
+        const diff = (day + 6) % 7;
+        d.setUTCDate(d.getUTCDate() - diff);
+        return d;
+      }
+      case 'end_of_week': {
+        d.setUTCHours(23, 59, 59, 0);
+        const day = d.getUTCDay();
+        const diff = 6 - ((day + 6) % 7);
+        d.setUTCDate(d.getUTCDate() + diff);
+        return d;
+      }
+      case 'start_of_month':
+        d.setUTCHours(0, 0, 0, 0);
+        d.setUTCDate(1);
+        return d;
+      case 'end_of_month':
+        d.setUTCHours(23, 59, 59, 0);
+        d.setUTCMonth(d.getUTCMonth() + 1, 0);
+        return d;
+      case 'start_of_year':
+        d.setUTCHours(0, 0, 0, 0);
+        d.setUTCMonth(0, 1);
+        return d;
+      case 'end_of_year':
+        d.setUTCHours(23, 59, 59, 0);
+        d.setUTCMonth(11, 31);
+        return d;
+      case 'raw':
+      default:
+        return d;
+    }
+  }
+
+  function formatDateByPreset(value: Date, preset: DateFormatPreset): string {
+    const y = value.getUTCFullYear();
+    const m = pad2(value.getUTCMonth() + 1);
+    const d = pad2(value.getUTCDate());
+    const hh = pad2(value.getUTCHours());
+    const mm = pad2(value.getUTCMinutes());
+    const ss = pad2(value.getUTCSeconds());
+    if (preset === 'yyyy_mm_dd') return `${y}-${m}-${d}`;
+    if (preset === 'datetime_utc_z') return `${y}-${m}-${d}T${hh}:${mm}:${ss}Z`;
+    if (preset === 'datetime_msk' || preset === 'rfc3339_msk') {
+      const msk = new Date(value.getTime() + 3 * 60 * 60 * 1000);
+      const my = msk.getUTCFullYear();
+      const mmn = pad2(msk.getUTCMonth() + 1);
+      const md = pad2(msk.getUTCDate());
+      const mhh = pad2(msk.getUTCHours());
+      const mmi = pad2(msk.getUTCMinutes());
+      const mss = pad2(msk.getUTCSeconds());
+      if (preset === 'datetime_msk') return `${my}-${mmn}-${md}T${mhh}:${mmi}:${mss}`;
+      return `${my}-${mmn}-${md}T${mhh}:${mmi}:${mss}+03:00`;
+    }
+    return value.toISOString();
+  }
+
+  function normalizeDataDateParameter(input: Partial<DataDateParameter> | null | undefined, idx = 1): DataDateParameter {
+    const baseRaw = String(input?.basePreset || '').trim() as DateBasePreset;
+    const anchorRaw = String(input?.anchorPreset || '').trim() as DateAnchorPreset;
+    const formatRaw = String(input?.formatPreset || '').trim() as DateFormatPreset;
+    const basePreset: DateBasePreset = baseRaw === 'custom' ? 'custom' : 'today';
+    const anchorPreset: DateAnchorPreset = DATE_ANCHOR_PRESETS.some((x) => x.value === anchorRaw) ? anchorRaw : 'raw';
+    const formatPreset: DateFormatPreset = DATE_FORMAT_PRESETS.some((x) => x.value === formatRaw) ? formatRaw : 'yyyy_mm_dd';
+    return {
+      id: String(input?.id || uid()),
+      alias: String(input?.alias || `date_${idx}`).trim(),
+      basePreset,
+      customDate: String(input?.customDate || '').trim(),
+      anchorPreset,
+      addDays: Number.isFinite(Number(input?.addDays)) ? Number(input?.addDays) : 0,
+      addMonths: Number.isFinite(Number(input?.addMonths)) ? Number(input?.addMonths) : 0,
+      formatPreset
+    };
+  }
+
+  function toDateAnchorPreset(value: string): DateAnchorPreset {
+    const raw = String(value || '').trim();
+    return DATE_ANCHOR_PRESETS.some((x) => x.value === raw) ? (raw as DateAnchorPreset) : 'raw';
+  }
+
+  function toDateFormatPreset(value: string): DateFormatPreset {
+    const raw = String(value || '').trim();
+    return DATE_FORMAT_PRESETS.some((x) => x.value === raw) ? (raw as DateFormatPreset) : 'yyyy_mm_dd';
+  }
+
+  function dataDateParametersForDraft(draft: ApiDraft | null): DataDateParameter[] {
+    if (!draft) return [];
+    return (Array.isArray(draft.dataDateParams) ? draft.dataDateParams : [])
+      .map((p, idx) => normalizeDataDateParameter(p, idx + 1))
+      .filter((p) => String(p.alias || '').trim());
+  }
+
+  function computeDateParameterValue(param: DataDateParameter, now = new Date()): { value: string; error?: string } {
+    const normalized = normalizeDataDateParameter(param, 1);
+    const base =
+      normalized.basePreset === 'custom'
+        ? parseDateInput(normalized.customDate)
+        : new Date(now.getTime());
+    if (!base) return { value: '', error: 'некорректная свободная дата' };
+    let value = applyDateAnchorPreset(base, normalized.anchorPreset);
+    value = shiftDateByMonthsUtc(value, Number(normalized.addMonths || 0));
+    value.setUTCDate(value.getUTCDate() + Number(normalized.addDays || 0));
+    return { value: formatDateByPreset(value, normalized.formatPreset) };
+  }
+
+  function resolveDateAliasValues(draft: ApiDraft | null, requestedAliases: string[]) {
+    const map: Record<string, any> = {};
+    const issues: Record<string, string> = {};
+    const requested = uniqueAliasList((requestedAliases || []).map((a) => String(a || '').trim()).filter(Boolean));
+    if (!draft || !requested.length) return { map, issues };
+    const params = dataDateParametersForDraft(draft);
+    if (!params.length) return { map, issues };
+    const byLower = new Map<string, DataDateParameter>();
+    params.forEach((p) => {
+      const key = String(p.alias || '').trim().toLowerCase();
+      if (key && !byLower.has(key)) byLower.set(key, p);
+    });
+    requested.forEach((alias) => {
+      const param = byLower.get(alias.toLowerCase());
+      if (!param) return;
+      const computed = computeDateParameterValue(param);
+      if (computed.error) {
+        issues[param.alias] = computed.error;
+        return;
+      }
+      map[param.alias] = computed.value;
+      if (alias !== param.alias) map[alias] = computed.value;
+    });
+    return { map, issues };
   }
 
   function normalizePaginationParameter(input: Partial<PaginationParameter> | null | undefined, fallbackAlias = 'cursor'): PaginationParameter {
@@ -2888,8 +3174,16 @@ function formatBytes(bytes: number) {
     const fromDataModel = (Array.isArray(draft.dataFields) ? draft.dataFields : [])
       .map((f) => String(f?.alias || '').trim())
       .filter(Boolean);
-    if (fromDataModel.length) return uniqueAliasList(fromDataModel);
-    return uniqueAliasList((Array.isArray(draft.parameterDefinitions) ? draft.parameterDefinitions : []).map((p) => String(p?.alias || '').trim()));
+    const fromDateParams = dataDateParametersForDraft(draft)
+      .map((p) => String(p?.alias || '').trim())
+      .filter(Boolean);
+    const fromDefinitions = (Array.isArray(draft.parameterDefinitions) ? draft.parameterDefinitions : [])
+      .map((p) => String(p?.alias || '').trim())
+      .filter(Boolean);
+    if (fromDataModel.length || fromDateParams.length) {
+      return uniqueAliasList([...fromDataModel, ...fromDateParams]);
+    }
+    return uniqueAliasList(fromDefinitions);
   }
 
   function sanitizeAliasReferences(draft: ApiDraft) {
@@ -3157,6 +3451,45 @@ function formatBytes(bytes: number) {
     });
   }
 
+  function addDataDateParam() {
+    mutateSelected((d) => {
+      const idx = (Array.isArray(d.dataDateParams) ? d.dataDateParams.length : 0) + 1;
+      const next = normalizeDataDateParameter(
+        {
+          id: uid(),
+          alias: `date_${idx}`,
+          basePreset: 'today',
+          customDate: '',
+          anchorPreset: 'raw',
+          addDays: 0,
+          addMonths: 0,
+          formatPreset: 'yyyy_mm_dd'
+        },
+        idx
+      );
+      d.dataDateParams = [...(Array.isArray(d.dataDateParams) ? d.dataDateParams : []), next];
+    });
+  }
+
+  function updateDataDateParam(paramId: string, patch: Partial<DataDateParameter>) {
+    mutateSelected((d) => {
+      d.dataDateParams = (Array.isArray(d.dataDateParams) ? d.dataDateParams : []).map((p, idx) =>
+        p.id === paramId ? normalizeDataDateParameter({ ...p, ...patch }, idx + 1) : p
+      );
+    });
+  }
+
+  function removeDataDateParam(paramId: string) {
+    mutateSelected((d) => {
+      d.dataDateParams = (Array.isArray(d.dataDateParams) ? d.dataDateParams : []).filter((p) => p.id !== paramId);
+    });
+  }
+
+  function dateParamPreviewValue(param: DataDateParameter) {
+    const computed = computeDateParameterValue(param);
+    return computed.error ? `Ошибка: ${computed.error}` : computed.value;
+  }
+
   function tableColumnsById(draft: ApiDraft | null, tableId: string) {
     if (!draft) return [];
     const t = draft.dataTables.find((x) => x.id === tableId);
@@ -3311,22 +3644,40 @@ function formatBytes(bytes: number) {
     const issues: Record<string, string> = {};
     if (!hasDataModelConfigured(draft)) return { rows: [], issues };
     const aliasesRequested = uniqueAliasList(aliases);
-    const available = new Set((draft.dataFields || []).map((f) => String(f.alias || '').trim()).filter(Boolean));
+    const dataAliases = uniqueAliasList((draft.dataFields || []).map((f) => String(f.alias || '').trim()).filter(Boolean));
+    const dateAliases = uniqueAliasList(dataDateParametersForDraft(draft).map((p) => String(p.alias || '').trim()).filter(Boolean));
+    const available = new Set([...dataAliases, ...dateAliases]);
     aliasesRequested.forEach((alias) => {
       if (!available.has(alias)) issues[alias] = 'alias не найден в конструкторе данных';
     });
     if (Object.keys(issues).length) return { rows: [], issues };
 
+    const dateResolved = resolveDateAliasValues(draft, aliasesRequested);
+    Object.entries(dateResolved.issues).forEach(([alias, reason]) => {
+      if (!issues[alias]) issues[alias] = reason;
+    });
+    if (Object.keys(issues).length) return { rows: [], issues };
+    const dateMap = dateResolved.map;
+    const hasDataAlias = aliasesRequested.some((alias) => dataAliases.includes(alias));
+    if (!hasDataAlias) {
+      return { rows: [dateMap], issues };
+    }
+
     const allRows: Array<Record<string, any>> = [];
     const limit = 1000;
     let offset = 0;
     while (offset <= 100000) {
-      const resp = await fetchDataModelRows(draft, aliasesRequested, limit, offset);
+      const onlyDataAliases = aliasesRequested.filter((alias) => dataAliases.includes(alias));
+      const resp = await fetchDataModelRows(draft, onlyDataAliases, limit, offset);
       const rows = Array.isArray(resp?.rows) ? resp.rows : [];
       if (!rows.length) break;
-      allRows.push(...rows);
+      const merged = rows.map((row) => ({ ...row, ...dateMap }));
+      allRows.push(...merged);
       offset += rows.length;
       if (!resp?.has_more || rows.length < limit) break;
+    }
+    if (!allRows.length && Object.keys(dateMap).length) {
+      allRows.push({ ...dateMap });
     }
     return { rows: allRows, issues };
   }
@@ -3340,7 +3691,8 @@ function formatBytes(bytes: number) {
       datasetPreviewError = 'Выбери API';
       return;
     }
-    if (!selected.dataTables?.length) {
+    const dateParams = dataDateParametersForDraft(selected);
+    if (!selected.dataTables?.length && !dateParams.length) {
       datasetPreviewColumns = [];
       datasetPreviewError = 'Добавь хотя бы одну таблицу.';
       return;
@@ -3348,20 +3700,38 @@ function formatBytes(bytes: number) {
     const previewCols = (selected.dataFields || [])
       .filter((f) => String(f?.tableId || '').trim() && String(f?.field || '').trim() && String(f?.alias || '').trim())
       .map((f) => ({ id: f.id, tableId: f.tableId, field: f.field, alias: f.alias }));
-    if (!previewCols.length) {
+    const dateAliases = uniqueAliasList(dateParams.map((p) => String(p.alias || '').trim()).filter(Boolean));
+    if (!previewCols.length && !dateAliases.length) {
       datasetPreviewColumns = [];
       datasetPreviewError = 'Добавь хотя бы один показатель для работы.';
       return;
     }
     datasetPreviewLoading = true;
     try {
-      const aliases = uniqueAliasList(previewCols.map((f) => String(f?.alias || '').trim()).filter(Boolean));
+      const aliases = uniqueAliasList([
+        ...previewCols.map((f) => String(f?.alias || '').trim()).filter(Boolean),
+        ...dateAliases
+      ]);
       if (requestId !== datasetPreviewRequestSeq) return;
       datasetPreviewColumns = aliases;
-      const resp = await fetchDataModelRowsByFields(selected, previewCols, aliases, 10, 0);
-      if (requestId !== datasetPreviewRequestSeq) return;
-      datasetPreviewRows = Array.isArray(resp?.rows) ? resp.rows : [];
-      datasetPreviewHasMore = Boolean(resp?.has_more);
+      const dateResolved = resolveDateAliasValues(selected, aliases);
+      if (Object.keys(dateResolved.issues).length) {
+        datasetPreviewError = Object.entries(dateResolved.issues)
+          .map(([k, v]) => `${k}: ${v}`)
+          .join('; ');
+      }
+      const dateMap = dateResolved.map;
+      if (!previewCols.length) {
+        datasetPreviewRows = [dateMap];
+        datasetPreviewHasMore = false;
+      } else {
+        const dataAliases = uniqueAliasList(previewCols.map((f) => String(f?.alias || '').trim()).filter(Boolean));
+        const resp = await fetchDataModelRowsByFields(selected, previewCols, dataAliases, 10, 0);
+        if (requestId !== datasetPreviewRequestSeq) return;
+        const rows = Array.isArray(resp?.rows) ? resp.rows : [];
+        datasetPreviewRows = rows.map((row) => ({ ...row, ...dateMap }));
+        datasetPreviewHasMore = Boolean(resp?.has_more);
+      }
     } catch (e: any) {
       if (requestId !== datasetPreviewRequestSeq) return;
       datasetPreviewError = e?.message ?? String(e);
@@ -3400,7 +3770,17 @@ function formatBytes(bytes: number) {
       operator: f.operator,
       compareValue: f.compareValue
     }));
-    return JSON.stringify({ tables, fields, joins, filters });
+    const dateParams = dataDateParametersForDraft(draft).map((p) => ({
+      id: p.id,
+      alias: p.alias,
+      basePreset: p.basePreset,
+      customDate: p.customDate,
+      anchorPreset: p.anchorPreset,
+      addDays: p.addDays,
+      addMonths: p.addMonths,
+      formatPreset: p.formatPreset
+    }));
+    return JSON.stringify({ tables, fields, joins, filters, dateParams });
   }
 
   function serializeParameterDefinition(param: ParameterDefinition) {
@@ -3774,6 +4154,14 @@ function handleDefinitionInput(value: string) {
 
     const issues: Record<string, string> = {};
     const map: Record<string, any> = {};
+
+    const dateResolved = resolveDateAliasValues(draft, aliases);
+    Object.entries(dateResolved.map).forEach(([k, v]) => {
+      map[k] = v;
+    });
+    Object.entries(dateResolved.issues).forEach(([k, v]) => {
+      if (!issues[k]) issues[k] = v;
+    });
 
     const dataAliases = uniqueAliasList((draft.dataFields || []).map((f) => String(f?.alias || '').trim()).filter(Boolean));
     const dataAliasByLower = new Map<string, string>();
@@ -4465,6 +4853,7 @@ function handleDefinitionInput(value: string) {
           [
             ...uniqueAliasList((s.parameterDefinitions || []).map((p) => String(p?.alias || '').trim()).filter(Boolean)),
             ...uniqueAliasList((s.dataFields || []).map((f) => String(f?.alias || '').trim()).filter(Boolean)),
+            ...uniqueAliasList(dataDateParametersForDraft(s).map((p) => String(p?.alias || '').trim()).filter(Boolean)),
             ...Array.from(paginationAliasesLower)
           ].map((x) => x.toLowerCase())
         );
@@ -5089,7 +5478,7 @@ function handleDefinitionInput(value: string) {
       responseEntry.next_iteration_reason = nextReason;
       nextIterationReason = nextReason;
 
-      if (Number(draft.paginationDelayMs || 0) > 0) {
+      if (Boolean(draft.paginationUseDelay) && Number(draft.paginationDelayMs || 0) > 0) {
         await new Promise((resolve) => setTimeout(resolve, Number(draft.paginationDelayMs || 0)));
       }
     }
@@ -5548,7 +5937,7 @@ function handleDefinitionInput(value: string) {
     responseEntry.decision = 'continue';
     responseEntry.next_iteration_reason = nextReason;
     state.nextIterationReason = nextReason;
-    if (Number(draft.paginationDelayMs || 0) > 0) {
+    if (Boolean(draft.paginationUseDelay) && Number(draft.paginationDelayMs || 0) > 0) {
       await new Promise((resolve) => setTimeout(resolve, Number(draft.paginationDelayMs || 0)));
     }
     return { entry: responseEntry, done: false, stopReason: '' };
@@ -6095,9 +6484,16 @@ function handleDefinitionInput(value: string) {
           .map((f) => String(f?.alias || '').trim())
           .filter(Boolean)
       );
+      const dateModelAliases = uniqueAliasList(
+        dataDateParametersForDraft(s)
+          .map((p) => String(p?.alias || '').trim())
+          .filter(Boolean)
+      );
       const paginationAliasesLower = paginationAliasLowerSet(s);
       const knownAliasesLower = new Set(
-        [...definitionAliases, ...dataModelAliases, ...Array.from(paginationAliasesLower)].map((x) => x.toLowerCase())
+        [...definitionAliases, ...dataModelAliases, ...dateModelAliases, ...Array.from(paginationAliasesLower)].map((x) =>
+          x.toLowerCase()
+        )
       );
 
       const requestBase = `${s.baseUrl.replace(/\/$/, '')}${s.path.startsWith('/') ? s.path : `/${s.path}`}`;
@@ -6765,7 +7161,7 @@ function syncParameterEditorsHeight() {
           {/if}
         </div>
 
-        <label>
+        <label class="auth-section">
           <div class="response-head field-head">
             <span>Авторизация</span>
             {#if authJsonValid}
@@ -6806,15 +7202,19 @@ function syncParameterEditorsHeight() {
         <div class="auth-mode-buttons">
           <button
             type="button"
-            class="view-toggle auth-mode-btn"
-            class:active={selected?.authMode === AUTH_MODE_OAUTH2}
+            class="group-toggle group-toggle-sm auth-mode-btn"
+            class:active-group-toggle={selected?.authMode === AUTH_MODE_OAUTH2}
             on:click={() =>
               mutateSelected((d) =>
                 (d.authMode = d.authMode === AUTH_MODE_OAUTH2 ? 'manual' : AUTH_MODE_OAUTH2)
               )
             }
+            aria-pressed={selected?.authMode === AUTH_MODE_OAUTH2}
           >
-            OAuth2 (client_credentials)
+            <span>{selected?.authMode === AUTH_MODE_OAUTH2 ? 'OAuth2 включен (client_credentials)' : 'OAuth2 выключен (client_credentials)'}</span>
+            {#if selected?.authMode === AUTH_MODE_OAUTH2}
+              <span class="group-toggle-indicator"></span>
+            {/if}
           </button>
         </div>
         {#if selected?.authMode === 'oauth2_client_credentials'}
@@ -7253,6 +7653,70 @@ function syncParameterEditorsHeight() {
 
             <div class="data-section">
               <div class="response-head field-head parameter-subhead">
+                <small>Параметры из даты</small>
+                <button type="button" class="view-toggle" on:click={addDataDateParam}>Дата +</button>
+              </div>
+              {#if selected?.dataDateParams?.length}
+                <div class="data-list">
+                  {#each selected.dataDateParams as p (p.id)}
+                    <div class="rule-card">
+                      <div class="rule-card-head">
+                        <small>{p.alias || 'date_param'}</small>
+                        <button type="button" class="chip-remove" title="Удалить параметр даты" on:click={() => removeDataDateParam(p.id)}>x</button>
+                      </div>
+                      <div class="data-row date-param-row">
+                        <input
+                          value={p.alias}
+                          placeholder="Короткое название (alias)"
+                          on:input={(e) => updateDataDateParam(p.id, { alias: e.currentTarget.value })}
+                        />
+                        <select value={p.basePreset} on:change={(e) => updateDataDateParam(p.id, { basePreset: e.currentTarget.value === 'custom' ? 'custom' : 'today' })}>
+                          {#each DATE_BASE_PRESETS as opt}
+                            <option value={opt.value}>{opt.label}</option>
+                          {/each}
+                        </select>
+                        <input
+                          type="text"
+                          value={p.customDate}
+                          placeholder="Свободная дата: 2024-03-01 или 2024-03-01T00:00:00"
+                          disabled={p.basePreset !== 'custom'}
+                          on:input={(e) => updateDataDateParam(p.id, { customDate: e.currentTarget.value })}
+                        />
+                        <select value={p.anchorPreset} on:change={(e) => updateDataDateParam(p.id, { anchorPreset: toDateAnchorPreset(e.currentTarget.value) })}>
+                          {#each DATE_ANCHOR_PRESETS as opt}
+                            <option value={opt.value}>{opt.label}</option>
+                          {/each}
+                        </select>
+                        <input
+                          type="number"
+                          value={p.addDays || 0}
+                          placeholder="+/- дни"
+                          on:input={(e) => updateDataDateParam(p.id, { addDays: Number(e.currentTarget.value) || 0 })}
+                        />
+                        <input
+                          type="number"
+                          value={p.addMonths || 0}
+                          placeholder="+/- месяцы"
+                          on:input={(e) => updateDataDateParam(p.id, { addMonths: Number(e.currentTarget.value) || 0 })}
+                        />
+                        <select value={p.formatPreset} on:change={(e) => updateDataDateParam(p.id, { formatPreset: toDateFormatPreset(e.currentTarget.value) })}>
+                          {#each DATE_FORMAT_PRESETS as fmt}
+                            <option value={fmt.value}>{fmt.label}</option>
+                          {/each}
+                        </select>
+                      </div>
+                      <p class="hint small-hint">Превью значения: <code>{dateParamPreviewValue(p)}</code></p>
+                    </div>
+                  {/each}
+                </div>
+                <p class="hint small-hint">Форматы поддерживают: <code>YYYY-MM-DD</code>, <code>YYYY-MM-DDTHH:MM:SSZ</code>, <code>RFC3339 (+03:00)</code> и ISO.</p>
+              {:else}
+                <p class="hint">Добавь параметры дат через «Дата +», чтобы подставлять периоды и метки времени.</p>
+              {/if}
+            </div>
+
+            <div class="data-section">
+              <div class="response-head field-head parameter-subhead">
                 <small>Предпросмотр данных</small>
                 <span class="hint small-hint">{datasetPreviewLoading ? 'Обновляется...' : 'Обновляется автоматически'}</span>
               </div>
@@ -7288,7 +7752,7 @@ function syncParameterEditorsHeight() {
                   </table>
                 {:else}
                   <div class="empty-preview-state">
-                    <p class="hint">Добавь показатели для работы, чтобы увидеть предпросмотр.</p>
+                    <p class="hint">Добавь показатели или параметры из даты, чтобы увидеть предпросмотр.</p>
                   </div>
                 {/if}
               </div>
@@ -7402,22 +7866,48 @@ function syncParameterEditorsHeight() {
               <div class="response-head field-head parameter-subhead">
                 <small>Лимиты и безопасность</small>
               </div>
-              <div class="pagination-grid">
+              <div class="pagination-limit-toggles">
+                <button
+                  type="button"
+                  class="group-toggle group-toggle-sm"
+                  class:active-group-toggle={Boolean(selected?.paginationUseMaxPages)}
+                  on:click={togglePaginationUseMaxPages}
+                  aria-pressed={Boolean(selected?.paginationUseMaxPages)}
+                >
+                  <span>{selected?.paginationUseMaxPages ? 'Макс.страниц - Лимит страниц: вкл' : 'Макс.страниц - Лимит страниц: выкл'}</span>
+                  {#if Boolean(selected?.paginationUseMaxPages)}
+                    <span class="group-toggle-indicator"></span>
+                  {/if}
+                </button>
+                <button
+                  type="button"
+                  class="group-toggle group-toggle-sm"
+                  class:active-group-toggle={Boolean(selected?.paginationUseDelay)}
+                  on:click={togglePaginationUseDelay}
+                  aria-pressed={Boolean(selected?.paginationUseDelay)}
+                >
+                  <span>{selected?.paginationUseDelay ? 'Пауза между страницами: вкл' : 'Пауза между страницами: выкл'}</span>
+                  {#if Boolean(selected?.paginationUseDelay)}
+                    <span class="group-toggle-indicator"></span>
+                  {/if}
+                </button>
+                <button
+                  type="button"
+                  class="group-toggle group-toggle-sm"
+                  class:active-group-toggle={Boolean(selected?.paginationStopOnSameResponse)}
+                  on:click={togglePaginationStopOnSameResponse}
+                  aria-pressed={Boolean(selected?.paginationStopOnSameResponse)}
+                >
+                  <span>{selected?.paginationStopOnSameResponse ? 'Одинаковые ответы: вкл' : 'Одинаковые ответы: выкл'}</span>
+                  {#if Boolean(selected?.paginationStopOnSameResponse)}
+                    <span class="group-toggle-indicator"></span>
+                  {/if}
+                </button>
+              </div>
+
+              <div class="pagination-limit-values">
                 <div class="pagination-field">
-                  <small>Лимит страниц</small>
-                  <button
-                    type="button"
-                    class="group-toggle group-toggle-sm group-toggle-inline"
-                    class:active-group-toggle={Boolean(selected?.paginationUseMaxPages)}
-                    on:click={togglePaginationUseMaxPages}
-                    aria-pressed={Boolean(selected?.paginationUseMaxPages)}
-                  >
-                    <span>{selected?.paginationUseMaxPages ? 'Макс. страниц: включено' : 'Макс. страниц: выключено'}</span>
-                    {#if Boolean(selected?.paginationUseMaxPages)}
-                      <span class="group-toggle-indicator"></span>
-                    {/if}
-                  </button>
-                  <small>Максимальное количество страниц</small>
+                  <small>Макс. количество страниц</small>
                   <input
                     type="number"
                     min="1"
@@ -7427,15 +7917,28 @@ function syncParameterEditorsHeight() {
                   />
                 </div>
                 <div class="pagination-field">
-                  <small>Пауза между страницами пагинации (мс)</small>
+                  <small>Пауза между страницами (мс)</small>
                   <input
                     type="number"
                     min="0"
                     value={selected?.paginationDelayMs || 0}
                     on:input={(e) => mutateSelected((d) => (d.paginationDelayMs = Number(e.currentTarget.value) || 0))}
+                    disabled={!selected?.paginationUseDelay}
+                  />
+                </div>
+                <div class="pagination-field">
+                  <small>Порог одинаковых ответов</small>
+                  <input
+                    type="number"
+                    min="2"
+                    max="50"
+                    value={selected?.paginationSameResponseLimit || 5}
+                    on:input={(e) => mutateSelected((d) => (d.paginationSameResponseLimit = Math.max(2, Math.min(50, Number(e.currentTarget.value) || 5))))}
+                    disabled={!selected?.paginationStopOnSameResponse}
                   />
                 </div>
               </div>
+
               <div class="pagination-stop-conditions">
                 <button
                   type="button"
@@ -7461,29 +7964,6 @@ function syncParameterEditorsHeight() {
                     <span class="group-toggle-indicator"></span>
                   {/if}
                 </button>
-                <button
-                  type="button"
-                  class="group-toggle group-toggle-sm"
-                  class:active-group-toggle={Boolean(selected?.paginationStopOnSameResponse)}
-                  on:click={togglePaginationStopOnSameResponse}
-                  aria-pressed={Boolean(selected?.paginationStopOnSameResponse)}
-                >
-                  <span>Остановка при одинаковых ответах подряд</span>
-                  {#if Boolean(selected?.paginationStopOnSameResponse)}
-                    <span class="group-toggle-indicator"></span>
-                  {/if}
-                </button>
-                <div class="pagination-stop-limit">
-                  <small>Порог одинаковых ответов</small>
-                  <input
-                    type="number"
-                    min="2"
-                    max="50"
-                    value={selected?.paginationSameResponseLimit || 5}
-                    on:input={(e) => mutateSelected((d) => (d.paginationSameResponseLimit = Math.max(2, Math.min(50, Number(e.currentTarget.value) || 5))))}
-                    disabled={!selected?.paginationStopOnSameResponse}
-                  />
-                </div>
               </div>
               <div class="pagination-stop-rules">
                 <div class="response-head field-head parameter-subhead">
@@ -7546,7 +8026,7 @@ function syncParameterEditorsHeight() {
 
         <div class="targets-wrap">
           <div class="targets-head">
-            <div class="targets-title">Куда записывать ответ</div>
+            <div class="targets-title">Выходные параметры</div>
           </div>
           <div class="crumbs-panel">
             <div class="crumbs-title-row">
@@ -7840,35 +8320,14 @@ function syncParameterEditorsHeight() {
   .okbox { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #bbf7d0; background: #f0fdf4; color:#166534; }
   pre { margin:0; white-space: pre-wrap; word-break: break-word; }
 
-  .auth-mode-buttons { margin:12px 0 10px; display:flex; gap:8px; }
-  .auth-mode-btn {
-    border:0;
-    background:#0f172a;
-    color:#fff;
-    padding:8px 16px;
-    border-radius:999px;
-    font-size:12px;
-    font-weight:600;
-    display:inline-flex;
-    gap:6px;
-    align-items:center;
-    min-height:34px;
-    cursor:pointer;
-  }
-  .auth-mode-btn.active {
-    background:#fff;
-    color:#0f172a;
-    border:1px solid transparent;
-    box-shadow:0 0 0 2px rgba(15,23,42,0.1);
-  }
-  .auth-mode-btn:focus-visible {
-    outline:2px solid #93c5fd;
-  }
+  .auth-section { display:block; margin-top:14px; }
+  .auth-mode-buttons { margin:10px 0 10px; display:flex; gap:8px; }
+  .auth-mode-btn { width:fit-content; min-width:280px; }
   .oauth-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:8px; }
   .oauth-grid input { margin:0; }
   .auth-mode-buttons + .oauth-grid + .hint { margin-top:0; }
   .pagination-box { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#f8fafc; }
-  .dispatch-box { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#f8fafc; }
+  .dispatch-box { margin-top:10px; margin-bottom:14px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#f8fafc; }
   .parameter-subhead { margin-top:12px; }
   .data-builder-box { border:1px solid #e2e8f0; border-radius:12px; padding:10px; background:#fff; margin-top:8px; display:flex; flex-direction:column; gap:10px; }
   .data-section { display:flex; flex-direction:column; gap:6px; }
@@ -7927,6 +8386,7 @@ function syncParameterEditorsHeight() {
   .join-rule-row { grid-template-columns: 1fr 1fr 80px 1fr 1fr 1fr; }
   .filter-rule-row { grid-template-columns: 1.2fr 1fr 1fr 1fr; }
   .param-row { grid-template-columns: 1.2fr 1fr 1fr 140px 72px auto; }
+  .date-param-row { grid-template-columns: 180px 160px minmax(220px, 1fr) 170px 120px 120px minmax(220px, 1fr); }
   .group-toggle {
     display:flex;
     align-items:center;
@@ -7945,10 +8405,6 @@ function syncParameterEditorsHeight() {
     min-height:30px;
     font-size:11px;
     border-radius:9px;
-  }
-  .group-toggle-inline {
-    width:100%;
-    margin-bottom:6px;
   }
   .group-toggle.active-group-toggle {
     border-color:#0f172a;
@@ -8004,6 +8460,19 @@ function syncParameterEditorsHeight() {
   .empty-preview-state { min-height:96px; display:flex; flex-direction:column; align-items:flex-start; justify-content:center; gap:8px; padding:10px; }
   .pagination-grid { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
   .pagination-field small { display:block; margin-bottom:4px; font-size:11px; color:#64748b; }
+  .pagination-limit-toggles {
+    margin-top:8px;
+    display:grid;
+    grid-template-columns: repeat(3, minmax(160px, 1fr));
+    gap:8px;
+    max-width:50%;
+  }
+  .pagination-limit-values {
+    margin-top:8px;
+    display:grid;
+    grid-template-columns: repeat(3, minmax(180px, 1fr));
+    gap:8px;
+  }
   .pagination-param-editor { margin-top:8px; }
   .pagination-param-grid { margin-top:0; }
   .pagination-param-inline-row {
@@ -8015,12 +8484,6 @@ function syncParameterEditorsHeight() {
     display:flex;
     flex-direction:column;
     gap:6px;
-  }
-  .pagination-stop-limit {
-    display:grid;
-    grid-template-columns: 1fr 140px;
-    gap:8px;
-    align-items:end;
   }
   .pagination-stop-rules {
     margin-top:8px;
@@ -8060,9 +8523,13 @@ function syncParameterEditorsHeight() {
     .connect-actions { justify-content:flex-start; flex-wrap:wrap; }
     .raw-grid { grid-template-columns: 1fr; }
     .saved-inline-actions { grid-template-columns: 1fr; }
-    .data-row, .table-rule-row, .join-rule-row, .filter-rule-row, .param-row { grid-template-columns: 1fr; }
+    .data-row, .table-rule-row, .join-rule-row, .filter-rule-row, .param-row, .date-param-row { grid-template-columns: 1fr; }
+    .pagination-limit-toggles,
+    .pagination-limit-values {
+      max-width:100%;
+      grid-template-columns: 1fr;
+    }
     .pagination-param-inline-row,
-    .pagination-stop-limit,
     .pagination-stop-rule-row {
       grid-template-columns: 1fr;
     }
