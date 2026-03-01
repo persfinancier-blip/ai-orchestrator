@@ -1910,7 +1910,9 @@ function formatBytes(bytes: number) {
 
   function isGroupedDispatchEnabled(draft: ApiDraft | null) {
     if (!draft) return false;
-    return sanitizeAliasReferences(draft).groupByAliases.length > 0;
+    const sanitized = sanitizeAliasReferences(draft);
+    if (sanitized.groupByAliases.length > 0) return true;
+    return hasDataModelConfigured(draft) && sanitized.bindingRules.length > 0;
   }
 
   function normalizeDraggedToken(raw: string) {
@@ -2969,10 +2971,6 @@ function handleDefinitionInput(value: string) {
   async function buildGroupedRequestPlan(draft: ApiDraft) {
     const issues: Record<string, string> = {};
     const sanitizedAliases = sanitizeAliasReferences(draft);
-    const groupByAliases = sanitizedAliases.groupByAliases;
-    if (!groupByAliases.length) {
-      throw new Error('Укажи ключ группировки (например: client_id)');
-    }
     const bindingRules = (Array.isArray(sanitizedAliases.bindingRules) ? sanitizedAliases.bindingRules : [])
       .map((rule) => ({
         id: String(rule?.id || uid()),
@@ -2983,6 +2981,21 @@ function handleDefinitionInput(value: string) {
       .filter((rule) => rule.alias && rule.path);
     if (!bindingRules.length) {
       throw new Error('Добавь хотя бы одно правило подстановки');
+    }
+    let groupByAliases = uniqueAliasList(sanitizedAliases.groupByAliases || []);
+    if (!groupByAliases.length) {
+      const scalarAliases = uniqueAliasList(
+        bindingRules
+          .filter((rule) => rule.target !== 'body_item')
+          .map((rule) => rule.alias)
+      );
+      groupByAliases = scalarAliases.length ? scalarAliases : uniqueAliasList(bindingRules.map((rule) => rule.alias));
+      if (groupByAliases.length) {
+        issues.auto_grouping = `автогруппировка по alias: ${groupByAliases.join(', ')}`;
+      }
+    }
+    if (!groupByAliases.length) {
+      throw new Error('Не удалось определить ключ группировки. Выбери параметры подстановки и/или включи группировку.');
     }
     if (sanitizedAliases.removedAliases.length) {
       issues.removed_aliases = `удалены неактуальные алиасы: ${sanitizedAliases.removedAliases.join(', ')}`;
@@ -3492,7 +3505,7 @@ function handleDefinitionInput(value: string) {
         let totalItems = 0;
         let totalSize = 0;
         let lastStatus = 0;
-        const samples: any[] = [];
+        const responses: any[] = [];
         for (const reqPlan of groupedPlan.allRequests) {
           const init: RequestInit = {
             method: reqPlan.method,
@@ -3515,13 +3528,11 @@ function handleDefinitionInput(value: string) {
           if (proxied?.ok) success += 1;
           else failed += 1;
           totalItems += countPayloadItems(parsed ?? txt);
-          if (samples.length < REQUEST_PREVIEW_MAX) {
-            samples.push({
-              group: reqPlan.group,
-              status: Number(proxied?.status || 0),
-              response: parsed ?? txt
-            });
-          }
+          responses.push({
+            group: reqPlan.group,
+            status: Number(proxied?.status || 0),
+            response: parsed ?? txt
+          });
         }
 
         responseStatus = lastStatus;
@@ -3534,7 +3545,7 @@ function handleDefinitionInput(value: string) {
             total_requests: groupedPlan.allRequests.length,
             success,
             failed,
-            sample_responses: samples
+            responses
           },
           null,
           2
