@@ -719,6 +719,7 @@ function formatBytes(bytes: number) {
     d: ApiDraft,
     parsed?: { headersJson: Record<string, any>; queryJson: Record<string, any>; bodyJson: any; authJson: Record<string, any> }
   ) {
+    const sanitizedAliases = sanitizeAliasReferences(d);
     const firstTarget = d.responseTargets.find((t) => t.schema && t.table);
   const parameterDefinitionsPayload = d.parameterDefinitions.map((pd) => ({
     id: pd.id,
@@ -788,8 +789,8 @@ function formatBytes(bytes: number) {
       auth_json: parsed?.authJson ?? tryObj(d.authJson),
       parameter_definitions: parameterDefinitionsPayload,
       execution: {
-        dispatch_mode: isGroupedDispatchEnabled(d) ? 'group_by' : 'single',
-        group_by_aliases: d.groupByAliases,
+        dispatch_mode: sanitizedAliases.groupByAliases.length ? 'group_by' : 'single',
+        group_by_aliases: sanitizedAliases.groupByAliases,
         body_items_path: d.bodyItemsPath,
         preview_request_limit: d.previewRequestLimit,
         data_model: {
@@ -821,7 +822,7 @@ function formatBytes(bytes: number) {
             compare_value: f.compareValue
           }))
         },
-        binding_rules: d.bindingRules.map((rule) => ({
+        binding_rules: sanitizedAliases.bindingRules.map((rule) => ({
           id: rule.id,
           alias: rule.alias,
           target: rule.target,
@@ -839,11 +840,11 @@ function formatBytes(bytes: number) {
     oauth2_expires_field: d.oauth2ExpiresField,
     oauth2_token_type_field: d.oauth2TokenTypeField,
     parameter_definitions: parameterDefinitionsPayload,
-    dispatch_mode: isGroupedDispatchEnabled(d) ? 'group_by' : 'single',
-    group_by_aliases: d.groupByAliases,
+    dispatch_mode: sanitizedAliases.groupByAliases.length ? 'group_by' : 'single',
+    group_by_aliases: sanitizedAliases.groupByAliases,
     body_items_path: d.bodyItemsPath,
     preview_request_limit: d.previewRequestLimit,
-    binding_rules: d.bindingRules.map((rule) => ({
+    binding_rules: sanitizedAliases.bindingRules.map((rule) => ({
       id: rule.id,
       alias: rule.alias,
       target: rule.target,
@@ -1854,7 +1855,7 @@ function formatBytes(bytes: number) {
 
   function isGroupedDispatchEnabled(draft: ApiDraft | null) {
     if (!draft) return false;
-    return uniqueAliasList(draft.groupByAliases || []).length > 0;
+    return sanitizeAliasReferences(draft).groupByAliases.length > 0;
   }
 
   function normalizeDraggedToken(raw: string) {
@@ -1983,6 +1984,52 @@ function formatBytes(bytes: number) {
       .filter(Boolean);
     if (fromDataModel.length) return uniqueAliasList(fromDataModel);
     return uniqueAliasList((Array.isArray(draft.parameterDefinitions) ? draft.parameterDefinitions : []).map((p) => String(p?.alias || '').trim()));
+  }
+
+  function sanitizeAliasReferences(draft: ApiDraft) {
+    const options = bindingAliasOptions(draft);
+    const optionSet = new Set(options);
+    const canonicalByLower = new Map<string, string>();
+    options.forEach((alias) => {
+      const key = alias.toLowerCase();
+      if (!canonicalByLower.has(key)) canonicalByLower.set(key, alias);
+    });
+    const removed: string[] = [];
+    const canonicalAlias = (raw: string) => {
+      const trimmed = String(raw || '').trim();
+      if (!trimmed) return '';
+      if (optionSet.has(trimmed)) return trimmed;
+      const canonical = canonicalByLower.get(trimmed.toLowerCase()) || '';
+      if (!canonical) {
+        removed.push(trimmed);
+        return '';
+      }
+      if (canonical !== trimmed) removed.push(trimmed);
+      return canonical;
+    };
+
+    const groupByAliases = uniqueAliasList((Array.isArray(draft.groupByAliases) ? draft.groupByAliases : []).map(canonicalAlias).filter(Boolean));
+    const seenRules = new Set<string>();
+    const bindingRules = (Array.isArray(draft.bindingRules) ? draft.bindingRules : [])
+      .map((rule) => ({
+        id: String(rule?.id || uid()),
+        alias: canonicalAlias(String(rule?.alias || '')),
+        target: toBindingTarget(String(rule?.target || 'body_item')),
+        path: String(rule?.path || '').trim()
+      }))
+      .filter((rule) => rule.alias && rule.path)
+      .filter((rule) => {
+        const key = `${rule.alias}|${rule.target}|${rule.path}`;
+        if (seenRules.has(key)) return false;
+        seenRules.add(key);
+        return true;
+      });
+
+    return {
+      groupByAliases,
+      bindingRules,
+      removedAliases: uniqueAliasList(removed)
+    };
   }
 
   function ensureDataTableColumnsLoaded(tableId: string) {
@@ -2701,11 +2748,12 @@ function handleDefinitionInput(value: string) {
 
   async function buildGroupedRequestPlan(draft: ApiDraft) {
     const issues: Record<string, string> = {};
-    const groupByAliases = uniqueAliasList(draft.groupByAliases || []);
+    const sanitizedAliases = sanitizeAliasReferences(draft);
+    const groupByAliases = sanitizedAliases.groupByAliases;
     if (!groupByAliases.length) {
       throw new Error('Укажи ключ группировки (например: client_id)');
     }
-    const bindingRules = (Array.isArray(draft.bindingRules) ? draft.bindingRules : [])
+    const bindingRules = (Array.isArray(sanitizedAliases.bindingRules) ? sanitizedAliases.bindingRules : [])
       .map((rule) => ({
         id: String(rule?.id || uid()),
         alias: String(rule?.alias || '').trim(),
@@ -2715,6 +2763,9 @@ function handleDefinitionInput(value: string) {
       .filter((rule) => rule.alias && rule.path);
     if (!bindingRules.length) {
       throw new Error('Добавь хотя бы одно правило подстановки');
+    }
+    if (sanitizedAliases.removedAliases.length) {
+      issues.removed_aliases = `удалены неактуальные алиасы: ${sanitizedAliases.removedAliases.join(', ')}`;
     }
 
     const requiredAliases = uniqueAliasList([
