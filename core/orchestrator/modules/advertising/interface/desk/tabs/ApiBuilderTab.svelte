@@ -113,6 +113,7 @@
     paginationCursorResPath1: string;
     paginationCursorResPath2: string;
     paginationNextUrlPath: string;
+    paginationUseMaxPages: boolean;
     paginationMaxPages: number;
     paginationDelayMs: number;
     paginationStopOnMissingValue: boolean;
@@ -135,6 +136,7 @@
     executionMode: 'sync' | 'async';
     syncPlanner: 'entity_to_stop' | 'by_wave';
     asyncConcurrency: number;
+    executionDelayMs: number;
     responseLogEnabled: boolean;
     responseLogSchema: string;
     responseLogTable: string;
@@ -561,6 +563,7 @@ function formatBytes(bytes: number) {
       paginationCursorResPath1: '',
       paginationCursorResPath2: '',
       paginationNextUrlPath: 'next',
+      paginationUseMaxPages: true,
       paginationMaxPages: 3,
       paginationDelayMs: 0,
       paginationStopOnMissingValue: true,
@@ -579,6 +582,7 @@ function formatBytes(bytes: number) {
       executionMode: 'sync',
       syncPlanner: 'entity_to_stop',
       asyncConcurrency: 3,
+      executionDelayMs: 0,
       responseLogEnabled: false,
       responseLogSchema: 'bronze',
       responseLogTable: 'wb_ads_raw',
@@ -747,6 +751,12 @@ function formatBytes(bytes: number) {
           : Number(executionCfg?.async_concurrency || 3)
       )
     );
+    const executionDelayMs = Math.max(
+      0,
+      Number.isFinite(Number(row?.execution_delay_ms))
+        ? Number(row?.execution_delay_ms)
+        : Number(executionCfg?.execution_delay_ms || 0)
+    );
     const responseLogCfg = executionCfg?.response_log && typeof executionCfg.response_log === 'object'
       ? executionCfg.response_log
       : {};
@@ -793,6 +803,14 @@ function formatBytes(bytes: number) {
     const paginationCursorResPath1Value = String(row?.pagination_cursor_res_path_1 || pagination?.cursor_res_path_1 || '');
     const paginationCursorResPath2Value = String(row?.pagination_cursor_res_path_2 || pagination?.cursor_res_path_2 || '');
     const paginationNextUrlPathValue = String(row?.pagination_next_url_path || pagination?.next_url_path || 'next');
+    const paginationUseMaxPagesRaw =
+      (row as any)?.pagination_use_max_pages ??
+      (pagination as any)?.use_max_pages ??
+      (pagination as any)?.max_pages_enabled;
+    const paginationUseMaxPages =
+      paginationUseMaxPagesRaw === undefined || paginationUseMaxPagesRaw === null
+        ? true
+        : Boolean(paginationUseMaxPagesRaw);
     const paginationMaxPagesValue = Number.isFinite(Number(row?.pagination_max_pages))
       ? Number(row?.pagination_max_pages)
       : Number(pagination?.max_pages || 3);
@@ -931,6 +949,7 @@ function formatBytes(bytes: number) {
       paginationCursorResPath1: paginationCursorResPath1Value,
       paginationCursorResPath2: paginationCursorResPath2Value,
       paginationNextUrlPath: paginationNextUrlPathValue,
+      paginationUseMaxPages,
       paginationMaxPages: paginationMaxPagesValue,
       paginationDelayMs: paginationDelayMsValue,
       paginationStopOnMissingValue,
@@ -949,6 +968,7 @@ function formatBytes(bytes: number) {
       executionMode,
       syncPlanner,
       asyncConcurrency,
+      executionDelayMs,
       responseLogEnabled,
       responseLogSchema,
       responseLogTable,
@@ -1039,6 +1059,7 @@ function formatBytes(bytes: number) {
         cursor_res_path_1: cursor1?.response_path || d.paginationCursorResPath1,
         cursor_res_path_2: cursor2?.response_path || d.paginationCursorResPath2,
         next_url_path: d.paginationNextUrlPath,
+        use_max_pages: Boolean(d.paginationUseMaxPages),
         max_pages: d.paginationMaxPages,
         delay_ms: d.paginationDelayMs,
         stop_conditions: {
@@ -1078,6 +1099,7 @@ function formatBytes(bytes: number) {
           execution_mode: d.executionMode || 'sync',
           sync_planner: d.syncPlanner || 'entity_to_stop',
           async_concurrency: Math.max(1, Math.min(20, Number(d.asyncConcurrency || 3))),
+          execution_delay_ms: Math.max(0, Number(d.executionDelayMs || 0)),
           response_log: {
             enabled: Boolean(d.responseLogEnabled),
             schema: String(d.responseLogSchema || '').trim(),
@@ -1160,6 +1182,7 @@ function formatBytes(bytes: number) {
       pagination_cursor_res_path_1: cursor1?.response_path || d.paginationCursorResPath1,
       pagination_cursor_res_path_2: cursor2?.response_path || d.paginationCursorResPath2,
       pagination_next_url_path: d.paginationNextUrlPath,
+      pagination_use_max_pages: Boolean(d.paginationUseMaxPages),
       pagination_max_pages: d.paginationMaxPages,
       pagination_delay_ms: d.paginationDelayMs,
       pagination_custom_strategy: d.paginationCustomStrategy,
@@ -1199,6 +1222,36 @@ function formatBytes(bytes: number) {
         d.responseLogSchema = String(existingTables[0].schema_name || '').trim();
         d.responseLogTable = String(existingTables[0].table_name || '').trim();
       }
+    });
+  }
+
+  function togglePaginationEnabled() {
+    mutateSelected((d) => {
+      d.paginationEnabled = !Boolean(d.paginationEnabled);
+    });
+  }
+
+  function togglePaginationUseMaxPages() {
+    mutateSelected((d) => {
+      d.paginationUseMaxPages = !Boolean(d.paginationUseMaxPages);
+    });
+  }
+
+  function togglePaginationStopOnMissingValue() {
+    mutateSelected((d) => {
+      d.paginationStopOnMissingValue = !Boolean(d.paginationStopOnMissingValue);
+    });
+  }
+
+  function togglePaginationStopOnHttpError() {
+    mutateSelected((d) => {
+      d.paginationStopOnHttpError = !Boolean(d.paginationStopOnHttpError);
+    });
+  }
+
+  function togglePaginationStopOnSameResponse() {
+    mutateSelected((d) => {
+      d.paginationStopOnSameResponse = !Boolean(d.paginationStopOnSameResponse);
     });
   }
 
@@ -4687,7 +4740,9 @@ function handleDefinitionInput(value: string) {
     let currentPage = Number(draft.paginationStartPage || 1);
     let currentOffset = Number(draft.paginationStartPage || 0);
 
-    const pagesMax = draft.paginationEnabled ? Math.max(1, Number(draft.paginationMaxPages || 1)) : 1;
+    const executionDelayMs = Math.max(0, Number(draft.executionDelayMs || 0));
+    const maxPagesEnabled = draft.paginationEnabled && Boolean(draft.paginationUseMaxPages);
+    const pagesMax = maxPagesEnabled ? Math.max(1, Number(draft.paginationMaxPages || 1)) : Number.MAX_SAFE_INTEGER;
     let requestCount = 0;
     let success = 0;
     let failed = 0;
@@ -4819,6 +4874,10 @@ function handleDefinitionInput(value: string) {
         if (reqPlan?.group) sentReq.group = reqPlan.group;
         if (reqPlan?.row_index) sentReq.row_index = reqPlan.row_index;
         sentRequests.push(sentReq);
+      }
+
+      if (executionDelayMs > 0 && requestCount > 0) {
+        await new Promise((resolve) => setTimeout(resolve, executionDelayMs));
       }
 
       let proxied: any = null;
@@ -5035,7 +5094,7 @@ function handleDefinitionInput(value: string) {
       }
     }
 
-    if (!stopReason && draft.paginationEnabled && requestCount >= pagesMax) {
+    if (!stopReason && draft.paginationEnabled && maxPagesEnabled && requestCount >= pagesMax) {
       stopReason = `Достигнут лимит страниц (${pagesMax})`;
       const lastEntry = responses[responses.length - 1];
       if (lastEntry && typeof lastEntry === 'object' && !lastEntry.stop_reason) {
@@ -5126,8 +5185,9 @@ function handleDefinitionInput(value: string) {
     waveNo: number
   ): Promise<{ entry: any | null; done: boolean; stopReason: string }> {
     if (state.done) return { entry: null, done: true, stopReason: state.stopReason || '' };
-    const pagesMax = draft.paginationEnabled ? Math.max(1, Number(draft.paginationMaxPages || 1)) : 1;
-    if (state.requestCount >= pagesMax) {
+    const maxPagesEnabled = draft.paginationEnabled && Boolean(draft.paginationUseMaxPages);
+    const pagesMax = maxPagesEnabled ? Math.max(1, Number(draft.paginationMaxPages || 1)) : Number.MAX_SAFE_INTEGER;
+    if (maxPagesEnabled && state.requestCount >= pagesMax) {
       state.done = true;
       state.stopReason = `Достигнут лимит страниц (${pagesMax})`;
       return { entry: null, done: true, stopReason: state.stopReason };
@@ -5477,7 +5537,7 @@ function handleDefinitionInput(value: string) {
       return { entry: responseEntry, done: true, stopReason: state.stopReason };
     }
 
-    if (state.requestCount >= pagesMax) {
+    if (maxPagesEnabled && state.requestCount >= pagesMax) {
       state.done = true;
       state.stopReason = `Достигнут лимит страниц (${pagesMax})`;
       responseEntry.decision = 'stop';
@@ -5599,6 +5659,7 @@ function handleDefinitionInput(value: string) {
         api_name: String(draft?.name || '').trim(),
         execution_mode: draft.executionMode || 'sync',
         sync_planner: draft.syncPlanner || 'entity_to_stop',
+        execution_delay_ms: Math.max(0, Number(draft.executionDelayMs || 0)),
         dispatch_mode: dispatchMode,
         entity_key: identity.entity_key,
         entity_label: identity.entity_label,
@@ -5627,6 +5688,9 @@ function handleDefinitionInput(value: string) {
     const table = String(draft.responseLogTable || '').trim();
     if (!schema || !table) {
       throw new Error('Для лога ответов API укажи схему и таблицу');
+    }
+    if (!isConnectedTable(schema, table)) {
+      throw new Error('Для лога ответов выбери таблицу из подключённых');
     }
     const payloadRows = Array.isArray(rows) ? rows.filter((x) => x && typeof x === 'object') : [];
     if (!payloadRows.length) return { written: 0, skipped: 0 };
@@ -5662,6 +5726,8 @@ function handleDefinitionInput(value: string) {
     let totalItems = 0;
     let totalSize = 0;
     let lastStatus = 0;
+    const executionDelayMs = Math.max(0, Number(draft.executionDelayMs || 0));
+    let scheduledStepsCount = 0;
 
     const planner = draft.executionMode === 'sync' ? draft.syncPlanner || 'entity_to_stop' : 'entity_to_stop';
     if (draft.executionMode === 'sync' && planner === 'by_wave') {
@@ -5672,6 +5738,10 @@ function handleDefinitionInput(value: string) {
         for (let idx = 0; idx < states.length; idx += 1) {
           const state = states[idx];
           if (!state || state.done) continue;
+          if (executionDelayMs > 0 && scheduledStepsCount > 0) {
+            await new Promise((resolve) => setTimeout(resolve, executionDelayMs));
+          }
+          scheduledStepsCount += 1;
           try {
             const step = await executeWaveRuntimeStep(draft, state, sentRequests, waveNo);
             if (step?.entry) {
@@ -5731,10 +5801,15 @@ function handleDefinitionInput(value: string) {
       const results: Array<{ reqPlan: any; run: any; idx: number }> = [];
       let cursor = 0;
       const worker = async () => {
+        let workerStepCount = 0;
         while (true) {
           const idx = cursor;
           cursor += 1;
           if (idx >= allRequests.length) return;
+          if (executionDelayMs > 0 && workerStepCount > 0) {
+            await new Promise((resolve) => setTimeout(resolve, executionDelayMs));
+          }
+          workerStepCount += 1;
           const reqPlan = allRequests[idx];
           try {
             const run = await executePlannedRequestWithPagination(draft, reqPlan, sentRequests);
@@ -5773,6 +5848,9 @@ function handleDefinitionInput(value: string) {
         });
     } else {
       for (let idx = 0; idx < allRequests.length; idx += 1) {
+        if (executionDelayMs > 0 && idx > 0) {
+          await new Promise((resolve) => setTimeout(resolve, executionDelayMs));
+        }
         const reqPlan = allRequests[idx];
         let run: any;
         try {
@@ -5857,6 +5935,7 @@ function handleDefinitionInput(value: string) {
             execution_mode: s.executionMode || 'sync',
             sync_planner: s.executionMode === 'sync' ? s.syncPlanner || 'entity_to_stop' : undefined,
             async_concurrency: s.executionMode === 'async' ? Math.max(1, Number(s.asyncConcurrency || 3)) : undefined,
+            execution_delay_ms: Math.max(0, Number(s.executionDelayMs || 0)),
             total_requests: execution.requestCount,
             request_groups: groupedPlan.allRequests.length,
             shown_requests: execution.sentRequests.length,
@@ -5886,6 +5965,7 @@ function handleDefinitionInput(value: string) {
             execution_mode: s.executionMode || 'sync',
             sync_planner: s.executionMode === 'sync' ? s.syncPlanner || 'entity_to_stop' : undefined,
             async_concurrency: s.executionMode === 'async' ? Math.max(1, Number(s.asyncConcurrency || 3)) : undefined,
+            execution_delay_ms: Math.max(0, Number(s.executionDelayMs || 0)),
             success: execution.success,
             failed: execution.failed,
             stop_reasons: execution.stopReasons,
@@ -5932,6 +6012,7 @@ function handleDefinitionInput(value: string) {
             execution_mode: s.executionMode || 'sync',
             sync_planner: s.executionMode === 'sync' ? s.syncPlanner || 'entity_to_stop' : undefined,
             async_concurrency: s.executionMode === 'async' ? Math.max(1, Number(s.asyncConcurrency || 3)) : undefined,
+            execution_delay_ms: Math.max(0, Number(s.executionDelayMs || 0)),
             total_requests: execution.requestCount,
             request_rows: rowPlan.allRequests.length,
             shown_requests: execution.sentRequests.length,
@@ -5961,6 +6042,7 @@ function handleDefinitionInput(value: string) {
             execution_mode: s.executionMode || 'sync',
             sync_planner: s.executionMode === 'sync' ? s.syncPlanner || 'entity_to_stop' : undefined,
             async_concurrency: s.executionMode === 'async' ? Math.max(1, Number(s.asyncConcurrency || 3)) : undefined,
+            execution_delay_ms: Math.max(0, Number(s.executionDelayMs || 0)),
             success: execution.success,
             failed: execution.failed,
             stop_reasons: execution.stopReasons,
@@ -6120,6 +6202,7 @@ function handleDefinitionInput(value: string) {
           execution_mode: s.executionMode || 'sync',
           sync_planner: s.executionMode === 'sync' ? s.syncPlanner || 'entity_to_stop' : undefined,
           async_concurrency: s.executionMode === 'async' ? Math.max(1, Number(s.asyncConcurrency || 3)) : undefined,
+          execution_delay_ms: Math.max(0, Number(s.executionDelayMs || 0)),
           success: execution.success,
           failed: execution.failed,
           stop_reasons: execution.stopReasons,
@@ -6619,6 +6702,19 @@ function syncParameterEditorsHeight() {
                 <p class="hint small-hint">Пример: лимит 3 и сущности A/B/C/D/E. Сначала стартуют A/B/C, потом по завершению подключаются D и E.</p>
               </div>
             {/if}
+            <div class="pagination-field">
+              <small>Пауза между запросами (мс, общий режим)</small>
+              <input
+                type="number"
+                min="0"
+                value={selected?.executionDelayMs || 0}
+                on:input={(e) =>
+                  mutateSelected((d) => {
+                    d.executionDelayMs = Math.max(0, Number(e.currentTarget.value) || 0);
+                  })}
+              />
+              <p class="hint small-hint">Применяется между шагами, волнами и асинхронными цепочками.</p>
+            </div>
           </div>
           {#if (selected?.executionMode || 'sync') === 'async'}
             <p class="hint small-hint">Асинхронный: несколько сущностей выполняются параллельно для ускорения.</p>
@@ -7208,14 +7304,18 @@ function syncParameterEditorsHeight() {
         <div class="pagination-box">
           <div class="response-head field-head">
             <span>Параметры пагинации</span>
-            <label class="pagination-toggle">
-              <input
-                type="checkbox"
-                checked={selected?.paginationEnabled}
-                on:change={(e) => mutateSelected((d) => (d.paginationEnabled = e.currentTarget.checked))}
-              />
-              <span>Включить</span>
-            </label>
+            <button
+              type="button"
+              class="group-toggle group-toggle-sm"
+              class:active-group-toggle={Boolean(selected?.paginationEnabled)}
+              on:click={togglePaginationEnabled}
+              aria-pressed={Boolean(selected?.paginationEnabled)}
+            >
+              <span>{selected?.paginationEnabled ? 'Пагинация включена' : 'Пагинация выключена'}</span>
+              {#if Boolean(selected?.paginationEnabled)}
+                <span class="group-toggle-indicator"></span>
+              {/if}
+            </button>
           </div>
           {#if selected?.paginationEnabled}
             <div class="data-section">
@@ -7304,16 +7404,30 @@ function syncParameterEditorsHeight() {
               </div>
               <div class="pagination-grid">
                 <div class="pagination-field">
-                  <small>Макс. страниц</small>
+                  <small>Лимит страниц</small>
+                  <button
+                    type="button"
+                    class="group-toggle group-toggle-sm group-toggle-inline"
+                    class:active-group-toggle={Boolean(selected?.paginationUseMaxPages)}
+                    on:click={togglePaginationUseMaxPages}
+                    aria-pressed={Boolean(selected?.paginationUseMaxPages)}
+                  >
+                    <span>{selected?.paginationUseMaxPages ? 'Макс. страниц: включено' : 'Макс. страниц: выключено'}</span>
+                    {#if Boolean(selected?.paginationUseMaxPages)}
+                      <span class="group-toggle-indicator"></span>
+                    {/if}
+                  </button>
+                  <small>Максимальное количество страниц</small>
                   <input
                     type="number"
                     min="1"
                     value={selected?.paginationMaxPages || 1}
                     on:input={(e) => mutateSelected((d) => (d.paginationMaxPages = Number(e.currentTarget.value) || 1))}
+                    disabled={!selected?.paginationUseMaxPages}
                   />
                 </div>
                 <div class="pagination-field">
-                  <small>Пауза между запросами (мс)</small>
+                  <small>Пауза между страницами пагинации (мс)</small>
                   <input
                     type="number"
                     min="0"
@@ -7323,9 +7437,42 @@ function syncParameterEditorsHeight() {
                 </div>
               </div>
               <div class="pagination-stop-conditions">
-                <label><input type="checkbox" checked={selected?.paginationStopOnMissingValue} on:change={(e) => mutateSelected((d) => (d.paginationStopOnMissingValue = e.currentTarget.checked))} /> Остановка, если не найдено новое значение пагинации</label>
-                <label><input type="checkbox" checked={selected?.paginationStopOnHttpError} on:change={(e) => mutateSelected((d) => (d.paginationStopOnHttpError = e.currentTarget.checked))} /> Остановка при HTTP ошибке</label>
-                <label><input type="checkbox" checked={selected?.paginationStopOnSameResponse} on:change={(e) => mutateSelected((d) => (d.paginationStopOnSameResponse = e.currentTarget.checked))} /> Остановка при одинаковых ответах подряд</label>
+                <button
+                  type="button"
+                  class="group-toggle group-toggle-sm"
+                  class:active-group-toggle={Boolean(selected?.paginationStopOnMissingValue)}
+                  on:click={togglePaginationStopOnMissingValue}
+                  aria-pressed={Boolean(selected?.paginationStopOnMissingValue)}
+                >
+                  <span>Остановка, если не найдено новое значение пагинации</span>
+                  {#if Boolean(selected?.paginationStopOnMissingValue)}
+                    <span class="group-toggle-indicator"></span>
+                  {/if}
+                </button>
+                <button
+                  type="button"
+                  class="group-toggle group-toggle-sm"
+                  class:active-group-toggle={Boolean(selected?.paginationStopOnHttpError)}
+                  on:click={togglePaginationStopOnHttpError}
+                  aria-pressed={Boolean(selected?.paginationStopOnHttpError)}
+                >
+                  <span>Остановка при HTTP ошибке</span>
+                  {#if Boolean(selected?.paginationStopOnHttpError)}
+                    <span class="group-toggle-indicator"></span>
+                  {/if}
+                </button>
+                <button
+                  type="button"
+                  class="group-toggle group-toggle-sm"
+                  class:active-group-toggle={Boolean(selected?.paginationStopOnSameResponse)}
+                  on:click={togglePaginationStopOnSameResponse}
+                  aria-pressed={Boolean(selected?.paginationStopOnSameResponse)}
+                >
+                  <span>Остановка при одинаковых ответах подряд</span>
+                  {#if Boolean(selected?.paginationStopOnSameResponse)}
+                    <span class="group-toggle-indicator"></span>
+                  {/if}
+                </button>
                 <div class="pagination-stop-limit">
                   <small>Порог одинаковых ответов</small>
                   <input
@@ -7793,6 +7940,16 @@ function syncParameterEditorsHeight() {
     color:#334155;
     min-height:34px;
   }
+  .group-toggle-sm {
+    padding:6px 9px;
+    min-height:30px;
+    font-size:11px;
+    border-radius:9px;
+  }
+  .group-toggle-inline {
+    width:100%;
+    margin-bottom:6px;
+  }
   .group-toggle.active-group-toggle {
     border-color:#0f172a;
     background:#0f172a;
@@ -7845,8 +8002,6 @@ function syncParameterEditorsHeight() {
   .dataset-preview-table th { background:#f8fafc; color:#334155; font-weight:600; position:sticky; top:0; z-index:1; }
   .dataset-preview-table td { max-width:320px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#0f172a; }
   .empty-preview-state { min-height:96px; display:flex; flex-direction:column; align-items:flex-start; justify-content:center; gap:8px; padding:10px; }
-  .pagination-toggle { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#475569; cursor:pointer; }
-  .pagination-toggle input { width:auto; }
   .pagination-grid { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
   .pagination-field small { display:block; margin-bottom:4px; font-size:11px; color:#64748b; }
   .pagination-param-editor { margin-top:8px; }
@@ -7860,16 +8015,6 @@ function syncParameterEditorsHeight() {
     display:flex;
     flex-direction:column;
     gap:6px;
-  }
-  .pagination-stop-conditions label {
-    display:flex;
-    align-items:center;
-    gap:8px;
-    font-size:12px;
-    color:#334155;
-  }
-  .pagination-stop-conditions input[type='checkbox'] {
-    width:auto;
   }
   .pagination-stop-limit {
     display:grid;
