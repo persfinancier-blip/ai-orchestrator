@@ -1439,6 +1439,52 @@ function formatBytes(bytes: number) {
     }
   }
 
+  function normalizeRequestHeaders(input?: HeadersInit): Record<string, string> {
+    const out: Record<string, string> = {};
+    if (!input) return out;
+    if (input instanceof Headers) {
+      input.forEach((v, k) => {
+        out[k] = v;
+      });
+      return out;
+    }
+    if (Array.isArray(input)) {
+      input.forEach(([k, v]) => {
+        out[String(k)] = String(v);
+      });
+      return out;
+    }
+    Object.entries(input as Record<string, any>).forEach(([k, v]) => {
+      if (v === undefined || v === null) return;
+      out[String(k)] = String(v);
+    });
+    return out;
+  }
+
+  async function runHttpRequestViaServer(url: string, init: RequestInit, timeoutMs = 30_000) {
+    let requestBody: any = null;
+    if (typeof init.body === 'string') requestBody = init.body;
+    else if (init.body !== undefined && init.body !== null) requestBody = String(init.body);
+    return apiJson<{
+      ok: boolean;
+      status: number;
+      status_text?: string;
+      headers?: Record<string, string>;
+      body_text?: string;
+      body_json?: any;
+    }>(`${apiBase}/http-request`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({
+        method: String(init.method || 'GET').toUpperCase(),
+        url,
+        headers: normalizeRequestHeaders(init.headers),
+        body: requestBody,
+        timeout_ms: timeoutMs
+      })
+    });
+  }
+
   async function getOAuthToken(d: ApiDraft): Promise<{ token: string; tokenType: string }> {
     const cacheKey = refOf(d);
     const cached = oauthTokenCache[cacheKey];
@@ -1452,20 +1498,29 @@ function formatBytes(bytes: number) {
       client_secret: d.oauth2ClientSecret,
       grant_type: d.oauth2GrantType || 'client_credentials'
     };
-    const res = await fetch(tokenUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    const txt = await res.text();
-    let json: any = {};
-    try {
-      json = txt ? JSON.parse(txt) : {};
-    } catch {
-      throw new Error(`OAuth2: некорректный ответ токена (${txt.slice(0, 200)})`);
-    }
-    if (!res.ok) {
-      throw new Error(`OAuth2: ${res.status} ${JSON.stringify(json)}`);
+    const proxyResp = await runHttpRequestViaServer(
+      tokenUrl,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(payload)
+      },
+      30_000
+    );
+    const resOk = Boolean(proxyResp?.ok);
+    const resStatus = Number(proxyResp?.status || 0);
+    const txt = String(proxyResp?.body_text || '');
+    const json = proxyResp?.body_json && typeof proxyResp.body_json === 'object'
+      ? proxyResp.body_json
+      : (() => {
+          try {
+            return txt ? JSON.parse(txt) : {};
+          } catch {
+            return {};
+          }
+        })();
+    if (!resOk) {
+      throw new Error(`OAuth2: ${resStatus} ${JSON.stringify(json)}`);
     }
     const tokenField = d.oauth2TokenField || 'access_token';
     const expiresField = d.oauth2ExpiresField || 'expires_in';
@@ -3400,23 +3455,24 @@ function handleDefinitionInput(value: string) {
           if (reqPlan.method !== 'GET' && reqPlan.method !== 'DELETE') {
             init.body = JSON.stringify(reqPlan.body || {});
           }
-          const res = await fetch(reqPlan.url, init);
-          lastStatus = res.status;
-          const txt = await res.text();
+          const proxied = await runHttpRequestViaServer(reqPlan.url, init, 60_000);
+          lastStatus = Number(proxied?.status || 0);
+          const txt = String(proxied?.body_text || '');
           totalSize += txt ? txt.length : 0;
-          let parsed: any = null;
-          try {
-            parsed = txt ? JSON.parse(txt) : null;
-          } catch {
-            parsed = null;
-          }
-          if (res.ok) success += 1;
+          const parsed = proxied?.body_json !== undefined ? proxied.body_json : (() => {
+            try {
+              return txt ? JSON.parse(txt) : null;
+            } catch {
+              return null;
+            }
+          })();
+          if (proxied?.ok) success += 1;
           else failed += 1;
           totalItems += countPayloadItems(parsed ?? txt);
           if (samples.length < REQUEST_PREVIEW_MAX) {
             samples.push({
               group: reqPlan.group,
-              status: res.status,
+              status: Number(proxied?.status || 0),
               response: parsed ?? txt
             });
           }
@@ -3565,15 +3621,16 @@ function handleDefinitionInput(value: string) {
           });
         }
 
-        const res = await fetch(url, init);
-        lastStatus = res.status;
-        const txt = await res.text();
-        let parsed: any = null;
-        try {
-          parsed = txt ? JSON.parse(txt) : null;
-        } catch {
-          parsed = null;
-        }
+        const proxied = await runHttpRequestViaServer(url, init, 60_000);
+        lastStatus = Number(proxied?.status || 0);
+        const txt = String(proxied?.body_text || '');
+        const parsed = proxied?.body_json !== undefined ? proxied.body_json : (() => {
+          try {
+            return txt ? JSON.parse(txt) : null;
+          } catch {
+            return null;
+          }
+        })();
         totalSize += txt ? txt.length : 0;
         pagePayloads.push(parsed ?? txt);
         pageCounter += 1;

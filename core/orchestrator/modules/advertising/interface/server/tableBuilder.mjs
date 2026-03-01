@@ -1718,6 +1718,91 @@ tableBuilderRouter.post('/api-configs/delete', requireDataAdmin, async (req, res
   }
 });
 
+tableBuilderRouter.post('/http-request', requireDataAdmin, async (req, res) => {
+  const method = String(req.body?.method || 'GET').trim().toUpperCase();
+  const rawUrl = String(req.body?.url || '').trim();
+  const inputHeaders = req.body?.headers && typeof req.body.headers === 'object' ? req.body.headers : {};
+  const timeoutMsRaw = Number(req.body?.timeout_ms || 30_000);
+  const timeoutMs = Number.isFinite(timeoutMsRaw) ? Math.max(1_000, Math.min(120_000, Math.trunc(timeoutMsRaw))) : 30_000;
+  const body = req.body?.body;
+
+  if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].includes(method)) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid method' });
+  }
+
+  let targetUrl;
+  try {
+    targetUrl = new URL(rawUrl);
+  } catch {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid url' });
+  }
+  if (!['http:', 'https:'].includes(targetUrl.protocol)) {
+    return res.status(400).json({ error: 'bad_request', details: 'only http/https are allowed' });
+  }
+
+  const blockedHeaders = new Set(['host', 'connection', 'content-length', 'accept-encoding']);
+  const forwardHeaders = {};
+  for (const [k, v] of Object.entries(inputHeaders)) {
+    const key = String(k || '').trim();
+    if (!key || blockedHeaders.has(key.toLowerCase())) continue;
+    if (v === undefined || v === null) continue;
+    forwardHeaders[key] = String(v);
+  }
+
+  let outgoingBody;
+  if (body !== undefined && body !== null && method !== 'GET' && method !== 'HEAD') {
+    if (typeof body === 'string') {
+      outgoingBody = body;
+    } else {
+      outgoingBody = JSON.stringify(body);
+      if (!Object.keys(forwardHeaders).some((h) => h.toLowerCase() === 'content-type')) {
+        forwardHeaders['Content-Type'] = 'application/json';
+      }
+    }
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(targetUrl.toString(), {
+      method,
+      headers: forwardHeaders,
+      body: outgoingBody,
+      redirect: 'follow',
+      signal: controller.signal
+    });
+
+    const responseText = await response.text();
+    let responseJson = null;
+    try {
+      responseJson = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      responseJson = null;
+    }
+
+    const responseHeaders = {};
+    response.headers.forEach((value, key) => {
+      responseHeaders[key] = value;
+    });
+
+    return res.json({
+      ok: response.ok,
+      status: response.status,
+      status_text: response.statusText,
+      headers: responseHeaders,
+      body_text: responseText,
+      body_json: responseJson
+    });
+  } catch (e) {
+    if (e?.name === 'AbortError') {
+      return res.status(504).json({ error: 'request_timeout', details: `timeout ${timeoutMs}ms` });
+    }
+    return res.status(502).json({ error: 'upstream_request_failed', details: String(e?.message || e) });
+  } finally {
+    clearTimeout(timeout);
+  }
+});
+
 tableBuilderRouter.post('/contracts/apply-version', requireDataAdmin, async (req, res) => {
   const schema = String(req.body?.schema || '').trim();
   const table = String(req.body?.table || '').trim();
