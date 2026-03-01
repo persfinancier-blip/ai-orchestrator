@@ -3755,6 +3755,204 @@ function handleDefinitionInput(value: string) {
     ok = 'API удален';
   }
 
+  async function executePlannedRequestWithPagination(
+    draft: ApiDraft,
+    reqPlan: any,
+    sentRequests: any[]
+  ): Promise<{
+    requestCount: number;
+    success: number;
+    failed: number;
+    totalItems: number;
+    totalSize: number;
+    lastStatus: number;
+    responses: any[];
+  }> {
+    const method = String(reqPlan?.method || draft.method || 'GET').toUpperCase();
+    const baseHeaders = normalizeRequestHeaders(reqPlan?.headers || {});
+    const isBodyMethod = method !== 'GET' && method !== 'DELETE';
+    let bodyCursorState = isBodyMethod && reqPlan?.body && typeof reqPlan.body === 'object' ? deepClone(reqPlan.body) : {};
+    let cursorQueryState: Record<string, any> = {};
+    let nextUrlOverride = '';
+    let currentPage = Number(draft.paginationStartPage || 1);
+    let currentOffset = 0;
+
+    const pagesMax = draft.paginationEnabled ? Math.max(1, Number(draft.paginationMaxPages || 1)) : 1;
+    let requestCount = 0;
+    let success = 0;
+    let failed = 0;
+    let totalItems = 0;
+    let totalSize = 0;
+    let lastStatus = 0;
+    const responses: any[] = [];
+
+    for (let pageIdx = 0; pageIdx < pagesMax; pageIdx++) {
+      const sourceUrl = String(nextUrlOverride || reqPlan?.url || '').trim();
+      if (!sourceUrl) throw new Error('Пустой URL в плане отправки');
+      const u = new URL(sourceUrl);
+      const queryObj: Record<string, any> = {};
+      u.searchParams.forEach((v, k) => {
+        queryObj[k] = v;
+      });
+      const bodyObj = isBodyMethod ? deepClone(bodyCursorState || {}) : undefined;
+
+      if (draft.paginationEnabled) {
+        if (draft.paginationStrategy === 'page_number') {
+          const p = draft.paginationPageParam || 'page';
+          if (draft.paginationTarget === 'query') queryObj[p] = currentPage;
+          else if (bodyObj) setByPath(bodyObj, p, currentPage);
+        } else if (draft.paginationStrategy === 'offset_limit') {
+          const off = draft.paginationPageParam || 'offset';
+          const lim = draft.paginationLimitParam || 'limit';
+          const limVal = Number(draft.paginationLimitValue || 100);
+          if (draft.paginationTarget === 'query') {
+            queryObj[off] = currentOffset;
+            queryObj[lim] = limVal;
+          } else if (bodyObj) {
+            setByPath(bodyObj, off, currentOffset);
+            setByPath(bodyObj, lim, limVal);
+          }
+        } else if (draft.paginationStrategy === 'cursor_fields') {
+          if (draft.paginationCursorReqPath1) {
+            if (draft.paginationTarget === 'query') {
+              const v = cursorQueryState[draft.paginationCursorReqPath1];
+              if (v !== undefined && v !== null) queryObj[draft.paginationCursorReqPath1] = v;
+            } else if (bodyObj) {
+              const v = getByPath(bodyCursorState, draft.paginationCursorReqPath1);
+              if (v !== undefined && v !== null) setByPath(bodyObj, draft.paginationCursorReqPath1, v);
+            }
+          }
+          if (draft.paginationCursorReqPath2) {
+            if (draft.paginationTarget === 'query') {
+              const v = cursorQueryState[draft.paginationCursorReqPath2];
+              if (v !== undefined && v !== null) queryObj[draft.paginationCursorReqPath2] = v;
+            } else if (bodyObj) {
+              const v = getByPath(bodyCursorState, draft.paginationCursorReqPath2);
+              if (v !== undefined && v !== null) setByPath(bodyObj, draft.paginationCursorReqPath2, v);
+            }
+          }
+        }
+      }
+
+      u.search = '';
+      Object.entries(queryObj).forEach(([k, v]) => {
+        if (v === undefined || v === null) return;
+        u.searchParams.set(k, String(v));
+      });
+      const finalUrl = u.toString();
+      const init: RequestInit = {
+        method,
+        headers: baseHeaders
+      };
+      if (isBodyMethod) {
+        init.body = JSON.stringify(bodyObj || {});
+      }
+
+      if (sentRequests.length < REQUEST_PREVIEW_MAX) {
+        const sentReq: Record<string, any> = {
+          method,
+          url: finalUrl,
+          headers: { ...baseHeaders },
+          query: deepClone(queryObj || {}),
+          body: isBodyMethod ? deepClone(bodyObj || {}) : undefined,
+          page: pageIdx + 1
+        };
+        if (reqPlan?.group) sentReq.group = reqPlan.group;
+        if (reqPlan?.row_index) sentReq.row_index = reqPlan.row_index;
+        sentRequests.push(sentReq);
+      }
+
+      const proxied = await runHttpRequestViaServer(finalUrl, init, 60_000);
+      lastStatus = Number(proxied?.status || 0);
+      const txt = String(proxied?.body_text || '');
+      totalSize += txt ? txt.length : 0;
+      const parsed = proxied?.body_json !== undefined
+        ? proxied.body_json
+        : (() => {
+            try {
+              return txt ? JSON.parse(txt) : null;
+            } catch {
+              return null;
+            }
+          })();
+      if (proxied?.ok) success += 1;
+      else failed += 1;
+      totalItems += countPayloadItems(parsed ?? txt);
+      requestCount += 1;
+
+      const responseEntry: Record<string, any> = {
+        page: pageIdx + 1,
+        status: Number(proxied?.status || 0),
+        response: parsed ?? txt
+      };
+      if (reqPlan?.group) responseEntry.group = reqPlan.group;
+      if (reqPlan?.row_index) responseEntry.row_index = reqPlan.row_index;
+      responses.push(responseEntry);
+
+      if (!draft.paginationEnabled) break;
+
+      const dataPath = String(draft.paginationDataPath || '').trim();
+      if (dataPath && parsed) {
+        const items = getByPath(parsed, dataPath);
+        if (Array.isArray(items) && items.length === 0) break;
+      }
+
+      let stop = false;
+      if (draft.paginationStrategy === 'page_number') {
+        currentPage += 1;
+      } else if (draft.paginationStrategy === 'offset_limit') {
+        currentOffset += Number(draft.paginationLimitValue || 100);
+      } else if (draft.paginationStrategy === 'cursor_fields') {
+        const v1 = draft.paginationCursorResPath1 ? getByPath(parsed, draft.paginationCursorResPath1) : undefined;
+        const v2 = draft.paginationCursorResPath2 ? getByPath(parsed, draft.paginationCursorResPath2) : undefined;
+        if (v1 == null && v2 == null) {
+          stop = true;
+        } else {
+          if (draft.paginationCursorReqPath1) {
+            if (draft.paginationTarget === 'query') {
+              cursorQueryState[draft.paginationCursorReqPath1] = v1;
+            } else {
+              setByPath(bodyCursorState, draft.paginationCursorReqPath1, v1);
+            }
+          }
+          if (draft.paginationCursorReqPath2) {
+            if (draft.paginationTarget === 'query') {
+              cursorQueryState[draft.paginationCursorReqPath2] = v2;
+            } else {
+              setByPath(bodyCursorState, draft.paginationCursorReqPath2, v2);
+            }
+          }
+        }
+      } else if (draft.paginationStrategy === 'next_url') {
+        const n = draft.paginationNextUrlPath ? getByPath(parsed, draft.paginationNextUrlPath) : undefined;
+        if (!n || typeof n !== 'string') {
+          stop = true;
+        } else {
+          nextUrlOverride = n;
+        }
+      } else if (draft.paginationStrategy === 'custom') {
+        stop = true;
+      } else {
+        stop = true;
+      }
+      if (stop) break;
+
+      if (Number(draft.paginationDelayMs || 0) > 0) {
+        await new Promise((resolve) => setTimeout(resolve, Number(draft.paginationDelayMs || 0)));
+      }
+    }
+
+    return {
+      requestCount,
+      success,
+      failed,
+      totalItems,
+      totalSize,
+      lastStatus,
+      responses
+    };
+  }
+
   async function checkApiNow() {
     err = '';
     ok = '';
@@ -3775,28 +3973,13 @@ function handleDefinitionInput(value: string) {
       const s = byRef(selectedRef) || selected;
       if (isGroupedDispatchEnabled(s)) {
         const groupedPlan = await buildGroupedRequestPlan(s);
-        myApiPreview = JSON.stringify(
-          {
-            mode: 'sent_grouped_requests',
-            total_requests: groupedPlan.allRequests.length,
-            shown_requests: groupedPlan.previewRequests.length,
-            requests: groupedPlan.previewRequests,
-            issues: Object.keys(groupedPlan.issues).length ? groupedPlan.issues : undefined
-          },
-          null,
-          2
-        );
-        myPreviewDirty = false;
-        myPreviewApplyMessage =
-          groupedPlan.allRequests.length > groupedPlan.previewRequests.length
-            ? `Перед отправкой показаны первые ${groupedPlan.previewRequests.length} запросов из ${groupedPlan.allRequests.length}`
-            : `Перед отправкой показаны ${groupedPlan.previewRequests.length} запросов`;
-
         if (!groupedPlan.allRequests.length) {
           throw new Error('Не удалось сформировать запросы для отправки');
         }
 
         const startedAt = Date.now();
+        const sentRequests: any[] = [];
+        let requestCount = 0;
         let success = 0;
         let failed = 0;
         let totalItems = 0;
@@ -3804,42 +3987,45 @@ function handleDefinitionInput(value: string) {
         let lastStatus = 0;
         const responses: any[] = [];
         for (const reqPlan of groupedPlan.allRequests) {
-          const init: RequestInit = {
-            method: reqPlan.method,
-            headers: reqPlan.headers
-          };
-          if (reqPlan.method !== 'GET' && reqPlan.method !== 'DELETE') {
-            init.body = JSON.stringify(reqPlan.body || {});
-          }
-          const proxied = await runHttpRequestViaServer(reqPlan.url, init, 60_000);
-          lastStatus = Number(proxied?.status || 0);
-          const txt = String(proxied?.body_text || '');
-          totalSize += txt ? txt.length : 0;
-          const parsed = proxied?.body_json !== undefined ? proxied.body_json : (() => {
-            try {
-              return txt ? JSON.parse(txt) : null;
-            } catch {
-              return null;
-            }
-          })();
-          if (proxied?.ok) success += 1;
-          else failed += 1;
-          totalItems += countPayloadItems(parsed ?? txt);
-          responses.push({
-            group: reqPlan.group,
-            status: Number(proxied?.status || 0),
-            response: parsed ?? txt
-          });
+          const run = await executePlannedRequestWithPagination(s, reqPlan, sentRequests);
+          requestCount += run.requestCount;
+          success += run.success;
+          failed += run.failed;
+          totalItems += run.totalItems;
+          totalSize += run.totalSize;
+          lastStatus = Number(run.lastStatus || lastStatus || 0);
+          responses.push(...run.responses);
         }
 
+        myApiPreview = JSON.stringify(
+          {
+            mode: 'sent_grouped_requests',
+            total_requests: requestCount,
+            request_groups: groupedPlan.allRequests.length,
+            shown_requests: sentRequests.length,
+            requests: sentRequests,
+            issues: Object.keys(groupedPlan.issues).length ? groupedPlan.issues : undefined
+          },
+          null,
+          2
+        );
+        myPreviewDirty = false;
+        myPreviewApplyMessage =
+          requestCount > sentRequests.length
+            ? `Показаны первые ${sentRequests.length} отправленных запросов из ${requestCount}`
+            : requestCount > 1
+            ? `Показаны отправленные запросы: ${requestCount}`
+            : 'Показан отправленный запрос';
+
         responseStatus = lastStatus;
-        responsePagesCount = groupedPlan.allRequests.length;
+        responsePagesCount = requestCount;
         responsePayloadCount = totalItems;
         responsePayloadSize = totalSize;
         responseTimeMs = Date.now() - startedAt;
         responseText = JSON.stringify(
           {
-            total_requests: groupedPlan.allRequests.length,
+            total_requests: requestCount,
+            request_groups: groupedPlan.allRequests.length,
             success,
             failed,
             responses
@@ -3852,24 +4038,9 @@ function handleDefinitionInput(value: string) {
       }
       const rowPlan = await buildUngroupedRowRequestPlan(s);
       if (rowPlan.allRequests.length) {
-        myApiPreview = JSON.stringify(
-          {
-            mode: 'sent_row_requests',
-            total_requests: rowPlan.allRequests.length,
-            shown_requests: rowPlan.previewRequests.length,
-            requests: rowPlan.previewRequests,
-            issues: Object.keys(rowPlan.issues).length ? rowPlan.issues : undefined
-          },
-          null,
-          2
-        );
-        myPreviewDirty = false;
-        myPreviewApplyMessage =
-          rowPlan.allRequests.length > rowPlan.previewRequests.length
-            ? `Перед отправкой показаны первые ${rowPlan.previewRequests.length} запросов из ${rowPlan.allRequests.length}`
-            : `Перед отправкой показаны ${rowPlan.previewRequests.length} запросов`;
-
         const startedAt = Date.now();
+        const sentRequests: any[] = [];
+        let requestCount = 0;
         let success = 0;
         let failed = 0;
         let totalItems = 0;
@@ -3877,42 +4048,45 @@ function handleDefinitionInput(value: string) {
         let lastStatus = 0;
         const responses: any[] = [];
         for (const reqPlan of rowPlan.allRequests) {
-          const init: RequestInit = {
-            method: reqPlan.method,
-            headers: reqPlan.headers
-          };
-          if (reqPlan.method !== 'GET' && reqPlan.method !== 'DELETE') {
-            init.body = JSON.stringify(reqPlan.body || {});
-          }
-          const proxied = await runHttpRequestViaServer(reqPlan.url, init, 60_000);
-          lastStatus = Number(proxied?.status || 0);
-          const txt = String(proxied?.body_text || '');
-          totalSize += txt ? txt.length : 0;
-          const parsed = proxied?.body_json !== undefined ? proxied.body_json : (() => {
-            try {
-              return txt ? JSON.parse(txt) : null;
-            } catch {
-              return null;
-            }
-          })();
-          if (proxied?.ok) success += 1;
-          else failed += 1;
-          totalItems += countPayloadItems(parsed ?? txt);
-          responses.push({
-            row_index: reqPlan.row_index,
-            status: Number(proxied?.status || 0),
-            response: parsed ?? txt
-          });
+          const run = await executePlannedRequestWithPagination(s, reqPlan, sentRequests);
+          requestCount += run.requestCount;
+          success += run.success;
+          failed += run.failed;
+          totalItems += run.totalItems;
+          totalSize += run.totalSize;
+          lastStatus = Number(run.lastStatus || lastStatus || 0);
+          responses.push(...run.responses);
         }
 
+        myApiPreview = JSON.stringify(
+          {
+            mode: 'sent_row_requests',
+            total_requests: requestCount,
+            request_rows: rowPlan.allRequests.length,
+            shown_requests: sentRequests.length,
+            requests: sentRequests,
+            issues: Object.keys(rowPlan.issues).length ? rowPlan.issues : undefined
+          },
+          null,
+          2
+        );
+        myPreviewDirty = false;
+        myPreviewApplyMessage =
+          requestCount > sentRequests.length
+            ? `Показаны первые ${sentRequests.length} отправленных запросов из ${requestCount}`
+            : requestCount > 1
+            ? `Показаны отправленные запросы: ${requestCount}`
+            : 'Показан отправленный запрос';
+
         responseStatus = lastStatus;
-        responsePagesCount = rowPlan.allRequests.length;
+        responsePagesCount = requestCount;
         responsePayloadCount = totalItems;
         responsePayloadSize = totalSize;
         responseTimeMs = Date.now() - startedAt;
         responseText = JSON.stringify(
           {
-            total_requests: rowPlan.allRequests.length,
+            total_requests: requestCount,
+            request_rows: rowPlan.allRequests.length,
             success,
             failed,
             responses
