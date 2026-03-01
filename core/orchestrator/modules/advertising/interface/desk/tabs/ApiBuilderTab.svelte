@@ -274,8 +274,6 @@
   let responsePathOptions: string[] = [];
   let responsePathPickerOpen = false;
   let responsePathPick = '';
-  let paginationArrayPathOptions: string[] = [];
-  let paginationArrayPathPick = '';
   let paginationCursorResponsePathOptions: string[] = [];
   let paginationCursorResponsePick = '';
   let activePaginationParameterId = '';
@@ -1319,20 +1317,6 @@ function formatBytes(bytes: number) {
     if (base) out.push(base);
   }
 
-  function collectArrayResponsePaths(node: any, base: string, out: Set<string>) {
-    if (!node || typeof node !== 'object') return;
-    if (Array.isArray(node)) {
-      if (base) out.add(base);
-      const sampleObjects = node.filter((item) => item && typeof item === 'object').slice(0, 3);
-      sampleObjects.forEach((item) => collectArrayResponsePaths(item, base, out));
-      return;
-    }
-    Object.entries(node).forEach(([k, v]) => {
-      const next = base ? `${base}.${k}` : k;
-      collectArrayResponsePaths(v, next, out);
-    });
-  }
-
   function isScalarValue(value: any) {
     const t = typeof value;
     return value === null || t === 'string' || t === 'number' || t === 'boolean';
@@ -1356,54 +1340,6 @@ function formatBytes(bytes: number) {
         collectScalarResponsePaths(v, next, out);
       });
     }
-  }
-
-  function pickBestPaginationArrayPath(paths: string[], payload: any) {
-    const preferredTokens = ['items', 'data', 'list', 'rows', 'cards', 'results', 'products', 'campaigns', 'skus'];
-    let best = '';
-    let bestScore = -Infinity;
-    paths.forEach((path) => {
-      const value = getByPath(payload, path);
-      const arr = Array.isArray(value) ? value : [];
-      const len = arr.length;
-      const depth = String(path || '').split('.').filter(Boolean).length;
-      const lower = path.toLowerCase();
-      let tokenScore = 0;
-      preferredTokens.forEach((token) => {
-        if (lower.endsWith(`.${token}`) || lower === token) tokenScore += 4;
-        else if (lower.includes(token)) tokenScore += 2;
-      });
-      const score = tokenScore + (len > 0 ? 5 : 0) + Math.min(len, 20) * 0.2 + depth * 0.1;
-      if (score > bestScore) {
-        best = path;
-        bestScore = score;
-      }
-    });
-    return best || (paths[0] || '');
-  }
-
-  function applyPickedPaginationArrayPath() {
-    if (!selected) return;
-    const path = String(paginationArrayPathPick || '').trim();
-    if (!path) return;
-    mutateSelected((d) => (d.paginationDataPath = path));
-    ok = 'Путь к данным подставлен из тестового ответа';
-  }
-
-  function autoPickPaginationArrayPath() {
-    if (!selected) return;
-    if (!paginationArrayPathOptions.length || !responseJson) {
-      err = 'Сначала выполни Проверить, чтобы получить тестовый JSON-ответ';
-      return;
-    }
-    const picked = pickBestPaginationArrayPath(paginationArrayPathOptions, responseJson);
-    if (!picked) {
-      err = 'Не удалось подобрать путь к массиву в ответе';
-      return;
-    }
-    paginationArrayPathPick = picked;
-    mutateSelected((d) => (d.paginationDataPath = picked));
-    ok = `Путь к данным выбран автоматически: ${picked}`;
   }
 
   function setActivePaginationParameter(id: string) {
@@ -4164,7 +4100,7 @@ function handleDefinitionInput(value: string) {
     const isBodyMethod = method !== 'GET' && method !== 'DELETE';
     const baseHeaders = normalizeRequestHeaders(reqPlan?.headers || {});
     const paginationParameters = paginationParametersForDraft(draft).filter(
-      (param) => String(param?.responsePath || '').trim() && String(param?.requestPath || '').trim()
+      (param) => String(param?.responsePath || '').trim() && String(param?.alias || '').trim()
     );
     const paginationState: Record<string, any> = {};
     let bodyCursorState = isBodyMethod && reqPlan?.body && typeof reqPlan.body === 'object' ? deepClone(reqPlan.body) : {};
@@ -4321,12 +4257,6 @@ function handleDefinitionInput(value: string) {
       responses.push(responseEntry);
 
       if (!draft.paginationEnabled) break;
-
-      const dataPath = String(draft.paginationDataPath || '').trim();
-      if (dataPath && parsed) {
-        const items = getByPath(parsed, dataPath);
-        if (Array.isArray(items) && items.length === 0) break;
-      }
 
       let stop = false;
       if (paginationParameters.length) {
@@ -4719,14 +4649,6 @@ function handleDefinitionInput(value: string) {
     responsePathOptions = [...new Set(out)].filter(Boolean);
     if (!responsePathOptions.includes(responsePathPick)) {
       responsePathPick = responsePathOptions[0] || '';
-    }
-  }
-  $: {
-    const out = new Set<string>();
-    if (responseIsJson) collectArrayResponsePaths(responseJson, '', out);
-    paginationArrayPathOptions = Array.from(out).filter(Boolean);
-    if (!paginationArrayPathOptions.includes(paginationArrayPathPick)) {
-      paginationArrayPathPick = paginationArrayPathOptions[0] || '';
     }
   }
   $: {
@@ -5647,18 +5569,6 @@ function syncParameterEditorsHeight() {
                           on:input={(e) => updatePaginationParameter(activePaginationParameter.id, { alias: e.currentTarget.value })}
                         />
                       </div>
-                      <div class="pagination-field">
-                        <small>Куда подставлять</small>
-                        <select
-                          value={activePaginationParameter.requestTarget}
-                          on:change={(e) => updatePaginationParameter(activePaginationParameter.id, { requestTarget: toPaginationParameterTarget(e.currentTarget.value) })}
-                        >
-                          <option value="body">Body JSON</option>
-                          <option value="query">Query JSON</option>
-                          <option value="header">Headers JSON</option>
-                          <option value="auth">Авторизация</option>
-                        </select>
-                      </div>
                     </div>
                     <div class="pagination-grid pagination-param-grid">
                       <div class="pagination-field">
@@ -5667,14 +5577,6 @@ function syncParameterEditorsHeight() {
                           value={activePaginationParameter.responsePath}
                           placeholder="cursor.updatedAt"
                           on:input={(e) => updatePaginationParameter(activePaginationParameter.id, { responsePath: e.currentTarget.value })}
-                        />
-                      </div>
-                      <div class="pagination-field">
-                        <small>Путь в запросе</small>
-                        <input
-                          value={activePaginationParameter.requestPath}
-                          placeholder="settings.cursor.updatedAt"
-                          on:input={(e) => updatePaginationParameter(activePaginationParameter.id, { requestPath: e.currentTarget.value })}
                         />
                       </div>
                     </div>
@@ -5713,55 +5615,12 @@ function syncParameterEditorsHeight() {
                         Автовыбор
                       </button>
                     </div>
-                    <p class="hint small-hint">Автовыбор берет путь из тестового ответа и вставляет его в активный параметр.</p>
+                    <p class="hint small-hint">Используй alias параметра как <code>&#123;&#123;alias&#125;&#125;</code> в Body/Headers/Query/Авторизация.</p>
                   </div>
                 {/if}
               {:else}
-                <p class="hint">Добавь параметр пагинации. Для каждого параметра укажи путь в ответе и путь подстановки в запрос.</p>
+                <p class="hint">Добавь параметр пагинации. Для каждого параметра укажи короткое имя и путь в ответе.</p>
               {/if}
-            </div>
-
-            <div class="data-section">
-              <div class="response-head field-head parameter-subhead">
-                <small>Путь к данным в ответе</small>
-              </div>
-              <div class="pagination-grid">
-                <div class="pagination-field">
-                  <small>Путь к массиву (остановка, когда массив пустой)</small>
-                  <input
-                    placeholder="cards"
-                    value={selected?.paginationDataPath || ''}
-                    on:input={(e) => mutateSelected((d) => (d.paginationDataPath = e.currentTarget.value))}
-                  />
-                  <div class="pagination-helper-row">
-                    <select bind:value={paginationArrayPathPick} disabled={!paginationArrayPathOptions.length}>
-                      {#if !paginationArrayPathOptions.length}
-                        <option value="">Нет массивов в тестовом ответе</option>
-                      {:else}
-                        {#each paginationArrayPathOptions as opt}
-                          <option value={opt}>{opt}</option>
-                        {/each}
-                      {/if}
-                    </select>
-                    <button
-                      type="button"
-                      class="view-toggle"
-                      on:click={applyPickedPaginationArrayPath}
-                      disabled={!paginationArrayPathOptions.length}
-                    >
-                      Подставить
-                    </button>
-                    <button
-                      type="button"
-                      class="view-toggle"
-                      on:click={autoPickPaginationArrayPath}
-                      disabled={!paginationArrayPathOptions.length}
-                    >
-                      Автовыбор
-                    </button>
-                  </div>
-                </div>
-              </div>
             </div>
 
             <div class="data-section">
