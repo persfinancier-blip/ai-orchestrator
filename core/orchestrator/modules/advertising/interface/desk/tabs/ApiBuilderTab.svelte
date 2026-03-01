@@ -285,6 +285,7 @@
   let datasetPreviewHasMore = false;
   let datasetPreviewLoading = false;
   let datasetPreviewError = '';
+  let groupByAliasCandidates: string[] = [];
   const PARAMETER_PREVIEW_LIMIT = 5;
   const REQUEST_PREVIEW_MAX = 20;
   const PARAMETER_TOKEN_RE = /\{\{\s*([^{}]+?)\s*\}\}/g;
@@ -1061,6 +1062,7 @@ function formatBytes(bytes: number) {
     selected && selectedParameterId
       ? selected.parameterDefinitions.find((param) => param.id === selectedParameterId) ?? null
       : null;
+  $: groupByAliasCandidates = bindingAliasOptions(selected);
 
   $: if (selected && selectedParameterId && !selected.parameterDefinitions.some((param) => param.id === selectedParameterId)) {
     selectedParameterId = null;
@@ -1833,6 +1835,17 @@ function formatBytes(bytes: number) {
     const next = parseAliasList(raw);
     mutateSelected((d) => {
       d.groupByAliases = next;
+    });
+  }
+
+  function toggleGroupByAlias(alias: string) {
+    const key = String(alias || '').trim();
+    if (!key) return;
+    mutateSelected((d) => {
+      const set = new Set((Array.isArray(d.groupByAliases) ? d.groupByAliases : []).map((x) => String(x || '').trim()).filter(Boolean));
+      if (set.has(key)) set.delete(key);
+      else set.add(key);
+      d.groupByAliases = [...set];
     });
   }
 
@@ -3941,11 +3954,23 @@ function syncParameterEditorsHeight() {
                 </div>
                 <div class="pagination-field">
                   <small>Группировать по alias</small>
-                  <input
-                    placeholder="например: client_id"
-                    value={selected?.groupByAliases?.join(', ') || ''}
-                    on:input={(e) => updateGroupByAliases(e.currentTarget.value)}
-                  />
+                  {#if groupByAliasCandidates.length}
+                    <div class="group-alias-list">
+                      {#each groupByAliasCandidates as alias}
+                        <label class="group-alias-item">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(selected?.groupByAliases?.includes(alias))}
+                            on:change={() => toggleGroupByAlias(alias)}
+                          />
+                          <span>{alias}</span>
+                        </label>
+                      {/each}
+                    </div>
+                    <p class="hint small-hint">Выбрано: {selected?.groupByAliases?.join(', ') || 'ничего'}</p>
+                  {:else}
+                    <p class="hint small-hint">Нет доступных параметров. Сначала добавь поля результата.</p>
+                  {/if}
                 </div>
                 <div class="pagination-field">
                   <small>Путь массива в body</small>
@@ -4501,6 +4526,9 @@ function syncParameterEditorsHeight() {
   .api-param-main { display:flex; flex-direction:column; gap:4px; }
   .api-param-main strong { font-size:12px; color:#0f172a; }
   .api-param-main span { font-size:11px; color:#64748b; word-break:break-word; }
+  .group-alias-list { display:flex; flex-wrap:wrap; gap:6px; margin-top:4px; }
+  .group-alias-item { display:inline-flex; align-items:center; gap:6px; border:1px solid #e2e8f0; background:#fff; border-radius:999px; padding:4px 8px; font-size:12px; color:#334155; }
+  .group-alias-item input { width:auto; margin:0; }
   .dataset-preview-table-wrap { overflow:auto; border:1px solid #e2e8f0; border-radius:10px; background:#fff; }
   .dataset-preview-table { width:100%; border-collapse:collapse; min-width:640px; }
   .dataset-preview-table th,
