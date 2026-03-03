@@ -132,7 +132,7 @@
           schema: ['request', 'response', 'status'],
           size: 0,
           preview: buildApiTemplatePreview(name, method, `${baseUrl}${path}`),
-          description: `РџСЂРµРґРЅР°СЃС‚СЂРѕРµРЅРЅС‹Р№ API-С€Р°Р±Р»РѕРЅ (${method} ${baseUrl}${path})`
+          description: `Преднастроенный API-шаблон (${method} ${baseUrl}${path})`
         };
       });
 
@@ -152,11 +152,11 @@
           schema: ['*'],
           size: 0,
           preview: [{ layer, schema, table }],
-          description: `РўР°Р±Р»РёС†Р° РІРёС‚СЂРёРЅС‹ РґР°РЅРЅС‹С… СѓСЂРѕРІРЅСЏ ${layer}`
+          description: `Таблица витрины данных уровня ${layer}`
         };
       });
     } catch (e: any) {
-      sourceCatalogError = String(e?.message || e || 'РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ РєР°С‚Р°Р»РѕРіРё РёСЃС‚РѕС‡РЅРёРєРѕРІ');
+      sourceCatalogError = String(e?.message || e || 'Не удалось загрузить каталоги источников');
     } finally {
       sourceCatalogLoading = false;
     }
@@ -240,7 +240,7 @@
   function connectTo(nodeId: string, port: string) {
     if (!linkFrom) return;
     if (!canConnect(linkFrom.nodeId, linkFrom.port, nodeId, port)) {
-      banner = 'РќРµР»СЊР·СЏ СЃРѕРµРґРёРЅРёС‚СЊ РІС‹Р±СЂР°РЅРЅС‹Рµ РїРѕСЂС‚С‹';
+      banner = 'Нельзя соединить выбранные порты';
       linkFrom = null;
       return;
     }
@@ -283,13 +283,13 @@
 
   function validate() {
     const out: WorkflowIssue[] = [];
-    if (!nodes.some((n) => n.type === 'data')) out.push({ level: 'error', text: 'РќРµС‚ РёСЃС‚РѕС‡РЅРёРєРѕРІ РґР°РЅРЅС‹С…' });
-    if (!nodes.some((n) => n.type === 'tool' && toolCfg(n).toolType === 'start_process')) out.push({ level: 'error', text: 'РќРµС‚ СѓР·Р»Р° РЎС‚Р°СЂС‚ РїСЂРѕС†РµСЃСЃР°' });
-    if (!nodes.some((n) => n.type === 'tool' && toolCfg(n).toolType === 'end_process')) out.push({ level: 'error', text: 'РќРµС‚ СѓР·Р»Р° РљРѕРЅРµС† РїСЂРѕС†РµСЃСЃР°' });
+    if (!nodes.some((n) => n.type === 'data')) out.push({ level: 'error', text: 'Нет источников данных' });
+    if (!nodes.some((n) => n.type === 'tool' && toolCfg(n).toolType === 'start_process')) out.push({ level: 'error', text: 'Нет узла Старт процесса' });
+    if (!nodes.some((n) => n.type === 'tool' && toolCfg(n).toolType === 'end_process')) out.push({ level: 'error', text: 'Нет узла Конец процесса' });
     nodes.filter((n) => n.type === 'tool' && toolCfg(n).toolType === 'db_write').forEach((n) => {
-      if (!String(toolCfg(n).settings.targetTable || '').trim()) out.push({ level: 'error', text: `РЈР·РµР» ${toolCfg(n).name} Р±РµР· С‚Р°Р±Р»РёС†С‹ Р·Р°РїРёСЃРё` });
+      if (!String(toolCfg(n).settings.targetTable || '').trim()) out.push({ level: 'error', text: `Узел ${toolCfg(n).name} без таблицы записи` });
     });
-    if (!edges.length) out.push({ level: 'warn', text: 'РќРµС‚ СЃРІСЏР·РµР№ РјРµР¶РґСѓ СѓР·Р»Р°РјРё' });
+    if (!edges.length) out.push({ level: 'warn', text: 'Нет связей между узлами' });
     return out;
   }
 
@@ -298,13 +298,13 @@
     edgeRows = {};
     issues = validate();
     if (issues.some((x) => x.level === 'error')) {
-      banner = 'РСЃРїСЂР°РІСЊ РѕС€РёР±РєРё СЃС…РµРјС‹ РїРµСЂРµРґ Р·Р°РїСѓСЃРєРѕРј';
+      banner = 'Исправь ошибки схемы перед запуском';
       return;
     }
     const order = topo();
     if (!order) {
-      issues = [...issues, { level: 'error', text: 'РћР±РЅР°СЂСѓР¶РµРЅ С†РёРєР» РІ РіСЂР°С„Рµ' }];
-      banner = 'РћР±РЅР°СЂСѓР¶РµРЅ С†РёРєР» РІ РіСЂР°С„Рµ';
+      issues = [...issues, { level: 'error', text: 'Обнаружен цикл в графе' }];
+      banner = 'Обнаружен цикл в графе';
       return;
     }
     for (const n of order) {
@@ -339,7 +339,7 @@
     const lossPct = sourceRows > 0 ? Number(((lossRows / sourceRows) * 100).toFixed(2)) : 0;
     const successPct = sourceRows > 0 ? Number((((sourceRows - lossRows) / sourceRows) * 100).toFixed(2)) : 100;
     summary = { sourceRows, finalRows, lossRows, lossPct, successPct };
-    banner = `РЎРёРјСѓР»СЏС†РёСЏ Р·Р°РІРµСЂС€РµРЅР°. РЈСЃРїРµС€РЅРѕСЃС‚СЊ ${successPct}%`;
+    banner = `Симуляция завершена. Успешность ${successPct}%`;
   }
 
   function updateSetting(nodeId: string, key: string, value: string) {
@@ -370,17 +370,17 @@
 </script>
 
 <section class="panel workflow-v2">
-  <h3>Workflow-РєРѕРЅСЃС‚СЂСѓРєС‚РѕСЂ РґР°РЅРЅС‹С…</h3>
+  <h3>Workflow-конструктор данных</h3>
 
   <div class="topbar">
-    <button on:click={() => (issues = validate())}>РџСЂРѕРІРµСЂРёС‚СЊ СЃС…РµРјСѓ</button>
-    <button class="primary" on:click={runWorkflow}>РЎРјРѕРґРµР»РёСЂРѕРІР°С‚СЊ Р·Р°РїСѓСЃРє</button>
-    <button on:click={resetCanvas}>РћС‡РёСЃС‚РёС‚СЊ</button>
+    <button on:click={() => (issues = validate())}>Проверить схему</button>
+    <button class="primary" on:click={runWorkflow}>Смоделировать запуск</button>
+    <button on:click={resetCanvas}>Очистить</button>
     <div class="summary">
-      <span>РСЃС‚РѕС‡РЅРёРє: {summary.sourceRows}</span>
-      <span>Р’С‹С…РѕРґ: {summary.finalRows}</span>
-      <span>РџРѕС‚РµСЂРё: {summary.lossRows} ({summary.lossPct}%)</span>
-      <span>РЈСЃРїРµС…: {summary.successPct}%</span>
+      <span>Источник: {summary.sourceRows}</span>
+      <span>Выход: {summary.finalRows}</span>
+      <span>Потери: {summary.lossRows} ({summary.lossPct}%)</span>
+      <span>Успех: {summary.successPct}%</span>
     </div>
   </div>
 
@@ -431,11 +431,11 @@
           <div class="node {node.type} {selectedNodeId === node.id ? 'selected' : ''}" style={`left:${node.x}px;top:${node.y}px;`} on:mousedown={(e) => startNodeDrag(e, node)} on:click={() => (selectedNodeId = node.id)}>
             <div class="node-head">
               <strong>{node.config.name}</strong>
-              <button on:click|stopPropagation={() => deleteNode(node.id)}>Г—</button>
+              <button on:click|stopPropagation={() => deleteNode(node.id)}>x</button>
             </div>
             <div class="node-meta">{node.type === 'data' ? node.config.datasetId : node.config.toolType}</div>
             {#if rt}
-              <div class="runtime {rt.status}">in {rt.inRows} В· out {rt.outRows} В· loss {rt.lossRows} ({rt.lossPct}%)</div>
+              <div class="runtime {rt.status}">in {rt.inRows} | out {rt.outRows} | loss {rt.lossRows} ({rt.lossPct}%)</div>
             {/if}
             <div class="ports">
               <div>{#each inputs(node) as p (p)}<button class="port in" on:click|stopPropagation={() => connectTo(node.id, p)}>{p}</button>{/each}</div>
@@ -448,7 +448,7 @@
     </div>
 
     <aside class="tools">
-      <h4>РРЅСЃС‚СЂСѓРјРµРЅС‚С‹ СЂР°Р±РѕС‚С‹ СЃ РґР°РЅРЅС‹РјРё</h4>
+      <h4>Инструменты работы с данными</h4>
       <div class="items">
         {#each tools as t (t.id)}
           <button draggable="true" class="item tool" on:dragstart={(e) => e.dataTransfer?.setData('application/x-workflow-tool', JSON.stringify(t))}>
@@ -459,43 +459,43 @@
       </div>
 
       <section class="props">
-        <h5>РЎРІРѕР№СЃС‚РІР°</h5>
+        <h5>Свойства</h5>
         {#if selectedNode && selectedNode.type === 'tool'}
           {#if toolCfg(selectedNode).toolType === 'schedule_process'}
             <label>Cron<input value={toolCfg(selectedNode).settings.cron || ''} on:input={(e) => onSettingInput(selectedNode.id, 'cron', e)} /></label>
           {/if}
           {#if toolCfg(selectedNode).toolType === 'table_parser'}
-            <label>РњРЅРѕР¶РёС‚РµР»СЊ РїР°СЂСЃРёРЅРіР°<input value={toolCfg(selectedNode).settings.parserMultiplier || ''} on:input={(e) => onSettingInput(selectedNode.id, 'parserMultiplier', e)} /></label>
+            <label>Множитель парсинга<input value={toolCfg(selectedNode).settings.parserMultiplier || ''} on:input={(e) => onSettingInput(selectedNode.id, 'parserMultiplier', e)} /></label>
           {/if}
           {#if toolCfg(selectedNode).toolType === 'db_write'}
-            <label>РЎС…РµРјР°<input value={toolCfg(selectedNode).settings.targetSchema || ''} on:input={(e) => onSettingInput(selectedNode.id, 'targetSchema', e)} /></label>
-            <label>РўР°Р±Р»РёС†Р°<input value={toolCfg(selectedNode).settings.targetTable || ''} on:input={(e) => onSettingInput(selectedNode.id, 'targetTable', e)} /></label>
-            <label>РЈСЃРїРµС€РЅР°СЏ Р·Р°РїРёСЃСЊ, %<input value={toolCfg(selectedNode).settings.writeSuccessRate || ''} on:input={(e) => onSettingInput(selectedNode.id, 'writeSuccessRate', e)} /></label>
+            <label>Схема<input value={toolCfg(selectedNode).settings.targetSchema || ''} on:input={(e) => onSettingInput(selectedNode.id, 'targetSchema', e)} /></label>
+            <label>Таблица<input value={toolCfg(selectedNode).settings.targetTable || ''} on:input={(e) => onSettingInput(selectedNode.id, 'targetTable', e)} /></label>
+            <label>Успешная запись, %<input value={toolCfg(selectedNode).settings.writeSuccessRate || ''} on:input={(e) => onSettingInput(selectedNode.id, 'writeSuccessRate', e)} /></label>
           {/if}
         {:else}
-          <div class="empty">Р’С‹Р±РµСЂРё СѓР·РµР»-РёРЅСЃС‚СЂСѓРјРµРЅС‚ РЅР° canvas</div>
+          <div class="empty">Выбери узел-инструмент на canvas</div>
         {/if}
       </section>
 
       <section class="props">
-        <h5>РЎРІСЏР·Рё</h5>
+        <h5>Связи</h5>
         {#if edges.length}
           {#each edges as e (e.id)}
-            <div class="edge-row"><span>{e.fromPort} -> {e.toPort}</span><button on:click={() => deleteEdge(e.id)}>РЈРґР°Р»РёС‚СЊ</button></div>
+            <div class="edge-row"><span>{e.fromPort} -> {e.toPort}</span><button on:click={() => deleteEdge(e.id)}>Удалить</button></div>
           {/each}
         {:else}
-          <div class="empty">РЎРІСЏР·РµР№ РЅРµС‚</div>
+          <div class="empty">Связей нет</div>
         {/if}
       </section>
 
       <section class="props">
-        <h5>РћС€РёР±РєРё Рё РїСЂРµРґСѓРїСЂРµР¶РґРµРЅРёСЏ</h5>
+        <h5>Ошибки и предупреждения</h5>
         {#if issues.length}
           {#each issues as i, idx (idx)}
             <div class="issue {i.level}">{i.text}</div>
           {/each}
         {:else}
-          <div class="empty">РќРµС‚</div>
+          <div class="empty">Нет</div>
         {/if}
       </section>
     </aside>
