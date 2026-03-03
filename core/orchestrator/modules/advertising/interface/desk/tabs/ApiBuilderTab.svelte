@@ -288,11 +288,65 @@
     { name: 'headers_json', types: ['jsonb', 'json'] },
     { name: 'query_json', types: ['jsonb', 'json'] },
     { name: 'body_json', types: ['jsonb', 'json'] },
+    { name: 'pagination_json', types: ['jsonb', 'json'] },
+    { name: 'execution_json', types: ['jsonb', 'json'] },
+    { name: 'data_model_json', types: ['jsonb', 'json'] },
     { name: 'target_schema', types: ['text', 'character varying', 'varchar'] },
     { name: 'target_table', types: ['text', 'character varying', 'varchar'] },
     { name: 'mapping_json', types: ['jsonb', 'json'] },
+    { name: 'auth_mode', types: ['text', 'character varying', 'varchar'] },
+    { name: 'auth_json', types: ['jsonb', 'json'] },
+    { name: 'oauth2_token_url', types: ['text', 'character varying', 'varchar'] },
+    { name: 'oauth2_client_id', types: ['text', 'character varying', 'varchar'] },
+    { name: 'oauth2_client_secret', types: ['text', 'character varying', 'varchar'] },
+    { name: 'oauth2_grant_type', types: ['text', 'character varying', 'varchar'] },
+    { name: 'oauth2_token_field', types: ['text', 'character varying', 'varchar'] },
+    { name: 'oauth2_expires_field', types: ['text', 'character varying', 'varchar'] },
+    { name: 'oauth2_token_type_field', types: ['text', 'character varying', 'varchar'] },
+    { name: 'parameter_definitions', types: ['jsonb', 'json'] },
+    { name: 'response_targets', types: ['jsonb', 'json'] },
+    { name: 'picked_paths', types: ['jsonb', 'json'] },
+    { name: 'example_request', types: ['text', 'character varying', 'varchar'] },
+    { name: 'pagination_enabled', types: ['boolean'] },
+    { name: 'pagination_strategy', types: ['text', 'character varying', 'varchar'] },
+    { name: 'pagination_target', types: ['text', 'character varying', 'varchar'] },
+    { name: 'pagination_data_path', types: ['text', 'character varying', 'varchar'] },
+    { name: 'pagination_page_param', types: ['text', 'character varying', 'varchar'] },
+    { name: 'pagination_start_page', types: ['integer', 'int', 'int4'] },
+    { name: 'pagination_limit_param', types: ['text', 'character varying', 'varchar'] },
+    { name: 'pagination_limit_value', types: ['integer', 'int', 'int4'] },
+    { name: 'pagination_cursor_req_path_1', types: ['text', 'character varying', 'varchar'] },
+    { name: 'pagination_cursor_req_path_2', types: ['text', 'character varying', 'varchar'] },
+    { name: 'pagination_cursor_res_path_1', types: ['text', 'character varying', 'varchar'] },
+    { name: 'pagination_cursor_res_path_2', types: ['text', 'character varying', 'varchar'] },
+    { name: 'pagination_next_url_path', types: ['text', 'character varying', 'varchar'] },
+    { name: 'dispatch_mode', types: ['text', 'character varying', 'varchar'] },
+    { name: 'execution_mode', types: ['text', 'character varying', 'varchar'] },
+    { name: 'sync_planner', types: ['text', 'character varying', 'varchar'] },
+    { name: 'async_concurrency', types: ['integer', 'int', 'int4'] },
+    { name: 'execution_delay_ms', types: ['integer', 'int', 'int4'] },
+    { name: 'response_log_enabled', types: ['boolean'] },
+    { name: 'response_log_schema', types: ['text', 'character varying', 'varchar'] },
+    { name: 'response_log_table', types: ['text', 'character varying', 'varchar'] },
+    { name: 'body_items_path', types: ['text', 'character varying', 'varchar'] },
+    { name: 'preview_request_limit', types: ['integer', 'int', 'int4'] },
+    { name: 'binding_rules', types: ['jsonb', 'json'] },
+    { name: 'group_by_aliases', types: ['jsonb', 'json'] },
+    { name: 'pagination_use_max_pages', types: ['boolean'] },
+    { name: 'pagination_max_pages', types: ['integer', 'int', 'int4'] },
+    { name: 'pagination_use_delay', types: ['boolean'] },
+    { name: 'pagination_delay_ms', types: ['integer', 'int', 'int4'] },
+    { name: 'pagination_stop_on_missing_value', types: ['boolean'] },
+    { name: 'pagination_stop_on_same_response', types: ['boolean'] },
+    { name: 'pagination_same_response_limit', types: ['integer', 'int', 'int4'] },
+    { name: 'pagination_stop_on_http_error', types: ['boolean'] },
+    { name: 'pagination_custom_strategy', types: ['text', 'character varying', 'varchar'] },
+    { name: 'data_date_parameters', types: ['jsonb', 'json'] },
+    { name: 'data_api_parameters', types: ['jsonb', 'json'] },
     { name: 'description', types: ['text', 'character varying', 'varchar'] },
-    { name: 'is_active', types: ['boolean'] }
+    { name: 'is_active', types: ['boolean'] },
+    { name: 'updated_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] },
+    { name: 'updated_by', types: ['text', 'character varying', 'varchar'] }
   ];
 
   const CONDITION_OPERATORS: Record<'text' | 'number' | 'date' | 'boolean', Array<{ value: string; label: string }>> = {
@@ -1213,6 +1267,77 @@ function formatBytes(bytes: number) {
       d.paginationEnabled && paginationParametersPayload.length
         ? 'cursor_fields'
         : d.paginationStrategy || 'cursor_fields';
+    const dispatchModePayload: DispatchMode = sanitizedAliases.groupByAliases.length ? 'group_by' : 'single';
+    const bindingRulesPayload = sanitizedAliases.bindingRules.map((rule) => ({
+      id: rule.id,
+      alias: rule.alias,
+      target: rule.target,
+      path: rule.path
+    }));
+    const dataModelPayload = {
+      tables: d.dataTables.map((t) => ({
+        id: t.id,
+        schema: t.schema,
+        table: t.table,
+        alias: t.alias
+      })),
+      joins: d.dataJoins.map((j) => ({
+        id: j.id,
+        left_table_id: j.leftTableId,
+        left_field: j.leftField,
+        right_table_id: j.rightTableId,
+        right_field: j.rightField,
+        join_type: j.joinType
+      })),
+      fields: d.dataFields.map((f) => ({
+        id: f.id,
+        table_id: f.tableId,
+        field: f.field,
+        alias: f.alias,
+        group_by: Boolean(f.grouped),
+        date_mode: f.dateMode === 'process' ? 'process' : 'raw',
+        date_anchor_preset: toDateAnchorPreset(String(f.dateAnchorPreset || 'raw')),
+        date_add_days: Number(f.dateAddDays || 0),
+        date_add_months: Number(f.dateAddMonths || 0),
+        date_format_preset: toDateFormatPreset(String(f.dateFormatPreset || 'yyyy_mm_dd')),
+        date_transform:
+          f.dateMode === 'process'
+            ? {
+                enabled: true,
+                anchor_preset: toDateAnchorPreset(String(f.dateAnchorPreset || 'raw')),
+                add_days: Number(f.dateAddDays || 0),
+                add_months: Number(f.dateAddMonths || 0),
+                format_preset: toDateFormatPreset(String(f.dateFormatPreset || 'yyyy_mm_dd'))
+              }
+            : { enabled: false }
+      })),
+      filters: d.dataFilters.map((f) => ({
+        id: f.id,
+        table_id: f.tableId,
+        field: f.field,
+        operator: f.operator,
+        compare_value: f.compareValue
+      })),
+      date_parameters: dataDateParametersPayload,
+      api_parameters: dataApiParametersPayload
+    };
+    const executionPayload = {
+      dispatch_mode: dispatchModePayload,
+      execution_mode: d.executionMode || 'sync',
+      sync_planner: d.syncPlanner || 'entity_to_stop',
+      async_concurrency: Math.max(1, Math.min(20, Number(d.asyncConcurrency || 3))),
+      execution_delay_ms: Math.max(0, Number(d.executionDelayMs || 0)),
+      response_log: {
+        enabled: Boolean(d.responseLogEnabled),
+        schema: String(d.responseLogSchema || '').trim(),
+        table: String(d.responseLogTable || '').trim()
+      },
+      group_by_aliases: sanitizedAliases.groupByAliases,
+      body_items_path: d.bodyItemsPath,
+      preview_request_limit: d.previewRequestLimit,
+      data_model: dataModelPayload,
+      binding_rules: bindingRulesPayload
+    };
 
     return {
       id: d.storeId || undefined,
@@ -1251,6 +1376,8 @@ function formatBytes(bytes: number) {
         custom_strategy: d.paginationCustomStrategy,
         parameters: paginationParametersPayload
       },
+      execution_json: executionPayload,
+      data_model_json: dataModelPayload,
       target_schema: firstTarget?.schema || '',
       target_table: firstTarget?.table || '',
       mapping_json: {
@@ -1273,74 +1400,7 @@ function formatBytes(bytes: number) {
             : { mode: 'manual' },
         auth_json: parsed?.authJson ?? tryObj(d.authJson),
         parameter_definitions: parameterDefinitionsPayload,
-        execution: {
-          dispatch_mode: sanitizedAliases.groupByAliases.length ? 'group_by' : 'single',
-          execution_mode: d.executionMode || 'sync',
-          sync_planner: d.syncPlanner || 'entity_to_stop',
-          async_concurrency: Math.max(1, Math.min(20, Number(d.asyncConcurrency || 3))),
-          execution_delay_ms: Math.max(0, Number(d.executionDelayMs || 0)),
-          response_log: {
-            enabled: Boolean(d.responseLogEnabled),
-            schema: String(d.responseLogSchema || '').trim(),
-            table: String(d.responseLogTable || '').trim()
-          },
-          group_by_aliases: sanitizedAliases.groupByAliases,
-          body_items_path: d.bodyItemsPath,
-          preview_request_limit: d.previewRequestLimit,
-          data_model: {
-            tables: d.dataTables.map((t) => ({
-              id: t.id,
-              schema: t.schema,
-              table: t.table,
-              alias: t.alias
-            })),
-            joins: d.dataJoins.map((j) => ({
-              id: j.id,
-              left_table_id: j.leftTableId,
-              left_field: j.leftField,
-              right_table_id: j.rightTableId,
-              right_field: j.rightField,
-              join_type: j.joinType
-            })),
-            fields: d.dataFields.map((f) => ({
-              id: f.id,
-              table_id: f.tableId,
-              field: f.field,
-              alias: f.alias,
-              group_by: Boolean(f.grouped),
-              date_mode: f.dateMode === 'process' ? 'process' : 'raw',
-              date_anchor_preset: toDateAnchorPreset(String(f.dateAnchorPreset || 'raw')),
-              date_add_days: Number(f.dateAddDays || 0),
-              date_add_months: Number(f.dateAddMonths || 0),
-              date_format_preset: toDateFormatPreset(String(f.dateFormatPreset || 'yyyy_mm_dd')),
-              date_transform:
-                f.dateMode === 'process'
-                  ? {
-                      enabled: true,
-                      anchor_preset: toDateAnchorPreset(String(f.dateAnchorPreset || 'raw')),
-                      add_days: Number(f.dateAddDays || 0),
-                      add_months: Number(f.dateAddMonths || 0),
-                      format_preset: toDateFormatPreset(String(f.dateFormatPreset || 'yyyy_mm_dd'))
-                    }
-                  : { enabled: false }
-            })),
-            filters: d.dataFilters.map((f) => ({
-              id: f.id,
-              table_id: f.tableId,
-              field: f.field,
-              operator: f.operator,
-              compare_value: f.compareValue
-            })),
-            date_parameters: dataDateParametersPayload,
-            api_parameters: dataApiParametersPayload
-          },
-          binding_rules: sanitizedAliases.bindingRules.map((rule) => ({
-            id: rule.id,
-            alias: rule.alias,
-            target: rule.target,
-            path: rule.path
-          }))
-        },
+        execution: executionPayload,
       },
       auth_mode: d.authMode,
       auth_json: parsed?.authJson ?? tryObj(d.authJson),
@@ -1352,16 +1412,18 @@ function formatBytes(bytes: number) {
       oauth2_expires_field: d.oauth2ExpiresField,
       oauth2_token_type_field: d.oauth2TokenTypeField,
       parameter_definitions: parameterDefinitionsPayload,
-      dispatch_mode: sanitizedAliases.groupByAliases.length ? 'group_by' : 'single',
+      dispatch_mode: dispatchModePayload,
+      execution_mode: d.executionMode || 'sync',
+      sync_planner: d.syncPlanner || 'entity_to_stop',
+      async_concurrency: Math.max(1, Math.min(20, Number(d.asyncConcurrency || 3))),
+      execution_delay_ms: Math.max(0, Number(d.executionDelayMs || 0)),
+      response_log_enabled: Boolean(d.responseLogEnabled),
+      response_log_schema: String(d.responseLogSchema || '').trim(),
+      response_log_table: String(d.responseLogTable || '').trim(),
       group_by_aliases: sanitizedAliases.groupByAliases,
       body_items_path: d.bodyItemsPath,
       preview_request_limit: d.previewRequestLimit,
-      binding_rules: sanitizedAliases.bindingRules.map((rule) => ({
-        id: rule.id,
-        alias: rule.alias,
-        target: rule.target,
-        path: rule.path
-      })),
+      binding_rules: bindingRulesPayload,
       response_targets: d.responseTargets,
       picked_paths: d.pickedPaths,
       example_request: d.exampleRequest,
@@ -1382,6 +1444,10 @@ function formatBytes(bytes: number) {
       pagination_max_pages: d.paginationMaxPages,
       pagination_use_delay: Boolean(d.paginationUseDelay),
       pagination_delay_ms: d.paginationDelayMs,
+      pagination_stop_on_missing_value: Boolean(d.paginationStopOnMissingValue),
+      pagination_stop_on_same_response: Boolean(d.paginationStopOnSameResponse),
+      pagination_same_response_limit: Math.max(2, Number(d.paginationSameResponseLimit || 5)),
+      pagination_stop_on_http_error: Boolean(d.paginationStopOnHttpError),
       pagination_custom_strategy: d.paginationCustomStrategy,
       data_date_parameters: dataDateParametersPayload,
       data_api_parameters: dataApiParametersPayload,
@@ -5527,12 +5593,28 @@ function handleDefinitionInput(value: string) {
         err = `Таблица ${schema}.${table} не найдена или пуста.`;
         return false;
       }
+      const colTypeByName = new Map(
+        cols.map((x) => [String(x?.name || '').toLowerCase(), normalizeTypeName(String(x?.type || ''))])
+      );
+      const issues: string[] = [];
       for (const need of API_STORAGE_REQUIRED_COLUMNS) {
-        const c = cols.find((x) => String(x.name || '').toLowerCase() === need.name);
-        if (!c || !need.types.includes(normalizeTypeName(c.type))) {
-          err = `Структура ${schema}.${table} не подходит: колонка ${need.name} отсутствует или имеет неверный тип.`;
-          return false;
+        const actualType = colTypeByName.get(String(need.name || '').toLowerCase());
+        if (!actualType) {
+          issues.push(`${need.name}: нет колонки`);
+          continue;
         }
+        const match = need.types.some((expected) => actualType.includes(normalizeTypeName(expected)));
+        if (!match) {
+          issues.push(`${need.name}: тип ${actualType}`);
+        }
+      }
+      if (issues.length) {
+        const short = issues.slice(0, 12);
+        const tail = issues.length > short.length ? `; ещё ${issues.length - short.length}` : '';
+        err =
+          `Структура ${schema}.${table} не подходит для "Хранилища API". ` +
+          `Проблемные поля: ${short.join(', ')}${tail}.`;
+        return false;
       }
       return true;
     } catch (e: any) {
@@ -8492,6 +8574,7 @@ function syncParameterEditorsHeight() {
           {api_storage_schema}.{api_storage_table}
         </button>
       </div>
+      <div class="storage-hint">Выбранный API-шаблон загружается из этой таблицы и используется для сборки запроса.</div>
 
       {#if api_storage_picker_open}
         <div class="storage-picker">
@@ -8646,6 +8729,7 @@ function syncParameterEditorsHeight() {
   .param-token-chip:active { cursor:grabbing; }
 
   .storage-meta { margin:0 0 8px; display:flex; align-items:center; gap:6px; font-size:12px; color:#64748b; }
+  .storage-hint { margin:-2px 0 8px; font-size:11px; color:#64748b; }
   .link-btn { border:0; background:transparent; color:#0f172a; padding:0; text-decoration:underline; font-size:12px; font-weight:500; }
   .storage-picker { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
   .storage-picker select { flex:1; min-width:0; }

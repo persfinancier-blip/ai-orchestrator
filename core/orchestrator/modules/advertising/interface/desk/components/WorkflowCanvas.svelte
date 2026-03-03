@@ -1,210 +1,104 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import {
-    cohortSources,
-    datamartSources,
-    graphSources,
-    toolPorts,
+    sourceGroups,
+    sourceItemsByGroup,
     tools,
+    toolPorts,
+    type SourceGroup,
     type SourceItem,
     type ToolItem,
-    type ToolType,
-    type SourceType,
+    type ToolType
   } from '../data/workflowEditor';
-
-  type Tab = 'graph' | 'datamart' | 'cohort';
-
-  type DataNodeConfig = {
-    name: string;
-    sourceType: SourceType;
-    datasetId: string;
-    schema: string[];
-    size: number;
-    preview: Array<Record<string, string | number>>;
-    dynamic?: boolean;
-    definition?: unknown;
-    generated?: boolean;
-  };
-
-  type ToolNodeConfig = {
-    name: string;
-    toolType: ToolType;
-    settings: Record<string, string>;
-  };
 
   type WorkflowNode = {
     id: string;
     type: 'data' | 'tool';
     x: number;
     y: number;
-    config: DataNodeConfig | ToolNodeConfig;
+    config: any;
   };
+  type WorkflowEdge = { id: string; from: string; to: string; fromPort: string; toPort: string };
+  type NodeRuntime = { inRows: number; outRows: number; lossRows: number; lossPct: number; successPct: number; status: 'idle' | 'ok' | 'warn' | 'error' };
+  type WorkflowIssue = { level: 'error' | 'warn' | 'info'; text: string };
 
-  type WorkflowEdge = {
-    id: string;
-    from: string;
-    to: string;
-    fromPort: string;
-    toPort: string;
-  };
-
-  let activeTab: Tab = 'graph';
+  let activeTab: SourceGroup = 'api_requests';
   let nodes: WorkflowNode[] = [];
   let edges: WorkflowEdge[] = [];
   let selectedNodeId = '';
   let linkFrom: { nodeId: string; port: string } | null = null;
   let banner = '';
+  let nodeRuntime: Record<string, NodeRuntime> = {};
+  let edgeRows: Record<string, number> = {};
+  let issues: WorkflowIssue[] = [];
+  let summary = { sourceRows: 0, finalRows: 0, lossRows: 0, lossPct: 0, successPct: 0 };
 
   let canvasEl: HTMLDivElement;
-
   let panX = 0;
   let panY = 0;
   let zoom = 1;
-
   let isPanning = false;
   let panStartX = 0;
   let panStartY = 0;
-
   let dragNode: { id: string; offsetX: number; offsetY: number } | null = null;
 
   $: selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null;
-  $: persist();
+  $: sourceList = sourceItemsByGroup[activeTab] || [];
 
-  function persist(): void {
-    // local storage disabled
+  const uid = (p: string) => `${p}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  const toolCfg = (n: WorkflowNode) => n.config as { name: string; toolType: ToolType; settings: Record<string, string> };
+
+  function defaultSettings(toolType: ToolType) {
+    if (toolType === 'schedule_process') return { cron: '0 * * * *', mode: 'sync' };
+    if (toolType === 'table_parser') return { parserMultiplier: '1' };
+    if (toolType === 'db_write') return { targetSchema: 'ao_data', targetTable: 'bronze_result', writeSuccessRate: '98' };
+    return {};
   }
 
-  function restore(): void {
-    nodes = [];
-    edges = [];
-    panX = 0;
-    panY = 0;
-    zoom = 1;
+  function dropPoint(clientX: number, clientY: number) {
+    const r = canvasEl.getBoundingClientRect();
+    return { x: (clientX - r.left - panX) / zoom, y: (clientY - r.top - panY) / zoom };
   }
 
-  function sourceList(): SourceItem[] {
-    if (activeTab === 'graph') return graphSources;
-    if (activeTab === 'datamart') return datamartSources;
-    return cohortSources;
-  }
-
-  function newId(prefix: string): string {
-    return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
-  }
-
-  function makeNodeFromSource(item: SourceItem, x: number, y: number): WorkflowNode {
-    return {
-      id: newId('node'),
-      type: 'data',
-      x,
-      y,
-      config: {
-        name: item.name,
-        sourceType: item.sourceType,
-        datasetId: item.datasetId,
-        schema: item.schema,
-        size: item.size,
-        preview: item.preview,
-        dynamic: item.dynamic,
-        definition: item.definition,
-        generated: false,
-      },
-    };
-  }
-
-  function makeNodeFromTool(item: ToolItem, x: number, y: number): WorkflowNode {
-    return {
-      id: newId('node'),
-      type: 'tool',
-      x,
-      y,
-      config: {
-        name: item.name,
-        toolType: item.toolType,
-        settings: {
-          condition: 'revenue > 10000',
-          key: 'sku',
-          groupBy: 'subject',
-        },
-      },
-    };
-  }
-
-  function nodeName(node: WorkflowNode): string {
-    return node.config.name;
-  }
-
-  function dataCfg(node: WorkflowNode): DataNodeConfig {
-    return node.config as DataNodeConfig;
-  }
-
-  function toolCfg(node: WorkflowNode): ToolNodeConfig {
-    return node.config as ToolNodeConfig;
-  }
-
-  function onDragStartSource(event: DragEvent, item: SourceItem): void {
-    event.dataTransfer?.setData('application/x-workflow-source', JSON.stringify(item));
-  }
-
-  function onDragStartTool(event: DragEvent, item: ToolItem): void {
-    event.dataTransfer?.setData('application/x-workflow-tool', JSON.stringify(item));
-  }
-
-  function toCanvasPoint(clientX: number, clientY: number): { x: number; y: number } {
-    const rect = canvasEl.getBoundingClientRect();
-    return {
-      x: (clientX - rect.left - panX) / zoom,
-      y: (clientY - rect.top - panY) / zoom,
-    };
-  }
-
-  function onDrop(event: DragEvent): void {
+  function onDrop(event: DragEvent) {
     event.preventDefault();
-    banner = '';
-    const p = toCanvasPoint(event.clientX, event.clientY);
-
+    const p = dropPoint(event.clientX, event.clientY);
     const sourceRaw = event.dataTransfer?.getData('application/x-workflow-source');
     if (sourceRaw) {
       const item = JSON.parse(sourceRaw) as SourceItem;
-      nodes = [...nodes, makeNodeFromSource(item, p.x, p.y)];
+      nodes = [...nodes, { id: uid('node'), type: 'data', x: p.x, y: p.y, config: { ...item } }];
       return;
     }
-
     const toolRaw = event.dataTransfer?.getData('application/x-workflow-tool');
     if (toolRaw) {
       const item = JSON.parse(toolRaw) as ToolItem;
-      nodes = [...nodes, makeNodeFromTool(item, p.x, p.y)];
+      nodes = [...nodes, { id: uid('node'), type: 'tool', x: p.x, y: p.y, config: { name: item.name, toolType: item.toolType, settings: defaultSettings(item.toolType) } }];
     }
   }
 
-  function onDragOver(event: DragEvent): void {
+  function onDragOver(event: DragEvent) {
     event.preventDefault();
   }
 
-  function onWheel(event: WheelEvent): void {
+  function onWheel(event: WheelEvent) {
     event.preventDefault();
-    const next = zoom - Math.sign(event.deltaY) * 0.08;
-    zoom = Math.max(0.5, Math.min(1.8, next));
+    zoom = Math.max(0.5, Math.min(1.8, zoom - Math.sign(event.deltaY) * 0.08));
   }
 
-  function startPan(event: MouseEvent): void {
+  function startPan(event: MouseEvent) {
     if ((event.target as HTMLElement).closest('.node')) return;
     isPanning = true;
     panStartX = event.clientX - panX;
     panStartY = event.clientY - panY;
   }
-
-  function stopAll(): void {
+  function stopAll() {
     isPanning = false;
     dragNode = null;
   }
-
-  function onMouseMove(event: MouseEvent): void {
+  function onMouseMove(event: MouseEvent) {
     if (dragNode) {
-      const p = toCanvasPoint(event.clientX, event.clientY);
-      nodes = nodes.map((n) =>
-        n.id === dragNode?.id ? { ...n, x: p.x - dragNode.offsetX, y: p.y - dragNode.offsetY } : n
-      );
+      const p = dropPoint(event.clientX, event.clientY);
+      nodes = nodes.map((n) => (n.id === dragNode?.id ? { ...n, x: p.x - dragNode.offsetX, y: p.y - dragNode.offsetY } : n));
       return;
     }
     if (!isPanning) return;
@@ -212,185 +106,194 @@
     panY = event.clientY - panStartY;
   }
 
-  function selectNode(id: string): void {
-    selectedNodeId = id;
-    linkFrom = null;
+  function startNodeDrag(event: MouseEvent, n: WorkflowNode) {
+    const p = dropPoint(event.clientX, event.clientY);
+    dragNode = { id: n.id, offsetX: p.x - n.x, offsetY: p.y - n.y };
   }
 
-  function deleteNode(id: string): void {
-    nodes = nodes.filter((n) => n.id !== id);
-    edges = edges.filter((e) => e.from !== id && e.to !== id);
-    if (selectedNodeId === id) selectedNodeId = '';
-    if (linkFrom?.nodeId === id) linkFrom = null;
+  function inputs(n: WorkflowNode) {
+    return n.type === 'tool' ? toolPorts[toolCfg(n).toolType].inputs : [];
   }
-
-  function deleteEdge(id: string): void {
-    edges = edges.filter((e) => e.id !== id);
+  function outputs(n: WorkflowNode) {
+    return n.type === 'tool' ? toolPorts[toolCfg(n).toolType].outputs : ['out'];
   }
-
-  function startNodeDrag(event: MouseEvent, node: WorkflowNode): void {
-    const p = toCanvasPoint(event.clientX, event.clientY);
-    dragNode = { id: node.id, offsetX: p.x - node.x, offsetY: p.y - node.y };
-  }
-
-  function inputs(node: WorkflowNode): string[] {
-    if (node.type === 'tool') return toolPorts[toolCfg(node).toolType].inputs;
-    return dataCfg(node).generated ? ['in'] : [];
-  }
-
-  function outputs(node: WorkflowNode): string[] {
-    if (node.type === 'tool') return toolPorts[toolCfg(node).toolType].outputs;
-    return ['out'];
-  }
-
-  function canConnect(fromId: string, fromPort: string, toId: string, toPort: string): boolean {
+  function canConnect(fromId: string, fromPort: string, toId: string, toPort: string) {
     if (fromId === toId) return false;
-    const fromNode = nodes.find((n) => n.id === fromId);
-    const toNode = nodes.find((n) => n.id === toId);
-    if (!fromNode || !toNode) return false;
-
-    if (!outputs(fromNode).includes(fromPort)) return false;
-    if (!inputs(toNode).includes(toPort)) return false;
-
-    if (toNode.type === 'tool') {
-      if (edges.some((e) => e.to === toId && e.toPort === toPort)) return false;
-    }
-    if (toNode.type === 'data') {
-      if (edges.some((e) => e.to === toId && e.toPort === 'in')) return false;
-    }
-
+    const from = nodes.find((n) => n.id === fromId);
+    const to = nodes.find((n) => n.id === toId);
+    if (!from || !to) return false;
+    if (!outputs(from).includes(fromPort) || !inputs(to).includes(toPort)) return false;
+    if (edges.some((e) => e.to === toId && e.toPort === toPort)) return false;
     return true;
   }
-
-  function connectFrom(nodeId: string, port: string): void {
+  function connectFrom(nodeId: string, port: string) {
     linkFrom = { nodeId, port };
     banner = '';
   }
-
-  function connectTo(nodeId: string, port: string): void {
+  function connectTo(nodeId: string, port: string) {
     if (!linkFrom) return;
     if (!canConnect(linkFrom.nodeId, linkFrom.port, nodeId, port)) {
-      banner = 'Нельзя соединить';
+      banner = 'Нельзя соединить выбранные порты';
       linkFrom = null;
       return;
     }
-    edges = [
-      ...edges,
-      {
-        id: newId('edge'),
-        from: linkFrom.nodeId,
-        to: nodeId,
-        fromPort: linkFrom.port,
-        toPort: port,
-      },
-    ];
+    edges = [...edges, { id: uid('edge'), from: linkFrom.nodeId, to: nodeId, fromPort: linkFrom.port, toPort: port }];
     linkFrom = null;
   }
 
-  function center(node: WorkflowNode): { x: number; y: number } {
-    return { x: node.x + 120, y: node.y + 50 };
+  function deleteNode(id: string) {
+    nodes = nodes.filter((n) => n.id !== id);
+    edges = edges.filter((e) => e.from !== id && e.to !== id);
+    selectedNodeId = selectedNodeId === id ? '' : selectedNodeId;
+  }
+  function deleteEdge(id: string) {
+    edges = edges.filter((e) => e.id !== id);
   }
 
-  function updateToolSetting(nodeId: string, key: string, value: string): void {
-    nodes = nodes.map((n) => {
-      if (n.id !== nodeId || n.type !== 'tool') return n;
-      const cfg = toolCfg(n);
-      return { ...n, config: { ...cfg, settings: { ...cfg.settings, [key]: value } } };
+  function center(n: WorkflowNode) {
+    return { x: n.x + 125, y: n.y + 55 };
+  }
+
+  function topo(): WorkflowNode[] | null {
+    const indeg = new Map(nodes.map((n) => [n.id, 0]));
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    edges.forEach((e) => indeg.set(e.to, Number(indeg.get(e.to) || 0) + 1));
+    const q = Array.from(indeg.entries()).filter(([, d]) => d === 0).map(([id]) => id);
+    const out: WorkflowNode[] = [];
+    while (q.length) {
+      const id = String(q.shift());
+      const n = byId.get(id);
+      if (!n) continue;
+      out.push(n);
+      edges.filter((e) => e.from === id).forEach((e) => {
+        const d = Number(indeg.get(e.to) || 0) - 1;
+        indeg.set(e.to, d);
+        if (d === 0) q.push(e.to);
+      });
+    }
+    return out.length === nodes.length ? out : null;
+  }
+
+  function validate() {
+    const out: WorkflowIssue[] = [];
+    if (!nodes.some((n) => n.type === 'data')) out.push({ level: 'error', text: 'Нет источников данных' });
+    if (!nodes.some((n) => n.type === 'tool' && toolCfg(n).toolType === 'start_process')) out.push({ level: 'error', text: 'Нет узла Старт процесса' });
+    if (!nodes.some((n) => n.type === 'tool' && toolCfg(n).toolType === 'end_process')) out.push({ level: 'error', text: 'Нет узла Конец процесса' });
+    nodes.filter((n) => n.type === 'tool' && toolCfg(n).toolType === 'db_write').forEach((n) => {
+      if (!String(toolCfg(n).settings.targetTable || '').trim()) out.push({ level: 'error', text: `Узел ${toolCfg(n).name} без таблицы записи` });
     });
+    if (!edges.length) out.push({ level: 'warn', text: 'Нет связей между узлами' });
+    return out;
   }
 
-  function runTool(node: WorkflowNode): void {
-    if (node.type !== 'tool') return;
-
-    const incoming = edges.filter((e) => e.to === node.id);
-    if (incoming.length === 0) {
-      banner = 'Нельзя выполнить инструмент без входных данных';
+  function runWorkflow() {
+    nodeRuntime = {};
+    edgeRows = {};
+    issues = validate();
+    if (issues.some((x) => x.level === 'error')) {
+      banner = 'Исправь ошибки схемы перед запуском';
       return;
     }
-
-    const outPorts = outputs(node);
-    if (outPorts.length === 0) {
-      banner = 'Инструмент без выходов (Export)';
+    const order = topo();
+    if (!order) {
+      issues = [...issues, { level: 'error', text: 'Обнаружен цикл в графе' }];
+      banner = 'Обнаружен цикл в графе';
       return;
     }
-
-    const datasetId = `result:${Date.now().toString(36)}`;
-    const resultNode: WorkflowNode = {
-      id: newId('node'),
-      type: 'data',
-      x: node.x + 300,
-      y: node.y + 40,
-      config: {
-        name: `Результат: ${nodeName(node)}`,
-        sourceType: 'datamart',
-        datasetId,
-        schema: ['entity', 'score', 'revenue', 'spend'],
-        size: 50 + Math.round(Math.random() * 400),
-        preview: Array.from({ length: 10 }).map((_, idx) => ({
-          entity: `row-${idx + 1}`,
-          score: Number((Math.random() * 100).toFixed(2)),
-          revenue: Math.round(2000 + Math.random() * 18000),
-          spend: Math.round(700 + Math.random() * 9000),
-        })),
-        generated: true,
-      },
-    };
-
-    const edge: WorkflowEdge = {
-      id: newId('edge'),
-      from: node.id,
-      to: resultNode.id,
-      fromPort: outPorts[0],
-      toPort: 'in',
-    };
-
-    nodes = [...nodes, resultNode];
-    edges = [...edges, edge];
-    banner = `Создан datasetId: ${datasetId}`;
+    for (const n of order) {
+      const inEdges = edges.filter((e) => e.to === n.id);
+      const inRows = inEdges.reduce((s, e) => s + Number(edgeRows[e.id] || 0), 0);
+      let outRows = inRows;
+      if (n.type === 'data') outRows = inEdges.length ? inRows : Number(n.config.size || 0);
+      if (n.type === 'tool') {
+        const cfg = toolCfg(n);
+        if (cfg.toolType === 'start_process') outRows = inRows > 0 ? inRows : 1;
+        if (cfg.toolType === 'schedule_process') outRows = inRows;
+        if (cfg.toolType === 'table_parser') outRows = Math.max(0, Math.round(inRows * Math.max(0.1, Number(cfg.settings.parserMultiplier || 1))));
+        if (cfg.toolType === 'db_write') outRows = Math.max(0, Math.round(inRows * Math.max(0, Math.min(100, Number(cfg.settings.writeSuccessRate || 98))) / 100));
+        if (cfg.toolType === 'end_process') outRows = 0;
+      }
+      const lossRows = Math.max(0, inRows - outRows);
+      const lossPct = inRows > 0 ? Number(((lossRows / inRows) * 100).toFixed(2)) : 0;
+      const successPct = inRows > 0 ? Number((((inRows - lossRows) / inRows) * 100).toFixed(2)) : n.type === 'tool' && toolCfg(n).toolType !== 'start_process' ? 0 : 100;
+      const status: NodeRuntime['status'] = successPct >= 95 ? 'ok' : successPct >= 80 ? 'warn' : 'error';
+      nodeRuntime[n.id] = { inRows, outRows, lossRows, lossPct, successPct, status };
+      const outs = edges.filter((e) => e.from === n.id);
+      const base = outs.length ? Math.floor(outRows / outs.length) : 0;
+      let rem = outs.length ? outRows - base * outs.length : 0;
+      outs.forEach((e) => {
+        edgeRows[e.id] = base + (rem > 0 ? 1 : 0);
+        if (rem > 0) rem -= 1;
+      });
+    }
+    const sourceRows = nodes.filter((n) => n.type === 'data' && edges.every((e) => e.to !== n.id)).reduce((s, n) => s + Number(nodeRuntime[n.id]?.outRows || 0), 0);
+    const finalRows = nodes.filter((n) => n.type === 'tool' && toolCfg(n).toolType === 'end_process').reduce((s, n) => s + Number(nodeRuntime[n.id]?.inRows || 0), 0);
+    const lossRows = Math.max(0, sourceRows - finalRows);
+    const lossPct = sourceRows > 0 ? Number(((lossRows / sourceRows) * 100).toFixed(2)) : 0;
+    const successPct = sourceRows > 0 ? Number((((sourceRows - lossRows) / sourceRows) * 100).toFixed(2)) : 100;
+    summary = { sourceRows, finalRows, lossRows, lossPct, successPct };
+    banner = `Симуляция завершена. Успешность ${successPct}%`;
   }
 
-  onMount(restore);
+  function updateSetting(nodeId: string, key: string, value: string) {
+    nodes = nodes.map((n) => (n.id === nodeId && n.type === 'tool' ? { ...n, config: { ...toolCfg(n), settings: { ...toolCfg(n).settings, [key]: value } } } : n));
+  }
+
+  function onSettingInput(nodeId: string, key: string, event: Event) {
+    const target = event.currentTarget as HTMLInputElement | null;
+    updateSetting(nodeId, key, target?.value ?? '');
+  }
+
+  function resetCanvas() {
+    nodes = [];
+    edges = [];
+    selectedNodeId = '';
+    linkFrom = null;
+    nodeRuntime = {};
+    edgeRows = {};
+    issues = [];
+    summary = { sourceRows: 0, finalRows: 0, lossRows: 0, lossPct: 0, successPct: 0 };
+    banner = '';
+  }
+
+  onMount(resetCanvas);
 </script>
 
 <section class="panel workflow-v2">
-  <h3>Workflow-редактор</h3>
+  <h3>Workflow-конструктор данных</h3>
+
+  <div class="topbar">
+    <button on:click={() => (issues = validate())}>Проверить схему</button>
+    <button class="primary" on:click={runWorkflow}>Смоделировать запуск</button>
+    <button on:click={resetCanvas}>Очистить</button>
+    <div class="summary">
+      <span>Источник: {summary.sourceRows}</span>
+      <span>Выход: {summary.finalRows}</span>
+      <span>Потери: {summary.lossRows} ({summary.lossPct}%)</span>
+      <span>Успех: {summary.successPct}%</span>
+    </div>
+  </div>
 
   <div class="workspace">
     <aside class="sources">
       <h4>Источники данных</h4>
-
       <div class="tabs">
-        <button class:active={activeTab === 'graph'} on:click={() => (activeTab = 'graph')}>Из графа</button>
-        <button class:active={activeTab === 'datamart'} on:click={() => (activeTab = 'datamart')}>Из витрины</button>
-        <button class:active={activeTab === 'cohort'} on:click={() => (activeTab = 'cohort')}>Когорты</button>
+        {#each sourceGroups as g (g.key)}
+          <button class:active={activeTab === g.key} on:click={() => (activeTab = g.key)}>{g.label}</button>
+        {/each}
       </div>
-
       <div class="items">
-        {#each sourceList() as item}
-          <button
-            draggable="true"
-            on:dragstart={(e) => onDragStartSource(e, item)}
-            class="item source {item.sourceType === 'cohort' ? 'cohort' : ''}"
-            title="Перетащите на canvas"
-          >
+        {#each sourceList as item (item.id)}
+          <button draggable="true" class="item source" on:dragstart={(e) => e.dataTransfer?.setData('application/x-workflow-source', JSON.stringify(item))}>
             <strong>{item.name}</strong>
-            <span>{item.sourceType} · {item.size}</span>
+            <span>{item.datasetId}</span>
+            <span>Строк: {item.size}</span>
           </button>
         {/each}
       </div>
     </aside>
 
-    <div
-      class="canvas-wrap"
-      bind:this={canvasEl}
-      on:drop={onDrop}
-      on:dragover={onDragOver}
-      on:wheel={onWheel}
-      on:mousedown={startPan}
-      on:mousemove={onMouseMove}
-      on:mouseup={stopAll}
-      on:mouseleave={stopAll}
-    >
+    <div class="canvas-wrap" bind:this={canvasEl} on:drop={onDrop} on:dragover={onDragOver} on:wheel={onWheel} on:mousedown={startPan} on:mousemove={onMouseMove} on:mouseup={stopAll} on:mouseleave={stopAll}>
       <div class="canvas" style={`transform: translate(${panX}px, ${panY}px) scale(${zoom});`}>
         <svg class="edges" width="3000" height="2000">
           {#each edges as edge (edge.id)}
@@ -399,168 +302,82 @@
             {#if fromNode && toNode}
               {@const a = center(fromNode)}
               {@const b = center(toNode)}
-              <path
-                d={`M ${a.x} ${a.y} C ${a.x + 90} ${a.y}, ${b.x - 90} ${b.y}, ${b.x} ${b.y}`}
-                stroke="#64748b"
-                fill="none"
-                stroke-width="2"
-              />
-              <g>
-                <rect
-                  x={(a.x + b.x) / 2 - 10}
-                  y={(a.y + b.y) / 2 - 20}
-                  width="20"
-                  height="20"
-                  rx="6"
-                  fill="#fff"
-                  stroke="#e2e8f0"
-                />
-                <text
-                  x={(a.x + b.x) / 2}
-                  y={(a.y + b.y) / 2 - 6}
-                  text-anchor="middle"
-                  class="edge-x"
-                  on:click={() => deleteEdge(edge.id)}
-                >
-                  ×
-                </text>
-              </g>
+              <path d={`M ${a.x} ${a.y} C ${a.x + 90} ${a.y}, ${b.x - 90} ${b.y}, ${b.x} ${b.y}`} stroke="#64748b" fill="none" stroke-width="2" />
+              <text x={(a.x + b.x) / 2} y={(a.y + b.y) / 2 - 6} text-anchor="middle" class="edge-label">{Number(edgeRows[edge.id] || 0)} строк</text>
             {/if}
           {/each}
         </svg>
 
         {#each nodes as node (node.id)}
-          <div
-            class="node {node.type} {selectedNodeId === node.id ? 'selected' : ''}"
-            style={`left:${node.x}px;top:${node.y}px;`}
-            on:mousedown={(e) => startNodeDrag(e, node)}
-            on:click={() => selectNode(node.id)}
-          >
+          {@const rt = nodeRuntime[node.id]}
+          <div class="node {node.type} {selectedNodeId === node.id ? 'selected' : ''}" style={`left:${node.x}px;top:${node.y}px;`} on:mousedown={(e) => startNodeDrag(e, node)} on:click={() => (selectedNodeId = node.id)}>
             <div class="node-head">
-              <strong>{nodeName(node)}</strong>
+              <strong>{node.config.name}</strong>
               <button on:click|stopPropagation={() => deleteNode(node.id)}>×</button>
             </div>
-
-            {#if node.type === 'data'}
-              <div class="node-meta">{dataCfg(node).sourceType} · {dataCfg(node).datasetId}</div>
-            {:else}
-              <div class="node-meta">Инструмент · {toolCfg(node).toolType}</div>
+            <div class="node-meta">{node.type === 'data' ? node.config.datasetId : node.config.toolType}</div>
+            {#if rt}
+              <div class="runtime {rt.status}">in {rt.inRows} · out {rt.outRows} · loss {rt.lossRows} ({rt.lossPct}%)</div>
             {/if}
-
             <div class="ports">
-              <div class="ins">
-                {#each inputs(node) as port (port)}
-                  <button class="port in" on:click|stopPropagation={() => connectTo(node.id, port)}>{port}</button>
-                {/each}
-              </div>
-              <div class="outs">
-                {#each outputs(node) as port (port)}
-                  <button
-                    class="port out {linkFrom?.nodeId === node.id ? 'active' : ''}"
-                    on:click|stopPropagation={() => connectFrom(node.id, port)}
-                  >
-                    {port}
-                  </button>
-                {/each}
-              </div>
+              <div>{#each inputs(node) as p (p)}<button class="port in" on:click|stopPropagation={() => connectTo(node.id, p)}>{p}</button>{/each}</div>
+              <div>{#each outputs(node) as p (p)}<button class="port out {linkFrom?.nodeId === node.id ? 'active' : ''}" on:click|stopPropagation={() => connectFrom(node.id, p)}>{p}</button>{/each}</div>
             </div>
-
-            {#if node.type === 'data' && dataCfg(node).sourceType === 'cohort'}
-              <div class="cohort-badge">КОГОРТА</div>
-            {/if}
           </div>
         {/each}
       </div>
-
-      {#if banner}
-        <div class="banner">{banner}</div>
-      {/if}
+      {#if banner}<div class="banner">{banner}</div>{/if}
     </div>
 
     <aside class="tools">
-      <h4>Инструменты</h4>
-
+      <h4>Инструменты работы с данными</h4>
       <div class="items">
-        {#each tools as tool}
-          <button
-            draggable="true"
-            on:dragstart={(e) => onDragStartTool(e, tool)}
-            class="item tool"
-            title="Перетащите на canvas"
-          >
-            <strong>{tool.name}</strong>
-            <span>{tool.toolType}</span>
+        {#each tools as t (t.id)}
+          <button draggable="true" class="item tool" on:dragstart={(e) => e.dataTransfer?.setData('application/x-workflow-tool', JSON.stringify(t))}>
+            <strong>{t.name}</strong>
+            <span>{t.description}</span>
           </button>
         {/each}
       </div>
 
       <section class="props">
-        <h5>Свойства ноды</h5>
-
-        {#if selectedNode}
-          {#if selectedNode.type === 'data'}
-            <div><b>name:</b> {dataCfg(selectedNode).name}</div>
-            <div><b>sourceType:</b> {dataCfg(selectedNode).sourceType}</div>
-            <div><b>schema:</b> {dataCfg(selectedNode).schema.join(', ')}</div>
-            <div><b>size:</b> {dataCfg(selectedNode).size}</div>
-
-            {#if dataCfg(selectedNode).sourceType === 'cohort'}
-              <div><b>dynamic:</b> {String(dataCfg(selectedNode).dynamic ?? false)}</div>
-              <div class="definition">{JSON.stringify(dataCfg(selectedNode).definition ?? {}, null, 2)}</div>
-            {/if}
-
-            {#if (dataCfg(selectedNode).preview?.length ?? 0) > 0}
-              <table>
-                <thead>
-                  <tr>
-                    {#each Object.keys(dataCfg(selectedNode).preview[0]) as k (k)}
-                      <th>{k}</th>
-                    {/each}
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each dataCfg(selectedNode).preview as row, i (i)}
-                    <tr>
-                      {#each Object.values(row) as v, j (j)}
-                        <td>{v}</td>
-                      {/each}
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
-            {/if}
-          {:else}
-            <div><b>name:</b> {toolCfg(selectedNode).name}</div>
-            <div><b>toolType:</b> {toolCfg(selectedNode).toolType}</div>
-
-            <label>
-              Условие
-              <input
-                value={toolCfg(selectedNode).settings.condition ?? ''}
-                on:input={(e) => updateToolSetting(selectedNode.id, 'condition', e.currentTarget.value)}
-              />
-            </label>
-
-            <label>
-              Ключ
-              <input
-                value={toolCfg(selectedNode).settings.key ?? ''}
-                on:input={(e) => updateToolSetting(selectedNode.id, 'key', e.currentTarget.value)}
-              />
-            </label>
-
-            <label>
-              Group by
-              <input
-                value={toolCfg(selectedNode).settings.groupBy ?? ''}
-                on:input={(e) => updateToolSetting(selectedNode.id, 'groupBy', e.currentTarget.value)}
-              />
-            </label>
-
-            <button class="run" on:click={() => runTool(selectedNode)}>Run</button>
+        <h5>Свойства</h5>
+        {#if selectedNode && selectedNode.type === 'tool'}
+          {#if toolCfg(selectedNode).toolType === 'schedule_process'}
+            <label>Cron<input value={toolCfg(selectedNode).settings.cron || ''} on:input={(e) => onSettingInput(selectedNode.id, 'cron', e)} /></label>
+          {/if}
+          {#if toolCfg(selectedNode).toolType === 'table_parser'}
+            <label>Множитель парсинга<input value={toolCfg(selectedNode).settings.parserMultiplier || ''} on:input={(e) => onSettingInput(selectedNode.id, 'parserMultiplier', e)} /></label>
+          {/if}
+          {#if toolCfg(selectedNode).toolType === 'db_write'}
+            <label>Схема<input value={toolCfg(selectedNode).settings.targetSchema || ''} on:input={(e) => onSettingInput(selectedNode.id, 'targetSchema', e)} /></label>
+            <label>Таблица<input value={toolCfg(selectedNode).settings.targetTable || ''} on:input={(e) => onSettingInput(selectedNode.id, 'targetTable', e)} /></label>
+            <label>Успешная запись, %<input value={toolCfg(selectedNode).settings.writeSuccessRate || ''} on:input={(e) => onSettingInput(selectedNode.id, 'writeSuccessRate', e)} /></label>
           {/if}
         {:else}
-          <div class="empty">Выберите ноду на canvas.</div>
+          <div class="empty">Выбери узел-инструмент на canvas</div>
+        {/if}
+      </section>
+
+      <section class="props">
+        <h5>Связи</h5>
+        {#if edges.length}
+          {#each edges as e (e.id)}
+            <div class="edge-row"><span>{e.fromPort} -> {e.toPort}</span><button on:click={() => deleteEdge(e.id)}>Удалить</button></div>
+          {/each}
+        {:else}
+          <div class="empty">Связей нет</div>
+        {/if}
+      </section>
+
+      <section class="props">
+        <h5>Ошибки и предупреждения</h5>
+        {#if issues.length}
+          {#each issues as i, idx (idx)}
+            <div class="issue {i.level}">{i.text}</div>
+          {/each}
+        {:else}
+          <div class="empty">Нет</div>
         {/if}
       </section>
     </aside>
@@ -568,245 +385,48 @@
 </section>
 
 <style>
-  .workflow-v2 {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .workspace {
-    display: grid;
-    grid-template-columns: 260px minmax(0, 1fr) 320px;
-    gap: 10px;
-    min-height: 720px;
-  }
-
-  .sources,
-  .tools {
-    border: 1px solid #e2e8f0;
-    border-radius: 14px;
-    padding: 10px;
-    background: #f8fbff;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .tabs {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 6px;
-  }
-  .tabs button {
-    border: 1px solid #dbe4f0;
-    background: #fff;
-    border-radius: 9px;
-    font-size: 11px;
-    padding: 6px;
-    cursor: pointer;
-  }
-  .tabs button.active {
-    background: #0f172a;
-    color: #fff;
-  }
-
-  .items {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .item {
-    text-align: left;
-    border: 1px solid #dbe4f0;
-    background: #fff;
-    border-radius: 10px;
-    padding: 8px;
-    cursor: grab;
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-  }
-  .item span {
-    color: #64748b;
-    font-size: 11px;
-  }
-  .item.cohort {
-    border-color: #c4b5fd;
-    background: #f5f3ff;
-  }
-
-  .canvas-wrap {
-    position: relative;
-    border: 1px solid #dbe4f0;
-    border-radius: 14px;
-    overflow: hidden;
-    background: #fff;
-  }
-  .canvas {
-    position: relative;
-    width: 3000px;
-    height: 2000px;
-    transform-origin: 0 0;
-    background-image: linear-gradient(#f1f5f9 1px, transparent 1px),
-      linear-gradient(90deg, #f1f5f9 1px, transparent 1px);
-    background-size: 24px 24px;
-  }
-
-  .edges {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-  }
-  .edge-x {
-    pointer-events: all;
-    cursor: pointer;
-    fill: #334155;
-    font-size: 14px;
-    font-weight: 700;
-  }
-
-  .node {
-    position: absolute;
-    width: 240px;
-    border: 1px solid #cbd5e1;
-    border-radius: 12px;
-    background: #fff;
-    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
-    padding: 8px;
-    user-select: none;
-  }
-  .node.selected {
-    border-color: #2563eb;
-  }
-  .node.data {
-    background: #f8fafc;
-  }
-  .node.tool {
-    background: #fff7ed;
-  }
-  .node-head {
-    display: flex;
-    justify-content: space-between;
-    gap: 8px;
-  }
-  .node-head button {
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    color: #64748b;
-  }
-  .node-meta {
-    font-size: 11px;
-    color: #64748b;
-    margin-top: 4px;
-  }
-
-  .ports {
-    display: flex;
-    justify-content: space-between;
-    margin-top: 8px;
-  }
-  .ins,
-  .outs {
-    display: flex;
-    gap: 6px;
-  }
-  .port {
-    border: 1px solid #cbd5e1;
-    border-radius: 999px;
-    font-size: 10px;
-    padding: 2px 7px;
-    background: #fff;
-    cursor: pointer;
-  }
-  .port.in {
-    border-color: #f59e0b;
-  }
-  .port.out {
-    border-color: #2563eb;
-  }
-  .port.active {
-    background: #dbeafe;
-  }
-
-  .cohort-badge {
-    margin-top: 8px;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 10px;
-    font-weight: 700;
-    color: #6d28d9;
-    background: #f5f3ff;
-    border: 1px solid #c4b5fd;
-    border-radius: 999px;
-    padding: 2px 8px;
-    width: max-content;
-  }
-
-  .banner {
-    position: absolute;
-    left: 12px;
-    bottom: 12px;
-    padding: 6px 10px;
-    border-radius: 8px;
-    background: #0f172a;
-    color: #fff;
-    font-size: 12px;
-  }
-
-  .props {
-    margin-top: 8px;
-    border-top: 1px solid #e2e8f0;
-    padding-top: 8px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    min-height: 300px;
-  }
-  .props h5 {
-    margin: 0;
-    font-size: 13px;
-  }
-  .props table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 10px;
-  }
-  .props th,
-  .props td {
-    border: 1px solid #e2e8f0;
-    padding: 3px;
-  }
-  .props label {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    font-size: 12px;
-  }
-  .props input {
-    border: 1px solid #dbe4f0;
-    border-radius: 8px;
-    padding: 6px;
-  }
-
-  .run {
-    border: 1px solid #0f172a;
-    background: #0f172a;
-    color: #fff;
-    border-radius: 8px;
-    padding: 6px;
-    cursor: pointer;
-  }
-  .definition {
-    white-space: pre-wrap;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 10px;
-    border: 1px dashed #dbe4f0;
-    padding: 6px;
-    border-radius: 8px;
-  }
-  .empty {
-    color: #64748b;
-    font-size: 12px;
-  }
+  .workflow-v2 { display: flex; flex-direction: column; gap: 10px; }
+  .topbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .topbar button { border: 1px solid #dbe4f0; background: #fff; border-radius: 9px; padding: 6px 10px; cursor: pointer; }
+  .topbar .primary { background: #0f172a; color: #fff; border-color: #0f172a; }
+  .summary { display: flex; gap: 8px; font-size: 12px; color: #334155; }
+  .workspace { display: grid; grid-template-columns: 280px minmax(0, 1fr) 360px; gap: 10px; min-height: 720px; }
+  .sources,.tools { border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px; background: #f8fbff; display: flex; flex-direction: column; gap: 8px; overflow: auto; }
+  .tabs { display: grid; gap: 6px; }
+  .tabs button { border: 1px solid #dbe4f0; background: #fff; border-radius: 8px; padding: 6px; text-align: left; cursor: pointer; }
+  .tabs button.active { background: #0f172a; color: #fff; }
+  .items { display: flex; flex-direction: column; gap: 6px; }
+  .item { text-align: left; border: 1px solid #dbe4f0; background: #fff; border-radius: 8px; padding: 7px; cursor: grab; display: flex; flex-direction: column; gap: 2px; }
+  .item span { font-size: 11px; color: #64748b; }
+  .item.tool { background: #fff7ed; border-color: #fed7aa; }
+  .canvas-wrap { position: relative; border: 1px solid #dbe4f0; border-radius: 12px; overflow: hidden; background: #fff; }
+  .canvas { position: relative; width: 3000px; height: 2000px; transform-origin: 0 0; background-image: linear-gradient(#eef2f7 1px, transparent 1px), linear-gradient(90deg, #eef2f7 1px, transparent 1px); background-size: 24px 24px; }
+  .edges { position: absolute; inset: 0; pointer-events: none; }
+  .edge-label { fill: #334155; font-size: 11px; }
+  .node { position: absolute; width: 250px; border: 1px solid #cbd5e1; border-radius: 10px; background: #fff; padding: 8px; box-shadow: 0 4px 12px rgba(15,23,42,.07); }
+  .node.tool { background: #fff7ed; }
+  .node.data { background: #f8fafc; }
+  .node.selected { border-color: #2563eb; }
+  .node-head { display: flex; justify-content: space-between; gap: 8px; }
+  .node-head button { border: none; background: transparent; cursor: pointer; color: #64748b; }
+  .node-meta { color: #64748b; font-size: 11px; margin-top: 4px; }
+  .runtime { margin-top: 6px; font-size: 11px; border-radius: 7px; padding: 4px 6px; border: 1px solid #e2e8f0; }
+  .runtime.ok { background: #f0fdf4; border-color: #86efac; }
+  .runtime.warn { background: #fffbeb; border-color: #fcd34d; }
+  .runtime.error { background: #fef2f2; border-color: #fca5a5; }
+  .ports { margin-top: 7px; display: flex; justify-content: space-between; }
+  .port { border: 1px solid #cbd5e1; border-radius: 999px; background: #fff; cursor: pointer; padding: 2px 7px; font-size: 10px; }
+  .port.in { border-color: #f59e0b; } .port.out { border-color: #2563eb; } .port.active { background: #dbeafe; }
+  .banner { position: absolute; left: 10px; bottom: 10px; background: #0f172a; color: #fff; border-radius: 7px; padding: 6px 9px; font-size: 12px; }
+  .props { border-top: 1px solid #e2e8f0; margin-top: 6px; padding-top: 7px; display: flex; flex-direction: column; gap: 6px; }
+  .props h5 { margin: 0; font-size: 13px; }
+  .props label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+  .props input { border: 1px solid #dbe4f0; border-radius: 7px; padding: 6px; }
+  .edge-row { border: 1px solid #e2e8f0; border-radius: 7px; background: #fff; padding: 6px; display: flex; justify-content: space-between; gap: 8px; font-size: 11px; }
+  .edge-row button { border: 1px solid #dbe4f0; border-radius: 6px; background: #fff; cursor: pointer; }
+  .issue { border-radius: 7px; border: 1px solid #e2e8f0; background: #fff; padding: 6px; font-size: 12px; }
+  .issue.error { border-color: #fecaca; background: #fef2f2; }
+  .issue.warn { border-color: #fde68a; background: #fffbeb; }
+  .issue.info { border-color: #bfdbfe; background: #eff6ff; }
+  .empty { color: #64748b; font-size: 12px; }
 </style>
