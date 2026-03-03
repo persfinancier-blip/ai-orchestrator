@@ -4,7 +4,7 @@
 
 <main class="workflow-desk-root">
   <header>
-    <h1>AI Orchestrator · Workflow</h1>
+    <h1>AI Orchestrator · Управление данными</h1>
   </header>
 
   <WorkflowCanvas />

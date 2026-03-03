@@ -5,7 +5,6 @@
   import CreateTableTab from './tabs/CreateTableTab.svelte';
   import TablesAndDataTab from './tabs/TablesAndDataTab.svelte';
   import ApiBuilderTab from './tabs/ApiBuilderTab.svelte';
-  import DataManagementTab from './tabs/DataManagementTab.svelte';
 
   export type Role = 'viewer' | 'operator' | 'data_admin';
   export type ExistingTable = { schema_name: string; table_name: string };
@@ -14,7 +13,7 @@
 
   let role: Role = 'data_admin';
 
-  type Tab = 'constructor' | 'tables' | 'api_builder' | 'data_management';
+  type Tab = 'constructor' | 'tables' | 'api_builder';
   let tab: Tab = 'constructor';
   let constructorRenderKey = 0;
 
@@ -135,7 +134,7 @@
     <div>
       <h1>Конструктор таблиц</h1>
       <p class="sub">
-        Создание и редактирование таблиц. Отдельно доступны конструктор API и блок управления данными.
+        Создание и редактирование таблиц. Здесь настраиваются таблицы и преднастроенные шаблоны API.
       </p>
     </div>
 
@@ -153,7 +152,6 @@
     <button class:active={tab === 'constructor'} on:click={() => (tab = 'constructor')}>Создание</button>
     <button class:active={tab === 'tables'} on:click={() => (tab = 'tables')}>Таблицы и данные</button>
     <button class:active={tab === 'api_builder'} on:click={() => (tab = 'api_builder')}>API</button>
-    <button class:active={tab === 'data_management'} on:click={() => (tab = 'data_management')}>Управление данными</button>
   </nav>
 
   {#if error}
@@ -195,8 +193,6 @@
       {existingTables}
       {refreshTables}
     />
-  {:else}
-    <DataManagementTab />
   {/if}
 </div>
 

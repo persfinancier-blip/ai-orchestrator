@@ -16,16 +16,16 @@
 <nav class="top-nav">
   <a href="#desk" class:active={route === 'desk'}>Пространство</a>
   <a href="#desk/data" class:active={route === 'desk/data'}>Данные</a>
-  <a href="#desk/workflow" class:active={route === 'desk/workflow'}>Workflow</a>
+  <a href="#desk/workflow" class:active={route === 'desk/workflow'}>Конструктор</a>
   <a href="#legacy" class:active={route === 'legacy'}>Старый дашборд</a>
 </nav>
 
 {#if route === 'legacy'}
   <div class="app"><AdvertisingDashboard /></div>
 {:else if route === 'desk/data'}
-  <DataDesk />
-{:else if route === 'desk/workflow'}
   <WorkflowDesk />
+{:else if route === 'desk/workflow'}
+  <DataDesk />
 {:else}
   <AdvertisingDesk />
 {/if}

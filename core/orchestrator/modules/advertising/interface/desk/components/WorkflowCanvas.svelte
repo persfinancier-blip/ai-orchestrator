@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
   import { onMount } from 'svelte';
   import {
     sourceGroups,
@@ -32,6 +32,10 @@
   let edgeRows: Record<string, number> = {};
   let issues: WorkflowIssue[] = [];
   let summary = { sourceRows: 0, finalRows: 0, lossRows: 0, lossPct: 0, successPct: 0 };
+  let sourceCatalogLoading = false;
+  let sourceCatalogError = '';
+  let dynamicApiSources: SourceItem[] = [];
+  let dynamicTableSources: SourceItem[] = [];
 
   let canvasEl: HTMLDivElement;
   let panX = 0;
@@ -42,8 +46,20 @@
   let panStartY = 0;
   let dragNode: { id: string; offsetX: number; offsetY: number } | null = null;
 
+  const API_BASE = '/ai-orchestrator/api';
+  const API_ROLE = 'data_admin';
+
   $: selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null;
-  $: sourceList = sourceItemsByGroup[activeTab] || [];
+  $: sourceList =
+    activeTab === 'api_requests'
+      ? dynamicApiSources.length
+        ? dynamicApiSources
+        : sourceItemsByGroup.api_requests || []
+      : activeTab === 'data_tables'
+      ? dynamicTableSources.length
+        ? dynamicTableSources
+        : sourceItemsByGroup.data_tables || []
+      : sourceItemsByGroup.math_calculations || [];
 
   const uid = (p: string) => `${p}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
   const toolCfg = (n: WorkflowNode) => n.config as { name: string; toolType: ToolType; settings: Record<string, string> };
@@ -53,6 +69,97 @@
     if (toolType === 'table_parser') return { parserMultiplier: '1' };
     if (toolType === 'db_write') return { targetSchema: 'ao_data', targetTable: 'bronze_result', writeSuccessRate: '98' };
     return {};
+  }
+
+  function normalizeLayer(schemaName: string, tableName: string) {
+    const s = String(schemaName || '').trim().toLowerCase();
+    const t = String(tableName || '').trim().toLowerCase();
+    if (s.includes('bronze') || t.startsWith('bronze_')) return 'bronze';
+    if (s.includes('silver') || t.startsWith('silver_')) return 'silver';
+    if (s.includes('gold') || t.startsWith('gold_')) return 'gold';
+    return '';
+  }
+
+  function buildApiTemplatePreview(apiName: string, method: string, path: string) {
+    return [
+      {
+        api_name: apiName || '',
+        method: method || '',
+        endpoint: path || ''
+      }
+    ];
+  }
+
+  async function loadDynamicSourceCatalog() {
+    sourceCatalogLoading = true;
+    sourceCatalogError = '';
+    try {
+      const [apiConfigsRaw, tablesRaw] = await Promise.all([
+        fetch(`${API_BASE}/api-configs`, {
+          method: 'GET',
+          headers: { Accept: 'application/json', 'X-AO-ROLE': API_ROLE }
+        }),
+        fetch(`${API_BASE}/tables`, {
+          method: 'GET',
+          headers: { Accept: 'application/json', 'X-AO-ROLE': API_ROLE }
+        })
+      ]);
+
+      let apiJson: any = {};
+      let tableJson: any = {};
+      try {
+        apiJson = await apiConfigsRaw.json();
+      } catch {
+        apiJson = {};
+      }
+      try {
+        tableJson = await tablesRaw.json();
+      } catch {
+        tableJson = {};
+      }
+
+      const apiRows = Array.isArray(apiJson?.api_configs) ? apiJson.api_configs : [];
+      dynamicApiSources = apiRows.map((row: any, idx: number) => {
+        const name = String(row?.api_name || row?.name || '').trim() || `API template ${idx + 1}`;
+        const method = String(row?.method || 'GET').trim().toUpperCase();
+        const baseUrl = String(row?.base_url || '').trim();
+        const path = String(row?.path || '').trim();
+        return {
+          id: `api_tpl_${String(row?.id || idx + 1)}`,
+          name,
+          group: 'api_requests' as SourceGroup,
+          datasetId: `api_template:${String(row?.id || idx + 1)}`,
+          schema: ['request', 'response', 'status'],
+          size: 0,
+          preview: buildApiTemplatePreview(name, method, `${baseUrl}${path}`),
+          description: `РџСЂРµРґРЅР°СЃС‚СЂРѕРµРЅРЅС‹Р№ API-С€Р°Р±Р»РѕРЅ (${method} ${baseUrl}${path})`
+        };
+      });
+
+      const existingTables = Array.isArray(tableJson?.existing_tables) ? tableJson.existing_tables : [];
+      const layerTables = existingTables.filter((t: any) =>
+        Boolean(normalizeLayer(String(t?.schema_name || ''), String(t?.table_name || '')))
+      );
+      dynamicTableSources = layerTables.map((t: any, idx: number) => {
+        const schema = String(t?.schema_name || '').trim();
+        const table = String(t?.table_name || '').trim();
+        const layer = normalizeLayer(schema, table);
+        return {
+          id: `mart_tbl_${idx + 1}_${schema}_${table}`,
+          name: `${schema}.${table}`,
+          group: 'data_tables' as SourceGroup,
+          datasetId: `db:${schema}.${table}`,
+          schema: ['*'],
+          size: 0,
+          preview: [{ layer, schema, table }],
+          description: `РўР°Р±Р»РёС†Р° РІРёС‚СЂРёРЅС‹ РґР°РЅРЅС‹С… СѓСЂРѕРІРЅСЏ ${layer}`
+        };
+      });
+    } catch (e: any) {
+      sourceCatalogError = String(e?.message || e || 'РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ РєР°С‚Р°Р»РѕРіРё РёСЃС‚РѕС‡РЅРёРєРѕРІ');
+    } finally {
+      sourceCatalogLoading = false;
+    }
   }
 
   function dropPoint(clientX: number, clientY: number) {
@@ -133,7 +240,7 @@
   function connectTo(nodeId: string, port: string) {
     if (!linkFrom) return;
     if (!canConnect(linkFrom.nodeId, linkFrom.port, nodeId, port)) {
-      banner = 'Нельзя соединить выбранные порты';
+      banner = 'РќРµР»СЊР·СЏ СЃРѕРµРґРёРЅРёС‚СЊ РІС‹Р±СЂР°РЅРЅС‹Рµ РїРѕСЂС‚С‹';
       linkFrom = null;
       return;
     }
@@ -176,13 +283,13 @@
 
   function validate() {
     const out: WorkflowIssue[] = [];
-    if (!nodes.some((n) => n.type === 'data')) out.push({ level: 'error', text: 'Нет источников данных' });
-    if (!nodes.some((n) => n.type === 'tool' && toolCfg(n).toolType === 'start_process')) out.push({ level: 'error', text: 'Нет узла Старт процесса' });
-    if (!nodes.some((n) => n.type === 'tool' && toolCfg(n).toolType === 'end_process')) out.push({ level: 'error', text: 'Нет узла Конец процесса' });
+    if (!nodes.some((n) => n.type === 'data')) out.push({ level: 'error', text: 'РќРµС‚ РёСЃС‚РѕС‡РЅРёРєРѕРІ РґР°РЅРЅС‹С…' });
+    if (!nodes.some((n) => n.type === 'tool' && toolCfg(n).toolType === 'start_process')) out.push({ level: 'error', text: 'РќРµС‚ СѓР·Р»Р° РЎС‚Р°СЂС‚ РїСЂРѕС†РµСЃСЃР°' });
+    if (!nodes.some((n) => n.type === 'tool' && toolCfg(n).toolType === 'end_process')) out.push({ level: 'error', text: 'РќРµС‚ СѓР·Р»Р° РљРѕРЅРµС† РїСЂРѕС†РµСЃСЃР°' });
     nodes.filter((n) => n.type === 'tool' && toolCfg(n).toolType === 'db_write').forEach((n) => {
-      if (!String(toolCfg(n).settings.targetTable || '').trim()) out.push({ level: 'error', text: `Узел ${toolCfg(n).name} без таблицы записи` });
+      if (!String(toolCfg(n).settings.targetTable || '').trim()) out.push({ level: 'error', text: `РЈР·РµР» ${toolCfg(n).name} Р±РµР· С‚Р°Р±Р»РёС†С‹ Р·Р°РїРёСЃРё` });
     });
-    if (!edges.length) out.push({ level: 'warn', text: 'Нет связей между узлами' });
+    if (!edges.length) out.push({ level: 'warn', text: 'РќРµС‚ СЃРІСЏР·РµР№ РјРµР¶РґСѓ СѓР·Р»Р°РјРё' });
     return out;
   }
 
@@ -191,13 +298,13 @@
     edgeRows = {};
     issues = validate();
     if (issues.some((x) => x.level === 'error')) {
-      banner = 'Исправь ошибки схемы перед запуском';
+      banner = 'РСЃРїСЂР°РІСЊ РѕС€РёР±РєРё СЃС…РµРјС‹ РїРµСЂРµРґ Р·Р°РїСѓСЃРєРѕРј';
       return;
     }
     const order = topo();
     if (!order) {
-      issues = [...issues, { level: 'error', text: 'Обнаружен цикл в графе' }];
-      banner = 'Обнаружен цикл в графе';
+      issues = [...issues, { level: 'error', text: 'РћР±РЅР°СЂСѓР¶РµРЅ С†РёРєР» РІ РіСЂР°С„Рµ' }];
+      banner = 'РћР±РЅР°СЂСѓР¶РµРЅ С†РёРєР» РІ РіСЂР°С„Рµ';
       return;
     }
     for (const n of order) {
@@ -232,7 +339,7 @@
     const lossPct = sourceRows > 0 ? Number(((lossRows / sourceRows) * 100).toFixed(2)) : 0;
     const successPct = sourceRows > 0 ? Number((((sourceRows - lossRows) / sourceRows) * 100).toFixed(2)) : 100;
     summary = { sourceRows, finalRows, lossRows, lossPct, successPct };
-    banner = `Симуляция завершена. Успешность ${successPct}%`;
+    banner = `РЎРёРјСѓР»СЏС†РёСЏ Р·Р°РІРµСЂС€РµРЅР°. РЈСЃРїРµС€РЅРѕСЃС‚СЊ ${successPct}%`;
   }
 
   function updateSetting(nodeId: string, key: string, value: string) {
@@ -256,32 +363,43 @@
     banner = '';
   }
 
-  onMount(resetCanvas);
+  onMount(() => {
+    resetCanvas();
+    loadDynamicSourceCatalog();
+  });
 </script>
 
 <section class="panel workflow-v2">
-  <h3>Workflow-конструктор данных</h3>
+  <h3>Workflow-РєРѕРЅСЃС‚СЂСѓРєС‚РѕСЂ РґР°РЅРЅС‹С…</h3>
 
   <div class="topbar">
-    <button on:click={() => (issues = validate())}>Проверить схему</button>
-    <button class="primary" on:click={runWorkflow}>Смоделировать запуск</button>
-    <button on:click={resetCanvas}>Очистить</button>
+    <button on:click={() => (issues = validate())}>РџСЂРѕРІРµСЂРёС‚СЊ СЃС…РµРјСѓ</button>
+    <button class="primary" on:click={runWorkflow}>РЎРјРѕРґРµР»РёСЂРѕРІР°С‚СЊ Р·Р°РїСѓСЃРє</button>
+    <button on:click={resetCanvas}>РћС‡РёСЃС‚РёС‚СЊ</button>
     <div class="summary">
-      <span>Источник: {summary.sourceRows}</span>
-      <span>Выход: {summary.finalRows}</span>
-      <span>Потери: {summary.lossRows} ({summary.lossPct}%)</span>
-      <span>Успех: {summary.successPct}%</span>
+      <span>РСЃС‚РѕС‡РЅРёРє: {summary.sourceRows}</span>
+      <span>Р’С‹С…РѕРґ: {summary.finalRows}</span>
+      <span>РџРѕС‚РµСЂРё: {summary.lossRows} ({summary.lossPct}%)</span>
+      <span>РЈСЃРїРµС…: {summary.successPct}%</span>
     </div>
   </div>
 
   <div class="workspace">
     <aside class="sources">
-      <h4>Источники данных</h4>
+      <div class="source-head">
+        <h4>Источники данных</h4>
+        <button class="mini" on:click={loadDynamicSourceCatalog} disabled={sourceCatalogLoading}>
+          {sourceCatalogLoading ? '...' : 'Обновить'}
+        </button>
+      </div>
       <div class="tabs">
         {#each sourceGroups as g (g.key)}
           <button class:active={activeTab === g.key} on:click={() => (activeTab = g.key)}>{g.label}</button>
         {/each}
       </div>
+      {#if sourceCatalogError}
+        <div class="source-error">{sourceCatalogError}</div>
+      {/if}
       <div class="items">
         {#each sourceList as item (item.id)}
           <button draggable="true" class="item source" on:dragstart={(e) => e.dataTransfer?.setData('application/x-workflow-source', JSON.stringify(item))}>
@@ -313,11 +431,11 @@
           <div class="node {node.type} {selectedNodeId === node.id ? 'selected' : ''}" style={`left:${node.x}px;top:${node.y}px;`} on:mousedown={(e) => startNodeDrag(e, node)} on:click={() => (selectedNodeId = node.id)}>
             <div class="node-head">
               <strong>{node.config.name}</strong>
-              <button on:click|stopPropagation={() => deleteNode(node.id)}>×</button>
+              <button on:click|stopPropagation={() => deleteNode(node.id)}>Г—</button>
             </div>
             <div class="node-meta">{node.type === 'data' ? node.config.datasetId : node.config.toolType}</div>
             {#if rt}
-              <div class="runtime {rt.status}">in {rt.inRows} · out {rt.outRows} · loss {rt.lossRows} ({rt.lossPct}%)</div>
+              <div class="runtime {rt.status}">in {rt.inRows} В· out {rt.outRows} В· loss {rt.lossRows} ({rt.lossPct}%)</div>
             {/if}
             <div class="ports">
               <div>{#each inputs(node) as p (p)}<button class="port in" on:click|stopPropagation={() => connectTo(node.id, p)}>{p}</button>{/each}</div>
@@ -330,7 +448,7 @@
     </div>
 
     <aside class="tools">
-      <h4>Инструменты работы с данными</h4>
+      <h4>РРЅСЃС‚СЂСѓРјРµРЅС‚С‹ СЂР°Р±РѕС‚С‹ СЃ РґР°РЅРЅС‹РјРё</h4>
       <div class="items">
         {#each tools as t (t.id)}
           <button draggable="true" class="item tool" on:dragstart={(e) => e.dataTransfer?.setData('application/x-workflow-tool', JSON.stringify(t))}>
@@ -341,43 +459,43 @@
       </div>
 
       <section class="props">
-        <h5>Свойства</h5>
+        <h5>РЎРІРѕР№СЃС‚РІР°</h5>
         {#if selectedNode && selectedNode.type === 'tool'}
           {#if toolCfg(selectedNode).toolType === 'schedule_process'}
             <label>Cron<input value={toolCfg(selectedNode).settings.cron || ''} on:input={(e) => onSettingInput(selectedNode.id, 'cron', e)} /></label>
           {/if}
           {#if toolCfg(selectedNode).toolType === 'table_parser'}
-            <label>Множитель парсинга<input value={toolCfg(selectedNode).settings.parserMultiplier || ''} on:input={(e) => onSettingInput(selectedNode.id, 'parserMultiplier', e)} /></label>
+            <label>РњРЅРѕР¶РёС‚РµР»СЊ РїР°СЂСЃРёРЅРіР°<input value={toolCfg(selectedNode).settings.parserMultiplier || ''} on:input={(e) => onSettingInput(selectedNode.id, 'parserMultiplier', e)} /></label>
           {/if}
           {#if toolCfg(selectedNode).toolType === 'db_write'}
-            <label>Схема<input value={toolCfg(selectedNode).settings.targetSchema || ''} on:input={(e) => onSettingInput(selectedNode.id, 'targetSchema', e)} /></label>
-            <label>Таблица<input value={toolCfg(selectedNode).settings.targetTable || ''} on:input={(e) => onSettingInput(selectedNode.id, 'targetTable', e)} /></label>
-            <label>Успешная запись, %<input value={toolCfg(selectedNode).settings.writeSuccessRate || ''} on:input={(e) => onSettingInput(selectedNode.id, 'writeSuccessRate', e)} /></label>
+            <label>РЎС…РµРјР°<input value={toolCfg(selectedNode).settings.targetSchema || ''} on:input={(e) => onSettingInput(selectedNode.id, 'targetSchema', e)} /></label>
+            <label>РўР°Р±Р»РёС†Р°<input value={toolCfg(selectedNode).settings.targetTable || ''} on:input={(e) => onSettingInput(selectedNode.id, 'targetTable', e)} /></label>
+            <label>РЈСЃРїРµС€РЅР°СЏ Р·Р°РїРёСЃСЊ, %<input value={toolCfg(selectedNode).settings.writeSuccessRate || ''} on:input={(e) => onSettingInput(selectedNode.id, 'writeSuccessRate', e)} /></label>
           {/if}
         {:else}
-          <div class="empty">Выбери узел-инструмент на canvas</div>
+          <div class="empty">Р’С‹Р±РµСЂРё СѓР·РµР»-РёРЅСЃС‚СЂСѓРјРµРЅС‚ РЅР° canvas</div>
         {/if}
       </section>
 
       <section class="props">
-        <h5>Связи</h5>
+        <h5>РЎРІСЏР·Рё</h5>
         {#if edges.length}
           {#each edges as e (e.id)}
-            <div class="edge-row"><span>{e.fromPort} -> {e.toPort}</span><button on:click={() => deleteEdge(e.id)}>Удалить</button></div>
+            <div class="edge-row"><span>{e.fromPort} -> {e.toPort}</span><button on:click={() => deleteEdge(e.id)}>РЈРґР°Р»РёС‚СЊ</button></div>
           {/each}
         {:else}
-          <div class="empty">Связей нет</div>
+          <div class="empty">РЎРІСЏР·РµР№ РЅРµС‚</div>
         {/if}
       </section>
 
       <section class="props">
-        <h5>Ошибки и предупреждения</h5>
+        <h5>РћС€РёР±РєРё Рё РїСЂРµРґСѓРїСЂРµР¶РґРµРЅРёСЏ</h5>
         {#if issues.length}
           {#each issues as i, idx (idx)}
             <div class="issue {i.level}">{i.text}</div>
           {/each}
         {:else}
-          <div class="empty">Нет</div>
+          <div class="empty">РќРµС‚</div>
         {/if}
       </section>
     </aside>
@@ -392,6 +510,9 @@
   .summary { display: flex; gap: 8px; font-size: 12px; color: #334155; }
   .workspace { display: grid; grid-template-columns: 280px minmax(0, 1fr) 360px; gap: 10px; min-height: 720px; }
   .sources,.tools { border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px; background: #f8fbff; display: flex; flex-direction: column; gap: 8px; overflow: auto; }
+  .source-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .mini { border: 1px solid #dbe4f0; background: #fff; border-radius: 8px; padding: 4px 8px; font-size: 11px; cursor: pointer; }
+  .source-error { border: 1px solid #fecaca; background: #fef2f2; color: #991b1b; border-radius: 8px; padding: 6px 8px; font-size: 11px; }
   .tabs { display: grid; gap: 6px; }
   .tabs button { border: 1px solid #dbe4f0; background: #fff; border-radius: 8px; padding: 6px; text-align: left; cursor: pointer; }
   .tabs button.active { background: #0f172a; color: #fff; }
@@ -430,3 +551,6 @@
   .issue.info { border-color: #bfdbfe; background: #eff6ff; }
   .empty { color: #64748b; font-size: 12px; }
 </style>
+
+
+
