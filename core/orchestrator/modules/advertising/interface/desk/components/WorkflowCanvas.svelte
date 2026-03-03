@@ -62,6 +62,51 @@
     responsePreview: any;
     error?: string;
   };
+  type TemplateParameterCondition = {
+    id?: string;
+    schema?: string;
+    table?: string;
+    field?: string;
+    operator?: string;
+    compareMode?: string;
+    compareValue?: string;
+    compareColumn?: string;
+  };
+  type TemplateParameterDefinition = {
+    alias: string;
+    definition: string;
+    sourceSchema: string;
+    sourceTable: string;
+    sourceField: string;
+    conditions: TemplateParameterCondition[];
+  };
+  type TemplatePaginationParameter = {
+    alias: string;
+    firstValue: any;
+  };
+  type DataModelTable = { id: string; schema: string; table: string; alias: string };
+  type DataModelJoin = {
+    id: string;
+    left_table_id: string;
+    left_field: string;
+    right_table_id: string;
+    right_field: string;
+    join_type: 'inner' | 'left';
+  };
+  type DataModelField = { id: string; table_id: string; field: string; alias: string };
+  type DataModelFilter = { id: string; table_id: string; field: string; operator: string; compare_value: string };
+  type TemplateDataModel = {
+    tables: DataModelTable[];
+    joins: DataModelJoin[];
+    fields: DataModelField[];
+    filters: DataModelFilter[];
+  };
+  type DynamicApiSource = SourceItem & {
+    rawRow?: any;
+    parameterDefinitions?: TemplateParameterDefinition[];
+    paginationParameters?: TemplatePaginationParameter[];
+    dataModel?: TemplateDataModel;
+  };
 
   let activeTab: SourceGroup = 'data_tables';
   let nodes: WorkflowNode[] = [];
@@ -75,7 +120,7 @@
   let summary = { sourceRows: 0, finalRows: 0, lossRows: 0, lossPct: 0, successPct: 0 };
   let sourceCatalogLoading = false;
   let sourceCatalogError = '';
-  let dynamicApiSources: SourceItem[] = [];
+  let dynamicApiSources: DynamicApiSource[] = [];
   let dynamicTableSources: SourceItem[] = [];
   let settingsNodeId = '';
   let settingsModalOpen = false;
@@ -100,6 +145,8 @@
 
   const API_BASE = '/ai-orchestrator/api';
   const API_ROLE = 'data_admin';
+  const PARAMETER_TOKEN_RE = /\{\{\s*([^{}]+?)\s*\}\}/g;
+  const PARAMETER_TOKEN_EXACT_RE = /^\{\{\s*([^{}]+?)\s*\}\}$/;
 
   $: selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null;
   $: settingsNode = nodes.find((n) => n.id === settingsNodeId) ?? null;
@@ -136,6 +183,434 @@
       queryText: prettyJson(template?.query || {}),
       bodyText: prettyJson(template?.body || {})
     };
+  }
+
+  function tryObj(value: any): Record<string, any> {
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+    if (typeof value !== 'string') return {};
+    const src = String(value || '').trim();
+    if (!src) return {};
+    try {
+      const parsed = JSON.parse(src);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function uniqueAliasList(values: string[]) {
+    return [...new Set((values || []).map((v) => String(v || '').trim()).filter(Boolean))];
+  }
+
+  function parseScalarValue(raw: any) {
+    if (raw === null || raw === undefined) return raw;
+    if (typeof raw !== 'string') return raw;
+    const txt = String(raw || '').trim();
+    if (!txt) return '';
+    if (txt.toLowerCase() === 'null') return null;
+    if (txt.toLowerCase() === 'true') return true;
+    if (txt.toLowerCase() === 'false') return false;
+    if (/^-?\d+(\.\d+)?$/.test(txt)) return Number(txt);
+    if ((txt.startsWith('{') && txt.endsWith('}')) || (txt.startsWith('[') && txt.endsWith(']'))) {
+      try {
+        return JSON.parse(txt);
+      } catch {
+        return txt;
+      }
+    }
+    return txt;
+  }
+
+  function normalizeTemplateParameterDefinitions(row: any): TemplateParameterDefinition[] {
+    const mapping = tryObj(row?.mapping_json);
+    const definitionsRaw = Array.isArray(row?.parameter_definitions)
+      ? row.parameter_definitions
+      : Array.isArray(mapping?.parameter_definitions)
+      ? mapping.parameter_definitions
+      : [];
+    return definitionsRaw
+      .map((pd: any) => ({
+        alias: String(pd?.alias || '').trim(),
+        definition: String(pd?.definition || '').trim(),
+        sourceSchema: String(pd?.source_schema || pd?.sourceSchema || '').trim(),
+        sourceTable: String(pd?.source_table || pd?.sourceTable || '').trim(),
+        sourceField: String(pd?.source_field || pd?.sourceField || '').trim(),
+        conditions: Array.isArray(pd?.conditions)
+          ? pd.conditions.map((cond: any) => ({
+              id: String(cond?.id || '').trim(),
+              schema: String(cond?.schema || '').trim(),
+              table: String(cond?.table || '').trim(),
+              field: String(cond?.field || '').trim(),
+              operator: String(cond?.operator || '').trim(),
+              compareMode: String(cond?.compare_mode || cond?.compareMode || 'value').trim(),
+              compareValue: String(cond?.compare_value || cond?.compareValue || '').trim(),
+              compareColumn: String(cond?.compare_column || cond?.compareColumn || '').trim()
+            }))
+          : []
+      }))
+      .filter((pd: TemplateParameterDefinition) => Boolean(pd.alias));
+  }
+
+  function normalizeTemplatePaginationParameters(row: any): TemplatePaginationParameter[] {
+    const pagination = tryObj(row?.pagination_json);
+    const mapping = tryObj(row?.mapping_json);
+    const raw =
+      Array.isArray(pagination?.parameters)
+        ? pagination.parameters
+        : Array.isArray(mapping?.pagination_parameters)
+        ? mapping.pagination_parameters
+        : [];
+    return raw
+      .map((p: any) => ({
+        alias: String(p?.alias || '').trim(),
+        firstValue: parseScalarValue(p?.first_value ?? p?.firstValue ?? '')
+      }))
+      .filter((p: TemplatePaginationParameter) => Boolean(p.alias));
+  }
+
+  function normalizeTemplateDataModel(row: any): TemplateDataModel {
+    const execution = tryObj(row?.execution_json);
+    const mapping = tryObj(row?.mapping_json);
+    const source = tryObj(execution?.data_model || mapping?.data_model || row?.data_model_json);
+
+    const tables = (Array.isArray(source?.tables) ? source.tables : [])
+      .map((t: any, idx: number) => ({
+        id: String(t?.id || `t${idx}`).trim(),
+        schema: String(t?.schema || '').trim(),
+        table: String(t?.table || '').trim(),
+        alias: String(t?.alias || t?.table || `table_${idx + 1}`).trim()
+      }))
+      .filter((t: DataModelTable) => Boolean(t.id && t.schema && t.table));
+    const tableIds = new Set(tables.map((t) => t.id));
+
+    const joins = (Array.isArray(source?.joins) ? source.joins : [])
+      .map((j: any, idx: number) => ({
+        id: String(j?.id || `j${idx}`).trim(),
+        left_table_id: String(j?.left_table_id || j?.leftTableId || '').trim(),
+        left_field: String(j?.left_field || j?.leftField || '').trim(),
+        right_table_id: String(j?.right_table_id || j?.rightTableId || '').trim(),
+        right_field: String(j?.right_field || j?.rightField || '').trim(),
+        join_type: String(j?.join_type || j?.joinType || 'inner').toLowerCase() === 'left' ? 'left' : 'inner'
+      }))
+      .filter((j: DataModelJoin) => Boolean(j.left_table_id && j.right_table_id && j.left_field && j.right_field))
+      .filter((j: DataModelJoin) => tableIds.has(j.left_table_id) && tableIds.has(j.right_table_id));
+
+    const fields = (Array.isArray(source?.fields) ? source.fields : [])
+      .map((f: any, idx: number) => ({
+        id: String(f?.id || `f${idx}`).trim(),
+        table_id: String(f?.table_id || f?.tableId || '').trim(),
+        field: String(f?.field || '').trim(),
+        alias: String(f?.alias || f?.field || `field_${idx + 1}`).trim()
+      }))
+      .filter((f: DataModelField) => Boolean(f.table_id && f.field && f.alias && tableIds.has(f.table_id)));
+
+    const filters = (Array.isArray(source?.filters) ? source.filters : [])
+      .map((f: any, idx: number) => ({
+        id: String(f?.id || `flt_${idx}`).trim(),
+        table_id: String(f?.table_id || f?.tableId || '').trim(),
+        field: String(f?.field || '').trim(),
+        operator: String(f?.operator || '').trim(),
+        compare_value: String(f?.compare_value || f?.compareValue || '').trim()
+      }))
+      .filter((f: DataModelFilter) => Boolean(f.table_id && f.field && f.operator));
+
+    return { tables, joins, fields, filters };
+  }
+
+  function findAliasInMap<T = any>(map: Record<string, T>, rawAlias: string): { found: boolean; key: string; value?: T } {
+    const alias = String(rawAlias || '').trim();
+    if (!alias || !map || typeof map !== 'object') return { found: false, key: '' };
+    if (Object.prototype.hasOwnProperty.call(map, alias)) {
+      return { found: true, key: alias, value: map[alias] };
+    }
+    const lower = alias.toLowerCase();
+    for (const key of Object.keys(map)) {
+      if (key.toLowerCase() === lower) return { found: true, key, value: map[key] };
+    }
+    return { found: false, key: '' };
+  }
+
+  function collectParameterTokens(value: any, out: Set<string>) {
+    if (typeof value === 'string') {
+      const matches = value.matchAll(new RegExp(PARAMETER_TOKEN_RE.source, 'g'));
+      for (const m of matches) {
+        const alias = String(m?.[1] || '').trim();
+        if (alias) out.add(alias);
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item) => collectParameterTokens(item, out));
+      return;
+    }
+    if (value && typeof value === 'object') {
+      Object.values(value).forEach((item) => collectParameterTokens(item, out));
+    }
+  }
+
+  function replaceParameterTokens(str: string, map: Record<string, any>) {
+    if (!str || !map || !Object.keys(map).length) return str;
+    return str.replace(PARAMETER_TOKEN_RE, (match, rawAlias) => {
+      const alias = String(rawAlias || '').trim();
+      const resolved = findAliasInMap(map, alias);
+      if (!alias || !resolved.found) return match;
+      const value = resolved.value;
+      if (value === undefined || value === null) return match;
+      if (typeof value === 'string') return value;
+      if (typeof value === 'object') return JSON.stringify(value);
+      return String(value);
+    });
+  }
+
+  function applyParametersToValue(value: any, map: Record<string, any>) {
+    if (!map || !Object.keys(map).length) return value;
+    if (typeof value === 'string') {
+      const exact = value.match(PARAMETER_TOKEN_EXACT_RE);
+      if (exact?.[1]) {
+        const alias = String(exact[1] || '').trim();
+        const resolved = findAliasInMap(map, alias);
+        if (alias && resolved.found) {
+          const raw = resolved.value;
+          if (raw !== undefined && raw !== null) return raw;
+        }
+      }
+      return replaceParameterTokens(value, map);
+    }
+    if (Array.isArray(value)) return value.map((item) => applyParametersToValue(item, map));
+    if (value && typeof value === 'object') {
+      Object.entries(value).forEach(([key, val]) => {
+        value[key] = applyParametersToValue(val, map);
+      });
+      return value;
+    }
+    return value;
+  }
+
+  function parseParameterSourceRef(raw: string, param: TemplateParameterDefinition): { schema: string; table: string; field: string } | null {
+    const src = String(raw || '').trim().replace(/^['"]|['"]$/g, '');
+    if (!src) return null;
+    const parts = src.split('.').map((x) => String(x || '').trim()).filter(Boolean);
+    if (parts.length >= 3) {
+      const [schema, table, ...fieldParts] = parts;
+      const field = fieldParts.join('.');
+      return schema && table && field ? { schema, table, field } : null;
+    }
+    if (parts.length === 2) {
+      const [table, field] = parts;
+      const schema = String(param?.sourceSchema || '').trim();
+      return schema && table && field ? { schema, table, field } : null;
+    }
+    if (parts.length === 1) {
+      const field = parts[0];
+      const schema = String(param?.sourceSchema || '').trim();
+      const table = String(param?.sourceTable || '').trim();
+      return schema && table && field ? { schema, table, field } : null;
+    }
+    return null;
+  }
+
+  function resolveParameterSource(param: TemplateParameterDefinition): { schema: string; table: string; field: string } | null {
+    const directSchema = String(param?.sourceSchema || '').trim();
+    const directTable = String(param?.sourceTable || '').trim();
+    const directField = String(param?.sourceField || '').trim();
+    if (directSchema && directTable && directField) {
+      return { schema: directSchema, table: directTable, field: directField };
+    }
+    const definition = String(param?.definition || '').trim();
+    if (!definition) return null;
+    try {
+      const parsed = JSON.parse(definition);
+      if (parsed && typeof parsed === 'object') {
+        const source = String((parsed as any).source || '').trim();
+        if (source) {
+          const fromSource = parseParameterSourceRef(source, param);
+          if (fromSource) return fromSource;
+        }
+        const schema = String((parsed as any).source_schema || (parsed as any).schema || '').trim();
+        const table = String((parsed as any).source_table || (parsed as any).table || '').trim();
+        const field = String((parsed as any).source_field || (parsed as any).field || '').trim();
+        if (schema && table && field) return { schema, table, field };
+      }
+    } catch {
+      // continue with text format parsing
+    }
+    const fieldFn = definition.match(/FIELD\(\s*['"]([^'"]+)['"]\s*\)/i);
+    if (fieldFn?.[1]) {
+      const fromField = parseParameterSourceRef(fieldFn[1], param);
+      if (fromField) return fromField;
+    }
+    if (/^[A-Za-z0-9_.-]+$/.test(definition)) {
+      const fromRaw = parseParameterSourceRef(definition, param);
+      if (fromRaw) return fromRaw;
+    }
+    return null;
+  }
+
+  async function fetchParameterValue(param: TemplateParameterDefinition): Promise<any> {
+    const source = resolveParameterSource(param);
+    if (!source) return null;
+    const query = new URLSearchParams();
+    query.set('schema', source.schema);
+    query.set('table', source.table);
+    query.set('field', source.field);
+    if (Array.isArray(param.conditions) && param.conditions.length) {
+      query.set('conditions', JSON.stringify(param.conditions));
+    }
+    const resp = await fetch(`${API_BASE}/parameter-value?${query.toString()}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json', 'X-AO-ROLE': API_ROLE }
+    });
+    if (!resp.ok) {
+      const txt = await resp.text();
+      throw new Error(txt || `parameter-value HTTP ${resp.status}`);
+    }
+    let json: any = {};
+    try {
+      json = await resp.json();
+    } catch {
+      json = {};
+    }
+    return json?.value ?? null;
+  }
+
+  async function resolveAliasesFromParameterDefinitions(
+    definitions: TemplateParameterDefinition[],
+    aliases: string[]
+  ): Promise<{ map: Record<string, any>; issues: Record<string, string> }> {
+    const map: Record<string, any> = {};
+    const issues: Record<string, string> = {};
+    const requested = uniqueAliasList(aliases);
+    if (!requested.length) return { map, issues };
+
+    for (const alias of requested) {
+      const param = definitions.find((d) => d.alias.toLowerCase() === alias.toLowerCase());
+      if (!param) continue;
+      try {
+        const value = await fetchParameterValue(param);
+        if (value !== undefined && value !== null && String(value) !== '') {
+          map[alias] = value;
+        } else {
+          issues[alias] = 'источник параметра вернул пустое значение';
+        }
+      } catch (e: any) {
+        issues[alias] = String(e?.message || e || 'ошибка получения значения');
+      }
+    }
+    return { map, issues };
+  }
+
+  async function resolveAliasesFromDataModel(
+    source: DynamicApiSource,
+    aliases: string[]
+  ): Promise<{ map: Record<string, any>; issues: Record<string, string> }> {
+    const map: Record<string, any> = {};
+    const issues: Record<string, string> = {};
+    const requested = uniqueAliasList(aliases);
+    if (!requested.length) return { map, issues };
+    const model = source.dataModel;
+    if (!model || !model.tables.length || !model.fields.length) return { map, issues };
+
+    const aliasSet = new Set(requested.map((a) => a.toLowerCase()));
+    const fields = model.fields.filter((f) => aliasSet.has(String(f.alias || '').trim().toLowerCase()));
+    if (!fields.length) return { map, issues };
+
+    const usedTableIds = new Set(fields.map((f) => f.table_id));
+    const tables = model.tables.filter((t) => usedTableIds.has(t.id));
+    const joins = usedTableIds.size <= 1 ? [] : model.joins;
+    const filters = model.filters.filter((f) => usedTableIds.has(f.table_id));
+
+    const resp = await fetch(`${API_BASE}/parameter-join-values`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-AO-ROLE': API_ROLE },
+      body: JSON.stringify({
+        tables,
+        joins,
+        fields,
+        filters,
+        aliases: requested,
+        limit: 1,
+        offset: 0
+      })
+    });
+    if (!resp.ok) {
+      const txt = await resp.text();
+      throw new Error(txt || `parameter-join-values HTTP ${resp.status}`);
+    }
+    let json: any = {};
+    try {
+      json = await resp.json();
+    } catch {
+      json = {};
+    }
+    const row = Array.isArray(json?.rows) && json.rows.length ? json.rows[0] : null;
+    if (!row) {
+      requested.forEach((alias) => {
+        issues[alias] = 'конструктор данных вернул 0 строк';
+      });
+      return { map, issues };
+    }
+    requested.forEach((alias) => {
+      const found = findAliasInMap(row, alias);
+      if (found.found && found.value !== undefined && found.value !== null && String(found.value) !== '') {
+        map[alias] = found.value;
+      }
+    });
+    return { map, issues };
+  }
+
+  function resolveAliasesFromPaginationFirstValues(source: DynamicApiSource, aliases: string[]) {
+    const map: Record<string, any> = {};
+    const requested = new Set(uniqueAliasList(aliases).map((a) => a.toLowerCase()));
+    (source.paginationParameters || []).forEach((p) => {
+      const alias = String(p.alias || '').trim();
+      if (!alias || !requested.has(alias.toLowerCase())) return;
+      if (p.firstValue === undefined || p.firstValue === null || p.firstValue === '') return;
+      map[alias] = p.firstValue;
+    });
+    return map;
+  }
+
+  async function resolveTemplateAliasValues(source: DynamicApiSource, aliases: string[]) {
+    const map: Record<string, any> = {};
+    const issues: Record<string, string> = {};
+    const requested = uniqueAliasList(aliases);
+    if (!requested.length) return { map, issues };
+
+    const paginationValues = resolveAliasesFromPaginationFirstValues(source, requested);
+    Object.entries(paginationValues).forEach(([alias, value]) => {
+      map[alias] = value;
+    });
+
+    const unresolvedAfterPagination = requested.filter((alias) => !findAliasInMap(map, alias).found);
+    if (unresolvedAfterPagination.length) {
+      try {
+        const fromDataModel = await resolveAliasesFromDataModel(source, unresolvedAfterPagination);
+        Object.entries(fromDataModel.map).forEach(([alias, value]) => {
+          if (!findAliasInMap(map, alias).found) map[alias] = value;
+        });
+        Object.entries(fromDataModel.issues).forEach(([alias, reason]) => {
+          if (!issues[alias]) issues[alias] = reason;
+        });
+      } catch (e: any) {
+        const msg = String(e?.message || e || 'ошибка чтения конструктора данных');
+        unresolvedAfterPagination.forEach((alias) => {
+          if (!issues[alias]) issues[alias] = msg;
+        });
+      }
+    }
+
+    const unresolvedAfterData = requested.filter((alias) => !findAliasInMap(map, alias).found);
+    if (unresolvedAfterData.length) {
+      const fromDefinitions = await resolveAliasesFromParameterDefinitions(source.parameterDefinitions || [], unresolvedAfterData);
+      Object.entries(fromDefinitions.map).forEach(([alias, value]) => {
+        if (!findAliasInMap(map, alias).found) map[alias] = value;
+      });
+      Object.entries(fromDefinitions.issues).forEach(([alias, reason]) => {
+        if (!issues[alias]) issues[alias] = reason;
+      });
+    }
+
+    return { map, issues };
   }
 
   function isApiNode(n: WorkflowNode | null | undefined) {
@@ -429,7 +904,11 @@
             headers: row?.headers_json && typeof row.headers_json === 'object' ? row.headers_json : {},
             query: row?.query_json && typeof row.query_json === 'object' ? row.query_json : {},
             body: row?.body_json !== undefined ? row.body_json : {}
-          }
+          },
+          rawRow: row,
+          parameterDefinitions: normalizeTemplateParameterDefinitions(row),
+          paginationParameters: normalizeTemplatePaginationParameters(row),
+          dataModel: normalizeTemplateDataModel(row)
         };
       });
 
@@ -958,6 +1437,49 @@
       const baseQueryObj = parseObjectJsonSafe('Query JSON', request.queryText);
       const baseBodyObj = parseAnyJsonSafe('Body JSON', request.bodyText);
 
+      const requestedAliasesSet = new Set<string>();
+      collectParameterTokens(urlRaw, requestedAliasesSet);
+      collectParameterTokens(headersObj, requestedAliasesSet);
+      collectParameterTokens(baseQueryObj, requestedAliasesSet);
+      collectParameterTokens(baseBodyObj, requestedAliasesSet);
+      const requestedAliases = Array.from(requestedAliasesSet);
+
+      const templateSource = dynamicApiSources.find((x) => x.id === nodeTemplateId(node));
+      let resolvedParameters: Record<string, any> = {};
+      let resolveIssues: Record<string, string> = {};
+      if (requestedAliases.length) {
+        if (!templateSource) {
+          requestedAliases.forEach((alias) => {
+            resolveIssues[alias] = 'шаблон API не найден в списке источников';
+          });
+        } else {
+          const resolved = await resolveTemplateAliasValues(templateSource, requestedAliases);
+          resolvedParameters = resolved.map;
+          resolveIssues = resolved.issues;
+        }
+      }
+
+      const resolvedUrlRaw = replaceParameterTokens(urlRaw, resolvedParameters);
+      applyParametersToValue(headersObj, resolvedParameters);
+      applyParametersToValue(baseQueryObj, resolvedParameters);
+      applyParametersToValue(baseBodyObj, resolvedParameters);
+
+      const unresolvedTokens = new Set<string>();
+      collectParameterTokens(resolvedUrlRaw, unresolvedTokens);
+      collectParameterTokens(headersObj, unresolvedTokens);
+      collectParameterTokens(baseQueryObj, unresolvedTokens);
+      collectParameterTokens(baseBodyObj, unresolvedTokens);
+      if (unresolvedTokens.size) {
+        const unresolvedList = Array.from(unresolvedTokens);
+        const details = unresolvedList
+          .map((alias) => {
+            const issue = findAliasInMap(resolveIssues, alias);
+            return issue.found && issue.value ? `${alias} (${issue.value})` : alias;
+          })
+          .join(', ');
+        throw new Error(`Не удалось подставить параметры: ${details}`);
+      }
+
       const startTs = Date.now();
       const requestsSent: any[] = [];
       const responses: Array<{ page: number; status: number; response: any }> = [];
@@ -993,7 +1515,7 @@
           }
         }
 
-        const url = new URL(urlRaw);
+        const url = new URL(resolvedUrlRaw);
         Object.entries(queryObj || {}).forEach(([k, v]) => {
           if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
         });
@@ -1077,14 +1599,26 @@
 
       const requestPreview =
         requestsSent.length <= 1
-          ? { request: requestsSent[0] || null }
-          : { total_requests: requestsSent.length, shown_requests: requestsSent.length, requests: requestsSent };
+          ? {
+              request: requestsSent[0] || null,
+              resolved_parameters: Object.keys(resolvedParameters).length ? resolvedParameters : undefined,
+              resolve_issues: Object.keys(resolveIssues).length ? resolveIssues : undefined
+            }
+          : {
+              total_requests: requestsSent.length,
+              shown_requests: requestsSent.length,
+              requests: requestsSent,
+              resolved_parameters: Object.keys(resolvedParameters).length ? resolvedParameters : undefined,
+              resolve_issues: Object.keys(resolveIssues).length ? resolveIssues : undefined
+            };
       const responsePreview = {
         total_requests: requestsSent.length,
         success,
         failed,
         stop_reason: stopReason || undefined,
-        responses
+        responses,
+        resolved_parameters: Object.keys(resolvedParameters).length ? resolvedParameters : undefined,
+        resolve_issues: Object.keys(resolveIssues).length ? resolveIssues : undefined
       };
       const payloadSize = new TextEncoder().encode(JSON.stringify(responsePreview)).length;
 
