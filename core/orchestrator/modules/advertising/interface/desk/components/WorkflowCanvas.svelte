@@ -174,6 +174,23 @@
     }
   }
 
+  function formatBytesShort(value: number | null | undefined) {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) return '-';
+    const bytes = Math.max(0, Number(value));
+    if (bytes < 1024) return `${bytes} B`;
+    const kb = bytes / 1024;
+    if (kb < 1024) return `${Math.round(kb * 10) / 10} KB`;
+    const mb = kb / 1024;
+    return `${Math.round(mb * 10) / 10} MB`;
+  }
+
+  function formatDurationShort(value: number | null | undefined) {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) return '-';
+    const ms = Math.max(0, Number(value));
+    if (ms < 1000) return `${ms} мс`;
+    return `${Math.round((ms / 1000) * 100) / 100} с`;
+  }
+
   function normalizeApiRequest(template: ApiRequestTemplate | undefined): ApiNodeRequest {
     return {
       method: String(template?.method || 'GET').trim().toUpperCase() || 'GET',
@@ -1773,6 +1790,7 @@
 
         {#each nodes as node (node.id)}
           {@const rt = nodeRuntime[node.id]}
+          {@const exec = nodeExecutions[node.id]}
           <div
             class="node {node.type} {selectedNodeId === node.id ? 'selected' : ''}"
             style={`left:${node.x}px;top:${node.y}px;`}
@@ -1810,6 +1828,12 @@
             {#if isApiNode(node) || isApiToolNode(node)}
               {@const req = getApiRequestForNode(node)}
               <div class="api-meta">{req.method || 'GET'} {req.url || ''}</div>
+              <div class="api-stats">
+                <span>Страницы: {exec ? exec.totalRequests : '-'}</span>
+                <span>Записей: {exec ? exec.payloadCount : '-'}</span>
+                <span>Размер: {exec ? formatBytesShort(exec.payloadSize) : '-'}</span>
+                <span>Время: {exec ? formatDurationShort(exec.durationMs) : '-'}</span>
+              </div>
             {/if}
             {#if rt}
               <div class="runtime {rt.status}">in {rt.inRows} | out {rt.outRows} | loss {rt.lossRows} ({rt.lossPct}%)</div>
@@ -2199,6 +2223,8 @@
   .delete-btn { color: #b91c1c; border-color: #fecaca; }
   .node-meta { color: #64748b; font-size: 11px; margin-top: 4px; }
   .api-meta { color: #0f172a; font-size: 10px; margin-top: 3px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .api-stats { margin-top: 5px; display: grid; grid-template-columns: 1fr; gap: 2px; font-size: 10px; color: #334155; }
+  .api-stats span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .runtime { margin-top: 6px; font-size: 11px; border-radius: 7px; padding: 4px 6px; border: 1px solid #e2e8f0; }
   .runtime.running { background: #eff6ff; border-color: #93c5fd; }
   .runtime.paused { background: #fff7ed; border-color: #fdba74; }
