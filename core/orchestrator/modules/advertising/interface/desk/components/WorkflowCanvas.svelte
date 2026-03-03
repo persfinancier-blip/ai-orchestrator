@@ -102,6 +102,7 @@
     filters: DataModelFilter[];
   };
   type DynamicApiSource = SourceItem & {
+    storeId?: number;
     rawRow?: any;
     parameterDefinitions?: TemplateParameterDefinition[];
     paginationParameters?: TemplatePaginationParameter[];
@@ -122,6 +123,7 @@
   let sourceCatalogError = '';
   let dynamicApiSources: DynamicApiSource[] = [];
   let dynamicTableSources: SourceItem[] = [];
+  let apiTemplateStorageRef = 'ao_system.api_configs_store';
   let settingsNodeId = '';
   let settingsModalOpen = false;
   let nodeExecutions: Record<string, ApiNodeExecution> = {};
@@ -705,11 +707,17 @@
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return;
     if (isApiNode(node)) {
-      updateDataNodeConfig(nodeId, { requestTemplate: src.requestTemplate, apiRequest: tpl, templateId: src.id });
+      updateDataNodeConfig(nodeId, {
+        requestTemplate: src.requestTemplate,
+        apiRequest: tpl,
+        templateId: src.id,
+        templateStoreId: src.storeId ? String(src.storeId) : ''
+      });
       return;
     }
     if (isApiToolNode(node)) {
       updateSetting(nodeId, 'templateId', src.id);
+      updateSetting(nodeId, 'templateStoreId', src.storeId ? String(src.storeId) : '');
       updateApiToolRequest(nodeId, 'method', tpl.method);
       updateApiToolRequest(nodeId, 'url', tpl.url);
       updateApiToolRequest(nodeId, 'authMode', tpl.authMode);
@@ -721,44 +729,86 @@
 
   function nodeTemplateId(n: WorkflowNode | null | undefined) {
     if (!n) return '';
-    if (isApiNode(n)) return String(n.config?.templateId || n.config?.id || '').trim();
-    if (isApiToolNode(n)) return String(toolCfg(n).settings.templateId || '').trim();
+    if (isApiNode(n)) {
+      const direct = String(n.config?.templateId || '').trim();
+      if (direct) return direct;
+      const refs = uniqueAliasList([
+        String(n.config?.templateStoreId || '').trim(),
+        String(n.config?.id || '').trim(),
+        String(n.config?.datasetId || '').trim()
+      ]);
+      for (const ref of refs) {
+        const found = dynamicApiSources.find((src) => sourceMatchesTemplateRef(src, ref));
+        if (found) return found.id;
+      }
+      return '';
+    }
+    if (isApiToolNode(n)) {
+      const settings = toolCfg(n).settings || {};
+      const direct = String(settings.templateId || '').trim();
+      if (direct) return direct;
+      const ref = String(settings.templateStoreId || '').trim();
+      if (ref) {
+        const found = dynamicApiSources.find((src) => sourceMatchesTemplateRef(src, ref));
+        if (found) return found.id;
+      }
+      return '';
+    }
     return '';
   }
 
-  function normalizeUrlForTemplateMatch(raw: string) {
-    const src = String(raw || '').trim();
-    if (!src) return '';
-    try {
-      const u = new URL(src);
-      const base = `${u.protocol}//${u.host}`;
-      const path = u.pathname.replace(/\/+$/, '') || '/';
-      return `${base}${path}`;
-    } catch {
-      return src.replace(/\/+$/, '');
+  function sourceMatchesTemplateRef(src: DynamicApiSource, refRaw: string) {
+    const ref = String(refRaw || '').trim();
+    if (!ref) return false;
+    const lower = ref.toLowerCase();
+    const storeId = Number(src.storeId || 0);
+    const storeIdStr = storeId > 0 ? String(storeId) : '';
+    if (lower === String(src.id || '').toLowerCase()) return true;
+    if (lower === String(src.datasetId || '').toLowerCase()) return true;
+    if (storeIdStr && lower === storeIdStr.toLowerCase()) return true;
+    if (storeIdStr && lower === `api_template:${storeIdStr}`.toLowerCase()) return true;
+    if (storeIdStr && lower === `api_tpl_${storeIdStr}`.toLowerCase()) return true;
+    return false;
+  }
+
+  function nodeTemplateRefs(node: WorkflowNode | null | undefined): string[] {
+    if (!node) return [];
+    const refs: string[] = [];
+    if (isApiNode(node)) {
+      refs.push(String(node.config?.templateId || '').trim());
+      refs.push(String(node.config?.templateStoreId || '').trim());
+      refs.push(String(node.config?.id || '').trim());
+      refs.push(String(node.config?.datasetId || '').trim());
+    } else if (isApiToolNode(node)) {
+      const settings = toolCfg(node).settings || {};
+      refs.push(String(settings.templateId || '').trim());
+      refs.push(String(settings.templateStoreId || '').trim());
     }
+    return uniqueAliasList(refs.filter(Boolean));
+  }
+
+  function nodeTemplateStoreId(node: WorkflowNode | null | undefined) {
+    const src = resolveTemplateSourceForNode(node, node ? getApiRequestForNode(node) : normalizeApiRequest(undefined));
+    if (src?.storeId) return String(src.storeId);
+    const refs = nodeTemplateRefs(node);
+    for (const ref of refs) {
+      const txt = String(ref || '').trim();
+      if (/^\d+$/.test(txt)) return txt;
+      const m1 = txt.match(/^api_template:(\d+)$/i);
+      if (m1?.[1]) return m1[1];
+      const m2 = txt.match(/^api_tpl_(\d+)$/i);
+      if (m2?.[1]) return m2[1];
+    }
+    return '';
   }
 
   function resolveTemplateSourceForNode(node: WorkflowNode, request: ApiNodeRequest): DynamicApiSource | null {
-    const tplId = nodeTemplateId(node);
-    if (tplId) {
-      const byId = dynamicApiSources.find((x) => x.id === tplId);
-      if (byId) return byId;
+    void request;
+    const refs = nodeTemplateRefs(node);
+    for (const ref of refs) {
+      const found = dynamicApiSources.find((src) => sourceMatchesTemplateRef(src, ref));
+      if (found) return found;
     }
-
-    const requestMethod = String(request.method || 'GET').trim().toUpperCase() || 'GET';
-    const requestUrl = normalizeUrlForTemplateMatch(String(request.url || '').trim());
-    if (requestUrl) {
-      const byMethodAndUrl = dynamicApiSources.find((src) => {
-        const tpl = normalizeApiRequest(src.requestTemplate);
-        const tplMethod = String(tpl.method || 'GET').trim().toUpperCase() || 'GET';
-        const tplUrl = normalizeUrlForTemplateMatch(String(tpl.url || '').trim());
-        return tplMethod === requestMethod && tplUrl === requestUrl;
-      });
-      if (byMethodAndUrl) return byMethodAndUrl;
-    }
-
-    if (dynamicApiSources.length === 1) return dynamicApiSources[0];
     return null;
   }
 
@@ -890,6 +940,7 @@
     if (toolType === 'api_request')
       return {
         templateId: '',
+        templateStoreId: '',
         apiMethod: 'GET',
         apiUrl: '',
         apiAuthMode: 'manual',
@@ -940,7 +991,7 @@
     sourceCatalogLoading = true;
     sourceCatalogError = '';
     try {
-      const [apiConfigsRaw, tablesRaw] = await Promise.all([
+      const [apiConfigsRaw, tablesRaw, settingsRaw] = await Promise.all([
         fetch(`${API_BASE}/api-configs`, {
           method: 'GET',
           headers: { Accept: 'application/json', 'X-AO-ROLE': API_ROLE }
@@ -948,11 +999,16 @@
         fetch(`${API_BASE}/tables`, {
           method: 'GET',
           headers: { Accept: 'application/json', 'X-AO-ROLE': API_ROLE }
+        }),
+        fetch(`${API_BASE}/settings/effective`, {
+          method: 'GET',
+          headers: { Accept: 'application/json', 'X-AO-ROLE': API_ROLE }
         })
       ]);
 
       let apiJson: any = {};
       let tableJson: any = {};
+      let settingsJson: any = {};
       try {
         apiJson = await apiConfigsRaw.json();
       } catch {
@@ -963,20 +1019,34 @@
       } catch {
         tableJson = {};
       }
+      try {
+        settingsJson = await settingsRaw.json();
+      } catch {
+        settingsJson = {};
+      }
+
+      const effective = settingsJson?.effective && typeof settingsJson.effective === 'object' ? settingsJson.effective : {};
+      const cfgSchema = String(effective?.api_configs_schema || '').trim();
+      const cfgTable = String(effective?.api_configs_table || '').trim();
+      if (cfgSchema && cfgTable) apiTemplateStorageRef = `${cfgSchema}.${cfgTable}`;
+      else apiTemplateStorageRef = 'ao_system.api_configs_store';
 
       const apiRows = Array.isArray(apiJson?.api_configs) ? apiJson.api_configs : [];
       dynamicApiSources = apiRows.map((row: any, idx: number) => {
+        const storeId = Number(String(row?.id ?? '').trim());
         const name = String(row?.api_name || row?.name || '').trim() || `API template ${idx + 1}`;
         const method = String(row?.method || 'GET').trim().toUpperCase();
         const baseUrl = String(row?.base_url || '').trim();
         const path = String(row?.path || '').trim();
         const finalPath = path ? (path.startsWith('/') ? path : `/${path}`) : '/';
         const templateUrl = `${baseUrl}${finalPath}`;
+        const datasetStoreId = Number.isFinite(storeId) && storeId > 0 ? String(storeId) : String(idx + 1);
         return {
-          id: `api_tpl_${String(row?.id || idx + 1)}`,
+          id: `api_tpl_${datasetStoreId}`,
+          storeId: Number.isFinite(storeId) && storeId > 0 ? storeId : undefined,
           name,
           group: 'api_requests' as SourceGroup,
-          datasetId: `api_template:${String(row?.id || idx + 1)}`,
+          datasetId: `api_template:${datasetStoreId}`,
           schema: ['request', 'response', 'status'],
           size: 100,
           preview: buildApiTemplatePreview(name, method, templateUrl),
@@ -1032,10 +1102,12 @@
     const p = dropPoint(event.clientX, event.clientY);
     const sourceRaw = event.dataTransfer?.getData('application/x-workflow-source');
     if (sourceRaw) {
-      const item = JSON.parse(sourceRaw) as SourceItem;
+      const item = JSON.parse(sourceRaw) as DynamicApiSource;
       const config: any = { ...item };
       if (item.group === 'api_requests') {
         config.apiRequest = normalizeApiRequest(item.requestTemplate);
+        config.templateId = String(item.id || '').trim();
+        config.templateStoreId = item.storeId ? String(item.storeId) : '';
       }
       nodes = [...nodes, { id: uid('node'), type: 'data', x: p.x, y: p.y, config }];
       return;
@@ -1049,6 +1121,7 @@
         if (firstTemplate) {
           const tpl = normalizeApiRequest(firstTemplate.requestTemplate);
           settings.templateId = firstTemplate.id;
+          settings.templateStoreId = firstTemplate.storeId ? String(firstTemplate.storeId) : '';
           settings.apiMethod = tpl.method;
           settings.apiUrl = tpl.url;
           settings.apiAuthMode = tpl.authMode;
@@ -1528,19 +1601,19 @@
       collectParameterTokens(baseBodyObj, requestedAliasesSet);
       const requestedAliases = Array.from(requestedAliasesSet);
 
+      const templateRefs = nodeTemplateRefs(node);
       const templateSource = resolveTemplateSourceForNode(node, request);
       let resolvedParameters: Record<string, any> = {};
       let resolveIssues: Record<string, string> = {};
       if (requestedAliases.length) {
         if (!templateSource) {
-          requestedAliases.forEach((alias) => {
-            resolveIssues[alias] = 'шаблон API не найден в списке источников';
-          });
-        } else {
-          const resolved = await resolveTemplateAliasValues(templateSource, requestedAliases);
-          resolvedParameters = resolved.map;
-          resolveIssues = resolved.issues;
+          throw new Error(
+            `Не найден привязанный API-шаблон для Request-ноды. Проверь поле "Шаблон API". refs: ${templateRefs.join(', ') || 'пусто'}`
+          );
         }
+        const resolved = await resolveTemplateAliasValues(templateSource, requestedAliases);
+        resolvedParameters = resolved.map;
+        resolveIssues = resolved.issues;
       }
 
       const resolvedUrlRaw = replaceParameterTokens(urlRaw, resolvedParameters);
@@ -1712,6 +1785,9 @@
         requestsSent.length <= 1
           ? {
               request: requestsSent[0] || null,
+              template_storage_ref: apiTemplateStorageRef,
+              template_store_id: templateSource?.storeId || nodeTemplateStoreId(node) || undefined,
+              template_ref: templateRefs.length ? templateRefs[0] : undefined,
               resolved_parameters: Object.keys(resolvedParameters).length ? resolvedParameters : undefined,
               resolve_issues: Object.keys(resolveIssues).length ? resolveIssues : undefined
             }
@@ -1719,6 +1795,9 @@
               total_requests: requestsSent.length,
               shown_requests: requestsSent.length,
               requests: requestsSent,
+              template_storage_ref: apiTemplateStorageRef,
+              template_store_id: templateSource?.storeId || nodeTemplateStoreId(node) || undefined,
+              template_ref: templateRefs.length ? templateRefs[0] : undefined,
               resolved_parameters: Object.keys(resolvedParameters).length ? resolvedParameters : undefined,
               resolve_issues: Object.keys(resolveIssues).length ? resolveIssues : undefined
             };
@@ -1728,6 +1807,9 @@
         failed,
         stop_reason: stopReason || undefined,
         responses,
+        template_storage_ref: apiTemplateStorageRef,
+        template_store_id: templateSource?.storeId || nodeTemplateStoreId(node) || undefined,
+        template_ref: templateRefs.length ? templateRefs[0] : undefined,
         resolved_parameters: Object.keys(resolvedParameters).length ? resolvedParameters : undefined,
         resolve_issues: Object.keys(resolveIssues).length ? resolveIssues : undefined
       };
@@ -1779,9 +1861,11 @@
     if (!node || (!isApiNode(node) && !isApiToolNode(node))) return;
     const req = getApiRequestForNode(node);
     const templateId = nodeTemplateId(node);
+    const templateStoreId = nodeTemplateStoreId(node);
     const payload = {
       nodeId,
       templateId,
+      templateStoreId,
       nodeName: String(node.config?.name || '').trim(),
       request: {
         method: req.method,
@@ -1921,7 +2005,12 @@
             {/if}
             {#if isApiNode(node) || isApiToolNode(node)}
               {@const req = getApiRequestForNode(node)}
+              {@const templateStoreId = nodeTemplateStoreId(node)}
               <div class="api-meta">{req.method || 'GET'} {req.url || ''}</div>
+              <div class="api-template-meta">
+                <span>Шаблон ID: {templateStoreId || '-'}</span>
+                <span>Хранилище: {apiTemplateStorageRef}</span>
+              </div>
               <div class="api-stats">
                 <span>Страницы: {exec ? exec.totalRequests : '-'}</span>
                 <span>Записей: {exec ? exec.payloadCount : '-'}</span>
@@ -2317,6 +2406,8 @@
   .delete-btn { color: #b91c1c; border-color: #fecaca; }
   .node-meta { color: #64748b; font-size: 11px; margin-top: 4px; }
   .api-meta { color: #0f172a; font-size: 10px; margin-top: 3px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .api-template-meta { margin-top: 4px; display: grid; grid-template-columns: 1fr; gap: 1px; font-size: 9px; color: #475569; }
+  .api-template-meta span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .api-stats { margin-top: 5px; display: grid; grid-template-columns: 1fr; gap: 2px; font-size: 10px; color: #334155; }
   .api-stats span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .runtime { margin-top: 6px; font-size: 11px; border-radius: 7px; padding: 4px 6px; border: 1px solid #e2e8f0; }
