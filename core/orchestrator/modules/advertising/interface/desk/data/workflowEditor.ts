@@ -1,5 +1,13 @@
 export type SourceGroup = 'api_requests' | 'data_tables' | 'math_calculations';
 export type ToolType = 'start_process' | 'schedule_process' | 'table_parser' | 'db_write' | 'end_process';
+export type ApiRequestTemplate = {
+  method: string;
+  url: string;
+  authMode: string;
+  headers: Record<string, any>;
+  query: Record<string, any>;
+  body: any;
+};
 
 export type SourceItem = {
   id: string;
@@ -10,6 +18,7 @@ export type SourceItem = {
   size: number;
   preview: Array<Record<string, string | number>>;
   description: string;
+  requestTemplate?: ApiRequestTemplate;
 };
 
 export type ToolItem = {

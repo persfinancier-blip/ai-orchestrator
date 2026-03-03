@@ -5,6 +5,7 @@
     sourceItemsByGroup,
     tools,
     toolPorts,
+    type ApiRequestTemplate,
     type SourceGroup,
     type SourceItem,
     type ToolItem,
@@ -21,6 +22,14 @@
   type WorkflowEdge = { id: string; from: string; to: string; fromPort: string; toPort: string };
   type NodeRuntime = { inRows: number; outRows: number; lossRows: number; lossPct: number; successPct: number; status: 'idle' | 'ok' | 'warn' | 'error' };
   type WorkflowIssue = { level: 'error' | 'warn' | 'info'; text: string };
+  type ApiNodeRequest = {
+    method: string;
+    url: string;
+    authMode: string;
+    headersText: string;
+    queryText: string;
+    bodyText: string;
+  };
 
   let activeTab: SourceGroup = 'api_requests';
   let nodes: WorkflowNode[] = [];
@@ -36,6 +45,8 @@
   let sourceCatalogError = '';
   let dynamicApiSources: SourceItem[] = [];
   let dynamicTableSources: SourceItem[] = [];
+  let settingsNodeId = '';
+  let settingsModalOpen = false;
 
   let canvasEl: HTMLDivElement;
   let panX = 0;
@@ -50,6 +61,7 @@
   const API_ROLE = 'data_admin';
 
   $: selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null;
+  $: settingsNode = nodes.find((n) => n.id === settingsNodeId) ?? null;
   $: sourceList =
     activeTab === 'api_requests'
       ? dynamicApiSources.length
@@ -63,8 +75,33 @@
 
   const uid = (p: string) => `${p}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
   const toolCfg = (n: WorkflowNode) => n.config as { name: string; toolType: ToolType; settings: Record<string, string> };
+  const apiCfg = (n: WorkflowNode) => n.config as SourceItem & { apiRequest?: ApiNodeRequest };
+
+  function prettyJson(value: any) {
+    try {
+      return JSON.stringify(value ?? {}, null, 2);
+    } catch {
+      return '{}';
+    }
+  }
+
+  function normalizeApiRequest(template: ApiRequestTemplate | undefined): ApiNodeRequest {
+    return {
+      method: String(template?.method || 'GET').trim().toUpperCase() || 'GET',
+      url: String(template?.url || '').trim(),
+      authMode: String(template?.authMode || 'manual').trim() || 'manual',
+      headersText: prettyJson(template?.headers || {}),
+      queryText: prettyJson(template?.query || {}),
+      bodyText: prettyJson(template?.body || {})
+    };
+  }
+
+  function isApiNode(n: WorkflowNode | null | undefined) {
+    return Boolean(n && n.type === 'data' && String(n.config?.group || '').trim() === 'api_requests');
+  }
 
   function defaultSettings(toolType: ToolType) {
+    if (toolType === 'start_process') return { triggerType: 'interval', intervalValue: '1', intervalUnit: 'minutes' };
     if (toolType === 'schedule_process') return { cron: '0 * * * *', mode: 'sync' };
     if (toolType === 'table_parser') return { parserMultiplier: '1' };
     if (toolType === 'db_write') return { targetSchema: 'ao_data', targetTable: 'bronze_result', writeSuccessRate: '98' };
@@ -124,15 +161,25 @@
         const method = String(row?.method || 'GET').trim().toUpperCase();
         const baseUrl = String(row?.base_url || '').trim();
         const path = String(row?.path || '').trim();
+        const finalPath = path ? (path.startsWith('/') ? path : `/${path}`) : '/';
+        const templateUrl = `${baseUrl}${finalPath}`;
         return {
           id: `api_tpl_${String(row?.id || idx + 1)}`,
           name,
           group: 'api_requests' as SourceGroup,
           datasetId: `api_template:${String(row?.id || idx + 1)}`,
           schema: ['request', 'response', 'status'],
-          size: 0,
-          preview: buildApiTemplatePreview(name, method, `${baseUrl}${path}`),
-          description: `Преднастроенный API-шаблон (${method} ${baseUrl}${path})`
+          size: 100,
+          preview: buildApiTemplatePreview(name, method, templateUrl),
+          description: `Преднастроенный API-шаблон (${method} ${templateUrl})`,
+          requestTemplate: {
+            method,
+            url: templateUrl,
+            authMode: String(row?.auth_mode || 'manual'),
+            headers: row?.headers_json && typeof row.headers_json === 'object' ? row.headers_json : {},
+            query: row?.query_json && typeof row.query_json === 'object' ? row.query_json : {},
+            body: row?.body_json !== undefined ? row.body_json : {}
+          }
         };
       });
 
@@ -173,7 +220,11 @@
     const sourceRaw = event.dataTransfer?.getData('application/x-workflow-source');
     if (sourceRaw) {
       const item = JSON.parse(sourceRaw) as SourceItem;
-      nodes = [...nodes, { id: uid('node'), type: 'data', x: p.x, y: p.y, config: { ...item } }];
+      const config: any = { ...item };
+      if (item.group === 'api_requests') {
+        config.apiRequest = normalizeApiRequest(item.requestTemplate);
+      }
+      nodes = [...nodes, { id: uid('node'), type: 'data', x: p.x, y: p.y, config }];
       return;
     }
     const toolRaw = event.dataTransfer?.getData('application/x-workflow-tool');
@@ -214,14 +265,17 @@
   }
 
   function startNodeDrag(event: MouseEvent, n: WorkflowNode) {
+    if (event.detail > 1) return;
     const p = dropPoint(event.clientX, event.clientY);
     dragNode = { id: n.id, offsetX: p.x - n.x, offsetY: p.y - n.y };
   }
 
   function inputs(n: WorkflowNode) {
+    if (isApiNode(n)) return ['in'];
     return n.type === 'tool' ? toolPorts[toolCfg(n).toolType].inputs : [];
   }
   function outputs(n: WorkflowNode) {
+    if (isApiNode(n)) return ['out'];
     return n.type === 'tool' ? toolPorts[toolCfg(n).toolType].outputs : ['out'];
   }
   function canConnect(fromId: string, fromPort: string, toId: string, toPort: string) {
@@ -255,6 +309,24 @@
   }
   function deleteEdge(id: string) {
     edges = edges.filter((e) => e.id !== id);
+  }
+
+  function openNodeSettings(nodeId: string) {
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    const isStartTool = node.type === 'tool' && toolCfg(node).toolType === 'start_process';
+    if (!isStartTool && !isApiNode(node)) {
+      banner = 'Для этого узла пока нет отдельной настройки по двойному клику';
+      return;
+    }
+    selectedNodeId = nodeId;
+    settingsNodeId = nodeId;
+    settingsModalOpen = true;
+  }
+
+  function closeSettingsModal() {
+    settingsModalOpen = false;
+    settingsNodeId = '';
   }
 
   function center(n: WorkflowNode) {
@@ -311,7 +383,14 @@
       const inEdges = edges.filter((e) => e.to === n.id);
       const inRows = inEdges.reduce((s, e) => s + Number(edgeRows[e.id] || 0), 0);
       let outRows = inRows;
-      if (n.type === 'data') outRows = inEdges.length ? inRows : Number(n.config.size || 0);
+      if (n.type === 'data') {
+        if (isApiNode(n)) {
+          const baseRows = Math.max(1, Number(n.config.size || 1));
+          outRows = inEdges.length ? Math.max(baseRows, inRows || 1) : baseRows;
+        } else {
+          outRows = inEdges.length ? inRows : Number(n.config.size || 0);
+        }
+      }
       if (n.type === 'tool') {
         const cfg = toolCfg(n);
         if (cfg.toolType === 'start_process') outRows = inRows > 0 ? inRows : 1;
@@ -346,9 +425,39 @@
     nodes = nodes.map((n) => (n.id === nodeId && n.type === 'tool' ? { ...n, config: { ...toolCfg(n), settings: { ...toolCfg(n).settings, [key]: value } } } : n));
   }
 
+  function updateDataNodeConfig(nodeId: string, patch: Record<string, any>) {
+    nodes = nodes.map((n) => (n.id === nodeId && n.type === 'data' ? { ...n, config: { ...n.config, ...patch } } : n));
+  }
+
+  function updateApiNodeRequest(nodeId: string, key: keyof ApiNodeRequest, value: string) {
+    nodes = nodes.map((n) => {
+      if (n.id !== nodeId || n.type !== 'data') return n;
+      const current = apiCfg(n).apiRequest || normalizeApiRequest(undefined);
+      return { ...n, config: { ...n.config, apiRequest: { ...current, [key]: value } } };
+    });
+  }
+
   function onSettingInput(nodeId: string, key: string, event: Event) {
     const target = event.currentTarget as HTMLInputElement | null;
     updateSetting(nodeId, key, target?.value ?? '');
+  }
+
+  function inputValue(event: Event) {
+    return (event.currentTarget as HTMLInputElement | null)?.value ?? '';
+  }
+
+  function selectValue(event: Event) {
+    return (event.currentTarget as HTMLSelectElement | null)?.value ?? '';
+  }
+
+  function textareaValue(event: Event) {
+    return (event.currentTarget as HTMLTextAreaElement | null)?.value ?? '';
+  }
+
+  function onNodeDoubleClick(event: MouseEvent, nodeId: string) {
+    event.preventDefault();
+    event.stopPropagation();
+    openNodeSettings(nodeId);
   }
 
   function resetCanvas() {
@@ -428,12 +537,21 @@
 
         {#each nodes as node (node.id)}
           {@const rt = nodeRuntime[node.id]}
-          <div class="node {node.type} {selectedNodeId === node.id ? 'selected' : ''}" style={`left:${node.x}px;top:${node.y}px;`} on:mousedown={(e) => startNodeDrag(e, node)} on:click={() => (selectedNodeId = node.id)}>
+          <div
+            class="node {node.type} {selectedNodeId === node.id ? 'selected' : ''}"
+            style={`left:${node.x}px;top:${node.y}px;`}
+            on:mousedown={(e) => startNodeDrag(e, node)}
+            on:click={() => (selectedNodeId = node.id)}
+            on:dblclick={(e) => onNodeDoubleClick(e, node.id)}
+          >
             <div class="node-head">
               <strong>{node.config.name}</strong>
               <button on:click|stopPropagation={() => deleteNode(node.id)}>x</button>
             </div>
             <div class="node-meta">{node.type === 'data' ? node.config.datasetId : node.config.toolType}</div>
+            {#if isApiNode(node)}
+              <div class="api-meta">{apiCfg(node).apiRequest?.method || 'GET'} {apiCfg(node).apiRequest?.url || ''}</div>
+            {/if}
             {#if rt}
               <div class="runtime {rt.status}">in {rt.inRows} | out {rt.outRows} | loss {rt.lossRows} ({rt.lossPct}%)</div>
             {/if}
@@ -500,6 +618,125 @@
       </section>
     </aside>
   </div>
+
+  {#if settingsModalOpen && settingsNode}
+    <div class="node-modal-backdrop" on:click={closeSettingsModal}></div>
+    <div class="node-modal">
+      <div class="node-modal-head">
+        <h4>Настройка узла: {settingsNode.config.name}</h4>
+        <button class="close-btn" on:click={closeSettingsModal}>x</button>
+      </div>
+
+      {#if settingsNode.type === 'tool' && toolCfg(settingsNode).toolType === 'start_process'}
+        <div class="node-modal-body">
+          <div class="help">Интервал запуска в стиле n8n: каждые N секунд/минут/часов.</div>
+          <label>
+            Тип запуска
+            <select
+              value={toolCfg(settingsNode).settings.triggerType || 'interval'}
+              on:change={(e) => updateSetting(settingsNode.id, 'triggerType', selectValue(e))}
+            >
+              <option value="interval">Интервал</option>
+              <option value="manual">Ручной</option>
+            </select>
+          </label>
+          {#if (toolCfg(settingsNode).settings.triggerType || 'interval') === 'interval'}
+            <div class="interval-grid">
+              <label>
+                Каждые
+                <input
+                  type="number"
+                  min="1"
+                  value={toolCfg(settingsNode).settings.intervalValue || '1'}
+                  on:input={(e) => onSettingInput(settingsNode.id, 'intervalValue', e)}
+                />
+              </label>
+              <label>
+                Единица
+                <select
+                  value={toolCfg(settingsNode).settings.intervalUnit || 'minutes'}
+                  on:change={(e) => updateSetting(settingsNode.id, 'intervalUnit', selectValue(e))}
+                >
+                  <option value="seconds">Секунды</option>
+                  <option value="minutes">Минуты</option>
+                  <option value="hours">Часы</option>
+                </select>
+              </label>
+            </div>
+          {/if}
+        </div>
+      {/if}
+
+      {#if isApiNode(settingsNode)}
+        <div class="node-modal-body">
+          <div class="help">Легкая поднастройка API-узла: метод, URL и JSON-поля запроса.</div>
+          <label>
+            Название узла
+            <input
+              value={settingsNode.config.name || ''}
+              on:input={(e) => updateDataNodeConfig(settingsNode.id, { name: inputValue(e) })}
+            />
+          </label>
+          <div class="interval-grid">
+            <label>
+              Метод
+              <select
+                value={apiCfg(settingsNode).apiRequest?.method || 'GET'}
+                on:change={(e) => updateApiNodeRequest(settingsNode.id, 'method', selectValue(e))}
+              >
+                <option value="GET">GET</option>
+                <option value="POST">POST</option>
+                <option value="PUT">PUT</option>
+                <option value="PATCH">PATCH</option>
+                <option value="DELETE">DELETE</option>
+              </select>
+            </label>
+            <label>
+              Режим авторизации
+              <select
+                value={apiCfg(settingsNode).apiRequest?.authMode || 'manual'}
+                on:change={(e) => updateApiNodeRequest(settingsNode.id, 'authMode', selectValue(e))}
+              >
+                <option value="manual">Ручная</option>
+                <option value="oauth2_client_credentials">OAuth2 (client_credentials)</option>
+              </select>
+            </label>
+          </div>
+          <label>
+            URL
+            <input
+              value={apiCfg(settingsNode).apiRequest?.url || ''}
+              on:input={(e) => updateApiNodeRequest(settingsNode.id, 'url', inputValue(e))}
+            />
+          </label>
+          <label>
+            Headers JSON
+            <textarea
+              rows="4"
+              value={apiCfg(settingsNode).apiRequest?.headersText || '{}'}
+              on:input={(e) => updateApiNodeRequest(settingsNode.id, 'headersText', textareaValue(e))}
+            ></textarea>
+          </label>
+          <label>
+            Query JSON
+            <textarea
+              rows="4"
+              value={apiCfg(settingsNode).apiRequest?.queryText || '{}'}
+              on:input={(e) => updateApiNodeRequest(settingsNode.id, 'queryText', textareaValue(e))}
+            ></textarea>
+          </label>
+          <label>
+            Body JSON
+            <textarea
+              rows="6"
+              value={apiCfg(settingsNode).apiRequest?.bodyText || '{}'}
+              on:input={(e) => updateApiNodeRequest(settingsNode.id, 'bodyText', textareaValue(e))}
+            ></textarea>
+          </label>
+        </div>
+      {/if}
+    </div>
+  {/if}
 </section>
 
 <style>
@@ -531,6 +768,7 @@
   .node-head { display: flex; justify-content: space-between; gap: 8px; }
   .node-head button { border: none; background: transparent; cursor: pointer; color: #64748b; }
   .node-meta { color: #64748b; font-size: 11px; margin-top: 4px; }
+  .api-meta { color: #0f172a; font-size: 10px; margin-top: 3px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .runtime { margin-top: 6px; font-size: 11px; border-radius: 7px; padding: 4px 6px; border: 1px solid #e2e8f0; }
   .runtime.ok { background: #f0fdf4; border-color: #86efac; }
   .runtime.warn { background: #fffbeb; border-color: #fcd34d; }
@@ -550,6 +788,19 @@
   .issue.warn { border-color: #fde68a; background: #fffbeb; }
   .issue.info { border-color: #bfdbfe; background: #eff6ff; }
   .empty { color: #64748b; font-size: 12px; }
+  .node-modal-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.48); z-index: 40; }
+  .node-modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; background: #fff; border: 1px solid #dbe4f0; border-radius: 14px; box-shadow: 0 18px 48px rgba(15, 23, 42, 0.28); z-index: 41; }
+  .node-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; border-bottom: 1px solid #e2e8f0; position: sticky; top: 0; background: #fff; }
+  .node-modal-head h4 { margin: 0; font-size: 16px; }
+  .close-btn { border: 1px solid #dbe4f0; border-radius: 9px; background: #fff; cursor: pointer; padding: 4px 10px; }
+  .node-modal-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .node-modal-body label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #334155; }
+  .node-modal-body input,
+  .node-modal-body select,
+  .node-modal-body textarea { border: 1px solid #dbe4f0; border-radius: 8px; padding: 7px 8px; font-family: inherit; font-size: 13px; }
+  .node-modal-body textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .interval-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .help { font-size: 12px; color: #475569; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; }
 </style>
 
 
