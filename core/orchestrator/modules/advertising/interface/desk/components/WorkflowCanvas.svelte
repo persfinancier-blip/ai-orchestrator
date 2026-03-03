@@ -1,5 +1,5 @@
 ﻿<script lang="ts">
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import JsonTreeView from './JsonTreeView.svelte';
   import {
     sourceGroups,
@@ -108,6 +108,24 @@
     paginationParameters?: TemplatePaginationParameter[];
     dataModel?: TemplateDataModel;
   };
+  type WorkflowDeskConfig = {
+    nodes: WorkflowNode[];
+    edges: WorkflowEdge[];
+    viewport?: { panX?: number; panY?: number; zoom?: number };
+    selectedNodeId?: string;
+  };
+  type WorkflowDeskRow = {
+    id?: number;
+    desk_name?: string;
+    desk_type?: string;
+    config_json?: any;
+    schema_version?: number;
+    revision?: number;
+    description?: string;
+    is_active?: boolean;
+    updated_at?: string;
+    updated_by?: string;
+  };
 
   let activeTab: SourceGroup = 'data_tables';
   let nodes: WorkflowNode[] = [];
@@ -124,6 +142,7 @@
   let dynamicApiSources: DynamicApiSource[] = [];
   let dynamicTableSources: SourceItem[] = [];
   let apiTemplateStorageRef = 'ao_system.api_configs_store';
+  let workflowDeskStorageRef = 'ao_system.workflow_desks_store';
   let settingsNodeId = '';
   let settingsModalOpen = false;
   let nodeExecutions: Record<string, ApiNodeExecution> = {};
@@ -135,6 +154,23 @@
   let chainRunStopRequested = false;
   let chainRunId = 0;
   let chainCurrentNodeId = '';
+  let deskId = 0;
+  let deskRevision = 0;
+  let deskName = 'Рабочий стол данных';
+  let deskDescription = '';
+  let deskSchemaVersion = 1;
+  let deskDirty = false;
+  let deskLoading = false;
+  let deskSaving = false;
+  let deskLastSavedAt = '';
+  let deskSaveError = '';
+  let deskAutosaveEnabled = true;
+  let deskAutosaveSeconds = 10;
+  let deskInitialized = false;
+  let deskSignatureMute = false;
+  let deskLastSavedSignature = '';
+  let deskCurrentSignature = '';
+  let deskAutosaveTimer: any = null;
 
   let canvasEl: HTMLDivElement;
   let panX = 0;
@@ -163,6 +199,15 @@
         ? dynamicTableSources
         : sourceItemsByGroup.data_tables || []
       : sourceItemsByGroup.math_calculations || [];
+  $: deskCurrentSignature = deskSignatureFromState({
+    nodes,
+    edges,
+    viewport: { panX, panY, zoom },
+    selectedNodeId
+  });
+  $: if (deskInitialized && !deskSignatureMute) {
+    deskDirty = deskCurrentSignature !== deskLastSavedSignature;
+  }
 
   const uid = (p: string) => `${p}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
   const toolCfg = (n: WorkflowNode) => n.config as { name: string; toolType: ToolType; settings: Record<string, string> };
@@ -191,6 +236,330 @@
     const ms = Math.max(0, Number(value));
     if (ms < 1000) return `${ms} мс`;
     return `${Math.round((ms / 1000) * 100) / 100} с`;
+  }
+
+  function hashQueryParams() {
+    const rawHash = String(window.location.hash || '');
+    const idx = rawHash.indexOf('?');
+    if (idx < 0) return new URLSearchParams();
+    return new URLSearchParams(rawHash.slice(idx + 1));
+  }
+
+  function hashParamInt(name: string) {
+    const n = Number(hashQueryParams().get(name) || 0);
+    return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0;
+  }
+
+  function safeIso(value: any) {
+    const txt = String(value || '').trim();
+    if (!txt) return '';
+    const dt = new Date(txt);
+    if (Number.isNaN(dt.getTime())) return '';
+    return dt.toISOString();
+  }
+
+  function deskSignatureFromState(state: WorkflowDeskConfig) {
+    try {
+      const normalized = {
+        nodes: Array.isArray(state?.nodes) ? state.nodes : [],
+        edges: Array.isArray(state?.edges) ? state.edges : [],
+        viewport: {
+          panX: Number(state?.viewport?.panX || 0),
+          panY: Number(state?.viewport?.panY || 0),
+          zoom: Number(state?.viewport?.zoom || 1)
+        },
+        selectedNodeId: String(state?.selectedNodeId || '').trim()
+      };
+      return JSON.stringify(normalized);
+    } catch {
+      return '';
+    }
+  }
+
+  function captureDeskState(): WorkflowDeskConfig {
+    return {
+      nodes: deepClone(nodes || []),
+      edges: deepClone(edges || []),
+      viewport: { panX, panY, zoom },
+      selectedNodeId
+    };
+  }
+
+  function normalizeWorkflowNode(raw: any): WorkflowNode | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const type: 'data' | 'tool' = raw.type === 'tool' ? 'tool' : 'data';
+    const id = String(raw.id || uid('node')).trim();
+    if (!id) return null;
+    const x = Number.isFinite(Number(raw.x)) ? Number(raw.x) : 120;
+    const y = Number.isFinite(Number(raw.y)) ? Number(raw.y) : 120;
+    if (type === 'tool') {
+      const rawToolType = String(raw?.config?.toolType || '').trim();
+      const knownTool = tools.find((t) => t.toolType === (rawToolType as ToolType));
+      const toolType: ToolType = knownTool ? knownTool.toolType : 'table_parser';
+      const base = defaultSettings(toolType);
+      const settings =
+        raw?.config?.settings && typeof raw.config.settings === 'object' && !Array.isArray(raw.config.settings)
+          ? { ...base, ...raw.config.settings }
+          : { ...base };
+      return {
+        id,
+        type,
+        x,
+        y,
+        config: {
+          name: String(raw?.config?.name || knownTool?.name || 'Узел').trim() || 'Узел',
+          toolType,
+          settings
+        }
+      };
+    }
+    const cfg = raw?.config && typeof raw.config === 'object' ? { ...raw.config } : {};
+    if (String(cfg.group || '').trim() === 'api_requests') {
+      cfg.apiRequest = normalizeApiRequest(cfg.apiRequest || cfg.requestTemplate);
+      cfg.templateId = String(cfg.templateId || '').trim();
+      cfg.templateStoreId = String(cfg.templateStoreId || '').trim();
+    }
+    return { id, type, x, y, config: cfg };
+  }
+
+  function normalizeWorkflowEdge(raw: any): WorkflowEdge | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const id = String(raw.id || uid('edge')).trim();
+    const from = String(raw.from || '').trim();
+    const to = String(raw.to || '').trim();
+    const fromPort = String(raw.fromPort || 'out').trim() || 'out';
+    const toPort = String(raw.toPort || 'in').trim() || 'in';
+    if (!id || !from || !to) return null;
+    return { id, from, to, fromPort, toPort };
+  }
+
+  function applyDeskConfig(rawConfig: any) {
+    const cfg = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
+    const nextNodes = (Array.isArray(cfg?.nodes) ? cfg.nodes : [])
+      .map((n: any) => normalizeWorkflowNode(n))
+      .filter((n: WorkflowNode | null): n is WorkflowNode => Boolean(n));
+    const nodeIds = new Set(nextNodes.map((n) => n.id));
+    const nextEdges = (Array.isArray(cfg?.edges) ? cfg.edges : [])
+      .map((e: any) => normalizeWorkflowEdge(e))
+      .filter((e: WorkflowEdge | null): e is WorkflowEdge => Boolean(e))
+      .filter((e) => nodeIds.has(e.from) && nodeIds.has(e.to));
+    deskSignatureMute = true;
+    nodes = nextNodes;
+    edges = nextEdges;
+    selectedNodeId = nodeIds.has(String(cfg?.selectedNodeId || '').trim()) ? String(cfg?.selectedNodeId || '').trim() : '';
+    const vp = cfg?.viewport && typeof cfg.viewport === 'object' ? cfg.viewport : {};
+    panX = Number.isFinite(Number(vp?.panX)) ? Number(vp.panX) : 0;
+    panY = Number.isFinite(Number(vp?.panY)) ? Number(vp.panY) : 0;
+    zoom = Number.isFinite(Number(vp?.zoom)) ? Math.max(0.5, Math.min(1.8, Number(vp.zoom))) : 1;
+    linkFrom = null;
+    settingsNodeId = '';
+    settingsModalOpen = false;
+    nodeRuntime = {};
+    edgeRows = {};
+    nodeExecutions = {};
+    nodeExecutionLoading = {};
+    issues = [];
+    summary = { sourceRows: 0, finalRows: 0, lossRows: 0, lossPct: 0, successPct: 0 };
+    chainRunActive = false;
+    chainRunPaused = false;
+    chainRunStopRequested = false;
+    chainCurrentNodeId = '';
+    deskSignatureMute = false;
+  }
+
+  function applyDeskRow(row: WorkflowDeskRow) {
+    deskId = Number(row?.id || 0) || 0;
+    deskRevision = Math.max(1, Number(row?.revision || 1) || 1);
+    deskSchemaVersion = Math.max(1, Number(row?.schema_version || 1) || 1);
+    deskName = String(row?.desk_name || '').trim() || 'Рабочий стол данных';
+    deskDescription = String(row?.description || '').trim();
+    applyDeskConfig(row?.config_json || {});
+    const signature = deskSignatureFromState(captureDeskState());
+    deskLastSavedSignature = signature;
+    deskDirty = false;
+    deskLastSavedAt = safeIso(row?.updated_at);
+    deskSaveError = '';
+  }
+
+  function clearDeskAutosaveTimer() {
+    if (deskAutosaveTimer) {
+      clearInterval(deskAutosaveTimer);
+      deskAutosaveTimer = null;
+    }
+  }
+
+  async function saveDesk(silent = false) {
+    if (deskSaving || deskLoading) return false;
+    const safeName = String(deskName || '').trim() || 'Рабочий стол данных';
+    const safeDesc = String(deskDescription || '').trim();
+    deskName = safeName;
+    deskDescription = safeDesc;
+    deskSaving = true;
+    deskSaveError = '';
+    try {
+      const response = await fetch(`${API_BASE}/workflow-desks/upsert`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-AO-ROLE': API_ROLE
+        },
+        body: JSON.stringify({
+          id: deskId > 0 ? deskId : undefined,
+          expected_revision: deskRevision > 0 ? deskRevision : undefined,
+          desk_name: safeName,
+          desk_type: 'data',
+          description: safeDesc,
+          schema_version: Math.max(1, Number(deskSchemaVersion || 1) || 1),
+          is_active: true,
+          updated_by: API_ROLE,
+          config_json: captureDeskState()
+        })
+      });
+      let payload: any = {};
+      try {
+        payload = await response.json();
+      } catch {
+        payload = {};
+      }
+      if (!response.ok) {
+        const details = String(payload?.details || payload?.error || `${response.status} ${response.statusText}`);
+        throw new Error(details);
+      }
+      deskId = Number(payload?.id || deskId || 0) || 0;
+      deskRevision = Math.max(1, Number(payload?.revision || deskRevision + 1 || 1) || 1);
+      deskLastSavedSignature = deskSignatureFromState(captureDeskState());
+      deskDirty = false;
+      deskLastSavedAt = new Date().toISOString();
+      if (!silent) banner = 'Рабочий стол сохранен на сервере';
+      return true;
+    } catch (e: any) {
+      const msg = String(e?.message || e || 'Ошибка сохранения рабочего стола');
+      deskSaveError = msg;
+      if (!silent) banner = msg;
+      return false;
+    } finally {
+      deskSaving = false;
+    }
+  }
+
+  async function loadWorkflowDeskFromServer() {
+    deskLoading = true;
+    deskSaveError = '';
+    try {
+      const desiredDeskId = hashParamInt('desk_id');
+      const listResp = await fetch(`${API_BASE}/workflow-desks?desk_type=data&limit=100`, {
+        method: 'GET',
+        headers: { Accept: 'application/json', 'X-AO-ROLE': API_ROLE }
+      });
+      let listPayload: any = {};
+      try {
+        listPayload = await listResp.json();
+      } catch {
+        listPayload = {};
+      }
+      if (!listResp.ok) {
+        const details = String(listPayload?.details || listPayload?.error || `${listResp.status} ${listResp.statusText}`);
+        throw new Error(details);
+      }
+      const list: WorkflowDeskRow[] = Array.isArray(listPayload?.workflow_desks) ? listPayload.workflow_desks : [];
+      let target: WorkflowDeskRow | undefined;
+      if (desiredDeskId > 0) {
+        target = list.find((r) => Number(r?.id || 0) === desiredDeskId);
+        if (!target) {
+          const oneResp = await fetch(`${API_BASE}/workflow-desks/${desiredDeskId}`, {
+            method: 'GET',
+            headers: { Accept: 'application/json', 'X-AO-ROLE': API_ROLE }
+          });
+          if (oneResp.ok) {
+            let onePayload: any = {};
+            try {
+              onePayload = await oneResp.json();
+            } catch {
+              onePayload = {};
+            }
+            if (onePayload?.workflow_desk && typeof onePayload.workflow_desk === 'object') {
+              target = onePayload.workflow_desk as WorkflowDeskRow;
+            }
+          }
+        }
+      }
+      if (!target && list.length) target = list[0];
+      if (!target) {
+        const created = await fetch(`${API_BASE}/workflow-desks/upsert`, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            'X-AO-ROLE': API_ROLE
+          },
+          body: JSON.stringify({
+            desk_name: deskName || 'Рабочий стол данных',
+            desk_type: 'data',
+            description: '',
+            schema_version: 1,
+            is_active: true,
+            updated_by: API_ROLE,
+            config_json: captureDeskState()
+          })
+        });
+        let createdPayload: any = {};
+        try {
+          createdPayload = await created.json();
+        } catch {
+          createdPayload = {};
+        }
+        if (!created.ok) {
+          const details = String(
+            createdPayload?.details || createdPayload?.error || `${created.status} ${created.statusText}`
+          );
+          throw new Error(details);
+        }
+        deskId = Number(createdPayload?.id || 0) || 0;
+        deskRevision = Math.max(1, Number(createdPayload?.revision || 1) || 1);
+        deskLastSavedAt = new Date().toISOString();
+        deskLastSavedSignature = deskSignatureFromState(captureDeskState());
+        deskDirty = false;
+        banner = `Создан новый рабочий стол (ID ${deskId})`;
+        return true;
+      }
+      applyDeskRow(target);
+      banner = `Рабочий стол загружен (ID ${deskId})`;
+      return true;
+    } catch (e: any) {
+      const msg = String(e?.message || e || 'Ошибка загрузки рабочего стола');
+      deskSaveError = msg;
+      banner = msg;
+      return false;
+    } finally {
+      deskLoading = false;
+    }
+  }
+
+  async function reloadDeskFromServer() {
+    await loadWorkflowDeskFromServer();
+  }
+
+  function restartDeskAutosaveTimer() {
+    clearDeskAutosaveTimer();
+    if (!deskAutosaveEnabled || !deskInitialized) return;
+    const sec = Math.max(3, Number(deskAutosaveSeconds || 10) || 10);
+    deskAutosaveSeconds = sec;
+    deskAutosaveTimer = setInterval(() => {
+      if (!deskInitialized || !deskDirty || deskSaving || deskLoading) return;
+      void saveDesk(true);
+    }, sec * 1000);
+  }
+
+  function toggleDeskAutosave() {
+    deskAutosaveEnabled = !deskAutosaveEnabled;
+    restartDeskAutosaveTimer();
+  }
+
+  function onDeskAutosaveSecondsInput(event: Event) {
+    const v = Number((event.currentTarget as HTMLInputElement | null)?.value || 10);
+    deskAutosaveSeconds = Number.isFinite(v) && v > 0 ? Math.max(3, Math.trunc(v)) : 10;
+    restartDeskAutosaveTimer();
   }
 
   function normalizeApiRequest(template: ApiRequestTemplate | undefined): ApiNodeRequest {
@@ -1030,6 +1399,10 @@
       const cfgTable = String(effective?.api_configs_table || '').trim();
       if (cfgSchema && cfgTable) apiTemplateStorageRef = `${cfgSchema}.${cfgTable}`;
       else apiTemplateStorageRef = 'ao_system.api_configs_store';
+      const deskSchema = String(effective?.workflow_desks_schema || '').trim();
+      const deskTable = String(effective?.workflow_desks_table || '').trim();
+      if (deskSchema && deskTable) workflowDeskStorageRef = `${deskSchema}.${deskTable}`;
+      else workflowDeskStorageRef = 'ao_system.workflow_desks_store';
 
       const apiRows = Array.isArray(apiJson?.api_configs) ? apiJson.api_configs : [];
       dynamicApiSources = apiRows.map((row: any, idx: number) => {
@@ -1859,30 +2232,13 @@
   function openFullApiBuilder(nodeId: string) {
     const node = nodes.find((n) => n.id === nodeId);
     if (!node || (!isApiNode(node) && !isApiToolNode(node))) return;
-    const req = getApiRequestForNode(node);
-    const templateId = nodeTemplateId(node);
     const templateStoreId = nodeTemplateStoreId(node);
-    const payload = {
-      nodeId,
-      templateId,
-      templateStoreId,
-      nodeName: String(node.config?.name || '').trim(),
-      request: {
-        method: req.method,
-        url: req.url,
-        authMode: req.authMode,
-        headers: req.headersText,
-        query: req.queryText,
-        body: req.bodyText
-      },
-      createdAt: new Date().toISOString()
-    };
-    try {
-      localStorage.setItem('ao_workflow_api_handoff', JSON.stringify(payload));
-    } catch {
-      // ignore storage errors
-    }
-    window.location.hash = '#desk/workflow';
+    const q = new URLSearchParams();
+    if (templateStoreId) q.set('api_store_id', templateStoreId);
+    if (deskId > 0) q.set('desk_id', String(deskId));
+    const nodeName = String(node.config?.name || '').trim();
+    if (nodeName) q.set('from_node', nodeName);
+    window.location.hash = q.toString() ? `#desk/workflow?${q.toString()}` : '#desk/workflow';
   }
 
   function resetCanvas() {
@@ -1903,14 +2259,58 @@
     banner = '';
   }
 
-  onMount(() => {
+  onMount(async () => {
     resetCanvas();
-    loadDynamicSourceCatalog();
+    await loadDynamicSourceCatalog();
+    await loadWorkflowDeskFromServer();
+    deskInitialized = true;
+    restartDeskAutosaveTimer();
+  });
+
+  onDestroy(() => {
+    clearDeskAutosaveTimer();
   });
 </script>
 
 <section class="panel workflow-v2">
   <h3>Workflow-конструктор данных</h3>
+
+  <div class="desk-bar">
+    <div class="desk-storage">
+      <span>Хранятся в таблице:</span>
+      <strong>{workflowDeskStorageRef}</strong>
+      <span>ID: {deskId || '-'}</span>
+      <span>Ревизия: {deskRevision || '-'}</span>
+      <span class={deskDirty ? 'dirty-flag' : 'clean-flag'}>{deskDirty ? 'Есть несохраненные изменения' : 'Синхронизировано'}</span>
+    </div>
+    <div class="desk-actions">
+      <label>
+        Название
+        <input value={deskName} on:input={(e) => (deskName = inputValue(e))} />
+      </label>
+      <label>
+        Описание
+        <input value={deskDescription} on:input={(e) => (deskDescription = inputValue(e))} />
+      </label>
+      <button class="mini" on:click={() => saveDesk(false)} disabled={deskSaving || deskLoading}>
+        {deskSaving ? 'Сохранение...' : 'Сохранить'}
+      </button>
+      <button class="mini" on:click={reloadDeskFromServer} disabled={deskSaving || deskLoading}>
+        {deskLoading ? 'Загрузка...' : 'Перезагрузить'}
+      </button>
+      <button class="mini toggle-btn" class:active={deskAutosaveEnabled} on:click={toggleDeskAutosave}>
+        {deskAutosaveEnabled ? 'Автосохранение: вкл' : 'Автосохранение: выкл'}
+      </button>
+      <label class="sec-label">
+        Интервал (сек)
+        <input type="number" min="3" value={String(deskAutosaveSeconds)} on:input={onDeskAutosaveSecondsInput} disabled={!deskAutosaveEnabled} />
+      </label>
+      <span class="saved-at">{deskLastSavedAt ? `Сохранено: ${deskLastSavedAt}` : 'Пока не сохранено'}</span>
+    </div>
+    {#if deskSaveError}
+      <div class="desk-error">{deskSaveError}</div>
+    {/if}
+  </div>
 
   <div class="topbar">
     <button on:click={() => (issues = validate())}>Проверить схему</button>
@@ -2364,6 +2764,68 @@
 
 <style>
   .workflow-v2 { display: flex; flex-direction: column; gap: 10px; }
+  .desk-bar {
+    border: 1px solid #dbe4f0;
+    border-radius: 12px;
+    padding: 10px;
+    background: #f8fbff;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .desk-storage {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 12px;
+    color: #334155;
+    align-items: center;
+  }
+  .dirty-flag { color: #b45309; font-weight: 600; }
+  .clean-flag { color: #166534; font-weight: 600; }
+  .desk-actions {
+    display: grid;
+    grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr) auto auto auto auto minmax(170px, 1fr);
+    gap: 8px;
+    align-items: end;
+  }
+  .desk-actions label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    color: #475569;
+  }
+  .desk-actions input {
+    border: 1px solid #dbe4f0;
+    border-radius: 8px;
+    background: #fff;
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+  .desk-actions .sec-label input {
+    min-width: 88px;
+  }
+  .toggle-btn.active {
+    background: #0f172a;
+    color: #fff;
+    border-color: #0f172a;
+  }
+  .saved-at {
+    font-size: 11px;
+    color: #475569;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .desk-error {
+    border: 1px solid #fecaca;
+    border-radius: 8px;
+    background: #fef2f2;
+    color: #991b1b;
+    padding: 6px 8px;
+    font-size: 12px;
+  }
   .topbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .topbar button { border: 1px solid #dbe4f0; background: #fff; border-radius: 9px; padding: 6px 10px; cursor: pointer; }
   .topbar .primary { background: #0f172a; color: #fff; border-color: #0f172a; }
@@ -2456,6 +2918,20 @@
   .exec-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .view-toggle { border-radius: 10px; border: 1px solid #e2e8f0; background: #fff; color: #0f172a; padding: 4px 8px; font-size: 11px; line-height: 1.2; cursor: pointer; }
   .response-tree-wrap { border: 1px solid #e6eaf2; border-radius: 12px; background: #fff; padding: 8px; min-height: 78px; overflow: visible; }
+  @media (max-width: 1440px) {
+    .desk-actions {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+  @media (max-width: 1100px) {
+    .workspace {
+      grid-template-columns: 1fr;
+      min-height: 0;
+    }
+    .desk-actions {
+      grid-template-columns: 1fr;
+    }
+  }
 </style>
 
 

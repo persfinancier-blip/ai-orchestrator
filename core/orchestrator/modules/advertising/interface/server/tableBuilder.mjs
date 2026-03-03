@@ -43,6 +43,8 @@ const DEFAULT_CONFIG = Object.freeze({
   templates_table: 'table_templates_store',
   api_configs_schema: 'ao_system',
   api_configs_table: 'api_configs_store',
+  workflow_desks_schema: 'ao_system',
+  workflow_desks_table: 'workflow_desks_store',
   server_writes_schema: 'ao_system',
   server_writes_table: 'table_server_writes_store'
 });
@@ -99,67 +101,20 @@ const SERVER_WRITES_REQUIRED_COLUMNS = [
 ];
 const API_CONFIGS_REQUIRED_COLUMNS = [
   { name: 'api_name', types: ['text', 'character varying', 'varchar'] },
-  { name: 'method', types: ['text', 'character varying', 'varchar'] },
-  { name: 'base_url', types: ['text', 'character varying', 'varchar'] },
-  { name: 'path', types: ['text', 'character varying', 'varchar'] },
-  { name: 'headers_json', types: ['jsonb', 'json'] },
-  { name: 'query_json', types: ['jsonb', 'json'] },
-  { name: 'body_json', types: ['jsonb', 'json'] },
-  { name: 'pagination_json', types: ['jsonb', 'json'] },
-  { name: 'execution_json', types: ['jsonb', 'json'] },
-  { name: 'data_model_json', types: ['jsonb', 'json'] },
-  { name: 'target_schema', types: ['text', 'character varying', 'varchar'] },
-  { name: 'target_table', types: ['text', 'character varying', 'varchar'] },
-  { name: 'mapping_json', types: ['jsonb', 'json'] },
-  { name: 'auth_mode', types: ['text', 'character varying', 'varchar'] },
-  { name: 'auth_json', types: ['jsonb', 'json'] },
-  { name: 'oauth2_token_url', types: ['text', 'character varying', 'varchar'] },
-  { name: 'oauth2_client_id', types: ['text', 'character varying', 'varchar'] },
-  { name: 'oauth2_client_secret', types: ['text', 'character varying', 'varchar'] },
-  { name: 'oauth2_grant_type', types: ['text', 'character varying', 'varchar'] },
-  { name: 'oauth2_token_field', types: ['text', 'character varying', 'varchar'] },
-  { name: 'oauth2_expires_field', types: ['text', 'character varying', 'varchar'] },
-  { name: 'oauth2_token_type_field', types: ['text', 'character varying', 'varchar'] },
-  { name: 'parameter_definitions', types: ['jsonb', 'json'] },
-  { name: 'response_targets', types: ['jsonb', 'json'] },
-  { name: 'picked_paths', types: ['jsonb', 'json'] },
-  { name: 'example_request', types: ['text', 'character varying', 'varchar'] },
-  { name: 'pagination_enabled', types: ['boolean'] },
-  { name: 'pagination_strategy', types: ['text', 'character varying', 'varchar'] },
-  { name: 'pagination_target', types: ['text', 'character varying', 'varchar'] },
-  { name: 'pagination_data_path', types: ['text', 'character varying', 'varchar'] },
-  { name: 'pagination_page_param', types: ['text', 'character varying', 'varchar'] },
-  { name: 'pagination_start_page', types: ['integer', 'int', 'int4'] },
-  { name: 'pagination_limit_param', types: ['text', 'character varying', 'varchar'] },
-  { name: 'pagination_limit_value', types: ['integer', 'int', 'int4'] },
-  { name: 'pagination_cursor_req_path_1', types: ['text', 'character varying', 'varchar'] },
-  { name: 'pagination_cursor_req_path_2', types: ['text', 'character varying', 'varchar'] },
-  { name: 'pagination_cursor_res_path_1', types: ['text', 'character varying', 'varchar'] },
-  { name: 'pagination_cursor_res_path_2', types: ['text', 'character varying', 'varchar'] },
-  { name: 'pagination_next_url_path', types: ['text', 'character varying', 'varchar'] },
-  { name: 'dispatch_mode', types: ['text', 'character varying', 'varchar'] },
-  { name: 'execution_mode', types: ['text', 'character varying', 'varchar'] },
-  { name: 'sync_planner', types: ['text', 'character varying', 'varchar'] },
-  { name: 'async_concurrency', types: ['integer', 'int', 'int4'] },
-  { name: 'execution_delay_ms', types: ['integer', 'int', 'int4'] },
-  { name: 'response_log_enabled', types: ['boolean'] },
-  { name: 'response_log_schema', types: ['text', 'character varying', 'varchar'] },
-  { name: 'response_log_table', types: ['text', 'character varying', 'varchar'] },
-  { name: 'body_items_path', types: ['text', 'character varying', 'varchar'] },
-  { name: 'preview_request_limit', types: ['integer', 'int', 'int4'] },
-  { name: 'binding_rules', types: ['jsonb', 'json'] },
-  { name: 'group_by_aliases', types: ['jsonb', 'json'] },
-  { name: 'pagination_use_max_pages', types: ['boolean'] },
-  { name: 'pagination_max_pages', types: ['integer', 'int', 'int4'] },
-  { name: 'pagination_use_delay', types: ['boolean'] },
-  { name: 'pagination_delay_ms', types: ['integer', 'int', 'int4'] },
-  { name: 'pagination_stop_on_missing_value', types: ['boolean'] },
-  { name: 'pagination_stop_on_same_response', types: ['boolean'] },
-  { name: 'pagination_same_response_limit', types: ['integer', 'int', 'int4'] },
-  { name: 'pagination_stop_on_http_error', types: ['boolean'] },
-  { name: 'pagination_custom_strategy', types: ['text', 'character varying', 'varchar'] },
-  { name: 'data_date_parameters', types: ['jsonb', 'json'] },
-  { name: 'data_api_parameters', types: ['jsonb', 'json'] },
+  { name: 'config_json', types: ['jsonb', 'json'] },
+  { name: 'schema_version', types: ['integer', 'int', 'int4'] },
+  { name: 'revision', types: ['integer', 'int', 'int4'] },
+  { name: 'description', types: ['text', 'character varying', 'varchar'] },
+  { name: 'is_active', types: ['boolean'] },
+  { name: 'updated_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] },
+  { name: 'updated_by', types: ['text', 'character varying', 'varchar'] }
+];
+const WORKFLOW_DESKS_REQUIRED_COLUMNS = [
+  { name: 'desk_name', types: ['text', 'character varying', 'varchar'] },
+  { name: 'desk_type', types: ['text', 'character varying', 'varchar'] },
+  { name: 'config_json', types: ['jsonb', 'json'] },
+  { name: 'schema_version', types: ['integer', 'int', 'int4'] },
+  { name: 'revision', types: ['integer', 'int', 'int4'] },
   { name: 'description', types: ['text', 'character varying', 'varchar'] },
   { name: 'is_active', types: ['boolean'] },
   { name: 'updated_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] },
@@ -186,6 +141,10 @@ function contractsQname(config) {
 
 function apiConfigsQname(config) {
   return `${qi(config.api_configs_schema)}.${qi(config.api_configs_table)}`;
+}
+
+function workflowDesksQname(config) {
+  return `${qi(config.workflow_desks_schema)}.${qi(config.workflow_desks_table)}`;
 }
 
 function syncProtectedSystemTables(config) {
@@ -339,6 +298,11 @@ async function ensureDefaultSettingsRows(client) {
       key: 'api_configs_storage',
       value: { schema: DEFAULT_CONFIG.api_configs_schema, table: DEFAULT_CONFIG.api_configs_table },
       description: 'Хранилище преднастроенных API'
+    },
+    {
+      key: 'workflow_desks_storage',
+      value: { schema: DEFAULT_CONFIG.workflow_desks_schema, table: DEFAULT_CONFIG.workflow_desks_table },
+      description: 'Хранилище рабочих столов процессов и данных'
     }
   ];
 
@@ -419,6 +383,20 @@ function applySettingValue(target, key, value) {
   }
   if (key === 'api_configs_storage_table') {
     target.api_configs_table = normalizeSettingIdent(value, target.api_configs_table);
+    return;
+  }
+  if (key === 'workflow_desks_storage') {
+    const parsed = parseStorageSettingValue(value);
+    target.workflow_desks_schema = normalizeSettingIdent(parsed.schema, target.workflow_desks_schema);
+    target.workflow_desks_table = normalizeSettingIdent(parsed.table, target.workflow_desks_table);
+    return;
+  }
+  if (key === 'workflow_desks_storage_schema') {
+    target.workflow_desks_schema = normalizeSettingIdent(value, target.workflow_desks_schema);
+    return;
+  }
+  if (key === 'workflow_desks_storage_table') {
+    target.workflow_desks_table = normalizeSettingIdent(value, target.workflow_desks_table);
   }
 }
 
@@ -488,9 +466,21 @@ async function loadRuntimeConfig(client, { force = false } = {}) {
     next.api_configs_table = DEFAULT_CONFIG.api_configs_table;
   }
 
+  const workflowDesksOk = await hasRequiredColumns(
+    client,
+    next.workflow_desks_schema,
+    next.workflow_desks_table,
+    WORKFLOW_DESKS_REQUIRED_COLUMNS
+  );
+  if (!workflowDesksOk) {
+    next.workflow_desks_schema = DEFAULT_CONFIG.workflow_desks_schema;
+    next.workflow_desks_table = DEFAULT_CONFIG.workflow_desks_table;
+  }
+
   const contractsQn = await ensureContractsTable(client, next);
   const templatesQn = await ensureTemplatesStorageTable(client, next);
   await ensureApiConfigsTable(client, next);
+  await ensureWorkflowDesksTable(client, next);
   const serverWritesQn = await ensureServerWritesTable(client, next);
   await ensureDefaultServerWriteRules(client, next, serverWritesQn);
 
@@ -536,6 +526,15 @@ async function loadRuntimeConfig(client, { force = false } = {}) {
     next.api_configs_schema,
     next.api_configs_table,
     'system_bootstrap:api_configs_storage',
+    'system_bootstrap',
+    next.contracts_schema
+  );
+  await ensureContractVersionForTable(
+    client,
+    contractsQn,
+    next.workflow_desks_schema,
+    next.workflow_desks_table,
+    'system_bootstrap:workflow_desks_storage',
     'system_bootstrap',
     next.contracts_schema
   );
@@ -648,67 +647,9 @@ async function ensureApiConfigsTable(client, config) {
     CREATE TABLE IF NOT EXISTS ${qn} (
       id bigserial PRIMARY KEY,
       api_name text NOT NULL,
-      method text NOT NULL DEFAULT 'GET',
-      base_url text NOT NULL DEFAULT '',
-      path text NOT NULL DEFAULT '',
-      headers_json jsonb NOT NULL DEFAULT '{}'::jsonb,
-      query_json jsonb NOT NULL DEFAULT '{}'::jsonb,
-      body_json jsonb NOT NULL DEFAULT '{}'::jsonb,
-      pagination_json jsonb NOT NULL DEFAULT '{}'::jsonb,
-      execution_json jsonb NOT NULL DEFAULT '{}'::jsonb,
-      data_model_json jsonb NOT NULL DEFAULT '{}'::jsonb,
-      target_schema text NOT NULL DEFAULT '',
-      target_table text NOT NULL DEFAULT '',
-      mapping_json jsonb NOT NULL DEFAULT '{}'::jsonb,
-      auth_mode text NOT NULL DEFAULT 'manual',
-      auth_json jsonb NOT NULL DEFAULT '{}'::jsonb,
-      oauth2_token_url text NOT NULL DEFAULT '',
-      oauth2_client_id text NOT NULL DEFAULT '',
-      oauth2_client_secret text NOT NULL DEFAULT '',
-      oauth2_grant_type text NOT NULL DEFAULT 'client_credentials',
-      oauth2_token_field text NOT NULL DEFAULT 'access_token',
-      oauth2_expires_field text NOT NULL DEFAULT 'expires_in',
-      oauth2_token_type_field text NOT NULL DEFAULT 'token_type',
-      parameter_definitions jsonb NOT NULL DEFAULT '[]'::jsonb,
-      response_targets jsonb NOT NULL DEFAULT '[]'::jsonb,
-      picked_paths jsonb NOT NULL DEFAULT '[]'::jsonb,
-      example_request text NOT NULL DEFAULT '',
-      pagination_enabled boolean NOT NULL DEFAULT false,
-      pagination_strategy text NOT NULL DEFAULT 'none',
-      pagination_target text NOT NULL DEFAULT 'body',
-      pagination_data_path text NOT NULL DEFAULT '',
-      pagination_page_param text NOT NULL DEFAULT 'page',
-      pagination_start_page integer NOT NULL DEFAULT 1,
-      pagination_limit_param text NOT NULL DEFAULT 'limit',
-      pagination_limit_value integer NOT NULL DEFAULT 100,
-      pagination_cursor_req_path_1 text NOT NULL DEFAULT '',
-      pagination_cursor_req_path_2 text NOT NULL DEFAULT '',
-      pagination_cursor_res_path_1 text NOT NULL DEFAULT '',
-      pagination_cursor_res_path_2 text NOT NULL DEFAULT '',
-      pagination_next_url_path text NOT NULL DEFAULT 'next',
-      dispatch_mode text NOT NULL DEFAULT 'single',
-      execution_mode text NOT NULL DEFAULT 'sync',
-      sync_planner text NOT NULL DEFAULT 'entity_to_stop',
-      async_concurrency integer NOT NULL DEFAULT 3,
-      execution_delay_ms integer NOT NULL DEFAULT 0,
-      response_log_enabled boolean NOT NULL DEFAULT false,
-      response_log_schema text NOT NULL DEFAULT '',
-      response_log_table text NOT NULL DEFAULT '',
-      body_items_path text NOT NULL DEFAULT 'items',
-      preview_request_limit integer NOT NULL DEFAULT 5,
-      binding_rules jsonb NOT NULL DEFAULT '[]'::jsonb,
-      group_by_aliases jsonb NOT NULL DEFAULT '[]'::jsonb,
-      pagination_use_max_pages boolean NOT NULL DEFAULT false,
-      pagination_max_pages integer NOT NULL DEFAULT 1,
-      pagination_use_delay boolean NOT NULL DEFAULT false,
-      pagination_delay_ms integer NOT NULL DEFAULT 0,
-      pagination_stop_on_missing_value boolean NOT NULL DEFAULT true,
-      pagination_stop_on_same_response boolean NOT NULL DEFAULT true,
-      pagination_same_response_limit integer NOT NULL DEFAULT 5,
-      pagination_stop_on_http_error boolean NOT NULL DEFAULT true,
-      pagination_custom_strategy text NOT NULL DEFAULT '',
-      data_date_parameters jsonb NOT NULL DEFAULT '[]'::jsonb,
-      data_api_parameters jsonb NOT NULL DEFAULT '[]'::jsonb,
+      config_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      schema_version integer NOT NULL DEFAULT 1,
+      revision integer NOT NULL DEFAULT 1,
       description text NOT NULL DEFAULT '',
       is_active boolean NOT NULL DEFAULT true,
       updated_at timestamptz NOT NULL DEFAULT now(),
@@ -725,57 +666,51 @@ async function ensureApiConfigsTable(client, config) {
   `);
   await client.query(`
     ALTER TABLE ${qn}
-      ADD COLUMN IF NOT EXISTS execution_json jsonb NOT NULL DEFAULT '{}'::jsonb,
-      ADD COLUMN IF NOT EXISTS data_model_json jsonb NOT NULL DEFAULT '{}'::jsonb,
-      ADD COLUMN IF NOT EXISTS auth_mode text NOT NULL DEFAULT 'manual',
-      ADD COLUMN IF NOT EXISTS auth_json jsonb NOT NULL DEFAULT '{}'::jsonb,
-      ADD COLUMN IF NOT EXISTS oauth2_token_url text NOT NULL DEFAULT '',
-      ADD COLUMN IF NOT EXISTS oauth2_client_id text NOT NULL DEFAULT '',
-      ADD COLUMN IF NOT EXISTS oauth2_client_secret text NOT NULL DEFAULT '',
-      ADD COLUMN IF NOT EXISTS oauth2_grant_type text NOT NULL DEFAULT 'client_credentials',
-      ADD COLUMN IF NOT EXISTS oauth2_token_field text NOT NULL DEFAULT 'access_token',
-      ADD COLUMN IF NOT EXISTS oauth2_expires_field text NOT NULL DEFAULT 'expires_in',
-      ADD COLUMN IF NOT EXISTS oauth2_token_type_field text NOT NULL DEFAULT 'token_type',
-      ADD COLUMN IF NOT EXISTS parameter_definitions jsonb NOT NULL DEFAULT '[]'::jsonb,
-      ADD COLUMN IF NOT EXISTS response_targets jsonb NOT NULL DEFAULT '[]'::jsonb,
-      ADD COLUMN IF NOT EXISTS picked_paths jsonb NOT NULL DEFAULT '[]'::jsonb,
-      ADD COLUMN IF NOT EXISTS example_request text NOT NULL DEFAULT '',
-      ADD COLUMN IF NOT EXISTS pagination_enabled boolean NOT NULL DEFAULT false,
-      ADD COLUMN IF NOT EXISTS pagination_strategy text NOT NULL DEFAULT 'none',
-      ADD COLUMN IF NOT EXISTS pagination_target text NOT NULL DEFAULT 'body',
-      ADD COLUMN IF NOT EXISTS pagination_data_path text NOT NULL DEFAULT '',
-      ADD COLUMN IF NOT EXISTS pagination_page_param text NOT NULL DEFAULT 'page',
-      ADD COLUMN IF NOT EXISTS pagination_start_page integer NOT NULL DEFAULT 1,
-      ADD COLUMN IF NOT EXISTS pagination_limit_param text NOT NULL DEFAULT 'limit',
-      ADD COLUMN IF NOT EXISTS pagination_limit_value integer NOT NULL DEFAULT 100,
-      ADD COLUMN IF NOT EXISTS pagination_cursor_req_path_1 text NOT NULL DEFAULT '',
-      ADD COLUMN IF NOT EXISTS pagination_cursor_req_path_2 text NOT NULL DEFAULT '',
-      ADD COLUMN IF NOT EXISTS pagination_cursor_res_path_1 text NOT NULL DEFAULT '',
-      ADD COLUMN IF NOT EXISTS pagination_cursor_res_path_2 text NOT NULL DEFAULT '',
-      ADD COLUMN IF NOT EXISTS pagination_next_url_path text NOT NULL DEFAULT 'next',
-      ADD COLUMN IF NOT EXISTS dispatch_mode text NOT NULL DEFAULT 'single',
-      ADD COLUMN IF NOT EXISTS execution_mode text NOT NULL DEFAULT 'sync',
-      ADD COLUMN IF NOT EXISTS sync_planner text NOT NULL DEFAULT 'entity_to_stop',
-      ADD COLUMN IF NOT EXISTS async_concurrency integer NOT NULL DEFAULT 3,
-      ADD COLUMN IF NOT EXISTS execution_delay_ms integer NOT NULL DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS response_log_enabled boolean NOT NULL DEFAULT false,
-      ADD COLUMN IF NOT EXISTS response_log_schema text NOT NULL DEFAULT '',
-      ADD COLUMN IF NOT EXISTS response_log_table text NOT NULL DEFAULT '',
-      ADD COLUMN IF NOT EXISTS body_items_path text NOT NULL DEFAULT 'items',
-      ADD COLUMN IF NOT EXISTS preview_request_limit integer NOT NULL DEFAULT 5,
-      ADD COLUMN IF NOT EXISTS binding_rules jsonb NOT NULL DEFAULT '[]'::jsonb,
-      ADD COLUMN IF NOT EXISTS group_by_aliases jsonb NOT NULL DEFAULT '[]'::jsonb,
-      ADD COLUMN IF NOT EXISTS pagination_use_max_pages boolean NOT NULL DEFAULT false,
-      ADD COLUMN IF NOT EXISTS pagination_max_pages integer NOT NULL DEFAULT 1,
-      ADD COLUMN IF NOT EXISTS pagination_use_delay boolean NOT NULL DEFAULT false,
-      ADD COLUMN IF NOT EXISTS pagination_delay_ms integer NOT NULL DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS pagination_stop_on_missing_value boolean NOT NULL DEFAULT true,
-      ADD COLUMN IF NOT EXISTS pagination_stop_on_same_response boolean NOT NULL DEFAULT true,
-      ADD COLUMN IF NOT EXISTS pagination_same_response_limit integer NOT NULL DEFAULT 5,
-      ADD COLUMN IF NOT EXISTS pagination_stop_on_http_error boolean NOT NULL DEFAULT true,
-      ADD COLUMN IF NOT EXISTS pagination_custom_strategy text NOT NULL DEFAULT '',
-      ADD COLUMN IF NOT EXISTS data_date_parameters jsonb NOT NULL DEFAULT '[]'::jsonb,
-      ADD COLUMN IF NOT EXISTS data_api_parameters jsonb NOT NULL DEFAULT '[]'::jsonb
+      ADD COLUMN IF NOT EXISTS config_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      ADD COLUMN IF NOT EXISTS schema_version integer NOT NULL DEFAULT 1,
+      ADD COLUMN IF NOT EXISTS revision integer NOT NULL DEFAULT 1,
+      ADD COLUMN IF NOT EXISTS description text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now(),
+      ADD COLUMN IF NOT EXISTS updated_by text NOT NULL DEFAULT 'system'
+  `);
+  await ensureSystemContractColumns(client, qn);
+  return qn;
+}
+
+async function ensureWorkflowDesksTable(client, config) {
+  const schema = normalizeSettingIdent(config?.workflow_desks_schema, DEFAULT_CONFIG.workflow_desks_schema);
+  const table = normalizeSettingIdent(config?.workflow_desks_table, DEFAULT_CONFIG.workflow_desks_table);
+  const qn = `${qi(schema)}.${qi(table)}`;
+
+  await client.query(`CREATE SCHEMA IF NOT EXISTS ${qi(schema)}`);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ${qn} (
+      id bigserial PRIMARY KEY,
+      desk_name text NOT NULL,
+      desk_type text NOT NULL DEFAULT 'data',
+      config_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      schema_version integer NOT NULL DEFAULT 1,
+      revision integer NOT NULL DEFAULT 1,
+      description text NOT NULL DEFAULT '',
+      is_active boolean NOT NULL DEFAULT true,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      updated_by text NOT NULL DEFAULT 'system'
+    )
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_workflow_desks_store_active_idx
+    ON ${qn} (is_active, desk_type, desk_name)
+  `);
+  await client.query(`
+    ALTER TABLE ${qn}
+      ADD COLUMN IF NOT EXISTS config_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      ADD COLUMN IF NOT EXISTS schema_version integer NOT NULL DEFAULT 1,
+      ADD COLUMN IF NOT EXISTS revision integer NOT NULL DEFAULT 1,
+      ADD COLUMN IF NOT EXISTS description text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now(),
+      ADD COLUMN IF NOT EXISTS updated_by text NOT NULL DEFAULT 'system'
   `);
   await ensureSystemContractColumns(client, qn);
   return qn;
@@ -817,6 +752,8 @@ async function ensureDefaultServerWriteRules(client, config, serverWritesQn) {
   const templatesTable = normalizeSettingIdent(config?.templates_table, DEFAULT_CONFIG.templates_table);
   const apiSchema = normalizeSettingIdent(config?.api_configs_schema, DEFAULT_CONFIG.api_configs_schema);
   const apiTable = normalizeSettingIdent(config?.api_configs_table, DEFAULT_CONFIG.api_configs_table);
+  const workflowSchema = normalizeSettingIdent(config?.workflow_desks_schema, DEFAULT_CONFIG.workflow_desks_schema);
+  const workflowTable = normalizeSettingIdent(config?.workflow_desks_table, DEFAULT_CONFIG.workflow_desks_table);
   const writesSchema = normalizeSettingIdent(config?.server_writes_schema, DEFAULT_CONFIG.server_writes_schema);
   const writesTable = normalizeSettingIdent(config?.server_writes_table, DEFAULT_CONFIG.server_writes_table);
   const contractName = defaultContractName(writesSchema, writesTable);
@@ -827,7 +764,15 @@ async function ensureDefaultServerWriteRules(client, config, serverWritesQn) {
       target_schema: SETTINGS_SCHEMA,
       target_table: SETTINGS_TABLE,
       operation: 'upsert_settings_defaults',
-      payload: { setting_keys: ['contracts_storage', 'templates_storage', 'api_configs_storage', 'server_writes_storage'] },
+      payload: {
+        setting_keys: [
+          'contracts_storage',
+          'templates_storage',
+          'api_configs_storage',
+          'workflow_desks_storage',
+          'server_writes_storage'
+        ]
+      },
       description: 'Сервер поддерживает обязательные ключи в таблице настроек'
     },
     {
@@ -853,6 +798,14 @@ async function ensureDefaultServerWriteRules(client, config, serverWritesQn) {
       operation: 'upsert_api_config',
       payload: { trigger: ['api_add', 'api_save', 'api_delete'] },
       description: 'Сервер сохраняет преднастроенные API в подключенное хранилище'
+    },
+    {
+      rule_key: 'workflow_desks_storage_sync',
+      target_schema: workflowSchema,
+      target_table: workflowTable,
+      operation: 'upsert_workflow_desk',
+      payload: { trigger: ['workflow_desk_save', 'workflow_desk_delete'] },
+      description: 'Сервер сохраняет рабочие столы процессов и данных'
     },
     {
       rule_key: 'server_writes_rules_self',
@@ -1380,6 +1333,37 @@ tableBuilderRouter.post('/contracts/version/delete', requireDataAdmin, async (re
   }
 });
 
+function tryObject(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value !== 'string') return {};
+  const raw = String(value || '').trim();
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function materializeApiConfigRow(row) {
+  const cfg = tryObject(row?.config_json);
+  const hasCfg = Object.keys(cfg).length > 0;
+  const src = hasCfg ? cfg : row || {};
+  return {
+    ...src,
+    id: Number(row?.id || src?.id || 0),
+    api_name: String(row?.api_name || src?.api_name || '').trim(),
+    description: String(row?.description ?? src?.description ?? '').trim(),
+    is_active: row?.is_active === undefined ? Boolean(src?.is_active ?? true) : Boolean(row?.is_active),
+    updated_at: row?.updated_at || src?.updated_at || null,
+    updated_by: String(row?.updated_by || src?.updated_by || '').trim(),
+    schema_version: Number(row?.schema_version || src?.schema_version || 1) || 1,
+    revision: Number(row?.revision || src?.revision || 1) || 1,
+    config_json: hasCfg ? cfg : {}
+  };
+}
+
 tableBuilderRouter.get('/api-configs', requireDataAdmin, async (_req, res) => {
   const client = await pool.connect();
   try {
@@ -1388,80 +1372,13 @@ tableBuilderRouter.get('/api-configs', requireDataAdmin, async (_req, res) => {
     await ensureApiConfigsTable(client, config);
     const r = await client.query(
       `
-      SELECT
-        id,
-        api_name,
-        method,
-        base_url,
-        path,
-        headers_json,
-        query_json,
-        body_json,
-        pagination_json,
-        execution_json,
-        data_model_json,
-        target_schema,
-        target_table,
-        mapping_json,
-        auth_mode,
-        auth_json,
-        oauth2_token_url,
-        oauth2_client_id,
-        oauth2_client_secret,
-        oauth2_grant_type,
-        oauth2_token_field,
-        oauth2_expires_field,
-        oauth2_token_type_field,
-        parameter_definitions,
-        response_targets,
-        picked_paths,
-        example_request,
-        pagination_enabled,
-        pagination_strategy,
-        pagination_target,
-        pagination_data_path,
-        pagination_page_param,
-        pagination_start_page,
-        pagination_limit_param,
-        pagination_limit_value,
-        pagination_cursor_req_path_1,
-        pagination_cursor_req_path_2,
-        pagination_cursor_res_path_1,
-        pagination_cursor_res_path_2,
-        pagination_next_url_path,
-        dispatch_mode,
-        execution_mode,
-        sync_planner,
-        async_concurrency,
-        execution_delay_ms,
-        response_log_enabled,
-        response_log_schema,
-        response_log_table,
-        body_items_path,
-        preview_request_limit,
-        binding_rules,
-        group_by_aliases,
-        pagination_use_max_pages,
-        pagination_max_pages,
-        pagination_use_delay,
-        pagination_delay_ms,
-        pagination_stop_on_missing_value,
-        pagination_stop_on_same_response,
-        pagination_same_response_limit,
-        pagination_stop_on_http_error,
-        pagination_custom_strategy,
-        data_date_parameters,
-        data_api_parameters,
-        description,
-        is_active,
-        updated_at,
-        updated_by
+      SELECT *
       FROM ${qn}
       WHERE is_active = true
       ORDER BY updated_at DESC, id DESC
       `
     );
-    return res.json({ api_configs: r.rows || [] });
+    return res.json({ api_configs: (r.rows || []).map(materializeApiConfigRow) });
   } catch (e) {
     return res.status(500).json({ error: 'api_configs_list_failed', details: String(e?.message || e) });
   } finally {
@@ -1600,6 +1517,79 @@ tableBuilderRouter.post('/api-configs/upsert', requireDataAdmin, async (req, res
   const pagination_custom_strategy = String(req.body?.pagination_custom_strategy || '').trim();
   const data_date_parameters = toArray(req.body?.data_date_parameters ?? data_model_json?.date_parameters);
   const data_api_parameters = toArray(req.body?.data_api_parameters ?? data_model_json?.api_parameters);
+  const schema_version = Number.isFinite(Number(req.body?.schema_version)) ? Number(req.body?.schema_version) : 1;
+  const expected_revision = Number.isFinite(Number(req.body?.expected_revision))
+    ? Number(req.body?.expected_revision)
+    : Number.isFinite(Number(req.body?.revision))
+    ? Number(req.body?.revision)
+    : 0;
+
+  const config_json = {
+    api_name,
+    method,
+    base_url,
+    path,
+    headers_json,
+    query_json,
+    body_json,
+    pagination_json,
+    execution_json,
+    data_model_json,
+    target_schema,
+    target_table,
+    mapping_json,
+    auth_mode,
+    auth_json,
+    oauth2_token_url,
+    oauth2_client_id,
+    oauth2_client_secret,
+    oauth2_grant_type,
+    oauth2_token_field,
+    oauth2_expires_field,
+    oauth2_token_type_field,
+    parameter_definitions,
+    response_targets,
+    picked_paths,
+    example_request,
+    pagination_enabled,
+    pagination_strategy,
+    pagination_target,
+    pagination_data_path,
+    pagination_page_param,
+    pagination_start_page,
+    pagination_limit_param,
+    pagination_limit_value,
+    pagination_cursor_req_path_1,
+    pagination_cursor_req_path_2,
+    pagination_cursor_res_path_1,
+    pagination_cursor_res_path_2,
+    pagination_next_url_path,
+    dispatch_mode,
+    execution_mode,
+    sync_planner,
+    async_concurrency,
+    execution_delay_ms,
+    response_log_enabled,
+    response_log_schema,
+    response_log_table,
+    body_items_path,
+    preview_request_limit,
+    binding_rules,
+    group_by_aliases,
+    pagination_use_max_pages,
+    pagination_max_pages,
+    pagination_use_delay,
+    pagination_delay_ms,
+    pagination_stop_on_missing_value,
+    pagination_stop_on_same_response,
+    pagination_same_response_limit,
+    pagination_stop_on_http_error,
+    pagination_custom_strategy,
+    data_date_parameters,
+    data_api_parameters,
+    description,
+    is_active
+  };
 
   const client = await pool.connect();
   try {
@@ -1608,164 +1598,102 @@ tableBuilderRouter.post('/api-configs/upsert', requireDataAdmin, async (req, res
     await ensureApiConfigsTable(client, config);
     const runId = `api_config_upsert_${Date.now()}`;
     const contractName = defaultContractName(config.api_configs_schema, config.api_configs_table);
-    const storageColumns = [
-      { name: 'api_name', value: api_name },
-      { name: 'method', value: method },
-      { name: 'base_url', value: base_url },
-      { name: 'path', value: path },
-      { name: 'headers_json', value: headers_json, json: true },
-      { name: 'query_json', value: query_json, json: true },
-      { name: 'body_json', value: body_json, json: true },
-      { name: 'pagination_json', value: pagination_json, json: true },
-      { name: 'execution_json', value: execution_json, json: true },
-      { name: 'data_model_json', value: data_model_json, json: true },
-      { name: 'target_schema', value: target_schema },
-      { name: 'target_table', value: target_table },
-      { name: 'mapping_json', value: mapping_json, json: true },
-      { name: 'auth_mode', value: auth_mode },
-      { name: 'auth_json', value: auth_json, json: true },
-      { name: 'oauth2_token_url', value: oauth2_token_url },
-      { name: 'oauth2_client_id', value: oauth2_client_id },
-      { name: 'oauth2_client_secret', value: oauth2_client_secret },
-      { name: 'oauth2_grant_type', value: oauth2_grant_type },
-      { name: 'oauth2_token_field', value: oauth2_token_field },
-      { name: 'oauth2_expires_field', value: oauth2_expires_field },
-      { name: 'oauth2_token_type_field', value: oauth2_token_type_field },
-      { name: 'parameter_definitions', value: parameter_definitions, json: true },
-      { name: 'response_targets', value: response_targets, json: true },
-      { name: 'picked_paths', value: picked_paths, json: true },
-      { name: 'example_request', value: example_request },
-      { name: 'pagination_enabled', value: pagination_enabled },
-      { name: 'pagination_strategy', value: pagination_strategy },
-      { name: 'pagination_target', value: pagination_target },
-      { name: 'pagination_data_path', value: pagination_data_path },
-      { name: 'pagination_page_param', value: pagination_page_param },
-      { name: 'pagination_start_page', value: pagination_start_page },
-      { name: 'pagination_limit_param', value: pagination_limit_param },
-      { name: 'pagination_limit_value', value: pagination_limit_value },
-      { name: 'pagination_cursor_req_path_1', value: pagination_cursor_req_path_1 },
-      { name: 'pagination_cursor_req_path_2', value: pagination_cursor_req_path_2 },
-      { name: 'pagination_cursor_res_path_1', value: pagination_cursor_res_path_1 },
-      { name: 'pagination_cursor_res_path_2', value: pagination_cursor_res_path_2 },
-      { name: 'pagination_next_url_path', value: pagination_next_url_path },
-      { name: 'dispatch_mode', value: dispatch_mode },
-      { name: 'execution_mode', value: execution_mode },
-      { name: 'sync_planner', value: sync_planner },
-      { name: 'async_concurrency', value: async_concurrency },
-      { name: 'execution_delay_ms', value: execution_delay_ms },
-      { name: 'response_log_enabled', value: response_log_enabled },
-      { name: 'response_log_schema', value: response_log_schema },
-      { name: 'response_log_table', value: response_log_table },
-      { name: 'body_items_path', value: body_items_path },
-      { name: 'preview_request_limit', value: preview_request_limit },
-      { name: 'binding_rules', value: binding_rules, json: true },
-      { name: 'group_by_aliases', value: group_by_aliases, json: true },
-      { name: 'pagination_use_max_pages', value: pagination_use_max_pages },
-      { name: 'pagination_max_pages', value: pagination_max_pages },
-      { name: 'pagination_use_delay', value: pagination_use_delay },
-      { name: 'pagination_delay_ms', value: pagination_delay_ms },
-      { name: 'pagination_stop_on_missing_value', value: pagination_stop_on_missing_value },
-      { name: 'pagination_stop_on_same_response', value: pagination_stop_on_same_response },
-      { name: 'pagination_same_response_limit', value: pagination_same_response_limit },
-      { name: 'pagination_stop_on_http_error', value: pagination_stop_on_http_error },
-      { name: 'pagination_custom_strategy', value: pagination_custom_strategy },
-      { name: 'data_date_parameters', value: data_date_parameters, json: true },
-      { name: 'data_api_parameters', value: data_api_parameters, json: true },
-      { name: 'description', value: description },
-      { name: 'is_active', value: is_active }
-    ];
-    const storageValues = storageColumns.map((column) =>
-      column.json ? JSON.stringify(column.value === undefined ? {} : column.value) : column.value
-    );
-
     if (Number.isFinite(id) && id > 0) {
-      const setClauses = storageColumns
-        .map((column, index) => `${column.name} = $${index + 2}${column.json ? '::jsonb' : ''}`)
-        .join(',\n          ');
-      const updatedByIdx = storageColumns.length + 2;
-      const runIdIdx = storageColumns.length + 3;
-      const contractSchemaIdx = storageColumns.length + 4;
-      const contractNameIdx = storageColumns.length + 5;
+      const params = [
+        Math.trunc(id),
+        api_name,
+        JSON.stringify(config_json),
+        Math.max(1, Math.trunc(schema_version || 1)),
+        description,
+        is_active,
+        updated_by,
+        runId,
+        config.contracts_schema,
+        contractName
+      ];
+      let whereSql = 'id = $1';
+      if (expected_revision > 0) {
+        params.push(Math.max(1, Math.trunc(expected_revision)));
+        whereSql += ` AND revision = $${params.length}`;
+      }
       const r = await client.query(
         `
         UPDATE ${qn}
         SET
-          ${setClauses},
+          api_name = $2,
+          config_json = $3::jsonb,
+          schema_version = $4,
+          description = $5,
+          is_active = $6,
+          revision = revision + 1,
           updated_at = now(),
-          updated_by = $${updatedByIdx},
+          updated_by = $7,
           ao_source = 'api_configs_api',
-          ao_run_id = $${runIdIdx},
+          ao_run_id = $8,
           ao_updated_at = now(),
-          ao_contract_schema = $${contractSchemaIdx},
-          ao_contract_name = $${contractNameIdx},
+          ao_contract_schema = $9,
+          ao_contract_name = $10,
           ao_contract_version = 1
-        WHERE id = $1
-        RETURNING id
+        WHERE ${whereSql}
+        RETURNING id, revision
         `,
-        [
-          Math.trunc(id),
-          ...storageValues,
-          updated_by,
-          runId,
-          config.contracts_schema,
-          contractName
-        ]
+        params
       );
-      if (!r.rows?.length) return res.status(404).json({ error: 'not_found', details: 'api_config id not found' });
-      return res.json({ ok: true, id: Number(r.rows[0].id || 0), updated: true });
+      if (!r.rows?.length) {
+        if (expected_revision > 0) {
+          return res.status(409).json({ error: 'revision_conflict', details: 'api config has been changed on server' });
+        }
+        return res.status(404).json({ error: 'not_found', details: 'api_config id not found' });
+      }
+      return res.json({ ok: true, id: Number(r.rows[0].id || 0), revision: Number(r.rows[0].revision || 1), updated: true });
     }
 
     const nowIso = new Date().toISOString();
-    const insertColumns = [
-      ...storageColumns.map((column) => column.name),
-      'updated_at',
-      'updated_by',
-      'ao_source',
-      'ao_run_id',
-      'ao_created_at',
-      'ao_updated_at',
-      'ao_contract_schema',
-      'ao_contract_name',
-      'ao_contract_version'
-    ];
-    const insertValues = [
-      ...storageValues,
-      nowIso,
-      updated_by,
-      'api_configs_api',
-      runId,
-      nowIso,
-      nowIso,
-      config.contracts_schema,
-      contractName,
-      1
-    ];
-    const storagePlaceholders = storageColumns.map((column, idx) => `$${idx + 1}${column.json ? '::jsonb' : ''}`);
-    const metaOffset = storageColumns.length;
-    const metaPlaceholders = [
-      `$${metaOffset + 1}`,
-      `$${metaOffset + 2}`,
-      `$${metaOffset + 3}`,
-      `$${metaOffset + 4}`,
-      `$${metaOffset + 5}`,
-      `$${metaOffset + 6}`,
-      `$${metaOffset + 7}`,
-      `$${metaOffset + 8}`,
-      `$${metaOffset + 9}`
-    ];
-    const placeholders = [...storagePlaceholders, ...metaPlaceholders].join(', ');
-
     const r = await client.query(
       `
       INSERT INTO ${qn}
-        (${insertColumns.join(', ')})
+        (
+          api_name,
+          config_json,
+          schema_version,
+          revision,
+          description,
+          is_active,
+          updated_at,
+          updated_by,
+          ao_source,
+          ao_run_id,
+          ao_created_at,
+          ao_updated_at,
+          ao_contract_schema,
+          ao_contract_name,
+          ao_contract_version
+        )
       VALUES
-        (${placeholders})
-      RETURNING id
+        ($1, $2::jsonb, $3, 1, $4, $5, $6, $7, 'api_configs_api', $8, $9, $10, $11, $12, 1)
+      RETURNING id, revision
       `,
-      insertValues
+      [
+        api_name,
+        JSON.stringify(config_json),
+        Math.max(1, Math.trunc(schema_version || 1)),
+        description,
+        is_active,
+        nowIso,
+        updated_by,
+        runId,
+        nowIso,
+        nowIso,
+        config.contracts_schema,
+        contractName
+      ]
     );
-    return res.json({ ok: true, id: Number(r.rows?.[0]?.id || 0), created: true });
+    return res.json({
+      ok: true,
+      id: Number(r.rows?.[0]?.id || 0),
+      revision: Number(r.rows?.[0]?.revision || 1),
+      created: true
+    });
   } catch (e) {
     return res.status(500).json({ error: 'api_config_upsert_failed', details: String(e?.message || e) });
   } finally {
@@ -1794,6 +1722,225 @@ tableBuilderRouter.post('/api-configs/delete', requireDataAdmin, async (req, res
     return res.json({ ok: true, id: Number(r.rows[0].id || 0), deleted: true });
   } catch (e) {
     return res.status(500).json({ error: 'api_config_delete_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+tableBuilderRouter.get('/workflow-desks', requireDataAdmin, async (req, res) => {
+  const deskType = String(req.query?.desk_type || '').trim();
+  const limit = Math.max(1, Math.min(Number(req.query?.limit || 100), 1000));
+  const client = await pool.connect();
+  try {
+    const config = await loadRuntimeConfig(client);
+    const qn = workflowDesksQname(config);
+    await ensureWorkflowDesksTable(client, config);
+    const params = [];
+    let whereSql = 'WHERE is_active = true';
+    if (deskType) {
+      params.push(deskType);
+      whereSql += ` AND desk_type = $${params.length}`;
+    }
+    params.push(limit);
+    const r = await client.query(
+      `
+      SELECT id, desk_name, desk_type, config_json, schema_version, revision, description, is_active, updated_at, updated_by
+      FROM ${qn}
+      ${whereSql}
+      ORDER BY updated_at DESC, id DESC
+      LIMIT $${params.length}
+      `,
+      params
+    );
+    return res.json({ workflow_desks: r.rows || [] });
+  } catch (e) {
+    return res.status(500).json({ error: 'workflow_desks_list_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+tableBuilderRouter.get('/workflow-desks/:id', requireDataAdmin, async (req, res) => {
+  const id = Number(req.params?.id || 0);
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'bad_request', details: 'invalid id' });
+  const client = await pool.connect();
+  try {
+    const config = await loadRuntimeConfig(client);
+    const qn = workflowDesksQname(config);
+    await ensureWorkflowDesksTable(client, config);
+    const r = await client.query(
+      `
+      SELECT id, desk_name, desk_type, config_json, schema_version, revision, description, is_active, updated_at, updated_by
+      FROM ${qn}
+      WHERE id = $1 AND is_active = true
+      LIMIT 1
+      `,
+      [Math.trunc(id)]
+    );
+    if (!r.rows?.length) return res.status(404).json({ error: 'not_found', details: 'workflow desk not found' });
+    return res.json({ workflow_desk: r.rows[0] });
+  } catch (e) {
+    return res.status(500).json({ error: 'workflow_desk_get_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+tableBuilderRouter.post('/workflow-desks/upsert', requireDataAdmin, async (req, res) => {
+  const id = Number(req.body?.id || 0);
+  const desk_name = String(req.body?.desk_name || '').trim();
+  const desk_type = String(req.body?.desk_type || 'data').trim() || 'data';
+  const config_json = req.body?.config_json && typeof req.body.config_json === 'object' ? req.body.config_json : {};
+  const schema_version = Number.isFinite(Number(req.body?.schema_version)) ? Number(req.body?.schema_version) : 1;
+  const description = String(req.body?.description || '').trim();
+  const is_active = req.body?.is_active === undefined ? true : Boolean(req.body?.is_active);
+  const expected_revision = Number.isFinite(Number(req.body?.expected_revision))
+    ? Number(req.body?.expected_revision)
+    : Number.isFinite(Number(req.body?.revision))
+    ? Number(req.body?.revision)
+    : 0;
+  const updated_by = String(req.body?.updated_by || req.header('X-AO-ROLE') || 'ui').trim();
+
+  if (!desk_name) return res.status(400).json({ error: 'bad_request', details: 'desk_name is required' });
+  if (!isIdent(desk_type)) return res.status(400).json({ error: 'bad_request', details: 'invalid desk_type' });
+
+  const client = await pool.connect();
+  try {
+    const config = await loadRuntimeConfig(client);
+    const qn = workflowDesksQname(config);
+    await ensureWorkflowDesksTable(client, config);
+    const runId = `workflow_desk_upsert_${Date.now()}`;
+    const contractName = defaultContractName(config.workflow_desks_schema, config.workflow_desks_table);
+
+    if (Number.isFinite(id) && id > 0) {
+      const params = [
+        Math.trunc(id),
+        desk_name,
+        desk_type,
+        JSON.stringify(config_json),
+        Math.max(1, Math.trunc(schema_version || 1)),
+        description,
+        is_active,
+        updated_by,
+        runId,
+        config.contracts_schema,
+        contractName
+      ];
+      let whereSql = 'id = $1';
+      if (expected_revision > 0) {
+        params.push(Math.max(1, Math.trunc(expected_revision)));
+        whereSql += ` AND revision = $${params.length}`;
+      }
+      const r = await client.query(
+        `
+        UPDATE ${qn}
+        SET
+          desk_name = $2,
+          desk_type = $3,
+          config_json = $4::jsonb,
+          schema_version = $5,
+          description = $6,
+          is_active = $7,
+          revision = revision + 1,
+          updated_at = now(),
+          updated_by = $8,
+          ao_source = 'workflow_desks_api',
+          ao_run_id = $9,
+          ao_updated_at = now(),
+          ao_contract_schema = $10,
+          ao_contract_name = $11,
+          ao_contract_version = 1
+        WHERE ${whereSql}
+        RETURNING id, revision
+        `,
+        params
+      );
+      if (!r.rows?.length) {
+        if (expected_revision > 0) {
+          return res.status(409).json({ error: 'revision_conflict', details: 'workflow desk has been changed on server' });
+        }
+        return res.status(404).json({ error: 'not_found', details: 'workflow desk id not found' });
+      }
+      return res.json({ ok: true, id: Number(r.rows[0].id || 0), revision: Number(r.rows[0].revision || 1), updated: true });
+    }
+
+    const nowIso = new Date().toISOString();
+    const r = await client.query(
+      `
+      INSERT INTO ${qn}
+        (
+          desk_name,
+          desk_type,
+          config_json,
+          schema_version,
+          revision,
+          description,
+          is_active,
+          updated_at,
+          updated_by,
+          ao_source,
+          ao_run_id,
+          ao_created_at,
+          ao_updated_at,
+          ao_contract_schema,
+          ao_contract_name,
+          ao_contract_version
+        )
+      VALUES
+        ($1, $2, $3::jsonb, $4, 1, $5, $6, $7, $8, 'workflow_desks_api', $9, $10, $11, $12, $13, 1)
+      RETURNING id, revision
+      `,
+      [
+        desk_name,
+        desk_type,
+        JSON.stringify(config_json),
+        Math.max(1, Math.trunc(schema_version || 1)),
+        description,
+        is_active,
+        nowIso,
+        updated_by,
+        runId,
+        nowIso,
+        nowIso,
+        config.contracts_schema,
+        contractName
+      ]
+    );
+    return res.json({
+      ok: true,
+      id: Number(r.rows?.[0]?.id || 0),
+      revision: Number(r.rows?.[0]?.revision || 1),
+      created: true
+    });
+  } catch (e) {
+    return res.status(500).json({ error: 'workflow_desk_upsert_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+tableBuilderRouter.post('/workflow-desks/delete', requireDataAdmin, async (req, res) => {
+  const id = Number(req.body?.id || 0);
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'bad_request', details: 'invalid id' });
+
+  const client = await pool.connect();
+  try {
+    const config = await loadRuntimeConfig(client);
+    const qn = workflowDesksQname(config);
+    await ensureWorkflowDesksTable(client, config);
+    const r = await client.query(
+      `
+      UPDATE ${qn}
+      SET is_active = false, updated_at = now(), updated_by = $2
+      WHERE id = $1
+      RETURNING id
+      `,
+      [Math.trunc(id), String(req.body?.updated_by || req.header('X-AO-ROLE') || 'ui').trim()]
+    );
+    if (!r.rows?.length) return res.status(404).json({ error: 'not_found', details: 'workflow desk id not found' });
+    return res.json({ ok: true, id: Number(r.rows[0].id || 0), deleted: true });
+  } catch (e) {
+    return res.status(500).json({ error: 'workflow_desk_delete_failed', details: String(e?.message || e) });
   } finally {
     client.release();
   }
@@ -3019,6 +3166,7 @@ export async function bootstrapTableBuilder() {
     await ensureContractsTable(client, effective);
     await ensureTemplatesStorageTable(client, effective);
     await ensureApiConfigsTable(client, effective);
+    await ensureWorkflowDesksTable(client, effective);
     await ensureServerWritesTable(client, effective);
     return { ok: true, effective };
   } finally {

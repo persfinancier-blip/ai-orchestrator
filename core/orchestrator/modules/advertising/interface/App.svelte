@@ -4,10 +4,16 @@
   import AdvertisingDesk from './desk/AdvertisingDesk.svelte';
   import WorkflowDesk from './desk/WorkflowDesk.svelte';
 
-  let route = window.location.hash.replace('#', '') || 'desk';
+  function hashRoute() {
+    const raw = window.location.hash.replace(/^#/, '') || 'desk';
+    const routeOnly = raw.split('?')[0];
+    return routeOnly || 'desk';
+  }
+
+  let route = hashRoute();
 
   const onHash = () => {
-    route = window.location.hash.replace('#', '') || 'desk';
+    route = hashRoute();
   };
 
   window.addEventListener('hashchange', onHash);

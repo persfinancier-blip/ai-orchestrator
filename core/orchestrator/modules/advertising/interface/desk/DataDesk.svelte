@@ -20,6 +20,7 @@
   let loading = false;
   let error = '';
   let handoffInfo = '';
+  let initialApiStoreId: number | null = null;
   let existingTables: ExistingTable[] = [];
   let dbStatus: 'checking' | 'ok' | 'error' = 'checking';
   let dbStatusMessage = 'Проверка подключения к базе...';
@@ -127,18 +128,23 @@
     }
   }
 
+  function hashQueryParams(): URLSearchParams {
+    const rawHash = String(window.location.hash || '');
+    const idx = rawHash.indexOf('?');
+    if (idx < 0) return new URLSearchParams();
+    return new URLSearchParams(rawHash.slice(idx + 1));
+  }
+
   onMount(async () => {
-    const raw = localStorage.getItem('ao_workflow_api_handoff');
-    if (raw) {
+    const params = hashQueryParams();
+    const apiStoreId = Number(params.get('api_store_id') || 0);
+    if (Number.isFinite(apiStoreId) && apiStoreId > 0) {
       tab = 'api_builder';
-      localStorage.removeItem('ao_workflow_api_handoff');
-      try {
-        const parsed = JSON.parse(raw);
-        const n = String(parsed?.nodeName || '').trim();
-        handoffInfo = n ? `Открыт из workflow-узла: ${n}` : 'Открыт из workflow-узла API';
-      } catch {
-        handoffInfo = 'Открыт из workflow-узла API';
-      }
+      initialApiStoreId = Math.trunc(apiStoreId);
+      const n = String(params.get('from_node') || '').trim();
+      handoffInfo = n
+        ? `Открыт из workflow-узла: ${n}. Шаблон API ID: ${initialApiStoreId}`
+        : `Открыт из workflow-узла API. Шаблон ID: ${initialApiStoreId}`;
     }
     await refreshTables();
   });
@@ -207,6 +213,7 @@
       {headers}
       {existingTables}
       {refreshTables}
+      {initialApiStoreId}
     />
   {/if}
   {#if handoffInfo}

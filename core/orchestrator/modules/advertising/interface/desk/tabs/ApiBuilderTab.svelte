@@ -12,6 +12,7 @@
   export let headers: () => Record<string, string>;
   export let existingTables: ExistingTable[] = [];
   export let refreshTables: () => Promise<void>;
+  export let initialApiStoreId: number | null = null;
 
   type BindingRule = {
     id: string;
@@ -282,67 +283,9 @@
 
   const API_STORAGE_REQUIRED_COLUMNS: Array<{ name: string; types: string[] }> = [
     { name: 'api_name', types: ['text', 'character varying', 'varchar'] },
-    { name: 'method', types: ['text', 'character varying', 'varchar'] },
-    { name: 'base_url', types: ['text', 'character varying', 'varchar'] },
-    { name: 'path', types: ['text', 'character varying', 'varchar'] },
-    { name: 'headers_json', types: ['jsonb', 'json'] },
-    { name: 'query_json', types: ['jsonb', 'json'] },
-    { name: 'body_json', types: ['jsonb', 'json'] },
-    { name: 'pagination_json', types: ['jsonb', 'json'] },
-    { name: 'execution_json', types: ['jsonb', 'json'] },
-    { name: 'data_model_json', types: ['jsonb', 'json'] },
-    { name: 'target_schema', types: ['text', 'character varying', 'varchar'] },
-    { name: 'target_table', types: ['text', 'character varying', 'varchar'] },
-    { name: 'mapping_json', types: ['jsonb', 'json'] },
-    { name: 'auth_mode', types: ['text', 'character varying', 'varchar'] },
-    { name: 'auth_json', types: ['jsonb', 'json'] },
-    { name: 'oauth2_token_url', types: ['text', 'character varying', 'varchar'] },
-    { name: 'oauth2_client_id', types: ['text', 'character varying', 'varchar'] },
-    { name: 'oauth2_client_secret', types: ['text', 'character varying', 'varchar'] },
-    { name: 'oauth2_grant_type', types: ['text', 'character varying', 'varchar'] },
-    { name: 'oauth2_token_field', types: ['text', 'character varying', 'varchar'] },
-    { name: 'oauth2_expires_field', types: ['text', 'character varying', 'varchar'] },
-    { name: 'oauth2_token_type_field', types: ['text', 'character varying', 'varchar'] },
-    { name: 'parameter_definitions', types: ['jsonb', 'json'] },
-    { name: 'response_targets', types: ['jsonb', 'json'] },
-    { name: 'picked_paths', types: ['jsonb', 'json'] },
-    { name: 'example_request', types: ['text', 'character varying', 'varchar'] },
-    { name: 'pagination_enabled', types: ['boolean'] },
-    { name: 'pagination_strategy', types: ['text', 'character varying', 'varchar'] },
-    { name: 'pagination_target', types: ['text', 'character varying', 'varchar'] },
-    { name: 'pagination_data_path', types: ['text', 'character varying', 'varchar'] },
-    { name: 'pagination_page_param', types: ['text', 'character varying', 'varchar'] },
-    { name: 'pagination_start_page', types: ['integer', 'int', 'int4'] },
-    { name: 'pagination_limit_param', types: ['text', 'character varying', 'varchar'] },
-    { name: 'pagination_limit_value', types: ['integer', 'int', 'int4'] },
-    { name: 'pagination_cursor_req_path_1', types: ['text', 'character varying', 'varchar'] },
-    { name: 'pagination_cursor_req_path_2', types: ['text', 'character varying', 'varchar'] },
-    { name: 'pagination_cursor_res_path_1', types: ['text', 'character varying', 'varchar'] },
-    { name: 'pagination_cursor_res_path_2', types: ['text', 'character varying', 'varchar'] },
-    { name: 'pagination_next_url_path', types: ['text', 'character varying', 'varchar'] },
-    { name: 'dispatch_mode', types: ['text', 'character varying', 'varchar'] },
-    { name: 'execution_mode', types: ['text', 'character varying', 'varchar'] },
-    { name: 'sync_planner', types: ['text', 'character varying', 'varchar'] },
-    { name: 'async_concurrency', types: ['integer', 'int', 'int4'] },
-    { name: 'execution_delay_ms', types: ['integer', 'int', 'int4'] },
-    { name: 'response_log_enabled', types: ['boolean'] },
-    { name: 'response_log_schema', types: ['text', 'character varying', 'varchar'] },
-    { name: 'response_log_table', types: ['text', 'character varying', 'varchar'] },
-    { name: 'body_items_path', types: ['text', 'character varying', 'varchar'] },
-    { name: 'preview_request_limit', types: ['integer', 'int', 'int4'] },
-    { name: 'binding_rules', types: ['jsonb', 'json'] },
-    { name: 'group_by_aliases', types: ['jsonb', 'json'] },
-    { name: 'pagination_use_max_pages', types: ['boolean'] },
-    { name: 'pagination_max_pages', types: ['integer', 'int', 'int4'] },
-    { name: 'pagination_use_delay', types: ['boolean'] },
-    { name: 'pagination_delay_ms', types: ['integer', 'int', 'int4'] },
-    { name: 'pagination_stop_on_missing_value', types: ['boolean'] },
-    { name: 'pagination_stop_on_same_response', types: ['boolean'] },
-    { name: 'pagination_same_response_limit', types: ['integer', 'int', 'int4'] },
-    { name: 'pagination_stop_on_http_error', types: ['boolean'] },
-    { name: 'pagination_custom_strategy', types: ['text', 'character varying', 'varchar'] },
-    { name: 'data_date_parameters', types: ['jsonb', 'json'] },
-    { name: 'data_api_parameters', types: ['jsonb', 'json'] },
+    { name: 'config_json', types: ['jsonb', 'json'] },
+    { name: 'schema_version', types: ['integer', 'int', 'int4'] },
+    { name: 'revision', types: ['integer', 'int', 'int4'] },
     { name: 'description', types: ['text', 'character varying', 'varchar'] },
     { name: 'is_active', types: ['boolean'] },
     { name: 'updated_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] },
@@ -389,6 +332,7 @@
   let checking = false;
   let err = '';
   let ok = '';
+  let initialApiStoreIdApplied = 0;
 
   let requestInput = '';
   let responseStatus = 0;
@@ -5648,6 +5592,17 @@ function handleDefinitionInput(value: string) {
     await loadAll();
   }
 
+  function applyInitialApiStoreSelection() {
+    const targetId = Math.trunc(Number(initialApiStoreId || 0));
+    if (!Number.isFinite(targetId) || targetId <= 0) return false;
+    const match = drafts.find((x) => Number(x.storeId || 0) === targetId);
+    if (!match) return false;
+    selectedRef = refOf(match);
+    nameDraft = match.name;
+    initialApiStoreIdApplied = targetId;
+    return true;
+  }
+
   async function loadAll() {
     loading = true;
     err = '';
@@ -5675,6 +5630,7 @@ function handleDefinitionInput(value: string) {
       } else if (!byRef(selectedRef)) {
         selectedRef = refOf(drafts[0]);
       }
+      applyInitialApiStoreSelection();
     } catch (e: any) {
       err = e?.message ?? String(e);
     } finally {
@@ -7299,6 +7255,13 @@ function syncParameterEditorsHeight() {
     autosize(headersEl);
     autosize(queryEl);
     autosize(bodyEl);
+  }
+
+  $: {
+    const targetId = Math.trunc(Number(initialApiStoreId || 0));
+    if (targetId > 0 && targetId !== initialApiStoreIdApplied && drafts.length) {
+      applyInitialApiStoreSelection();
+    }
   }
 
   onDestroy(() => {
