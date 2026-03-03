@@ -1346,13 +1346,32 @@ function tryObject(value) {
   }
 }
 
+function extractPositiveIntFromObject(obj, candidateKeys = []) {
+  if (!obj || typeof obj !== 'object') return 0;
+  const lowered = new Map();
+  Object.keys(obj).forEach((k) => {
+    lowered.set(String(k || '').toLowerCase(), obj[k]);
+  });
+  const keys = Array.isArray(candidateKeys) ? candidateKeys : [];
+  for (const key of keys) {
+    const raw = lowered.get(String(key || '').toLowerCase());
+    const n = Number(String(raw ?? '').trim());
+    if (Number.isFinite(n) && n > 0) return Math.trunc(n);
+  }
+  return 0;
+}
+
 function materializeApiConfigRow(row) {
   const cfg = tryObject(row?.config_json);
   const hasCfg = Object.keys(cfg).length > 0;
   const src = hasCfg ? cfg : row || {};
+  const id =
+    extractPositiveIntFromObject(row, ['id', 'api_config_id', 'config_id', 'api_id', 'store_id']) ||
+    extractPositiveIntFromObject(src, ['id', 'api_config_id', 'config_id', 'api_id', 'store_id']) ||
+    0;
   return {
     ...src,
-    id: Number(row?.id || src?.id || 0),
+    id,
     api_name: String(row?.api_name || src?.api_name || '').trim(),
     description: String(row?.description ?? src?.description ?? '').trim(),
     is_active: row?.is_active === undefined ? Boolean(src?.is_active ?? true) : Boolean(row?.is_active),

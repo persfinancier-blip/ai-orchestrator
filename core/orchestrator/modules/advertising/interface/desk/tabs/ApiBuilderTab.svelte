@@ -5738,7 +5738,7 @@ function handleDefinitionInput(value: string) {
       drafts = (Array.isArray(j?.api_configs) ? j.api_configs : []).map((r) => fromRow(r));
       const missingStoreId = drafts.filter((x) => !resolveDraftStoreId(x)).length;
       if (missingStoreId > 0) {
-        err = `Часть API-шаблонов загружена без ID (${missingStoreId}). Сохранение/удаление может работать некорректно.`;
+        warn = `Часть API-шаблонов загружена без ID (${missingStoreId}). Сохранение/удаление для них может работать ограниченно.`;
       }
 
       if (!drafts.length) {
