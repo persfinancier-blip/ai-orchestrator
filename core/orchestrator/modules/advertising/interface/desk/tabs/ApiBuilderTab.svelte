@@ -2513,6 +2513,16 @@ function formatBytes(bytes: number) {
       .replace(/\s+/g, ' ');
   }
 
+  function normalizePathLike(value: any): string {
+    const raw = String(value || '').trim();
+    if (!raw) return '/';
+    return raw.startsWith('/') ? raw : `/${raw}`;
+  }
+
+  function normalizeBaseUrlLike(value: any): string {
+    return String(value || '').trim().replace(/\/+$/, '');
+  }
+
   function duplicateNameMatches(name: string, current?: ApiDraft | null): ApiDraft[] {
     const key = normalizeTemplateName(name);
     if (!key) return [];
@@ -2525,6 +2535,49 @@ function formatBytes(bytes: number) {
       if (!currentStoreId && currentLocalId) return String(d.localId || '').trim() !== currentLocalId;
       return true;
     });
+  }
+
+  function fingerprintForDraft(draft: ApiDraft | null | undefined) {
+    return {
+      name: normalizeTemplateName(draft?.name),
+      method: String(draft?.method || 'GET').trim().toUpperCase(),
+      baseUrl: normalizeBaseUrlLike(draft?.baseUrl),
+      path: normalizePathLike(draft?.path)
+    };
+  }
+
+  function fingerprintFromRow(row: any) {
+    const cfg = tryObj(row?.config_json);
+    return {
+      id: extractStoreIdFromRow(row),
+      name: normalizeTemplateName(row?.api_name ?? cfg?.api_name ?? ''),
+      method: String(row?.method ?? cfg?.method ?? 'GET').trim().toUpperCase(),
+      baseUrl: normalizeBaseUrlLike(row?.base_url ?? cfg?.base_url ?? ''),
+      path: normalizePathLike(row?.path ?? cfg?.path ?? '/')
+    };
+  }
+
+  async function resolveServerStoreIdForDraft(draft: ApiDraft | null | undefined): Promise<number> {
+    if (!draft) return 0;
+    const fp = fingerprintForDraft(draft);
+    if (!fp.name) return 0;
+    try {
+      const j = await apiJson<{ api_configs: any[] }>(`${apiBase}/api-configs`, { headers: headers() });
+      const rows = Array.isArray(j?.api_configs) ? j.api_configs : [];
+      const matches = rows
+        .map((row) => fingerprintFromRow(row))
+        .filter((x) => x.id > 0)
+        .filter(
+          (x) =>
+            x.name === fp.name &&
+            x.method === fp.method &&
+            x.baseUrl === fp.baseUrl &&
+            x.path === fp.path
+        );
+      return matches.length === 1 ? matches[0].id : 0;
+    } catch {
+      return 0;
+    }
   }
 
   function extractStoreIdFromRow(row: any): number {
@@ -5749,7 +5802,10 @@ function handleDefinitionInput(value: string) {
 
     saving = true;
     try {
-      const resolvedStoreId = resolveDraftStoreId(next, selectedRef);
+      let resolvedStoreId = resolveDraftStoreId(next, selectedRef);
+      if (!resolvedStoreId) {
+        resolvedStoreId = await resolveServerStoreIdForDraft(next);
+      }
       const payload = toPayload(next, parsedFields);
       if (resolvedStoreId > 0) payload.id = resolvedStoreId;
       const r = await apiJson<{ id?: number }>(`${apiBase}/api-configs/upsert`, {
@@ -5799,20 +5855,27 @@ function handleDefinitionInput(value: string) {
     err = '';
     ok = '';
     warn = '';
-    const storeId = resolveDraftStoreId(d, refOf(d));
-    if (!storeId) {
-      drafts = drafts.filter((x) => x.localId !== d.localId);
-      if (!byRef(selectedRef) && drafts.length) selectedRef = refOf(drafts[0]);
-      ok = 'Локальный черновик удален';
-      return;
+    try {
+      let storeId = resolveDraftStoreId(d, refOf(d));
+      if (!storeId) {
+        storeId = await resolveServerStoreIdForDraft(d);
+      }
+      if (!storeId) {
+        drafts = drafts.filter((x) => x.localId !== d.localId);
+        if (!byRef(selectedRef) && drafts.length) selectedRef = refOf(drafts[0]);
+        warn = 'Удален только локальный черновик (ID в БД не найден).';
+        return;
+      }
+      await apiJson(`${apiBase}/api-configs/delete`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ id: storeId })
+      });
+      await loadAll();
+      ok = 'API удален';
+    } catch (e: any) {
+      err = e?.message ?? String(e);
     }
-    await apiJson(`${apiBase}/api-configs/delete`, {
-      method: 'POST',
-      headers: headers(),
-      body: JSON.stringify({ id: storeId })
-    });
-    await loadAll();
-    ok = 'API удален';
   }
 
   async function executePlannedRequestWithPagination(
@@ -8703,12 +8766,12 @@ function syncParameterEditorsHeight() {
       <div class="list api-list">
         {#each drafts as d (d.localId)}
           <div class="row-item" class:activeitem={refOf(d) === selectedRef}>
-            <button class="item-button" on:click={() => (selectedRef = refOf(d))}>
-              <div class="row-name">{d.storeId || 'new'} • {d.name}</div>
+            <button type="button" class="item-button" on:click={() => (selectedRef = refOf(d))}>
+              <div class="row-name">{resolveDraftStoreId(d, refOf(d)) || 'new'} • {d.name}</div>
               <div class="row-meta">{d.method} {d.baseUrl}{d.path}</div>
             </button>
             <div class="row-actions">
-              <button class="danger icon-btn" on:click|stopPropagation={() => deleteApi(d)} title="Удалить API">x</button>
+              <button type="button" class="danger icon-btn" on:click|stopPropagation={() => deleteApi(d)} title="Удалить API">x</button>
             </div>
           </div>
         {/each}
