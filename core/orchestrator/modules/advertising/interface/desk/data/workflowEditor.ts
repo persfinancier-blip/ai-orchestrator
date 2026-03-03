@@ -1,5 +1,5 @@
 export type SourceGroup = 'api_requests' | 'data_tables' | 'math_calculations';
-export type ToolType = 'start_process' | 'schedule_process' | 'table_parser' | 'db_write' | 'end_process';
+export type ToolType = 'start_process' | 'schedule_process' | 'api_request' | 'table_parser' | 'db_write' | 'end_process';
 export type ApiRequestTemplate = {
   method: string;
   url: string;
@@ -155,6 +155,12 @@ export const tools: ToolItem[] = [
     description: 'Настройка частоты и окна запуска'
   },
   {
+    id: 'tool_api_request',
+    name: 'API Request',
+    toolType: 'api_request',
+    description: 'HTTP-запрос к внешнему API'
+  },
+  {
     id: 'tool_parser',
     name: 'Парсер данных таблицы',
     toolType: 'table_parser',
@@ -177,6 +183,7 @@ export const tools: ToolItem[] = [
 export const toolPorts: Record<ToolType, { inputs: string[]; outputs: string[] }> = {
   start_process: { inputs: ['in'], outputs: ['out'] },
   schedule_process: { inputs: ['in'], outputs: ['out'] },
+  api_request: { inputs: ['in'], outputs: ['out'] },
   table_parser: { inputs: ['in'], outputs: ['out'] },
   db_write: { inputs: ['in'], outputs: ['out'] },
   end_process: { inputs: ['in'], outputs: [] }

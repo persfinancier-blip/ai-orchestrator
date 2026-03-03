@@ -30,6 +30,24 @@
     queryText: string;
     bodyText: string;
   };
+  type ApiNodeExecution = {
+    startedAt: string;
+    durationMs: number;
+    status: number;
+    ok: boolean;
+    request: {
+      method: string;
+      url: string;
+      headers: Record<string, any>;
+      query: Record<string, any>;
+      body: any;
+    };
+    response: {
+      headers: Record<string, string>;
+      body: any;
+    };
+    error?: string;
+  };
 
   let activeTab: SourceGroup = 'api_requests';
   let nodes: WorkflowNode[] = [];
@@ -47,6 +65,8 @@
   let dynamicTableSources: SourceItem[] = [];
   let settingsNodeId = '';
   let settingsModalOpen = false;
+  let nodeExecutions: Record<string, ApiNodeExecution> = {};
+  let nodeExecutionLoading: Record<string, boolean> = {};
 
   let canvasEl: HTMLDivElement;
   let panX = 0;
@@ -62,6 +82,8 @@
 
   $: selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null;
   $: settingsNode = nodes.find((n) => n.id === settingsNodeId) ?? null;
+  $: settingsApiExecution = settingsNodeId ? nodeExecutions[settingsNodeId] : undefined;
+  $: settingsApiLoading = settingsNodeId ? Boolean(nodeExecutionLoading[settingsNodeId]) : false;
   $: sourceList =
     activeTab === 'api_requests'
       ? dynamicApiSources.length
@@ -100,9 +122,71 @@
     return Boolean(n && n.type === 'data' && String(n.config?.group || '').trim() === 'api_requests');
   }
 
+  function isApiToolNode(n: WorkflowNode | null | undefined) {
+    return Boolean(n && n.type === 'tool' && toolCfg(n).toolType === 'api_request');
+  }
+
+  function getApiRequestForNode(n: WorkflowNode | null | undefined): ApiNodeRequest {
+    if (!n) return normalizeApiRequest(undefined);
+    if (isApiNode(n)) return apiCfg(n).apiRequest || normalizeApiRequest(undefined);
+    if (isApiToolNode(n)) {
+      const settings = toolCfg(n).settings || {};
+      return {
+        method: String(settings.apiMethod || 'GET').trim().toUpperCase() || 'GET',
+        url: String(settings.apiUrl || '').trim(),
+        authMode: String(settings.apiAuthMode || 'manual').trim() || 'manual',
+        headersText: String(settings.apiHeaders || '{}'),
+        queryText: String(settings.apiQuery || '{}'),
+        bodyText: String(settings.apiBody || '{}')
+      };
+    }
+    return normalizeApiRequest(undefined);
+  }
+
+  function updateApiToolRequest(nodeId: string, key: keyof ApiNodeRequest, value: string) {
+    const map: Record<keyof ApiNodeRequest, string> = {
+      method: 'apiMethod',
+      url: 'apiUrl',
+      authMode: 'apiAuthMode',
+      headersText: 'apiHeaders',
+      queryText: 'apiQuery',
+      bodyText: 'apiBody'
+    };
+    updateSetting(nodeId, map[key], value);
+  }
+
+  function applyTemplateToNode(nodeId: string, templateId: string) {
+    const src = dynamicApiSources.find((x) => x.id === templateId);
+    if (!src) return;
+    const tpl = normalizeApiRequest(src.requestTemplate);
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    if (isApiNode(node)) {
+      updateDataNodeConfig(nodeId, { requestTemplate: src.requestTemplate, apiRequest: tpl, templateId: src.id });
+      return;
+    }
+    if (isApiToolNode(node)) {
+      updateSetting(nodeId, 'templateId', src.id);
+      updateApiToolRequest(nodeId, 'method', tpl.method);
+      updateApiToolRequest(nodeId, 'url', tpl.url);
+      updateApiToolRequest(nodeId, 'authMode', tpl.authMode);
+      updateApiToolRequest(nodeId, 'headersText', tpl.headersText);
+      updateApiToolRequest(nodeId, 'queryText', tpl.queryText);
+      updateApiToolRequest(nodeId, 'bodyText', tpl.bodyText);
+    }
+  }
+
+  function nodeTemplateId(n: WorkflowNode | null | undefined) {
+    if (!n) return '';
+    if (isApiNode(n)) return String(n.config?.templateId || n.config?.id || '').trim();
+    if (isApiToolNode(n)) return String(toolCfg(n).settings.templateId || '').trim();
+    return '';
+  }
+
   function defaultSettings(toolType: ToolType) {
     if (toolType === 'start_process') return { triggerType: 'interval', intervalValue: '1', intervalUnit: 'minutes' };
     if (toolType === 'schedule_process') return { cron: '0 * * * *', mode: 'sync' };
+    if (toolType === 'api_request') return { templateId: '', apiMethod: 'GET', apiUrl: '', apiAuthMode: 'manual', apiHeaders: '{}', apiQuery: '{}', apiBody: '{}' };
     if (toolType === 'table_parser') return { parserMultiplier: '1' };
     if (toolType === 'db_write') return { targetSchema: 'ao_data', targetTable: 'bronze_result', writeSuccessRate: '98' };
     return {};
@@ -230,7 +314,21 @@
     const toolRaw = event.dataTransfer?.getData('application/x-workflow-tool');
     if (toolRaw) {
       const item = JSON.parse(toolRaw) as ToolItem;
-      nodes = [...nodes, { id: uid('node'), type: 'tool', x: p.x, y: p.y, config: { name: item.name, toolType: item.toolType, settings: defaultSettings(item.toolType) } }];
+      const settings = defaultSettings(item.toolType);
+      if (item.toolType === 'api_request') {
+        const firstTemplate = dynamicApiSources[0];
+        if (firstTemplate) {
+          const tpl = normalizeApiRequest(firstTemplate.requestTemplate);
+          settings.templateId = firstTemplate.id;
+          settings.apiMethod = tpl.method;
+          settings.apiUrl = tpl.url;
+          settings.apiAuthMode = tpl.authMode;
+          settings.apiHeaders = tpl.headersText;
+          settings.apiQuery = tpl.queryText;
+          settings.apiBody = tpl.bodyText;
+        }
+      }
+      nodes = [...nodes, { id: uid('node'), type: 'tool', x: p.x, y: p.y, config: { name: item.name, toolType: item.toolType, settings } }];
     }
   }
 
@@ -315,7 +413,7 @@
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return;
     const isStartTool = node.type === 'tool' && toolCfg(node).toolType === 'start_process';
-    if (!isStartTool && !isApiNode(node)) {
+    if (!isStartTool && !isApiNode(node) && !isApiToolNode(node)) {
       banner = 'Для этого узла пока нет отдельной настройки по двойному клику';
       return;
     }
@@ -395,6 +493,7 @@
         const cfg = toolCfg(n);
         if (cfg.toolType === 'start_process') outRows = inRows > 0 ? inRows : 1;
         if (cfg.toolType === 'schedule_process') outRows = inRows;
+        if (cfg.toolType === 'api_request') outRows = inRows > 0 ? inRows : 1;
         if (cfg.toolType === 'table_parser') outRows = Math.max(0, Math.round(inRows * Math.max(0.1, Number(cfg.settings.parserMultiplier || 1))));
         if (cfg.toolType === 'db_write') outRows = Math.max(0, Math.round(inRows * Math.max(0, Math.min(100, Number(cfg.settings.writeSuccessRate || 98))) / 100));
         if (cfg.toolType === 'end_process') outRows = 0;
@@ -425,11 +524,20 @@
     nodes = nodes.map((n) => (n.id === nodeId && n.type === 'tool' ? { ...n, config: { ...toolCfg(n), settings: { ...toolCfg(n).settings, [key]: value } } } : n));
   }
 
+  function updateToolName(nodeId: string, value: string) {
+    nodes = nodes.map((n) => (n.id === nodeId && n.type === 'tool' ? { ...n, config: { ...toolCfg(n), name: value } } : n));
+  }
+
   function updateDataNodeConfig(nodeId: string, patch: Record<string, any>) {
     nodes = nodes.map((n) => (n.id === nodeId && n.type === 'data' ? { ...n, config: { ...n.config, ...patch } } : n));
   }
 
   function updateApiNodeRequest(nodeId: string, key: keyof ApiNodeRequest, value: string) {
+    const targetNode = nodes.find((n) => n.id === nodeId);
+    if (isApiToolNode(targetNode)) {
+      updateApiToolRequest(nodeId, key, value);
+      return;
+    }
     nodes = nodes.map((n) => {
       if (n.id !== nodeId || n.type !== 'data') return n;
       const current = apiCfg(n).apiRequest || normalizeApiRequest(undefined);
@@ -460,6 +568,146 @@
     openNodeSettings(nodeId);
   }
 
+  function parseObjectJsonSafe(label: string, raw: string) {
+    const txt = String(raw || '').trim() || '{}';
+    let parsed: any = {};
+    try {
+      parsed = JSON.parse(txt);
+    } catch {
+      throw new Error(`${label}: некорректный JSON`);
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error(`${label}: нужен JSON-объект`);
+    }
+    return parsed as Record<string, any>;
+  }
+
+  function parseAnyJsonSafe(label: string, raw: string) {
+    const txt = String(raw || '').trim();
+    if (!txt) return {};
+    try {
+      return JSON.parse(txt);
+    } catch {
+      throw new Error(`${label}: некорректный JSON`);
+    }
+  }
+
+  async function executeApiNode(nodeId: string) {
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node || (!isApiNode(node) && !isApiToolNode(node))) {
+      banner = 'Этот узел не поддерживает Execute Node';
+      return;
+    }
+
+    const request = getApiRequestForNode(node);
+    const method = String(request.method || 'GET').trim().toUpperCase() || 'GET';
+    const urlRaw = String(request.url || '').trim();
+    if (!urlRaw) {
+      banner = 'Укажи URL в настройке API-узла';
+      return;
+    }
+
+    try {
+      nodeExecutionLoading = { ...nodeExecutionLoading, [nodeId]: true };
+      const headersObj = parseObjectJsonSafe('Headers JSON', request.headersText);
+      const queryObj = parseObjectJsonSafe('Query JSON', request.queryText);
+      const bodyObj = parseAnyJsonSafe('Body JSON', request.bodyText);
+
+      const url = new URL(urlRaw);
+      Object.entries(queryObj).forEach(([k, v]) => {
+        if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+      });
+
+      const startTs = Date.now();
+      const resp = await fetch(url.toString(), {
+        method,
+        headers: headersObj,
+        body: method === 'GET' || method === 'DELETE' ? undefined : JSON.stringify(bodyObj)
+      });
+      const durationMs = Date.now() - startTs;
+      const responseHeaders: Record<string, string> = {};
+      resp.headers.forEach((v, k) => (responseHeaders[k] = v));
+      const text = await resp.text();
+      let responseBody: any = text;
+      try {
+        responseBody = text ? JSON.parse(text) : {};
+      } catch {
+        responseBody = text;
+      }
+
+      nodeExecutions = {
+        ...nodeExecutions,
+        [nodeId]: {
+          startedAt: new Date(startTs).toISOString(),
+          durationMs,
+          status: resp.status,
+          ok: resp.ok,
+          request: {
+            method,
+            url: url.toString(),
+            headers: headersObj,
+            query: queryObj,
+            body: bodyObj
+          },
+          response: {
+            headers: responseHeaders,
+            body: responseBody
+          }
+        }
+      };
+      banner = resp.ok ? `Узел выполнен: ${resp.status}` : `Узел вернул ошибку: ${resp.status}`;
+    } catch (e: any) {
+      nodeExecutions = {
+        ...nodeExecutions,
+        [nodeId]: {
+          startedAt: new Date().toISOString(),
+          durationMs: 0,
+          status: 0,
+          ok: false,
+          request: {
+            method: String(request.method || 'GET').trim().toUpperCase() || 'GET',
+            url: String(request.url || '').trim(),
+            headers: {},
+            query: {},
+            body: {}
+          },
+          response: { headers: {}, body: null },
+          error: String(e?.message || e || 'Ошибка выполнения узла')
+        }
+      };
+      banner = String(e?.message || e || 'Ошибка выполнения узла');
+    } finally {
+      nodeExecutionLoading = { ...nodeExecutionLoading, [nodeId]: false };
+    }
+  }
+
+  function openFullApiBuilder(nodeId: string) {
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node || (!isApiNode(node) && !isApiToolNode(node))) return;
+    const req = getApiRequestForNode(node);
+    const templateId = nodeTemplateId(node);
+    const payload = {
+      nodeId,
+      templateId,
+      nodeName: String(node.config?.name || '').trim(),
+      request: {
+        method: req.method,
+        url: req.url,
+        authMode: req.authMode,
+        headers: req.headersText,
+        query: req.queryText,
+        body: req.bodyText
+      },
+      createdAt: new Date().toISOString()
+    };
+    try {
+      localStorage.setItem('ao_workflow_api_handoff', JSON.stringify(payload));
+    } catch {
+      // ignore storage errors
+    }
+    window.location.hash = '#desk/workflow';
+  }
+
   function resetCanvas() {
     nodes = [];
     edges = [];
@@ -467,6 +715,8 @@
     linkFrom = null;
     nodeRuntime = {};
     edgeRows = {};
+    nodeExecutions = {};
+    nodeExecutionLoading = {};
     issues = [];
     summary = { sourceRows: 0, finalRows: 0, lossRows: 0, lossPct: 0, successPct: 0 };
     banner = '';
@@ -549,8 +799,9 @@
               <button on:click|stopPropagation={() => deleteNode(node.id)}>x</button>
             </div>
             <div class="node-meta">{node.type === 'data' ? node.config.datasetId : node.config.toolType}</div>
-            {#if isApiNode(node)}
-              <div class="api-meta">{apiCfg(node).apiRequest?.method || 'GET'} {apiCfg(node).apiRequest?.url || ''}</div>
+            {#if isApiNode(node) || isApiToolNode(node)}
+              {@const req = getApiRequestForNode(node)}
+              <div class="api-meta">{req.method || 'GET'} {req.url || ''}</div>
             {/if}
             {#if rt}
               <div class="runtime {rt.status}">in {rt.inRows} | out {rt.outRows} | loss {rt.lossRows} ({rt.lossPct}%)</div>
@@ -667,21 +918,30 @@
         </div>
       {/if}
 
-      {#if isApiNode(settingsNode)}
+      {#if isApiNode(settingsNode) || isApiToolNode(settingsNode)}
         <div class="node-modal-body">
-          <div class="help">Легкая поднастройка API-узла: метод, URL и JSON-поля запроса.</div>
+          <div class="help">Легкая поднастройка API-узла: шаблон, метод, URL и JSON-поля. Ниже можно выполнить один запрос (Execute Node) и посмотреть сырой request/response.</div>
+          <label>
+            Шаблон API
+            <select value={nodeTemplateId(settingsNode)} on:change={(e) => applyTemplateToNode(settingsNode.id, selectValue(e))}>
+              <option value="">Без шаблона</option>
+              {#each dynamicApiSources as src (src.id)}
+                <option value={src.id}>{src.name}</option>
+              {/each}
+            </select>
+          </label>
           <label>
             Название узла
             <input
               value={settingsNode.config.name || ''}
-              on:input={(e) => updateDataNodeConfig(settingsNode.id, { name: inputValue(e) })}
+              on:input={(e) => (settingsNode.type === 'data' ? updateDataNodeConfig(settingsNode.id, { name: inputValue(e) }) : updateToolName(settingsNode.id, inputValue(e)))}
             />
           </label>
           <div class="interval-grid">
             <label>
               Метод
               <select
-                value={apiCfg(settingsNode).apiRequest?.method || 'GET'}
+                value={getApiRequestForNode(settingsNode).method || 'GET'}
                 on:change={(e) => updateApiNodeRequest(settingsNode.id, 'method', selectValue(e))}
               >
                 <option value="GET">GET</option>
@@ -694,7 +954,7 @@
             <label>
               Режим авторизации
               <select
-                value={apiCfg(settingsNode).apiRequest?.authMode || 'manual'}
+                value={getApiRequestForNode(settingsNode).authMode || 'manual'}
                 on:change={(e) => updateApiNodeRequest(settingsNode.id, 'authMode', selectValue(e))}
               >
                 <option value="manual">Ручная</option>
@@ -705,7 +965,7 @@
           <label>
             URL
             <input
-              value={apiCfg(settingsNode).apiRequest?.url || ''}
+              value={getApiRequestForNode(settingsNode).url || ''}
               on:input={(e) => updateApiNodeRequest(settingsNode.id, 'url', inputValue(e))}
             />
           </label>
@@ -713,7 +973,7 @@
             Headers JSON
             <textarea
               rows="4"
-              value={apiCfg(settingsNode).apiRequest?.headersText || '{}'}
+              value={getApiRequestForNode(settingsNode).headersText || '{}'}
               on:input={(e) => updateApiNodeRequest(settingsNode.id, 'headersText', textareaValue(e))}
             ></textarea>
           </label>
@@ -721,7 +981,7 @@
             Query JSON
             <textarea
               rows="4"
-              value={apiCfg(settingsNode).apiRequest?.queryText || '{}'}
+              value={getApiRequestForNode(settingsNode).queryText || '{}'}
               on:input={(e) => updateApiNodeRequest(settingsNode.id, 'queryText', textareaValue(e))}
             ></textarea>
           </label>
@@ -729,10 +989,36 @@
             Body JSON
             <textarea
               rows="6"
-              value={apiCfg(settingsNode).apiRequest?.bodyText || '{}'}
+              value={getApiRequestForNode(settingsNode).bodyText || '{}'}
               on:input={(e) => updateApiNodeRequest(settingsNode.id, 'bodyText', textareaValue(e))}
             ></textarea>
           </label>
+          <div class="actions-row">
+            <button class="primary-action" on:click={() => executeApiNode(settingsNode.id)} disabled={settingsApiLoading}>
+              {settingsApiLoading ? 'Выполнение...' : 'Execute Node'}
+            </button>
+            <button on:click={() => openFullApiBuilder(settingsNode.id)}>Открыть полный конструктор API</button>
+          </div>
+          {#if settingsApiExecution}
+            <div class="exec-block">
+              <div class="exec-head">
+                <span>Статус: {settingsApiExecution.status || '-'}</span>
+                <span>Время: {settingsApiExecution.durationMs} мс</span>
+                <span>Запуск: {settingsApiExecution.startedAt}</span>
+              </div>
+              {#if settingsApiExecution.error}
+                <div class="issue error">{settingsApiExecution.error}</div>
+              {/if}
+              <label>
+                RAW request
+                <textarea readonly rows="10" value={JSON.stringify(settingsApiExecution.request, null, 2)}></textarea>
+              </label>
+              <label>
+                RAW response
+                <textarea readonly rows="12" value={JSON.stringify(settingsApiExecution.response, null, 2)}></textarea>
+              </label>
+            </div>
+          {/if}
         </div>
       {/if}
     </div>
@@ -801,6 +1087,11 @@
   .node-modal-body textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   .interval-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .help { font-size: 12px; color: #475569; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; }
+  .actions-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .actions-row button { border: 1px solid #dbe4f0; background: #fff; border-radius: 8px; padding: 7px 10px; cursor: pointer; }
+  .actions-row .primary-action { background: #0f172a; color: #fff; border-color: #0f172a; }
+  .exec-block { border: 1px solid #e2e8f0; border-radius: 10px; padding: 8px; display: flex; flex-direction: column; gap: 8px; background: #f8fafc; }
+  .exec-head { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: #334155; }
 </style>
 
 

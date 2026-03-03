@@ -19,6 +19,7 @@
 
   let loading = false;
   let error = '';
+  let handoffInfo = '';
   let existingTables: ExistingTable[] = [];
   let dbStatus: 'checking' | 'ok' | 'error' = 'checking';
   let dbStatusMessage = 'Проверка подключения к базе...';
@@ -126,7 +127,21 @@
     }
   }
 
-  onMount(refreshTables);
+  onMount(async () => {
+    const raw = localStorage.getItem('ao_workflow_api_handoff');
+    if (raw) {
+      tab = 'api_builder';
+      localStorage.removeItem('ao_workflow_api_handoff');
+      try {
+        const parsed = JSON.parse(raw);
+        const n = String(parsed?.nodeName || '').trim();
+        handoffInfo = n ? `Открыт из workflow-узла: ${n}` : 'Открыт из workflow-узла API';
+      } catch {
+        handoffInfo = 'Открыт из workflow-узла API';
+      }
+    }
+    await refreshTables();
+  });
 </script>
 
 <div class="page">
@@ -194,6 +209,9 @@
       {refreshTables}
     />
   {/if}
+  {#if handoffInfo}
+    <div class="okbox">{handoffInfo}</div>
+  {/if}
 </div>
 
 <style>
@@ -211,5 +229,14 @@
 
   .alert { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #f3c0c0; background: #fff5f5; }
   .alert-title { font-weight: 700; margin-bottom: 6px; }
+  .okbox {
+    margin: 10px 0;
+    border: 1px solid #b8e7c8;
+    border-radius: 12px;
+    padding: 9px 12px;
+    background: #effcf3;
+    color: #14532d;
+    font-size: 13px;
+  }
   pre { margin:0; white-space: pre-wrap; word-break: break-word; }
 </style>
