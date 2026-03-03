@@ -282,6 +282,7 @@
   ];
 
   const API_STORAGE_REQUIRED_COLUMNS: Array<{ name: string; types: string[] }> = [
+    { name: 'id', types: ['bigint', 'int8', 'bigserial', 'integer', 'int4', 'int'] },
     { name: 'api_name', types: ['text', 'character varying', 'varchar'] },
     { name: 'config_json', types: ['jsonb', 'json'] },
     { name: 'schema_version', types: ['integer', 'int', 'int4'] },
@@ -5814,6 +5815,9 @@ function handleDefinitionInput(value: string) {
         body: JSON.stringify(payload)
       });
       const id = parsePositiveInt(r?.id) || resolvedStoreId;
+      if (!id) {
+        warn = 'Сервер сохранил шаблон, но не вернул числовой ID. Проверь таблицу хранилища API.';
+      }
       await loadAll();
       if (Number.isFinite(id) && id > 0) {
         const m = drafts.find((x) => Number(x.storeId || 0) === id);

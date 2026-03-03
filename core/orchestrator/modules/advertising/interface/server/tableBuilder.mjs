@@ -100,6 +100,7 @@ const SERVER_WRITES_REQUIRED_COLUMNS = [
   { name: 'updated_by', types: ['text', 'character varying', 'varchar'] }
 ];
 const API_CONFIGS_REQUIRED_COLUMNS = [
+  { name: 'id', types: ['bigint', 'int8', 'bigserial', 'integer', 'int4', 'int'] },
   { name: 'api_name', types: ['text', 'character varying', 'varchar'] },
   { name: 'config_json', types: ['jsonb', 'json'] },
   { name: 'schema_version', types: ['integer', 'int', 'int4'] },
