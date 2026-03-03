@@ -1,5 +1,6 @@
 ﻿<script lang="ts">
   import { onMount } from 'svelte';
+  import JsonTreeView from './JsonTreeView.svelte';
   import {
     sourceGroups,
     sourceItemsByGroup,
@@ -30,26 +31,39 @@
     queryText: string;
     bodyText: string;
   };
+  type ApiPaginationMode = 'none' | 'page_number' | 'offset_limit' | 'cursor';
+  type ApiPaginationTarget = 'query' | 'body';
+  type ApiNodePagination = {
+    enabled: boolean;
+    mode: ApiPaginationMode;
+    target: ApiPaginationTarget;
+    maxPages: number;
+    pauseMs: number;
+    dataPath: string;
+    stopOnEmpty: boolean;
+    pageParam: string;
+    startPage: number;
+    limitParam: string;
+    limitValue: number;
+    offsetParam: string;
+    startOffset: number;
+    cursorReqPath: string;
+    cursorResPath: string;
+  };
   type ApiNodeExecution = {
     startedAt: string;
     durationMs: number;
     status: number;
     ok: boolean;
-    request: {
-      method: string;
-      url: string;
-      headers: Record<string, any>;
-      query: Record<string, any>;
-      body: any;
-    };
-    response: {
-      headers: Record<string, string>;
-      body: any;
-    };
+    totalRequests: number;
+    payloadCount: number;
+    payloadSize: number;
+    requestPreview: any;
+    responsePreview: any;
     error?: string;
   };
 
-  let activeTab: SourceGroup = 'api_requests';
+  let activeTab: SourceGroup = 'data_tables';
   let nodes: WorkflowNode[] = [];
   let edges: WorkflowEdge[] = [];
   let selectedNodeId = '';
@@ -67,6 +81,8 @@
   let settingsModalOpen = false;
   let nodeExecutions: Record<string, ApiNodeExecution> = {};
   let nodeExecutionLoading: Record<string, boolean> = {};
+  let settingsRequestViewMode: 'tree' | 'raw' = 'tree';
+  let settingsResponseViewMode: 'tree' | 'raw' = 'tree';
 
   let canvasEl: HTMLDivElement;
   let panX = 0;
@@ -84,12 +100,11 @@
   $: settingsNode = nodes.find((n) => n.id === settingsNodeId) ?? null;
   $: settingsApiExecution = settingsNodeId ? nodeExecutions[settingsNodeId] : undefined;
   $: settingsApiLoading = settingsNodeId ? Boolean(nodeExecutionLoading[settingsNodeId]) : false;
+  $: settingsPagination = settingsNode ? getPaginationForNode(settingsNode) : defaultApiPagination();
+  $: visibleSourceGroups = sourceGroups.filter((g) => g.key !== 'api_requests');
+  $: if (activeTab === 'api_requests') activeTab = 'data_tables';
   $: sourceList =
-    activeTab === 'api_requests'
-      ? dynamicApiSources.length
-        ? dynamicApiSources
-        : sourceItemsByGroup.api_requests || []
-      : activeTab === 'data_tables'
+    activeTab === 'data_tables'
       ? dynamicTableSources.length
         ? dynamicTableSources
         : sourceItemsByGroup.data_tables || []
@@ -183,10 +198,156 @@
     return '';
   }
 
+  function defaultApiPagination(): ApiNodePagination {
+    return {
+      enabled: false,
+      mode: 'none',
+      target: 'query',
+      maxPages: 10,
+      pauseMs: 0,
+      dataPath: '',
+      stopOnEmpty: true,
+      pageParam: 'page',
+      startPage: 1,
+      limitParam: 'limit',
+      limitValue: 100,
+      offsetParam: 'offset',
+      startOffset: 0,
+      cursorReqPath: 'cursor',
+      cursorResPath: 'response.cursor'
+    };
+  }
+
+  function parsePathParts(path: string): Array<string | number> {
+    const raw = String(path || '').trim();
+    if (!raw) return [];
+    const normalized = raw.replace(/\[(\d+)\]/g, '.$1');
+    return normalized
+      .split('.')
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .map((p) => (/^\d+$/.test(p) ? Number(p) : p));
+  }
+
+  function getByPath(obj: any, path: string): any {
+    if (!path) return obj;
+    const parts = parsePathParts(path);
+    let cur = obj;
+    for (const part of parts) {
+      if (cur == null) return undefined;
+      cur = cur[part as any];
+    }
+    return cur;
+  }
+
+  function setByPath(obj: any, path: string, value: any) {
+    const parts = parsePathParts(path);
+    if (!parts.length) return;
+    let cur = obj;
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      const key = parts[i];
+      const nextKey = parts[i + 1];
+      if (cur[key as any] === undefined || cur[key as any] === null || typeof cur[key as any] !== 'object') {
+        cur[key as any] = typeof nextKey === 'number' ? [] : {};
+      }
+      cur = cur[key as any];
+    }
+    cur[parts[parts.length - 1] as any] = value;
+  }
+
+  function getPaginationForNode(n: WorkflowNode | null | undefined): ApiNodePagination {
+    if (!n) return defaultApiPagination();
+    if (isApiNode(n)) return { ...defaultApiPagination(), ...(n.config?.apiPagination || {}) };
+    if (isApiToolNode(n)) {
+      const s = toolCfg(n).settings || {};
+      return {
+        enabled: String(s.paginationEnabled || 'false') === 'true',
+        mode: (String(s.paginationMode || 'none') as ApiPaginationMode) || 'none',
+        target: (String(s.paginationTarget || 'query') as ApiPaginationTarget) || 'query',
+        maxPages: Math.max(1, Number(s.paginationMaxPages || 10)),
+        pauseMs: Math.max(0, Number(s.paginationPauseMs || 0)),
+        dataPath: String(s.paginationDataPath || '').trim(),
+        stopOnEmpty: String(s.paginationStopOnEmpty || 'true') !== 'false',
+        pageParam: String(s.paginationPageParam || 'page').trim() || 'page',
+        startPage: Math.max(1, Number(s.paginationStartPage || 1)),
+        limitParam: String(s.paginationLimitParam || 'limit').trim() || 'limit',
+        limitValue: Math.max(1, Number(s.paginationLimitValue || 100)),
+        offsetParam: String(s.paginationOffsetParam || 'offset').trim() || 'offset',
+        startOffset: Math.max(0, Number(s.paginationStartOffset || 0)),
+        cursorReqPath: String(s.paginationCursorReqPath || 'cursor').trim() || 'cursor',
+        cursorResPath: String(s.paginationCursorResPath || 'response.cursor').trim() || 'response.cursor'
+      };
+    }
+    return defaultApiPagination();
+  }
+
+  function updatePaginationForNode(nodeId: string, key: keyof ApiNodePagination, value: any) {
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    if (isApiToolNode(node)) {
+      const map: Record<keyof ApiNodePagination, string> = {
+        enabled: 'paginationEnabled',
+        mode: 'paginationMode',
+        target: 'paginationTarget',
+        maxPages: 'paginationMaxPages',
+        pauseMs: 'paginationPauseMs',
+        dataPath: 'paginationDataPath',
+        stopOnEmpty: 'paginationStopOnEmpty',
+        pageParam: 'paginationPageParam',
+        startPage: 'paginationStartPage',
+        limitParam: 'paginationLimitParam',
+        limitValue: 'paginationLimitValue',
+        offsetParam: 'paginationOffsetParam',
+        startOffset: 'paginationStartOffset',
+        cursorReqPath: 'paginationCursorReqPath',
+        cursorResPath: 'paginationCursorResPath'
+      };
+      updateSetting(nodeId, map[key], String(value));
+      return;
+    }
+    if (isApiNode(node)) {
+      const current = getPaginationForNode(node);
+      updateDataNodeConfig(nodeId, { apiPagination: { ...current, [key]: value } });
+    }
+  }
+
+  function deepClone<T>(v: T): T {
+    return JSON.parse(JSON.stringify(v));
+  }
+
+  async function delayMs(ms: number) {
+    if (ms <= 0) return;
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
   function defaultSettings(toolType: ToolType) {
     if (toolType === 'start_process') return { triggerType: 'interval', intervalValue: '1', intervalUnit: 'minutes' };
     if (toolType === 'schedule_process') return { cron: '0 * * * *', mode: 'sync' };
-    if (toolType === 'api_request') return { templateId: '', apiMethod: 'GET', apiUrl: '', apiAuthMode: 'manual', apiHeaders: '{}', apiQuery: '{}', apiBody: '{}' };
+    if (toolType === 'api_request')
+      return {
+        templateId: '',
+        apiMethod: 'GET',
+        apiUrl: '',
+        apiAuthMode: 'manual',
+        apiHeaders: '{}',
+        apiQuery: '{}',
+        apiBody: '{}',
+        paginationEnabled: 'false',
+        paginationMode: 'none',
+        paginationTarget: 'query',
+        paginationMaxPages: '10',
+        paginationPauseMs: '0',
+        paginationDataPath: '',
+        paginationStopOnEmpty: 'true',
+        paginationPageParam: 'page',
+        paginationStartPage: '1',
+        paginationLimitParam: 'limit',
+        paginationLimitValue: '100',
+        paginationOffsetParam: 'offset',
+        paginationStartOffset: '0',
+        paginationCursorReqPath: 'cursor',
+        paginationCursorResPath: 'response.cursor'
+      };
     if (toolType === 'table_parser') return { parserMultiplier: '1' };
     if (toolType === 'db_write') return { targetSchema: 'ao_data', targetTable: 'bronze_result', writeSuccessRate: '98' };
     return {};
@@ -420,6 +581,8 @@
     selectedNodeId = nodeId;
     settingsNodeId = nodeId;
     settingsModalOpen = true;
+    settingsRequestViewMode = 'tree';
+    settingsResponseViewMode = 'tree';
   }
 
   function closeSettingsModal() {
@@ -453,7 +616,7 @@
 
   function validate() {
     const out: WorkflowIssue[] = [];
-    if (!nodes.some((n) => n.type === 'data')) out.push({ level: 'error', text: 'Нет источников данных' });
+    if (!nodes.some((n) => n.type === 'data')) out.push({ level: 'warn', text: 'Нет источников данных: поток может начинаться от Старт процесса' });
     if (!nodes.some((n) => n.type === 'tool' && toolCfg(n).toolType === 'start_process')) out.push({ level: 'error', text: 'Нет узла Старт процесса' });
     if (!nodes.some((n) => n.type === 'tool' && toolCfg(n).toolType === 'end_process')) out.push({ level: 'error', text: 'Нет узла Конец процесса' });
     nodes.filter((n) => n.type === 'tool' && toolCfg(n).toolType === 'db_write').forEach((n) => {
@@ -609,53 +772,158 @@
 
     try {
       nodeExecutionLoading = { ...nodeExecutionLoading, [nodeId]: true };
+      settingsRequestViewMode = 'tree';
+      settingsResponseViewMode = 'tree';
+      const pagination = getPaginationForNode(node);
       const headersObj = parseObjectJsonSafe('Headers JSON', request.headersText);
-      const queryObj = parseObjectJsonSafe('Query JSON', request.queryText);
-      const bodyObj = parseAnyJsonSafe('Body JSON', request.bodyText);
-
-      const url = new URL(urlRaw);
-      Object.entries(queryObj).forEach(([k, v]) => {
-        if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
-      });
+      const baseQueryObj = parseObjectJsonSafe('Query JSON', request.queryText);
+      const baseBodyObj = parseAnyJsonSafe('Body JSON', request.bodyText);
 
       const startTs = Date.now();
-      const resp = await fetch(url.toString(), {
-        method,
-        headers: headersObj,
-        body: method === 'GET' || method === 'DELETE' ? undefined : JSON.stringify(bodyObj)
-      });
-      const durationMs = Date.now() - startTs;
-      const responseHeaders: Record<string, string> = {};
-      resp.headers.forEach((v, k) => (responseHeaders[k] = v));
-      const text = await resp.text();
-      let responseBody: any = text;
-      try {
-        responseBody = text ? JSON.parse(text) : {};
-      } catch {
-        responseBody = text;
+      const requestsSent: any[] = [];
+      const responses: Array<{ page: number; status: number; response: any }> = [];
+      let success = 0;
+      let failed = 0;
+      let lastStatus = 0;
+      let stopReason = '';
+      let pageNo = 1;
+      let pageNumberValue = Math.max(1, Number(pagination.startPage || 1));
+      let offsetValue = Math.max(0, Number(pagination.startOffset || 0));
+      let cursorValue: any = undefined;
+
+      while (true) {
+        const queryObj = deepClone(baseQueryObj || {});
+        const bodyRaw = deepClone(baseBodyObj || {});
+        const bodyObj = bodyRaw && typeof bodyRaw === 'object' ? bodyRaw : {};
+        const targetObj = pagination.target === 'body' ? bodyObj : queryObj;
+        if (pagination.enabled) {
+          if (pagination.mode === 'page_number') {
+            setByPath(targetObj, pagination.pageParam, pageNumberValue);
+            if (pagination.limitParam) setByPath(targetObj, pagination.limitParam, Math.max(1, Number(pagination.limitValue || 1)));
+          } else if (pagination.mode === 'offset_limit') {
+            setByPath(targetObj, pagination.offsetParam, offsetValue);
+            if (pagination.limitParam) setByPath(targetObj, pagination.limitParam, Math.max(1, Number(pagination.limitValue || 1)));
+          } else if (pagination.mode === 'cursor') {
+            if (pageNo > 1) {
+              if (cursorValue === undefined || cursorValue === null || cursorValue === '') {
+                stopReason = 'Остановка: курсор не найден в предыдущем ответе';
+                break;
+              }
+              setByPath(targetObj, pagination.cursorReqPath, cursorValue);
+            }
+          }
+        }
+
+        const url = new URL(urlRaw);
+        Object.entries(queryObj || {}).forEach(([k, v]) => {
+          if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+        });
+
+        const reqPayload = {
+          page: pageNo,
+          method,
+          url: url.toString(),
+          headers: headersObj,
+          query: queryObj,
+          body: method === 'GET' || method === 'DELETE' ? undefined : bodyObj
+        };
+        requestsSent.push(reqPayload);
+
+        const resp = await fetch(url.toString(), {
+          method,
+          headers: headersObj,
+          body: method === 'GET' || method === 'DELETE' ? undefined : JSON.stringify(bodyObj)
+        });
+        lastStatus = resp.status;
+        if (resp.ok) success += 1;
+        else failed += 1;
+        const text = await resp.text();
+        let responseBody: any = text;
+        try {
+          responseBody = text ? JSON.parse(text) : {};
+        } catch {
+          responseBody = text;
+        }
+        responses.push({ page: pageNo, status: resp.status, response: responseBody });
+        if (!resp.ok) {
+          stopReason = `HTTP ошибка ${resp.status}`;
+          break;
+        }
+
+        if (!pagination.enabled || pagination.mode === 'none') break;
+        const maxPages = Math.max(1, Number(pagination.maxPages || 1));
+        if (pageNo >= maxPages) {
+          stopReason = `Достигнут лимит страниц (${maxPages})`;
+          break;
+        }
+
+        if (pagination.mode === 'page_number') {
+          if (pagination.stopOnEmpty && pagination.dataPath) {
+            const arr = getByPath({ response: responseBody }, pagination.dataPath);
+            if (Array.isArray(arr) && arr.length === 0) {
+              stopReason = 'Остановка: массив данных пустой';
+              break;
+            }
+          }
+          pageNumberValue += 1;
+        } else if (pagination.mode === 'offset_limit') {
+          if (pagination.stopOnEmpty && pagination.dataPath) {
+            const arr = getByPath({ response: responseBody }, pagination.dataPath);
+            if (Array.isArray(arr) && arr.length === 0) {
+              stopReason = 'Остановка: массив данных пустой';
+              break;
+            }
+          }
+          offsetValue += Math.max(1, Number(pagination.limitValue || 1));
+        } else if (pagination.mode === 'cursor') {
+          cursorValue = getByPath({ response: responseBody }, pagination.cursorResPath);
+          if (pagination.stopOnEmpty && pagination.dataPath) {
+            const arr = getByPath({ response: responseBody }, pagination.dataPath);
+            if (Array.isArray(arr) && arr.length === 0) {
+              stopReason = 'Остановка: массив данных пустой';
+              break;
+            }
+          }
+        }
+
+        pageNo += 1;
+        await delayMs(Math.max(0, Number(pagination.pauseMs || 0)));
       }
+
+      const durationMs = Date.now() - startTs;
+      const payloadCount = responses.reduce((acc, item) => {
+        const arr = pagination.dataPath ? getByPath({ response: item.response }, pagination.dataPath) : undefined;
+        return acc + (Array.isArray(arr) ? arr.length : 0);
+      }, 0);
+
+      const requestPreview =
+        requestsSent.length <= 1
+          ? { request: requestsSent[0] || null }
+          : { total_requests: requestsSent.length, shown_requests: requestsSent.length, requests: requestsSent };
+      const responsePreview = {
+        total_requests: requestsSent.length,
+        success,
+        failed,
+        stop_reason: stopReason || undefined,
+        responses
+      };
+      const payloadSize = new TextEncoder().encode(JSON.stringify(responsePreview)).length;
 
       nodeExecutions = {
         ...nodeExecutions,
         [nodeId]: {
           startedAt: new Date(startTs).toISOString(),
           durationMs,
-          status: resp.status,
-          ok: resp.ok,
-          request: {
-            method,
-            url: url.toString(),
-            headers: headersObj,
-            query: queryObj,
-            body: bodyObj
-          },
-          response: {
-            headers: responseHeaders,
-            body: responseBody
-          }
+          status: lastStatus,
+          ok: failed === 0,
+          totalRequests: requestsSent.length,
+          payloadCount,
+          payloadSize,
+          requestPreview,
+          responsePreview
         }
       };
-      banner = resp.ok ? `Узел выполнен: ${resp.status}` : `Узел вернул ошибку: ${resp.status}`;
+      banner = failed > 0 ? `Узел выполнен с ошибками: ${failed}` : `Узел выполнен, запросов: ${requestsSent.length}`;
     } catch (e: any) {
       nodeExecutions = {
         ...nodeExecutions,
@@ -664,14 +932,11 @@
           durationMs: 0,
           status: 0,
           ok: false,
-          request: {
-            method: String(request.method || 'GET').trim().toUpperCase() || 'GET',
-            url: String(request.url || '').trim(),
-            headers: {},
-            query: {},
-            body: {}
-          },
-          response: { headers: {}, body: null },
+          totalRequests: 0,
+          payloadCount: 0,
+          payloadSize: 0,
+          requestPreview: {},
+          responsePreview: {},
           error: String(e?.message || e || 'Ошибка выполнения узла')
         }
       };
@@ -752,7 +1017,7 @@
         </button>
       </div>
       <div class="tabs">
-        {#each sourceGroups as g (g.key)}
+        {#each visibleSourceGroups as g (g.key)}
           <button class:active={activeTab === g.key} on:click={() => (activeTab = g.key)}>{g.label}</button>
         {/each}
       </div>
@@ -920,7 +1185,7 @@
 
       {#if isApiNode(settingsNode) || isApiToolNode(settingsNode)}
         <div class="node-modal-body">
-          <div class="help">Легкая поднастройка API-узла: шаблон, метод, URL и JSON-поля. Ниже можно выполнить один запрос (Execute Node) и посмотреть сырой request/response.</div>
+          <div class="help">Поднастройка API-узла: шаблон, метод, URL, JSON-поля и пагинация.</div>
           <label>
             Шаблон API
             <select value={nodeTemplateId(settingsNode)} on:change={(e) => applyTemplateToNode(settingsNode.id, selectValue(e))}>
@@ -993,6 +1258,108 @@
               on:input={(e) => updateApiNodeRequest(settingsNode.id, 'bodyText', textareaValue(e))}
             ></textarea>
           </label>
+          <div class="subbox">
+            <div class="subttl">Пагинация (узел API Request)</div>
+            <div class="actions-row">
+              <button class:active={settingsPagination.enabled} on:click={() => updatePaginationForNode(settingsNode.id, 'enabled', !settingsPagination.enabled)}>
+                {settingsPagination.enabled ? 'Пагинация: включена' : 'Пагинация: выключена'}
+              </button>
+            </div>
+            {#if settingsPagination.enabled}
+              <div class="interval-grid">
+                <label>
+                  Тип
+                  <select value={settingsPagination.mode} on:change={(e) => updatePaginationForNode(settingsNode.id, 'mode', selectValue(e))}>
+                    <option value="page_number">Номер страницы</option>
+                    <option value="offset_limit">Смещение + лимит</option>
+                    <option value="cursor">Курсор</option>
+                  </select>
+                </label>
+                <label>
+                  Куда подставлять
+                  <select value={settingsPagination.target} on:change={(e) => updatePaginationForNode(settingsNode.id, 'target', selectValue(e))}>
+                    <option value="query">Query</option>
+                    <option value="body">Body</option>
+                  </select>
+                </label>
+              </div>
+              <div class="interval-grid">
+                <label>
+                  Макс. страниц
+                  <input type="number" min="1" value={String(settingsPagination.maxPages)} on:input={(e) => updatePaginationForNode(settingsNode.id, 'maxPages', Number(inputValue(e) || 1))} />
+                </label>
+                <label>
+                  Пауза между запросами (мс)
+                  <input type="number" min="0" value={String(settingsPagination.pauseMs)} on:input={(e) => updatePaginationForNode(settingsNode.id, 'pauseMs', Number(inputValue(e) || 0))} />
+                </label>
+              </div>
+              <label>
+                Путь к массиву данных в ответе (для остановки на пустом массиве)
+                <input value={settingsPagination.dataPath} on:input={(e) => updatePaginationForNode(settingsNode.id, 'dataPath', inputValue(e))} placeholder="response.cards" />
+              </label>
+              <div class="actions-row">
+                <button class:active={settingsPagination.stopOnEmpty} on:click={() => updatePaginationForNode(settingsNode.id, 'stopOnEmpty', !settingsPagination.stopOnEmpty)}>
+                  {settingsPagination.stopOnEmpty ? 'Стоп на пустом массиве: да' : 'Стоп на пустом массиве: нет'}
+                </button>
+              </div>
+              {#if settingsPagination.mode === 'page_number'}
+                <div class="interval-grid">
+                  <label>
+                    Параметр страницы
+                    <input value={settingsPagination.pageParam} on:input={(e) => updatePaginationForNode(settingsNode.id, 'pageParam', inputValue(e))} />
+                  </label>
+                  <label>
+                    Первая страница
+                    <input type="number" min="1" value={String(settingsPagination.startPage)} on:input={(e) => updatePaginationForNode(settingsNode.id, 'startPage', Number(inputValue(e) || 1))} />
+                  </label>
+                </div>
+                <div class="interval-grid">
+                  <label>
+                    Параметр лимита
+                    <input value={settingsPagination.limitParam} on:input={(e) => updatePaginationForNode(settingsNode.id, 'limitParam', inputValue(e))} />
+                  </label>
+                  <label>
+                    Лимит
+                    <input type="number" min="1" value={String(settingsPagination.limitValue)} on:input={(e) => updatePaginationForNode(settingsNode.id, 'limitValue', Number(inputValue(e) || 1))} />
+                  </label>
+                </div>
+              {/if}
+              {#if settingsPagination.mode === 'offset_limit'}
+                <div class="interval-grid">
+                  <label>
+                    Параметр смещения
+                    <input value={settingsPagination.offsetParam} on:input={(e) => updatePaginationForNode(settingsNode.id, 'offsetParam', inputValue(e))} />
+                  </label>
+                  <label>
+                    Стартовое смещение
+                    <input type="number" min="0" value={String(settingsPagination.startOffset)} on:input={(e) => updatePaginationForNode(settingsNode.id, 'startOffset', Number(inputValue(e) || 0))} />
+                  </label>
+                </div>
+                <div class="interval-grid">
+                  <label>
+                    Параметр лимита
+                    <input value={settingsPagination.limitParam} on:input={(e) => updatePaginationForNode(settingsNode.id, 'limitParam', inputValue(e))} />
+                  </label>
+                  <label>
+                    Лимит
+                    <input type="number" min="1" value={String(settingsPagination.limitValue)} on:input={(e) => updatePaginationForNode(settingsNode.id, 'limitValue', Number(inputValue(e) || 1))} />
+                  </label>
+                </div>
+              {/if}
+              {#if settingsPagination.mode === 'cursor'}
+                <div class="interval-grid">
+                  <label>
+                    Путь курсора в следующем запросе
+                    <input value={settingsPagination.cursorReqPath} on:input={(e) => updatePaginationForNode(settingsNode.id, 'cursorReqPath', inputValue(e))} placeholder="settings.cursor.updatedAt" />
+                  </label>
+                  <label>
+                    Путь курсора в ответе
+                    <input value={settingsPagination.cursorResPath} on:input={(e) => updatePaginationForNode(settingsNode.id, 'cursorResPath', inputValue(e))} placeholder="response.cursor.updatedAt" />
+                  </label>
+                </div>
+              {/if}
+            {/if}
+          </div>
           <div class="actions-row">
             <button class="primary-action" on:click={() => executeApiNode(settingsNode.id)} disabled={settingsApiLoading}>
               {settingsApiLoading ? 'Выполнение...' : 'Execute Node'}
@@ -1003,20 +1370,40 @@
             <div class="exec-block">
               <div class="exec-head">
                 <span>Статус: {settingsApiExecution.status || '-'}</span>
+                <span>Страниц: {settingsApiExecution.totalRequests || '-'}</span>
+                <span>Записей: {settingsApiExecution.payloadCount || '-'}</span>
+                <span>Размер: {Math.round((settingsApiExecution.payloadSize || 0) / 1024 * 10) / 10} KB</span>
                 <span>Время: {settingsApiExecution.durationMs} мс</span>
-                <span>Запуск: {settingsApiExecution.startedAt}</span>
               </div>
               {#if settingsApiExecution.error}
                 <div class="issue error">{settingsApiExecution.error}</div>
               {/if}
-              <label>
-                RAW request
-                <textarea readonly rows="10" value={JSON.stringify(settingsApiExecution.request, null, 2)}></textarea>
-              </label>
-              <label>
-                RAW response
-                <textarea readonly rows="12" value={JSON.stringify(settingsApiExecution.response, null, 2)}></textarea>
-              </label>
+              <div class="subbox">
+                <div class="subttl exec-preview-head">
+                  <span>Что ушло на сервер</span>
+                  <button type="button" class="view-toggle" on:click={() => (settingsRequestViewMode = settingsRequestViewMode === 'tree' ? 'raw' : 'tree')}>
+                    {settingsRequestViewMode === 'tree' ? 'RAW' : 'Дерево'}
+                  </button>
+                </div>
+                {#if settingsRequestViewMode === 'tree'}
+                  <div class="response-tree-wrap"><JsonTreeView node={settingsApiExecution.requestPreview} name="request" level={0} /></div>
+                {:else}
+                  <textarea readonly rows="10" value={JSON.stringify(settingsApiExecution.requestPreview, null, 2)}></textarea>
+                {/if}
+              </div>
+              <div class="subbox">
+                <div class="subttl exec-preview-head">
+                  <span>Предпросмотр ответа</span>
+                  <button type="button" class="view-toggle" on:click={() => (settingsResponseViewMode = settingsResponseViewMode === 'tree' ? 'raw' : 'tree')}>
+                    {settingsResponseViewMode === 'tree' ? 'RAW' : 'Дерево'}
+                  </button>
+                </div>
+                {#if settingsResponseViewMode === 'tree'}
+                  <div class="response-tree-wrap"><JsonTreeView node={settingsApiExecution.responsePreview} name="response" level={0} /></div>
+                {:else}
+                  <textarea readonly rows="12" value={JSON.stringify(settingsApiExecution.responsePreview, null, 2)}></textarea>
+                {/if}
+              </div>
             </div>
           {/if}
         </div>
@@ -1089,9 +1476,15 @@
   .help { font-size: 12px; color: #475569; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; }
   .actions-row { display: flex; gap: 8px; flex-wrap: wrap; }
   .actions-row button { border: 1px solid #dbe4f0; background: #fff; border-radius: 8px; padding: 7px 10px; cursor: pointer; }
+  .actions-row button.active { background: #0f172a; color: #fff; border-color: #0f172a; }
   .actions-row .primary-action { background: #0f172a; color: #fff; border-color: #0f172a; }
   .exec-block { border: 1px solid #e2e8f0; border-radius: 10px; padding: 8px; display: flex; flex-direction: column; gap: 8px; background: #f8fafc; }
   .exec-head { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: #334155; }
+  .subbox { border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+  .subttl { font-size: 12px; font-weight: 600; color: #334155; }
+  .exec-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .view-toggle { border-radius: 10px; border: 1px solid #e2e8f0; background: #fff; color: #0f172a; padding: 4px 8px; font-size: 11px; line-height: 1.2; cursor: pointer; }
+  .response-tree-wrap { border: 1px solid #e6eaf2; border-radius: 12px; background: #fff; padding: 8px; min-height: 78px; overflow: visible; }
 </style>
 
 
