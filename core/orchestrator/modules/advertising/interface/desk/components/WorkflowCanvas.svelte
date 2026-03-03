@@ -403,6 +403,37 @@
     return value;
   }
 
+  function isExactTemplateAlias(value: any, aliasesLower: Set<string>) {
+    if (typeof value !== 'string' || !aliasesLower.size) return false;
+    const exact = value.match(PARAMETER_TOKEN_EXACT_RE);
+    if (!exact?.[1]) return false;
+    return aliasesLower.has(String(exact[1] || '').trim().toLowerCase());
+  }
+
+  function stripUnresolvedTemplateTokens(value: any, aliasesLower: Set<string>) {
+    if (!value || !aliasesLower.size) return;
+    if (Array.isArray(value)) {
+      for (let i = value.length - 1; i >= 0; i -= 1) {
+        const item = value[i];
+        if (isExactTemplateAlias(item, aliasesLower)) {
+          value.splice(i, 1);
+          continue;
+        }
+        stripUnresolvedTemplateTokens(item, aliasesLower);
+      }
+      return;
+    }
+    if (typeof value !== 'object') return;
+    Object.keys(value).forEach((key) => {
+      const val = value[key];
+      if (isExactTemplateAlias(val, aliasesLower)) {
+        delete value[key];
+        return;
+      }
+      stripUnresolvedTemplateTokens(val, aliasesLower);
+    });
+  }
+
   function parseParameterSourceRef(raw: string, param: TemplateParameterDefinition): { schema: string; table: string; field: string } | null {
     const src = String(raw || '').trim().replace(/^['"]|['"]$/g, '');
     if (!src) return null;
@@ -693,6 +724,42 @@
     if (isApiNode(n)) return String(n.config?.templateId || n.config?.id || '').trim();
     if (isApiToolNode(n)) return String(toolCfg(n).settings.templateId || '').trim();
     return '';
+  }
+
+  function normalizeUrlForTemplateMatch(raw: string) {
+    const src = String(raw || '').trim();
+    if (!src) return '';
+    try {
+      const u = new URL(src);
+      const base = `${u.protocol}//${u.host}`;
+      const path = u.pathname.replace(/\/+$/, '') || '/';
+      return `${base}${path}`;
+    } catch {
+      return src.replace(/\/+$/, '');
+    }
+  }
+
+  function resolveTemplateSourceForNode(node: WorkflowNode, request: ApiNodeRequest): DynamicApiSource | null {
+    const tplId = nodeTemplateId(node);
+    if (tplId) {
+      const byId = dynamicApiSources.find((x) => x.id === tplId);
+      if (byId) return byId;
+    }
+
+    const requestMethod = String(request.method || 'GET').trim().toUpperCase() || 'GET';
+    const requestUrl = normalizeUrlForTemplateMatch(String(request.url || '').trim());
+    if (requestUrl) {
+      const byMethodAndUrl = dynamicApiSources.find((src) => {
+        const tpl = normalizeApiRequest(src.requestTemplate);
+        const tplMethod = String(tpl.method || 'GET').trim().toUpperCase() || 'GET';
+        const tplUrl = normalizeUrlForTemplateMatch(String(tpl.url || '').trim());
+        return tplMethod === requestMethod && tplUrl === requestUrl;
+      });
+      if (byMethodAndUrl) return byMethodAndUrl;
+    }
+
+    if (dynamicApiSources.length === 1) return dynamicApiSources[0];
+    return null;
   }
 
   function defaultApiPagination(): ApiNodePagination {
@@ -1461,7 +1528,7 @@
       collectParameterTokens(baseBodyObj, requestedAliasesSet);
       const requestedAliases = Array.from(requestedAliasesSet);
 
-      const templateSource = dynamicApiSources.find((x) => x.id === nodeTemplateId(node));
+      const templateSource = resolveTemplateSourceForNode(node, request);
       let resolvedParameters: Record<string, any> = {};
       let resolveIssues: Record<string, string> = {};
       if (requestedAliases.length) {
@@ -1481,11 +1548,38 @@
       applyParametersToValue(baseQueryObj, resolvedParameters);
       applyParametersToValue(baseBodyObj, resolvedParameters);
 
+      const unresolvedBeforeStrip = new Set<string>();
+      collectParameterTokens(resolvedUrlRaw, unresolvedBeforeStrip);
+      collectParameterTokens(headersObj, unresolvedBeforeStrip);
+      collectParameterTokens(baseQueryObj, unresolvedBeforeStrip);
+      collectParameterTokens(baseBodyObj, unresolvedBeforeStrip);
+      const paginationAliasesLower = new Set(
+        (templateSource?.paginationParameters || [])
+          .map((p) => String(p?.alias || '').trim().toLowerCase())
+          .filter(Boolean)
+      );
+      const unresolvedPaginationAliasesLower = new Set(
+        Array.from(unresolvedBeforeStrip)
+          .map((a) => String(a || '').trim().toLowerCase())
+          .filter((a) => paginationAliasesLower.has(a))
+      );
+      if (unresolvedPaginationAliasesLower.size) {
+        stripUnresolvedTemplateTokens(baseQueryObj, unresolvedPaginationAliasesLower);
+        if (baseBodyObj && typeof baseBodyObj === 'object') {
+          stripUnresolvedTemplateTokens(baseBodyObj, unresolvedPaginationAliasesLower);
+        }
+      }
+
       const unresolvedTokens = new Set<string>();
       collectParameterTokens(resolvedUrlRaw, unresolvedTokens);
       collectParameterTokens(headersObj, unresolvedTokens);
       collectParameterTokens(baseQueryObj, unresolvedTokens);
       collectParameterTokens(baseBodyObj, unresolvedTokens);
+      if (!Object.keys(resolveIssues).length && unresolvedTokens.size) {
+        Array.from(unresolvedTokens).forEach((alias) => {
+          resolveIssues[alias] = 'alias не найден в источниках шаблона (конструктор/параметры/первое значение пагинации)';
+        });
+      }
       if (unresolvedTokens.size) {
         const unresolvedList = Array.from(unresolvedTokens);
         const details = unresolvedList
