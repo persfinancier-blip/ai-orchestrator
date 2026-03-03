@@ -332,7 +332,9 @@
   let checking = false;
   let err = '';
   let ok = '';
+  let warn = '';
   let initialApiStoreIdApplied = 0;
+  let nameDuplicateHint = '';
 
   let requestInput = '';
   let responseStatus = 0;
@@ -2502,6 +2504,27 @@ function formatBytes(bytes: number) {
     const fromDraft = parsePositiveInt(draft?.storeId);
     if (fromDraft > 0) return fromDraft;
     return storeIdFromRef(ref);
+  }
+
+  function normalizeTemplateName(value: any): string {
+    return String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' ');
+  }
+
+  function duplicateNameMatches(name: string, current?: ApiDraft | null): ApiDraft[] {
+    const key = normalizeTemplateName(name);
+    if (!key) return [];
+    const currentStoreId = resolveDraftStoreId(current || null, selectedRef);
+    const currentLocalId = String(current?.localId || '').trim();
+    return drafts.filter((d) => {
+      if (normalizeTemplateName(d.name) !== key) return false;
+      const dStoreId = resolveDraftStoreId(d, refOf(d));
+      if (currentStoreId > 0 && dStoreId > 0) return dStoreId !== currentStoreId;
+      if (!currentStoreId && currentLocalId) return String(d.localId || '').trim() !== currentLocalId;
+      return true;
+    });
   }
 
   function extractStoreIdFromRow(row: any): number {
@@ -5607,6 +5630,7 @@ function handleDefinitionInput(value: string) {
   async function applyStorageChoice() {
     err = '';
     ok = '';
+    warn = '';
     const [schema, table] = String(api_storage_pick_value || '').split('.');
     if (!schema || !table) return;
     const valid = await checkStorageTable(schema, table);
@@ -5643,6 +5667,7 @@ function handleDefinitionInput(value: string) {
   async function loadAll() {
     loading = true;
     err = '';
+    warn = '';
     try {
       try {
         const cfg = await apiJson<{ effective?: any }>(`${apiBase}/settings/effective`, { headers: headers() });
@@ -5682,6 +5707,7 @@ function handleDefinitionInput(value: string) {
   async function saveSelected() {
     err = '';
     ok = '';
+    warn = '';
     const current = selected;
     if (!current) {
       err = 'Выбери API для сохранения';
@@ -5691,6 +5717,10 @@ function handleDefinitionInput(value: string) {
     if (!name) {
       err = 'Укажи название API';
       return;
+    }
+    const duplicateOnSave = duplicateNameMatches(name, current);
+    if (duplicateOnSave.length) {
+      warn = `Предупреждение: шаблон с таким именем уже есть (${duplicateOnSave.length}).`;
     }
 
     applyUrlInput(requestInput);
@@ -5747,10 +5777,15 @@ function handleDefinitionInput(value: string) {
   async function addApi() {
     err = '';
     ok = '';
+    warn = '';
     const name = String(nameDraft || '').trim();
     if (!name) {
       err = 'Укажи название API';
       return;
+    }
+    const duplicateOnAdd = duplicateNameMatches(name, null);
+    if (duplicateOnAdd.length) {
+      warn = `Предупреждение: шаблон с таким именем уже есть (${duplicateOnAdd.length}).`;
     }
     const d = baseDraft();
     d.name = name;
@@ -5763,6 +5798,7 @@ function handleDefinitionInput(value: string) {
   async function deleteApi(d: ApiDraft) {
     err = '';
     ok = '';
+    warn = '';
     const storeId = resolveDraftStoreId(d, refOf(d));
     if (!storeId) {
       drafts = drafts.filter((x) => x.localId !== d.localId);
@@ -7205,6 +7241,17 @@ function handleDefinitionInput(value: string) {
   $: selected?.headersJson, tick().then(syncMainTextareasHeight);
   $: selected?.queryJson, tick().then(syncMainTextareasHeight);
   $: selected?.bodyJson, tick().then(syncMainTextareasHeight);
+  $: {
+    const currentName = String(nameDraft || selected?.name || '').trim();
+    if (!currentName) {
+      nameDuplicateHint = '';
+    } else {
+      const duplicates = duplicateNameMatches(currentName, selected || null);
+      nameDuplicateHint = duplicates.length
+        ? `Внимание: такое имя уже используется (${duplicates.length}).`
+        : '';
+    }
+  }
   $: definitionDraft, tick().then(syncParameterEditorsHeight);
   $: activeParameter, tick().then(syncParameterEditorsHeight);
   $: {
@@ -7330,6 +7377,9 @@ function syncParameterEditorsHeight() {
   {/if}
   {#if ok}
     <div class="okbox">{ok}</div>
+  {/if}
+  {#if warn}
+    <div class="warnbox">{warn}</div>
   {/if}
 
   <div class="layout">
@@ -8633,7 +8683,7 @@ function syncParameterEditorsHeight() {
 
       <div class="template-controls">
         <input
-          class="template-name"
+          class="template-name {nameDuplicateHint ? 'warn' : ''}"
           value={nameDraft}
           on:input={(e) => {
             nameDraft = e.currentTarget.value;
@@ -8641,6 +8691,9 @@ function syncParameterEditorsHeight() {
           }}
           placeholder="Название API"
         />
+        {#if nameDuplicateHint}
+          <div class="name-warn">{nameDuplicateHint}</div>
+        {/if}
         <div class="saved-inline-actions">
           <button on:click={addApi}>Добавить</button>
           <button on:click={saveSelected} disabled={saving || !selected}>{saving ? 'Сохранение...' : 'Сохранить'}</button>
@@ -8744,6 +8797,8 @@ function syncParameterEditorsHeight() {
   .storage-picker select { flex:1; min-width:0; }
   .template-controls { margin-bottom:8px; display:grid; gap:8px; }
   .template-name { width:100%; box-sizing:border-box; }
+  .template-name.warn { border-color:#f59e0b; background:#fffbeb; }
+  .name-warn { font-size:12px; color:#92400e; margin-top:-2px; }
   .saved-inline-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
 
   .list { display:flex; flex-direction:column; gap:8px; }
@@ -8775,6 +8830,7 @@ function syncParameterEditorsHeight() {
   .alert { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #f3c0c0; background: #fff5f5; }
   .alert-title { font-weight: 700; margin-bottom: 6px; }
   .okbox { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #bbf7d0; background: #f0fdf4; color:#166534; }
+  .warnbox { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #fcd34d; background: #fffbeb; color:#92400e; }
   pre { margin:0; white-space: pre-wrap; word-break: break-word; }
 
   .auth-section { display:block; margin-top:14px; }
