@@ -21,7 +21,7 @@
     config: any;
   };
   type WorkflowEdge = { id: string; from: string; to: string; fromPort: string; toPort: string };
-  type NodeRuntime = { inRows: number; outRows: number; lossRows: number; lossPct: number; successPct: number; status: 'idle' | 'ok' | 'warn' | 'error' };
+  type NodeRuntime = { inRows: number; outRows: number; lossRows: number; lossPct: number; successPct: number; status: 'idle' | 'running' | 'paused' | 'ok' | 'warn' | 'error' | 'stopped' };
   type WorkflowIssue = { level: 'error' | 'warn' | 'info'; text: string };
   type ApiNodeRequest = {
     method: string;
@@ -83,6 +83,11 @@
   let nodeExecutionLoading: Record<string, boolean> = {};
   let settingsRequestViewMode: 'tree' | 'raw' = 'tree';
   let settingsResponseViewMode: 'tree' | 'raw' = 'tree';
+  let chainRunActive = false;
+  let chainRunPaused = false;
+  let chainRunStopRequested = false;
+  let chainRunId = 0;
+  let chainCurrentNodeId = '';
 
   let canvasEl: HTMLDivElement;
   let panX = 0;
@@ -614,6 +619,180 @@
     return out.length === nodes.length ? out : null;
   }
 
+  function reachableFrom(startId: string) {
+    const seen = new Set<string>();
+    const stack = [startId];
+    while (stack.length) {
+      const id = String(stack.pop());
+      if (seen.has(id)) continue;
+      seen.add(id);
+      edges.filter((e) => e.from === id).forEach((e) => stack.push(e.to));
+    }
+    return seen;
+  }
+
+  function topoForSubset(nodeIds: Set<string>): WorkflowNode[] | null {
+    const subsetNodes = nodes.filter((n) => nodeIds.has(n.id));
+    const indeg = new Map(subsetNodes.map((n) => [n.id, 0]));
+    const byId = new Map(subsetNodes.map((n) => [n.id, n]));
+    const subsetEdges = edges.filter((e) => nodeIds.has(e.from) && nodeIds.has(e.to));
+    subsetEdges.forEach((e) => indeg.set(e.to, Number(indeg.get(e.to) || 0) + 1));
+    const q = Array.from(indeg.entries())
+      .filter(([, d]) => d === 0)
+      .map(([id]) => id);
+    const out: WorkflowNode[] = [];
+    while (q.length) {
+      const id = String(q.shift());
+      const n = byId.get(id);
+      if (!n) continue;
+      out.push(n);
+      subsetEdges
+        .filter((e) => e.from === id)
+        .forEach((e) => {
+          const d = Number(indeg.get(e.to) || 0) - 1;
+          indeg.set(e.to, d);
+          if (d === 0) q.push(e.to);
+        });
+    }
+    return out.length === subsetNodes.length ? out : null;
+  }
+
+  function computeOutRows(n: WorkflowNode, inRows: number, apiExec?: ApiNodeExecution | null) {
+    let outRows = inRows;
+    if (n.type === 'data') {
+      if (isApiNode(n)) {
+        if (apiExec) {
+          outRows = apiExec.payloadCount > 0 ? apiExec.payloadCount : Math.max(inRows, apiExec.totalRequests || 1);
+        } else {
+          const baseRows = Math.max(1, Number(n.config.size || 1));
+          outRows = inRows > 0 ? Math.max(baseRows, inRows) : baseRows;
+        }
+      } else {
+        outRows = inRows > 0 ? inRows : Number(n.config.size || 0);
+      }
+    }
+    if (n.type === 'tool') {
+      const cfg = toolCfg(n);
+      if (cfg.toolType === 'start_process') outRows = inRows > 0 ? inRows : 1;
+      if (cfg.toolType === 'schedule_process') outRows = inRows;
+      if (cfg.toolType === 'api_request') {
+        if (apiExec) {
+          outRows = apiExec.payloadCount > 0 ? apiExec.payloadCount : Math.max(inRows, apiExec.totalRequests || 1);
+        } else {
+          outRows = inRows > 0 ? inRows : 1;
+        }
+      }
+      if (cfg.toolType === 'table_parser') outRows = Math.max(0, Math.round(inRows * Math.max(0.1, Number(cfg.settings.parserMultiplier || 1))));
+      if (cfg.toolType === 'db_write') outRows = Math.max(0, Math.round(inRows * Math.max(0, Math.min(100, Number(cfg.settings.writeSuccessRate || 98))) / 100));
+      if (cfg.toolType === 'end_process') outRows = 0;
+    }
+    return outRows;
+  }
+
+  function setNodeRuntime(n: WorkflowNode, inRows: number, outRows: number, forceStatus?: NodeRuntime['status']) {
+    const lossRows = Math.max(0, inRows - outRows);
+    const lossPct = inRows > 0 ? Number(((lossRows / inRows) * 100).toFixed(2)) : 0;
+    const successPct = inRows > 0 ? Number((((inRows - lossRows) / inRows) * 100).toFixed(2)) : n.type === 'tool' && toolCfg(n).toolType !== 'start_process' ? 0 : 100;
+    const status: NodeRuntime['status'] =
+      forceStatus || (successPct >= 95 ? 'ok' : successPct >= 80 ? 'warn' : 'error');
+    nodeRuntime = { ...nodeRuntime, [n.id]: { inRows, outRows, lossRows, lossPct, successPct, status } };
+  }
+
+  function applyOutRowsToEdges(n: WorkflowNode, outRows: number, allowedNodeIds?: Set<string>) {
+    const outs = edges.filter((e) => e.from === n.id && (!allowedNodeIds || (allowedNodeIds.has(e.from) && allowedNodeIds.has(e.to))));
+    const base = outs.length ? Math.floor(outRows / outs.length) : 0;
+    let rem = outs.length ? outRows - base * outs.length : 0;
+    const next = { ...edgeRows };
+    outs.forEach((e) => {
+      next[e.id] = base + (rem > 0 ? 1 : 0);
+      if (rem > 0) rem -= 1;
+    });
+    edgeRows = next;
+  }
+
+  async function startNodeChain(nodeId: string) {
+    const startNode = nodes.find((n) => n.id === nodeId);
+    if (!startNode) return;
+
+    chainRunId += 1;
+    const myRunId = chainRunId;
+    chainRunActive = true;
+    chainRunPaused = false;
+    chainRunStopRequested = false;
+    chainCurrentNodeId = '';
+    banner = '';
+    issues = validate();
+    if (issues.some((x) => x.level === 'error')) {
+      banner = 'Исправь ошибки схемы перед запуском';
+      chainRunActive = false;
+      return;
+    }
+
+    const reachableIds = reachableFrom(nodeId);
+    const order = topoForSubset(reachableIds);
+    if (!order) {
+      banner = 'Обнаружен цикл в цепочке от выбранной ноды';
+      chainRunActive = false;
+      return;
+    }
+
+    nodeRuntime = {};
+    edgeRows = {};
+
+    for (const n of order) {
+      if (!chainRunActive || myRunId !== chainRunId) return;
+      if (chainRunStopRequested) break;
+      while (chainRunPaused && !chainRunStopRequested && chainRunActive && myRunId === chainRunId) {
+        const current = nodeRuntime[n.id];
+        if (current) setNodeRuntime(n, current.inRows, current.outRows, 'paused');
+        await delayMs(120);
+      }
+      if (chainRunStopRequested || !chainRunActive || myRunId !== chainRunId) break;
+
+      chainCurrentNodeId = n.id;
+      const inEdges = edges.filter((e) => e.to === n.id && reachableIds.has(e.from) && reachableIds.has(e.to));
+      const inRows = inEdges.reduce((s, e) => s + Number(edgeRows[e.id] || 0), 0);
+      setNodeRuntime(n, inRows, inRows, 'running');
+
+      let apiExec: ApiNodeExecution | null = null;
+      if (isApiNode(n) || isApiToolNode(n)) {
+        apiExec = await executeApiNode(n.id);
+      } else {
+        await delayMs(180);
+      }
+      if (!chainRunActive || myRunId !== chainRunId) return;
+
+      const outRows = computeOutRows(n, inRows, apiExec);
+      const forcedStatus: NodeRuntime['status'] | undefined = chainRunStopRequested ? 'stopped' : undefined;
+      setNodeRuntime(n, inRows, outRows, forcedStatus);
+      applyOutRowsToEdges(n, outRows, reachableIds);
+      await delayMs(80);
+    }
+
+    chainCurrentNodeId = '';
+    if (chainRunStopRequested) {
+      banner = 'Выполнение остановлено';
+    } else {
+      const executed = order.length;
+      banner = `Цепочка выполнена: узлов ${executed}`;
+    }
+    chainRunActive = false;
+    chainRunPaused = false;
+    chainRunStopRequested = false;
+  }
+
+  function toggleChainPause() {
+    if (!chainRunActive) return;
+    chainRunPaused = !chainRunPaused;
+    banner = chainRunPaused ? 'Выполнение на паузе' : 'Выполнение продолжено';
+  }
+
+  function stopChainRun() {
+    if (!chainRunActive) return;
+    chainRunStopRequested = true;
+    chainRunPaused = false;
+  }
+
   function validate() {
     const out: WorkflowIssue[] = [];
     if (!nodes.some((n) => n.type === 'data')) out.push({ level: 'warn', text: 'Нет источников данных: поток может начинаться от Старт процесса' });
@@ -755,11 +934,11 @@
     }
   }
 
-  async function executeApiNode(nodeId: string) {
+  async function executeApiNode(nodeId: string): Promise<ApiNodeExecution | null> {
     const node = nodes.find((n) => n.id === nodeId);
     if (!node || (!isApiNode(node) && !isApiToolNode(node))) {
       banner = 'Этот узел не поддерживает Execute Node';
-      return;
+      return null;
     }
 
     const request = getApiRequestForNode(node);
@@ -767,7 +946,7 @@
     const urlRaw = String(request.url || '').trim();
     if (!urlRaw) {
       banner = 'Укажи URL в настройке API-узла';
-      return;
+      return null;
     }
 
     try {
@@ -909,38 +1088,42 @@
       };
       const payloadSize = new TextEncoder().encode(JSON.stringify(responsePreview)).length;
 
+      const result: ApiNodeExecution = {
+        startedAt: new Date(startTs).toISOString(),
+        durationMs,
+        status: lastStatus,
+        ok: failed === 0,
+        totalRequests: requestsSent.length,
+        payloadCount,
+        payloadSize,
+        requestPreview,
+        responsePreview
+      };
       nodeExecutions = {
         ...nodeExecutions,
-        [nodeId]: {
-          startedAt: new Date(startTs).toISOString(),
-          durationMs,
-          status: lastStatus,
-          ok: failed === 0,
-          totalRequests: requestsSent.length,
-          payloadCount,
-          payloadSize,
-          requestPreview,
-          responsePreview
-        }
+        [nodeId]: result
       };
       banner = failed > 0 ? `Узел выполнен с ошибками: ${failed}` : `Узел выполнен, запросов: ${requestsSent.length}`;
+      return result;
     } catch (e: any) {
+      const failedResult: ApiNodeExecution = {
+        startedAt: new Date().toISOString(),
+        durationMs: 0,
+        status: 0,
+        ok: false,
+        totalRequests: 0,
+        payloadCount: 0,
+        payloadSize: 0,
+        requestPreview: {},
+        responsePreview: {},
+        error: String(e?.message || e || 'Ошибка выполнения узла')
+      };
       nodeExecutions = {
         ...nodeExecutions,
-        [nodeId]: {
-          startedAt: new Date().toISOString(),
-          durationMs: 0,
-          status: 0,
-          ok: false,
-          totalRequests: 0,
-          payloadCount: 0,
-          payloadSize: 0,
-          requestPreview: {},
-          responsePreview: {},
-          error: String(e?.message || e || 'Ошибка выполнения узла')
-        }
+        [nodeId]: failedResult
       };
       banner = String(e?.message || e || 'Ошибка выполнения узла');
+      return failedResult;
     } finally {
       nodeExecutionLoading = { ...nodeExecutionLoading, [nodeId]: false };
     }
@@ -982,6 +1165,10 @@
     edgeRows = {};
     nodeExecutions = {};
     nodeExecutionLoading = {};
+    chainRunActive = false;
+    chainRunPaused = false;
+    chainRunStopRequested = false;
+    chainCurrentNodeId = '';
     issues = [];
     summary = { sourceRows: 0, finalRows: 0, lossRows: 0, lossPct: 0, successPct: 0 };
     banner = '';
@@ -1061,9 +1248,31 @@
           >
             <div class="node-head">
               <strong>{node.config.name}</strong>
-              <button on:click|stopPropagation={() => deleteNode(node.id)}>x</button>
+              <div class="node-controls">
+                <button
+                  class="ctrl-btn"
+                  title="Старт цепочки от этой ноды"
+                  on:click|stopPropagation={() => startNodeChain(node.id)}
+                >></button>
+                <button
+                  class="ctrl-btn"
+                  title="Пауза/продолжить"
+                  on:click|stopPropagation={toggleChainPause}
+                  disabled={!chainRunActive}
+                >||</button>
+                <button
+                  class="ctrl-btn"
+                  title="Остановить выполнение"
+                  on:click|stopPropagation={stopChainRun}
+                  disabled={!chainRunActive}
+                >[]</button>
+                <button class="ctrl-btn delete-btn" title="Удалить ноду" on:click|stopPropagation={() => deleteNode(node.id)}>x</button>
+              </div>
             </div>
             <div class="node-meta">{node.type === 'data' ? node.config.datasetId : node.config.toolType}</div>
+            {#if chainRunActive && chainCurrentNodeId === node.id}
+              <div class="runtime running">Выполняется...</div>
+            {/if}
             {#if isApiNode(node) || isApiToolNode(node)}
               {@const req = getApiRequestForNode(node)}
               <div class="api-meta">{req.method || 'GET'} {req.url || ''}</div>
@@ -1439,10 +1648,27 @@
   .node.data { background: #f8fafc; }
   .node.selected { border-color: #2563eb; }
   .node-head { display: flex; justify-content: space-between; gap: 8px; }
-  .node-head button { border: none; background: transparent; cursor: pointer; color: #64748b; }
+  .node-controls { display: inline-flex; align-items: center; gap: 4px; }
+  .ctrl-btn {
+    border: 1px solid #dbe4f0;
+    background: #fff;
+    color: #475569;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 10px;
+    line-height: 1;
+    min-width: 22px;
+    height: 20px;
+    padding: 0 4px;
+  }
+  .ctrl-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .delete-btn { color: #b91c1c; border-color: #fecaca; }
   .node-meta { color: #64748b; font-size: 11px; margin-top: 4px; }
   .api-meta { color: #0f172a; font-size: 10px; margin-top: 3px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .runtime { margin-top: 6px; font-size: 11px; border-radius: 7px; padding: 4px 6px; border: 1px solid #e2e8f0; }
+  .runtime.running { background: #eff6ff; border-color: #93c5fd; }
+  .runtime.paused { background: #fff7ed; border-color: #fdba74; }
+  .runtime.stopped { background: #f1f5f9; border-color: #cbd5e1; }
   .runtime.ok { background: #f0fdf4; border-color: #86efac; }
   .runtime.warn { background: #fffbeb; border-color: #fcd34d; }
   .runtime.error { background: #fef2f2; border-color: #fca5a5; }
