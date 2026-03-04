@@ -37,10 +37,16 @@
     enabled: boolean;
     mode: ApiPaginationMode;
     target: ApiPaginationTarget;
+    useMaxPages: boolean;
     maxPages: number;
+    useDelay: boolean;
     pauseMs: number;
     dataPath: string;
-    stopOnEmpty: boolean;
+    stopOnMissingValue: boolean;
+    stopOnHttpError: boolean;
+    stopOnSameResponse: boolean;
+    sameResponseLimit: number;
+    stopRules: Array<{ id: string; responsePath: string; operator: string; compareValue: string }>;
     pageParam: string;
     startPage: number;
     limitParam: string;
@@ -806,6 +812,58 @@
     });
   }
 
+  function resolveStopRuleCompareValue(raw: string, resolvedParams: Record<string, any>, requestCtx?: { body?: any; query?: any; headers?: any }) {
+    const source = String(raw || '').trim();
+    if (!source) return '';
+    const bodyRef = source.match(/^\{\{\s*body\.([^{}]+)\s*\}\}$/i);
+    if (bodyRef?.[1]) return getByPath(requestCtx?.body || {}, String(bodyRef[1] || '').trim());
+    const queryRef = source.match(/^\{\{\s*query\.([^{}]+)\s*\}\}$/i);
+    if (queryRef?.[1]) return getByPath(requestCtx?.query || {}, String(queryRef[1] || '').trim());
+    const headersRef = source.match(/^\{\{\s*headers\.([^{}]+)\s*\}\}$/i);
+    if (headersRef?.[1]) return getByPath(requestCtx?.headers || {}, String(headersRef[1] || '').trim());
+    return applyParametersToValue(source, resolvedParams);
+  }
+
+  function evaluateNodeStopRuleOperator(operatorRaw: string, actual: any, expected: any) {
+    const op = normalizeStopRuleOperator(operatorRaw);
+    if (op === 'equals') return evaluateStopRuleValue(actual, '=', expected);
+    if (op === 'not_equals') return evaluateStopRuleValue(actual, '!=', expected);
+    if (op === 'gt') return evaluateStopRuleValue(actual, '>', expected);
+    if (op === 'gte') return evaluateStopRuleValue(actual, '>=', expected);
+    if (op === 'lt') return evaluateStopRuleValue(actual, '<', expected);
+    if (op === 'lte') return evaluateStopRuleValue(actual, '<=', expected);
+    if (op === 'contains') return evaluateStopRuleValue(actual, 'contains', expected);
+    if (op === 'not_contains') return evaluateStopRuleValue(actual, 'not_contains', expected);
+    if (op === 'is_empty') return evaluateStopRuleValue(actual, 'empty', expected);
+    if (op === 'not_empty') return evaluateStopRuleValue(actual, 'exists', expected);
+    return false;
+  }
+
+  function findTriggeredStopRule(
+    responseBody: any,
+    rules: Array<{ id: string; responsePath: string; operator: string; compareValue: string }>,
+    resolvedParams: Record<string, any>,
+    requestCtx?: { body?: any; query?: any; headers?: any }
+  ) {
+    const list = Array.isArray(rules) ? rules : [];
+    for (const rule of list) {
+      const path = String(rule?.responsePath || '').trim();
+      if (!path) continue;
+      const actual = getByPath({ response: responseBody }, path);
+      const expected = resolveStopRuleCompareValue(String(rule?.compareValue || ''), resolvedParams, requestCtx);
+      if (evaluateNodeStopRuleOperator(String(rule?.operator || ''), actual, expected)) {
+        return {
+          id: String(rule?.id || ''),
+          path,
+          operator: normalizeStopRuleOperator(rule?.operator),
+          actual,
+          expected
+        };
+      }
+    }
+    return null;
+  }
+
   function parseParameterSourceRef(raw: string, param: TemplateParameterDefinition): { schema: string; table: string; field: string } | null {
     const src = String(raw || '').trim().replace(/^['"]|['"]$/g, '');
     if (!src) return null;
@@ -978,6 +1036,132 @@
     return { map, issues };
   }
 
+  async function resolveAliasRowsFromDataModel(
+    source: DynamicApiSource,
+    aliases: string[]
+  ): Promise<{ rows: Record<string, any>[]; issues: Record<string, string> }> {
+    const issues: Record<string, string> = {};
+    const requested = uniqueAliasList(aliases);
+    if (!requested.length) return { rows: [], issues };
+    const model = source.dataModel;
+    if (!model || !model.tables.length || !model.fields.length) return { rows: [], issues };
+
+    const aliasSet = new Set(requested.map((a) => a.toLowerCase()));
+    const fields = model.fields.filter((f) => aliasSet.has(String(f.alias || '').trim().toLowerCase()));
+    if (!fields.length) return { rows: [], issues };
+
+    const usedTableIds = new Set(fields.map((f) => f.table_id));
+    const tables = model.tables.filter((t) => usedTableIds.has(t.id));
+    const joins = usedTableIds.size <= 1 ? [] : model.joins;
+    const filters = model.filters.filter((f) => usedTableIds.has(f.table_id));
+
+    const resp = await fetch(`${API_BASE}/parameter-join-values`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-AO-ROLE': API_ROLE },
+      body: JSON.stringify({
+        tables,
+        joins,
+        fields,
+        filters,
+        aliases: requested,
+        limit: 5000,
+        offset: 0
+      })
+    });
+    if (!resp.ok) {
+      const txt = await resp.text();
+      throw new Error(txt || `parameter-join-values HTTP ${resp.status}`);
+    }
+    let json: any = {};
+    try {
+      json = await resp.json();
+    } catch {
+      json = {};
+    }
+    const rowsRaw = Array.isArray(json?.rows) ? json.rows : [];
+    const rows = rowsRaw.map((row: any) => {
+      const out: Record<string, any> = {};
+      requested.forEach((alias) => {
+        const found = findAliasInMap(row, alias);
+        if (found.found) out[alias] = found.value;
+      });
+      return out;
+    });
+    return { rows, issues };
+  }
+
+  function templateDispatchConfig(source: DynamicApiSource | null | undefined) {
+    const raw = source?.rawRow && typeof source.rawRow === 'object' ? source.rawRow : {};
+    const mapping = tryObj(raw?.mapping_json);
+    const execution = tryObj(raw?.execution_json || mapping?.execution);
+    const dispatchModeRaw = String(raw?.dispatch_mode || execution?.dispatch_mode || 'single').trim().toLowerCase();
+    const dispatchMode: 'single' | 'group_by' = dispatchModeRaw === 'group_by' ? 'group_by' : 'single';
+    const groupByRaw = Array.isArray(raw?.group_by_aliases)
+      ? raw.group_by_aliases
+      : Array.isArray(execution?.group_by_aliases)
+      ? execution.group_by_aliases
+      : [];
+    const groupByAliases = uniqueAliasList(groupByRaw.map((x: any) => String(x || '').trim()));
+    return { dispatchMode, groupByAliases };
+  }
+
+  function templateAliasesForNode(node: WorkflowNode | null | undefined): string[] {
+    if (!node || (!isApiNode(node) && !isApiToolNode(node))) return [];
+    const request = getApiRequestForNode(node);
+    const source = resolveTemplateSourceForNode(node, request);
+    if (!source) return [];
+    const out: string[] = [];
+    (source.parameterDefinitions || []).forEach((p) => {
+      const alias = String(p?.alias || '').trim();
+      if (alias) out.push(alias);
+    });
+    (source.paginationParameters || []).forEach((p) => {
+      const alias = String(p?.alias || '').trim();
+      if (alias) out.push(alias);
+    });
+    (source.dataModel?.fields || []).forEach((f) => {
+      const alias = String(f?.alias || '').trim();
+      if (alias) out.push(alias);
+    });
+    return uniqueAliasList(out);
+  }
+
+  function parseParameterOverridesRaw(value: any): Record<string, any> {
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
+    const txt = String(value || '').trim();
+    if (!txt) return {};
+    try {
+      const parsed = JSON.parse(txt);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function getNodeParameterOverrides(node: WorkflowNode | null | undefined): Record<string, any> {
+    if (!node) return {};
+    if (isApiNode(node)) return parseParameterOverridesRaw(node.config?.parameterOverrides || {});
+    if (isApiToolNode(node)) return parseParameterOverridesRaw(toolCfg(node).settings?.parameterOverrides || '{}');
+    return {};
+  }
+
+  function setNodeParameterOverride(nodeId: string, alias: string, value: string) {
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node || (!isApiNode(node) && !isApiToolNode(node))) return;
+    const key = String(alias || '').trim();
+    if (!key) return;
+    const current = getNodeParameterOverrides(node);
+    const next = { ...current };
+    const txt = String(value ?? '').trim();
+    if (!txt) delete next[key];
+    else next[key] = txt;
+    if (isApiNode(node)) {
+      updateDataNodeConfig(nodeId, { parameterOverrides: next });
+      return;
+    }
+    updateSetting(nodeId, 'parameterOverrides', JSON.stringify(next));
+  }
+
   function resolveAliasesFromPaginationFirstValues(source: DynamicApiSource, aliases: string[]) {
     const map: Record<string, any> = {};
     const requested = new Set(uniqueAliasList(aliases).map((a) => a.toLowerCase()));
@@ -1075,8 +1259,60 @@
     return 'none';
   }
 
+  function normalizeStopRuleOperator(raw: any) {
+    const op = String(raw || '').trim().toLowerCase();
+    if (
+      op === 'equals' ||
+      op === 'not_equals' ||
+      op === 'gt' ||
+      op === 'gte' ||
+      op === 'lt' ||
+      op === 'lte' ||
+      op === 'contains' ||
+      op === 'not_contains' ||
+      op === 'is_empty' ||
+      op === 'not_empty'
+    ) {
+      return op;
+    }
+    if (op === '=' || op === '==') return 'equals';
+    if (op === '!=' || op === '<>') return 'not_equals';
+    if (op === '>') return 'gt';
+    if (op === '>=') return 'gte';
+    if (op === '<') return 'lt';
+    if (op === '<=') return 'lte';
+    if (op === 'empty') return 'is_empty';
+    if (op === 'exists') return 'not_empty';
+    return 'equals';
+  }
+
+  function parsePaginationStopRules(raw: any) {
+    const src = Array.isArray(raw) ? raw : [];
+    return src
+      .map((rule: any, idx: number) => ({
+        id: String(rule?.id || `stop_${idx + 1}`),
+        responsePath: String(rule?.response_path || rule?.responsePath || rule?.path || '').trim(),
+        operator: normalizeStopRuleOperator(rule?.operator),
+        compareValue: String(rule?.compare_value || rule?.compareValue || rule?.value || '').trim()
+      }))
+      .filter((rule) => Boolean(rule.responsePath));
+  }
+
+  function parsePaginationStopRulesFromSetting(raw: any) {
+    if (Array.isArray(raw)) return parsePaginationStopRules(raw);
+    const txt = String(raw || '').trim();
+    if (!txt) return [];
+    try {
+      const parsed = JSON.parse(txt);
+      return parsePaginationStopRules(parsed);
+    } catch {
+      return [];
+    }
+  }
+
   function paginationFromTemplateRaw(rawRow: any): ApiNodePagination {
     const pagination = tryObj(rawRow?.pagination_json);
+    const stopConditions = tryObj(pagination?.stop_conditions);
     const enabledRaw = rawRow?.pagination_enabled;
     const enabled =
       enabledRaw === undefined || enabledRaw === null
@@ -1095,6 +1331,12 @@
       : Number.isFinite(Number(pagination?.delay_ms))
       ? Number(pagination?.delay_ms)
       : 0;
+    const useMaxPagesRaw = rawRow?.pagination_use_max_pages ?? pagination?.use_max_pages ?? pagination?.max_pages_enabled;
+    const useDelayRaw = rawRow?.pagination_use_delay ?? pagination?.use_delay ?? pagination?.delay_enabled;
+    const stopOnMissingRaw = rawRow?.pagination_stop_on_missing_value ?? stopConditions?.on_missing_pagination_value;
+    const stopOnHttpErrorRaw = rawRow?.pagination_stop_on_http_error ?? stopConditions?.on_http_error;
+    const stopOnSameRaw = rawRow?.pagination_stop_on_same_response ?? stopConditions?.on_same_response;
+    const sameResponseLimitRaw = rawRow?.pagination_same_response_limit ?? stopConditions?.same_response_limit;
     const dataPath = String(rawRow?.pagination_data_path || pagination?.data_path || '').trim();
     const pageParam = String(rawRow?.pagination_page_param || pagination?.page_param || 'page').trim() || 'page';
     const startPage = Number.isFinite(Number(rawRow?.pagination_start_page))
@@ -1116,14 +1358,21 @@
       : 0;
     const cursorReqPath = String(rawRow?.pagination_cursor_req_path_1 || pagination?.cursor_req_path_1 || 'cursor').trim() || 'cursor';
     const cursorResPath = String(rawRow?.pagination_cursor_res_path_1 || pagination?.cursor_res_path_1 || 'response.cursor').trim() || 'response.cursor';
+    const stopRules = parsePaginationStopRules(stopConditions?.response_rules || stopConditions?.rules || []);
     return {
       enabled: Boolean(enabled),
       mode,
       target,
+      useMaxPages: useMaxPagesRaw === undefined || useMaxPagesRaw === null ? true : Boolean(useMaxPagesRaw),
       maxPages: Math.max(1, Number(maxPages || 1)),
+      useDelay: useDelayRaw === undefined || useDelayRaw === null ? Math.max(0, Number(pauseMs || 0)) > 0 : Boolean(useDelayRaw),
       pauseMs: Math.max(0, Number(pauseMs || 0)),
       dataPath,
-      stopOnEmpty: true,
+      stopOnMissingValue: stopOnMissingRaw === undefined || stopOnMissingRaw === null ? true : Boolean(stopOnMissingRaw),
+      stopOnHttpError: stopOnHttpErrorRaw === undefined || stopOnHttpErrorRaw === null ? true : Boolean(stopOnHttpErrorRaw),
+      stopOnSameResponse: stopOnSameRaw === undefined || stopOnSameRaw === null ? true : Boolean(stopOnSameRaw),
+      sameResponseLimit: Math.max(2, Math.min(50, Number(sameResponseLimitRaw || 5))),
+      stopRules,
       pageParam,
       startPage: Math.max(1, Number(startPage || 1)),
       limitParam,
@@ -1147,10 +1396,16 @@
     updateSetting(nodeId, 'paginationEnabled', pg.enabled ? 'true' : 'false');
     updateSetting(nodeId, 'paginationMode', pg.mode);
     updateSetting(nodeId, 'paginationTarget', pg.target);
+    updateSetting(nodeId, 'paginationUseMaxPages', pg.useMaxPages ? 'true' : 'false');
     updateSetting(nodeId, 'paginationMaxPages', String(pg.maxPages));
+    updateSetting(nodeId, 'paginationUseDelay', pg.useDelay ? 'true' : 'false');
     updateSetting(nodeId, 'paginationPauseMs', String(pg.pauseMs));
     updateSetting(nodeId, 'paginationDataPath', pg.dataPath);
-    updateSetting(nodeId, 'paginationStopOnEmpty', pg.stopOnEmpty ? 'true' : 'false');
+    updateSetting(nodeId, 'paginationStopOnMissingValue', pg.stopOnMissingValue ? 'true' : 'false');
+    updateSetting(nodeId, 'paginationStopOnHttpError', pg.stopOnHttpError ? 'true' : 'false');
+    updateSetting(nodeId, 'paginationStopOnSameResponse', pg.stopOnSameResponse ? 'true' : 'false');
+    updateSetting(nodeId, 'paginationSameResponseLimit', String(pg.sameResponseLimit));
+    updateSetting(nodeId, 'paginationStopRules', JSON.stringify(pg.stopRules || []));
     updateSetting(nodeId, 'paginationPageParam', pg.pageParam);
     updateSetting(nodeId, 'paginationStartPage', String(pg.startPage));
     updateSetting(nodeId, 'paginationLimitParam', pg.limitParam);
@@ -1261,6 +1516,12 @@
       const mergedQuery = { ...urlParts.query, ...queryObj };
       const basePagination = tryObj(raw?.pagination_json);
       const baseStopConditions = tryObj(basePagination?.stop_conditions);
+      const stopRulesPayload = parsePaginationStopRules(pagination.stopRules || []).map((rule) => ({
+        id: rule.id,
+        response_path: rule.responsePath,
+        operator: normalizeStopRuleOperator(rule.operator),
+        compare_value: String(rule.compareValue || '')
+      }));
       const paginationJson = {
         ...basePagination,
         enabled: Boolean(pagination.enabled),
@@ -1275,12 +1536,17 @@
         start_offset: Math.max(0, Number(pagination.startOffset || 0)),
         cursor_req_path_1: String(pagination.cursorReqPath || ''),
         cursor_res_path_1: String(pagination.cursorResPath || ''),
-        use_max_pages: true,
+        use_max_pages: Boolean(pagination.useMaxPages),
         max_pages: Math.max(1, Number(pagination.maxPages || 1)),
-        use_delay: Math.max(0, Number(pagination.pauseMs || 0)) > 0,
+        use_delay: Boolean(pagination.useDelay),
         delay_ms: Math.max(0, Number(pagination.pauseMs || 0)),
         stop_conditions: {
-          ...baseStopConditions
+          ...baseStopConditions,
+          on_missing_pagination_value: Boolean(pagination.stopOnMissingValue),
+          on_same_response: Boolean(pagination.stopOnSameResponse),
+          same_response_limit: Math.max(2, Math.min(50, Number(pagination.sameResponseLimit || 5))),
+          on_http_error: Boolean(pagination.stopOnHttpError),
+          response_rules: stopRulesPayload
         }
       };
 
@@ -1309,10 +1575,14 @@
         pagination_start_offset: Math.max(0, Number(pagination.startOffset || 0)),
         pagination_cursor_req_path_1: String(pagination.cursorReqPath || ''),
         pagination_cursor_res_path_1: String(pagination.cursorResPath || ''),
-        pagination_use_max_pages: true,
+        pagination_use_max_pages: Boolean(pagination.useMaxPages),
         pagination_max_pages: Math.max(1, Number(pagination.maxPages || 1)),
-        pagination_use_delay: Math.max(0, Number(pagination.pauseMs || 0)) > 0,
+        pagination_use_delay: Boolean(pagination.useDelay),
         pagination_delay_ms: Math.max(0, Number(pagination.pauseMs || 0)),
+        pagination_stop_on_missing_value: Boolean(pagination.stopOnMissingValue),
+        pagination_stop_on_same_response: Boolean(pagination.stopOnSameResponse),
+        pagination_same_response_limit: Math.max(2, Math.min(50, Number(pagination.sameResponseLimit || 5))),
+        pagination_stop_on_http_error: Boolean(pagination.stopOnHttpError),
         updated_by: 'workflow_node'
       };
 
@@ -1433,10 +1703,16 @@
       enabled: false,
       mode: 'none',
       target: 'query',
+      useMaxPages: true,
       maxPages: 10,
+      useDelay: false,
       pauseMs: 0,
       dataPath: '',
-      stopOnEmpty: true,
+      stopOnMissingValue: true,
+      stopOnHttpError: true,
+      stopOnSameResponse: true,
+      sameResponseLimit: 5,
+      stopRules: [],
       pageParam: 'page',
       startPage: 1,
       limitParam: 'limit',
@@ -1494,10 +1770,16 @@
         enabled: String(s.paginationEnabled || 'false') === 'true',
         mode: (String(s.paginationMode || 'none') as ApiPaginationMode) || 'none',
         target: (String(s.paginationTarget || 'query') as ApiPaginationTarget) || 'query',
+        useMaxPages: String(s.paginationUseMaxPages || 'true') !== 'false',
         maxPages: Math.max(1, Number(s.paginationMaxPages || 10)),
+        useDelay: String(s.paginationUseDelay || 'false') === 'true',
         pauseMs: Math.max(0, Number(s.paginationPauseMs || 0)),
         dataPath: String(s.paginationDataPath || '').trim(),
-        stopOnEmpty: String(s.paginationStopOnEmpty || 'true') !== 'false',
+        stopOnMissingValue: String(s.paginationStopOnMissingValue || 'true') !== 'false',
+        stopOnHttpError: String(s.paginationStopOnHttpError || 'true') !== 'false',
+        stopOnSameResponse: String(s.paginationStopOnSameResponse || 'true') !== 'false',
+        sameResponseLimit: Math.max(2, Math.min(50, Number(s.paginationSameResponseLimit || 5))),
+        stopRules: parsePaginationStopRulesFromSetting(s.paginationStopRules),
         pageParam: String(s.paginationPageParam || 'page').trim() || 'page',
         startPage: Math.max(1, Number(s.paginationStartPage || 1)),
         limitParam: String(s.paginationLimitParam || 'limit').trim() || 'limit',
@@ -1519,10 +1801,16 @@
         enabled: 'paginationEnabled',
         mode: 'paginationMode',
         target: 'paginationTarget',
+        useMaxPages: 'paginationUseMaxPages',
         maxPages: 'paginationMaxPages',
+        useDelay: 'paginationUseDelay',
         pauseMs: 'paginationPauseMs',
         dataPath: 'paginationDataPath',
-        stopOnEmpty: 'paginationStopOnEmpty',
+        stopOnMissingValue: 'paginationStopOnMissingValue',
+        stopOnHttpError: 'paginationStopOnHttpError',
+        stopOnSameResponse: 'paginationStopOnSameResponse',
+        sameResponseLimit: 'paginationSameResponseLimit',
+        stopRules: 'paginationStopRules',
         pageParam: 'paginationPageParam',
         startPage: 'paginationStartPage',
         limitParam: 'paginationLimitParam',
@@ -1532,7 +1820,8 @@
         cursorReqPath: 'paginationCursorReqPath',
         cursorResPath: 'paginationCursorResPath'
       };
-      updateSetting(nodeId, map[key], String(value));
+      if (key === 'stopRules') updateSetting(nodeId, map[key], JSON.stringify(Array.isArray(value) ? value : []));
+      else updateSetting(nodeId, map[key], String(value));
       return;
     }
     if (isApiNode(node)) {
@@ -1566,10 +1855,16 @@
         paginationEnabled: 'false',
         paginationMode: 'none',
         paginationTarget: 'query',
+        paginationUseMaxPages: 'true',
         paginationMaxPages: '10',
+        paginationUseDelay: 'false',
         paginationPauseMs: '0',
         paginationDataPath: '',
-        paginationStopOnEmpty: 'true',
+        paginationStopOnMissingValue: 'true',
+        paginationStopOnHttpError: 'true',
+        paginationStopOnSameResponse: 'true',
+        paginationSameResponseLimit: '5',
+        paginationStopRules: '[]',
         paginationPageParam: 'page',
         paginationStartPage: '1',
         paginationLimitParam: 'limit',
@@ -2223,176 +2518,282 @@
 
       const templateRefs = nodeTemplateRefs(node);
       const templateSource = resolveTemplateSourceForNode(node, request);
-      let resolvedParameters: Record<string, any> = {};
       let resolveIssues: Record<string, string> = {};
+      let entityParameterMaps: Array<Record<string, any>> = [{}];
       if (requestedAliases.length) {
         if (!templateSource) {
           throw new Error(
             `Не найден привязанный API-шаблон для Request-ноды. Проверь поле "Шаблон API". refs: ${templateRefs.join(', ') || 'пусто'}`
           );
         }
-        const resolved = await resolveTemplateAliasValues(templateSource, requestedAliases);
-        resolvedParameters = resolved.map;
-        resolveIssues = resolved.issues;
+        const dispatchCfg = templateDispatchConfig(templateSource);
+        const paginationSeed = resolveAliasesFromPaginationFirstValues(templateSource, requestedAliases);
+        const unresolvedAfterPagination = requestedAliases.filter((alias) => !findAliasInMap(paginationSeed, alias).found);
+
+        let dataRows: Array<Record<string, any>> = [];
+        if (unresolvedAfterPagination.length) {
+          try {
+            const fromRows = await resolveAliasRowsFromDataModel(templateSource, unresolvedAfterPagination);
+            dataRows = Array.isArray(fromRows.rows) ? fromRows.rows : [];
+            Object.entries(fromRows.issues || {}).forEach(([alias, reason]) => {
+              if (!resolveIssues[alias]) resolveIssues[alias] = String(reason || '');
+            });
+          } catch (e: any) {
+            const msg = String(e?.message || e || 'ошибка чтения конструктора данных');
+            unresolvedAfterPagination.forEach((alias) => {
+              if (!resolveIssues[alias]) resolveIssues[alias] = msg;
+            });
+          }
+        }
+
+        const fromDefinitions = await resolveAliasesFromParameterDefinitions(
+          templateSource.parameterDefinitions || [],
+          unresolvedAfterPagination
+        );
+        Object.entries(fromDefinitions.issues || {}).forEach(([alias, reason]) => {
+          if (!resolveIssues[alias]) resolveIssues[alias] = String(reason || '');
+        });
+
+        const rowsBase = dataRows.length ? dataRows : [{}];
+        let mergedRows = rowsBase.map((row) => ({
+          ...row,
+          ...fromDefinitions.map,
+          ...paginationSeed
+        }));
+
+        if (dispatchCfg.dispatchMode === 'group_by' && dispatchCfg.groupByAliases.length && mergedRows.length > 1) {
+          const grouped = groupRowsByAliases(mergedRows, dispatchCfg.groupByAliases);
+          mergedRows = Array.from(grouped.values()).map((g: any) => ({
+            ...(g?.rows?.[0] || {}),
+            ...(g?.key || {})
+          }));
+        }
+
+        entityParameterMaps = mergedRows.length ? mergedRows : [{ ...fromDefinitions.map, ...paginationSeed }];
       }
 
-      const resolvedUrlRaw = replaceParameterTokens(urlRaw, resolvedParameters);
-      applyParametersToValue(headersObj, resolvedParameters);
-      applyParametersToValue(baseQueryObj, resolvedParameters);
-      applyParametersToValue(baseBodyObj, resolvedParameters);
-
-      const unresolvedBeforeStrip = new Set<string>();
-      collectParameterTokens(resolvedUrlRaw, unresolvedBeforeStrip);
-      collectParameterTokens(headersObj, unresolvedBeforeStrip);
-      collectParameterTokens(baseQueryObj, unresolvedBeforeStrip);
-      collectParameterTokens(baseBodyObj, unresolvedBeforeStrip);
+      const startTs = Date.now();
+      const requestsSent: any[] = [];
+      const responses: Array<{ page: number; status: number; response: any; entity_index?: number }> = [];
+      let success = 0;
+      let failed = 0;
+      let lastStatus = 0;
+      const stopReasons: Array<{ entity_index: number; stop_reason: string }> = [];
       const paginationAliasesLower = new Set(
         (templateSource?.paginationParameters || [])
           .map((p) => String(p?.alias || '').trim().toLowerCase())
           .filter(Boolean)
       );
-      const unresolvedPaginationAliasesLower = new Set(
-        Array.from(unresolvedBeforeStrip)
-          .map((a) => String(a || '').trim().toLowerCase())
-          .filter((a) => paginationAliasesLower.has(a))
-      );
-      if (unresolvedPaginationAliasesLower.size) {
-        stripUnresolvedTemplateTokens(baseQueryObj, unresolvedPaginationAliasesLower);
-        if (baseBodyObj && typeof baseBodyObj === 'object') {
-          stripUnresolvedTemplateTokens(baseBodyObj, unresolvedPaginationAliasesLower);
+      const nodeOverrides = getNodeParameterOverrides(node);
+      const finalEntityMaps = (entityParameterMaps.length ? entityParameterMaps : [{}]).map((m) => ({
+        ...m,
+        ...nodeOverrides
+      }));
+
+      for (let entityIdx = 0; entityIdx < finalEntityMaps.length; entityIdx += 1) {
+        const resolvedParameters = finalEntityMaps[entityIdx] || {};
+        const headersForEntity = deepClone(headersObj || {});
+        const queryForEntity = deepClone(baseQueryObj || {});
+        const bodyForEntity = deepClone(baseBodyObj || {});
+        const resolvedUrlRaw = replaceParameterTokens(urlRaw, resolvedParameters);
+        applyParametersToValue(headersForEntity, resolvedParameters);
+        applyParametersToValue(queryForEntity, resolvedParameters);
+        applyParametersToValue(bodyForEntity, resolvedParameters);
+
+        const unresolvedBeforeStrip = new Set<string>();
+        collectParameterTokens(resolvedUrlRaw, unresolvedBeforeStrip);
+        collectParameterTokens(headersForEntity, unresolvedBeforeStrip);
+        collectParameterTokens(queryForEntity, unresolvedBeforeStrip);
+        collectParameterTokens(bodyForEntity, unresolvedBeforeStrip);
+        const unresolvedPaginationAliasesLower = new Set(
+          Array.from(unresolvedBeforeStrip)
+            .map((a) => String(a || '').trim().toLowerCase())
+            .filter((a) => paginationAliasesLower.has(a))
+        );
+        if (unresolvedPaginationAliasesLower.size) {
+          stripUnresolvedTemplateTokens(queryForEntity, unresolvedPaginationAliasesLower);
+          if (bodyForEntity && typeof bodyForEntity === 'object') {
+            stripUnresolvedTemplateTokens(bodyForEntity, unresolvedPaginationAliasesLower);
+          }
         }
-      }
 
-      const unresolvedTokens = new Set<string>();
-      collectParameterTokens(resolvedUrlRaw, unresolvedTokens);
-      collectParameterTokens(headersObj, unresolvedTokens);
-      collectParameterTokens(baseQueryObj, unresolvedTokens);
-      collectParameterTokens(baseBodyObj, unresolvedTokens);
-      if (!Object.keys(resolveIssues).length && unresolvedTokens.size) {
-        Array.from(unresolvedTokens).forEach((alias) => {
-          resolveIssues[alias] = 'alias не найден в источниках шаблона (конструктор/параметры/первое значение пагинации)';
-        });
-      }
-      if (unresolvedTokens.size) {
-        const unresolvedList = Array.from(unresolvedTokens);
-        const details = unresolvedList
-          .map((alias) => {
-            const issue = findAliasInMap(resolveIssues, alias);
-            return issue.found && issue.value ? `${alias} (${issue.value})` : alias;
-          })
-          .join(', ');
-        throw new Error(`Не удалось подставить параметры: ${details}`);
-      }
+        const unresolvedTokens = new Set<string>();
+        collectParameterTokens(resolvedUrlRaw, unresolvedTokens);
+        collectParameterTokens(headersForEntity, unresolvedTokens);
+        collectParameterTokens(queryForEntity, unresolvedTokens);
+        collectParameterTokens(bodyForEntity, unresolvedTokens);
+        if (!Object.keys(resolveIssues).length && unresolvedTokens.size) {
+          Array.from(unresolvedTokens).forEach((alias) => {
+            resolveIssues[alias] = 'alias не найден в источниках шаблона (конструктор/параметры/первое значение пагинации)';
+          });
+        }
+        if (unresolvedTokens.size) {
+          const unresolvedList = Array.from(unresolvedTokens);
+          const details = unresolvedList
+            .map((alias) => {
+              const issue = findAliasInMap(resolveIssues, alias);
+              return issue.found && issue.value ? `${alias} (${issue.value})` : alias;
+            })
+            .join(', ');
+          throw new Error(`Не удалось подставить параметры (сущность ${entityIdx + 1}): ${details}`);
+        }
 
-      const startTs = Date.now();
-      const requestsSent: any[] = [];
-      const responses: Array<{ page: number; status: number; response: any }> = [];
-      let success = 0;
-      let failed = 0;
-      let lastStatus = 0;
-      let stopReason = '';
-      let pageNo = 1;
-      let pageNumberValue = Math.max(1, Number(pagination.startPage || 1));
-      let offsetValue = Math.max(0, Number(pagination.startOffset || 0));
-      let cursorValue: any = undefined;
+        let entityStopReason = '';
+        let pageNo = 1;
+        let pageNumberValue = Math.max(1, Number(pagination.startPage || 1));
+        let offsetValue = Math.max(0, Number(pagination.startOffset || 0));
+        let cursorValue: any = undefined;
+        let lastResponseFingerprint = '';
+        let sameResponseStreak = 0;
+        const absoluteSafetyLimit = 1000;
 
-      while (true) {
-        const queryObj = deepClone(baseQueryObj || {});
-        const bodyRaw = deepClone(baseBodyObj || {});
-        const bodyObj = bodyRaw && typeof bodyRaw === 'object' ? bodyRaw : {};
-        const targetObj = pagination.target === 'body' ? bodyObj : queryObj;
-        if (pagination.enabled) {
-          if (pagination.mode === 'page_number') {
-            setByPath(targetObj, pagination.pageParam, pageNumberValue);
-            if (pagination.limitParam) setByPath(targetObj, pagination.limitParam, Math.max(1, Number(pagination.limitValue || 1)));
-          } else if (pagination.mode === 'offset_limit') {
-            setByPath(targetObj, pagination.offsetParam, offsetValue);
-            if (pagination.limitParam) setByPath(targetObj, pagination.limitParam, Math.max(1, Number(pagination.limitValue || 1)));
-          } else if (pagination.mode === 'cursor') {
-            if (pageNo > 1) {
-              if (cursorValue === undefined || cursorValue === null || cursorValue === '') {
-                stopReason = 'Остановка: курсор не найден в предыдущем ответе';
-                break;
+        while (true) {
+          if (pageNo > absoluteSafetyLimit) {
+            entityStopReason = `Достигнут защитный лимит страниц (${absoluteSafetyLimit})`;
+            break;
+          }
+          const queryObj = deepClone(queryForEntity || {});
+          const bodyRaw = deepClone(bodyForEntity || {});
+          const bodyObj = bodyRaw && typeof bodyRaw === 'object' ? bodyRaw : {};
+          const targetObj = pagination.target === 'body' ? bodyObj : queryObj;
+          if (pagination.enabled) {
+            if (pagination.mode === 'page_number') {
+              setByPath(targetObj, pagination.pageParam, pageNumberValue);
+              if (pagination.limitParam) setByPath(targetObj, pagination.limitParam, Math.max(1, Number(pagination.limitValue || 1)));
+            } else if (pagination.mode === 'offset_limit') {
+              setByPath(targetObj, pagination.offsetParam, offsetValue);
+              if (pagination.limitParam) setByPath(targetObj, pagination.limitParam, Math.max(1, Number(pagination.limitValue || 1)));
+            } else if (pagination.mode === 'cursor') {
+              if (pageNo > 1) {
+                if (cursorValue === undefined || cursorValue === null || cursorValue === '') {
+                  if (pagination.stopOnMissingValue) {
+                    entityStopReason = 'Остановка: курсор не найден в предыдущем ответе';
+                    break;
+                  }
+                }
+                setByPath(targetObj, pagination.cursorReqPath, cursorValue);
               }
-              setByPath(targetObj, pagination.cursorReqPath, cursorValue);
             }
           }
-        }
 
-        const url = new URL(resolvedUrlRaw);
-        Object.entries(queryObj || {}).forEach(([k, v]) => {
-          if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
-        });
+          const url = new URL(resolvedUrlRaw);
+          Object.entries(queryObj || {}).forEach(([k, v]) => {
+            if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+          });
 
-        const reqPayload = {
-          page: pageNo,
-          method,
-          url: url.toString(),
-          headers: headersObj,
-          query: queryObj,
-          body: method === 'GET' || method === 'DELETE' ? undefined : bodyObj
-        };
-        requestsSent.push(reqPayload);
+          const reqPayload = {
+            entity_index: entityIdx + 1,
+            page: pageNo,
+            method,
+            url: url.toString(),
+            headers: headersForEntity,
+            query: queryObj,
+            body: method === 'GET' || method === 'DELETE' ? undefined : bodyObj
+          };
+          requestsSent.push(reqPayload);
 
-        const resp = await fetch(url.toString(), {
-          method,
-          headers: headersObj,
-          body: method === 'GET' || method === 'DELETE' ? undefined : JSON.stringify(bodyObj)
-        });
-        lastStatus = resp.status;
-        if (resp.ok) success += 1;
-        else failed += 1;
-        const text = await resp.text();
-        let responseBody: any = text;
-        try {
-          responseBody = text ? JSON.parse(text) : {};
-        } catch {
-          responseBody = text;
-        }
-        responses.push({ page: pageNo, status: resp.status, response: responseBody });
-        if (!resp.ok) {
-          stopReason = `HTTP ошибка ${resp.status}`;
-          break;
-        }
-
-        if (!pagination.enabled || pagination.mode === 'none') break;
-        const maxPages = Math.max(1, Number(pagination.maxPages || 1));
-        if (pageNo >= maxPages) {
-          stopReason = `Достигнут лимит страниц (${maxPages})`;
-          break;
-        }
-
-        if (pagination.mode === 'page_number') {
-          if (pagination.stopOnEmpty && pagination.dataPath) {
-            const arr = getByPath({ response: responseBody }, pagination.dataPath);
-            if (Array.isArray(arr) && arr.length === 0) {
-              stopReason = 'Остановка: массив данных пустой';
+          const resp = await fetch(url.toString(), {
+            method,
+            headers: headersForEntity,
+            body: method === 'GET' || method === 'DELETE' ? undefined : JSON.stringify(bodyObj)
+          });
+          lastStatus = resp.status;
+          if (resp.ok) success += 1;
+          else failed += 1;
+          const text = await resp.text();
+          let responseBody: any = text;
+          try {
+            responseBody = text ? JSON.parse(text) : {};
+          } catch {
+            responseBody = text;
+          }
+          responses.push({ entity_index: entityIdx + 1, page: pageNo, status: resp.status, response: responseBody });
+          if (!resp.ok) {
+            if (pagination.stopOnHttpError) {
+              entityStopReason = `HTTP ошибка ${resp.status}`;
               break;
             }
           }
-          pageNumberValue += 1;
-        } else if (pagination.mode === 'offset_limit') {
-          if (pagination.stopOnEmpty && pagination.dataPath) {
-            const arr = getByPath({ response: responseBody }, pagination.dataPath);
-            if (Array.isArray(arr) && arr.length === 0) {
-              stopReason = 'Остановка: массив данных пустой';
+
+          if (!pagination.enabled || pagination.mode === 'none') break;
+          if (pagination.useMaxPages) {
+            const maxPages = Math.max(1, Number(pagination.maxPages || 1));
+            if (pageNo >= maxPages) {
+              entityStopReason = `Достигнут лимит страниц (${maxPages})`;
               break;
             }
           }
-          offsetValue += Math.max(1, Number(pagination.limitValue || 1));
-        } else if (pagination.mode === 'cursor') {
-          cursorValue = getByPath({ response: responseBody }, pagination.cursorResPath);
-          if (pagination.stopOnEmpty && pagination.dataPath) {
-            const arr = getByPath({ response: responseBody }, pagination.dataPath);
-            if (Array.isArray(arr) && arr.length === 0) {
-              stopReason = 'Остановка: массив данных пустой';
+
+          const stopRuleHit = findTriggeredStopRule(responseBody, pagination.stopRules || [], resolvedParameters, {
+            body: bodyObj,
+            query: queryObj,
+            headers: headersForEntity
+          });
+          if (stopRuleHit) {
+            entityStopReason = `Сработало условие остановки: ${stopRuleHit.path}`;
+            break;
+          }
+
+          if (pagination.stopOnSameResponse) {
+            const fingerprint =
+              typeof responseBody === 'string'
+                ? responseBody
+                : (() => {
+                    try {
+                      return JSON.stringify(responseBody);
+                    } catch {
+                      return String(responseBody);
+                    }
+                  })();
+            if (fingerprint === lastResponseFingerprint) sameResponseStreak += 1;
+            else sameResponseStreak = 1;
+            lastResponseFingerprint = fingerprint;
+            if (sameResponseStreak >= Math.max(2, Math.min(50, Number(pagination.sameResponseLimit || 5)))) {
+              entityStopReason = `Получено ${sameResponseStreak} одинаковых ответов подряд`;
               break;
             }
+          }
+
+          const dataArr = pagination.dataPath ? getByPath({ response: responseBody }, pagination.dataPath) : undefined;
+          const isMissingData = pagination.dataPath
+            ? dataArr === undefined || dataArr === null || (Array.isArray(dataArr) && dataArr.length === 0)
+            : false;
+          if (pagination.mode === 'page_number') {
+            if (pagination.stopOnMissingValue && isMissingData) {
+              entityStopReason = 'Остановка: массив данных пустой или отсутствует';
+              break;
+            }
+            pageNumberValue += 1;
+          } else if (pagination.mode === 'offset_limit') {
+            if (pagination.stopOnMissingValue && isMissingData) {
+              entityStopReason = 'Остановка: массив данных пустой или отсутствует';
+              break;
+            }
+            offsetValue += Math.max(1, Number(pagination.limitValue || 1));
+          } else if (pagination.mode === 'cursor') {
+            cursorValue = getByPath({ response: responseBody }, pagination.cursorResPath);
+            if (pagination.stopOnMissingValue && isMissingData) {
+              entityStopReason = 'Остановка: массив данных пустой или отсутствует';
+              break;
+            }
+            if (
+              pagination.stopOnMissingValue &&
+              (cursorValue === undefined || cursorValue === null || cursorValue === '')
+            ) {
+              entityStopReason = 'Остановка: курсор пустой';
+              break;
+            }
+          }
+
+          pageNo += 1;
+          if (pagination.useDelay) {
+            await delayMs(Math.max(0, Number(pagination.pauseMs || 0)));
           }
         }
 
-        pageNo += 1;
-        await delayMs(Math.max(0, Number(pagination.pauseMs || 0)));
+        if (entityStopReason) {
+          stopReasons.push({ entity_index: entityIdx + 1, stop_reason: entityStopReason });
+        }
       }
 
       const durationMs = Date.now() - startTs;
@@ -2408,7 +2809,10 @@
               template_storage_ref: apiTemplateStorageRef,
               template_store_id: templateSource?.storeId || nodeTemplateStoreId(node) || undefined,
               template_ref: templateRefs.length ? templateRefs[0] : undefined,
-              resolved_parameters: Object.keys(resolvedParameters).length ? resolvedParameters : undefined,
+              resolved_parameters:
+                finalEntityMaps.length === 1
+                  ? finalEntityMaps[0]
+                  : finalEntityMaps.slice(0, 5).map((p, idx) => ({ entity_index: idx + 1, values: p })),
               resolve_issues: Object.keys(resolveIssues).length ? resolveIssues : undefined
             }
           : {
@@ -2418,19 +2822,27 @@
               template_storage_ref: apiTemplateStorageRef,
               template_store_id: templateSource?.storeId || nodeTemplateStoreId(node) || undefined,
               template_ref: templateRefs.length ? templateRefs[0] : undefined,
-              resolved_parameters: Object.keys(resolvedParameters).length ? resolvedParameters : undefined,
+              entities: finalEntityMaps.length,
+              resolved_parameters:
+                finalEntityMaps.length === 1
+                  ? finalEntityMaps[0]
+                  : finalEntityMaps.slice(0, 5).map((p, idx) => ({ entity_index: idx + 1, values: p })),
               resolve_issues: Object.keys(resolveIssues).length ? resolveIssues : undefined
             };
       const responsePreview = {
         total_requests: requestsSent.length,
+        request_entities: finalEntityMaps.length,
         success,
         failed,
-        stop_reason: stopReason || undefined,
+        stop_reasons: stopReasons.length ? stopReasons : undefined,
         responses,
         template_storage_ref: apiTemplateStorageRef,
         template_store_id: templateSource?.storeId || nodeTemplateStoreId(node) || undefined,
         template_ref: templateRefs.length ? templateRefs[0] : undefined,
-        resolved_parameters: Object.keys(resolvedParameters).length ? resolvedParameters : undefined,
+        resolved_parameters:
+          finalEntityMaps.length === 1
+            ? finalEntityMaps[0]
+            : finalEntityMaps.slice(0, 5).map((p, idx) => ({ entity_index: idx + 1, values: p })),
         resolve_issues: Object.keys(resolveIssues).length ? resolveIssues : undefined
       };
       const payloadSize = new TextEncoder().encode(JSON.stringify(responsePreview)).length;
@@ -2855,6 +3267,24 @@
               on:input={(e) => updateApiNodeRequest(settingsNode.id, 'bodyText', textareaValue(e))}
             ></textarea>
           </label>
+          {#if templateAliasesForNode(settingsNode).length}
+            <div class="subbox">
+              <div class="subttl">Параметры шаблона (алиасы)</div>
+              <div class="params-grid">
+                {#each templateAliasesForNode(settingsNode) as alias (alias)}
+                  <label>
+                    {alias}
+                    <input
+                      value={String(getNodeParameterOverrides(settingsNode)?.[alias] ?? '')}
+                      placeholder="переопределить значение"
+                      on:input={(e) => setNodeParameterOverride(settingsNode.id, alias, inputValue(e))}
+                    />
+                  </label>
+                {/each}
+              </div>
+              <div class="help">Если поле пустое, берется значение из конструктора API. Если заполнено, используется значение из ноды.</div>
+            </div>
+          {/if}
           <div class="subbox">
             <div class="subttl">Пагинация (узел API Request)</div>
             <div class="actions-row">
@@ -2883,22 +3313,68 @@
               <div class="interval-grid">
                 <label>
                   Макс. страниц
-                  <input type="number" min="1" value={String(settingsPagination.maxPages)} on:input={(e) => updatePaginationForNode(settingsNode.id, 'maxPages', Number(inputValue(e) || 1))} />
+                  <input
+                    type="number"
+                    min="1"
+                    value={String(settingsPagination.maxPages)}
+                    on:input={(e) => updatePaginationForNode(settingsNode.id, 'maxPages', Number(inputValue(e) || 1))}
+                    disabled={!settingsPagination.useMaxPages}
+                  />
                 </label>
                 <label>
                   Пауза между запросами (мс)
-                  <input type="number" min="0" value={String(settingsPagination.pauseMs)} on:input={(e) => updatePaginationForNode(settingsNode.id, 'pauseMs', Number(inputValue(e) || 0))} />
+                  <input
+                    type="number"
+                    min="0"
+                    value={String(settingsPagination.pauseMs)}
+                    on:input={(e) => updatePaginationForNode(settingsNode.id, 'pauseMs', Number(inputValue(e) || 0))}
+                    disabled={!settingsPagination.useDelay}
+                  />
                 </label>
               </div>
+              <div class="actions-row">
+                <button class:active={settingsPagination.useMaxPages} on:click={() => updatePaginationForNode(settingsNode.id, 'useMaxPages', !settingsPagination.useMaxPages)}>
+                  {settingsPagination.useMaxPages ? 'Лимит страниц: вкл' : 'Лимит страниц: выкл'}
+                </button>
+                <button class:active={settingsPagination.useDelay} on:click={() => updatePaginationForNode(settingsNode.id, 'useDelay', !settingsPagination.useDelay)}>
+                  {settingsPagination.useDelay ? 'Пауза: вкл' : 'Пауза: выкл'}
+                </button>
+              </div>
               <label>
-                Путь к массиву данных в ответе (для остановки на пустом массиве)
+                Путь к массиву данных в ответе
                 <input value={settingsPagination.dataPath} on:input={(e) => updatePaginationForNode(settingsNode.id, 'dataPath', inputValue(e))} placeholder="response.cards" />
               </label>
               <div class="actions-row">
-                <button class:active={settingsPagination.stopOnEmpty} on:click={() => updatePaginationForNode(settingsNode.id, 'stopOnEmpty', !settingsPagination.stopOnEmpty)}>
-                  {settingsPagination.stopOnEmpty ? 'Стоп на пустом массиве: да' : 'Стоп на пустом массиве: нет'}
+                <button class:active={settingsPagination.stopOnMissingValue} on:click={() => updatePaginationForNode(settingsNode.id, 'stopOnMissingValue', !settingsPagination.stopOnMissingValue)}>
+                  {settingsPagination.stopOnMissingValue ? 'Стоп при отсутствии значений: вкл' : 'Стоп при отсутствии значений: выкл'}
+                </button>
+                <button class:active={settingsPagination.stopOnHttpError} on:click={() => updatePaginationForNode(settingsNode.id, 'stopOnHttpError', !settingsPagination.stopOnHttpError)}>
+                  {settingsPagination.stopOnHttpError ? 'Стоп при HTTP-ошибке: вкл' : 'Стоп при HTTP-ошибке: выкл'}
+                </button>
+                <button class:active={settingsPagination.stopOnSameResponse} on:click={() => updatePaginationForNode(settingsNode.id, 'stopOnSameResponse', !settingsPagination.stopOnSameResponse)}>
+                  {settingsPagination.stopOnSameResponse ? 'Стоп на одинаковых ответах: вкл' : 'Стоп на одинаковых ответах: выкл'}
                 </button>
               </div>
+              <label>
+                Порог одинаковых ответов подряд
+                <input
+                  type="number"
+                  min="2"
+                  max="50"
+                  value={String(settingsPagination.sameResponseLimit)}
+                  on:input={(e) => updatePaginationForNode(settingsNode.id, 'sameResponseLimit', Number(inputValue(e) || 5))}
+                  disabled={!settingsPagination.stopOnSameResponse}
+                />
+              </label>
+              <label>
+                Условия ручной остановки (JSON массив)
+                <textarea
+                  rows="4"
+                  value={JSON.stringify(settingsPagination.stopRules || [], null, 2)}
+                  on:change={(e) => updatePaginationForNode(settingsNode.id, 'stopRules', parsePaginationStopRulesFromSetting(textareaValue(e)))}
+                  placeholder="JSON массив правил остановки"
+                ></textarea>
+              </label>
               {#if settingsPagination.mode === 'page_number'}
                 <div class="interval-grid">
                   <label>
@@ -3170,6 +3646,7 @@
   .exec-head { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: #334155; }
   .subbox { border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
   .subttl { font-size: 12px; font-weight: 600; color: #334155; }
+  .params-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .exec-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .view-toggle { border-radius: 10px; border: 1px solid #e2e8f0; background: #fff; color: #0f172a; padding: 4px 8px; font-size: 11px; line-height: 1.2; cursor: pointer; }
   .response-tree-wrap { border: 1px solid #e6eaf2; border-radius: 12px; background: #fff; padding: 8px; min-height: 78px; overflow: visible; }
@@ -3184,6 +3661,9 @@
       min-height: 0;
     }
     .desk-actions {
+      grid-template-columns: 1fr;
+    }
+    .params-grid {
       grid-template-columns: 1fr;
     }
   }
