@@ -1,6 +1,7 @@
 ﻿<script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import JsonTreeView from './JsonTreeView.svelte';
+  import ApiBuilderTab from '../tabs/ApiBuilderTab.svelte';
   import {
     sourceGroups,
     sourceItemsByGroup,
@@ -132,6 +133,7 @@
     updated_at?: string;
     updated_by?: string;
   };
+  type ExistingTable = { schema_name: string; table_name: string };
 
   let activeTab: SourceGroup = 'data_tables';
   let nodes: WorkflowNode[] = [];
@@ -147,6 +149,7 @@
   let sourceCatalogError = '';
   let dynamicApiSources: DynamicApiSource[] = [];
   let dynamicTableSources: SourceItem[] = [];
+  let apiBuilderExistingTables: ExistingTable[] = [];
   let apiTemplateStorageRef = 'ao_system.api_configs_store';
   let workflowDeskStorageRef = 'ao_system.workflow_desks_store';
   let settingsNodeId = '';
@@ -198,6 +201,11 @@
   $: settingsApiExecution = settingsNodeId ? nodeExecutions[settingsNodeId] : undefined;
   $: settingsApiLoading = settingsNodeId ? Boolean(nodeExecutionLoading[settingsNodeId]) : false;
   $: settingsPagination = settingsNode ? getPaginationForNode(settingsNode) : defaultApiPagination();
+  $: settingsApiBuilderStoreId = (() => {
+    if (!settingsNode || (!isApiNode(settingsNode) && !isApiToolNode(settingsNode))) return null;
+    const raw = Number(nodeTemplateStoreId(settingsNode) || 0);
+    return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : null;
+  })();
   $: visibleSourceGroups = sourceGroups.filter((g) => g.key !== 'api_requests');
   $: if (activeTab === 'api_requests') activeTab = 'data_tables';
   $: sourceList =
@@ -1485,6 +1493,32 @@
     };
   }
 
+  async function workflowApiJson<T = any>(url: string, init?: RequestInit): Promise<T> {
+    const response = await fetch(url, init);
+    let payload: any = null;
+    try {
+      payload = await response.json();
+    } catch {
+      payload = null;
+    }
+    if (!response.ok) {
+      const details = payload?.details || payload?.error || `${response.status} ${response.statusText}`;
+      throw new Error(String(details || 'Ошибка API'));
+    }
+    return (payload || {}) as T;
+  }
+
+  function workflowApiHeaders(): Record<string, string> {
+    return {
+      'Content-Type': 'application/json',
+      'X-AO-ROLE': API_ROLE
+    };
+  }
+
+  async function refreshApiBuilderTables(): Promise<void> {
+    await loadDynamicSourceCatalog();
+  }
+
   async function saveNodeEditsToApiTemplate(nodeId: string) {
     const node = nodes.find((n) => n.id === nodeId);
     if (!node || (!isApiNode(node) && !isApiToolNode(node))) {
@@ -1982,6 +2016,7 @@
       });
 
       const existingTables = Array.isArray(tableJson?.existing_tables) ? tableJson.existing_tables : [];
+      apiBuilderExistingTables = [...existingTables];
       const layerTables = existingTables.filter((t: any) =>
         Boolean(normalizeLayer(String(t?.schema_name || ''), String(t?.table_name || '')))
       );
@@ -3146,7 +3181,7 @@
 
   {#if settingsModalOpen && settingsNode}
     <div class="node-modal-backdrop" on:click={closeSettingsModal}></div>
-    <div class="node-modal">
+    <div class="node-modal" class:node-modal-wide={isApiNode(settingsNode) || isApiToolNode(settingsNode)}>
       <div class="node-modal-head">
         <h4>Настройка узла: {settingsNode.config.name}</h4>
         <button class="close-btn" on:click={closeSettingsModal}>x</button>
@@ -3193,299 +3228,18 @@
       {/if}
 
       {#if isApiNode(settingsNode) || isApiToolNode(settingsNode)}
-        <div class="node-modal-body">
-          <div class="help">Поднастройка API-узла: шаблон, метод, URL, JSON-поля и пагинация.</div>
-          <label>
-            Шаблон API
-            <select value={nodeTemplateId(settingsNode)} on:change={(e) => applyTemplateToNode(settingsNode.id, selectValue(e))}>
-              <option value="">Без шаблона</option>
-              {#each dynamicApiSources as src (src.id)}
-                <option value={src.id}>{src.name}</option>
-              {/each}
-            </select>
-          </label>
-          <label>
-            Название узла
-            <input
-              value={settingsNode.config.name || ''}
-              on:input={(e) => (settingsNode.type === 'data' ? updateDataNodeConfig(settingsNode.id, { name: inputValue(e) }) : updateToolName(settingsNode.id, inputValue(e)))}
-            />
-          </label>
-          <div class="interval-grid">
-            <label>
-              Метод
-              <select
-                value={getApiRequestForNode(settingsNode).method || 'GET'}
-                on:change={(e) => updateApiNodeRequest(settingsNode.id, 'method', selectValue(e))}
-              >
-                <option value="GET">GET</option>
-                <option value="POST">POST</option>
-                <option value="PUT">PUT</option>
-                <option value="PATCH">PATCH</option>
-                <option value="DELETE">DELETE</option>
-              </select>
-            </label>
-            <label>
-              Режим авторизации
-              <select
-                value={getApiRequestForNode(settingsNode).authMode || 'manual'}
-                on:change={(e) => updateApiNodeRequest(settingsNode.id, 'authMode', selectValue(e))}
-              >
-                <option value="manual">Ручная</option>
-                <option value="oauth2_client_credentials">OAuth2 (client_credentials)</option>
-              </select>
-            </label>
-          </div>
-          <label>
-            URL
-            <input
-              value={getApiRequestForNode(settingsNode).url || ''}
-              on:input={(e) => updateApiNodeRequest(settingsNode.id, 'url', inputValue(e))}
-            />
-          </label>
-          <label>
-            Headers JSON
-            <textarea
-              rows="4"
-              value={getApiRequestForNode(settingsNode).headersText || '{}'}
-              on:input={(e) => updateApiNodeRequest(settingsNode.id, 'headersText', textareaValue(e))}
-            ></textarea>
-          </label>
-          <label>
-            Query JSON
-            <textarea
-              rows="4"
-              value={getApiRequestForNode(settingsNode).queryText || '{}'}
-              on:input={(e) => updateApiNodeRequest(settingsNode.id, 'queryText', textareaValue(e))}
-            ></textarea>
-          </label>
-          <label>
-            Body JSON
-            <textarea
-              rows="6"
-              value={getApiRequestForNode(settingsNode).bodyText || '{}'}
-              on:input={(e) => updateApiNodeRequest(settingsNode.id, 'bodyText', textareaValue(e))}
-            ></textarea>
-          </label>
-          {#if templateAliasesForNode(settingsNode).length}
-            <div class="subbox">
-              <div class="subttl">Параметры шаблона (алиасы)</div>
-              <div class="params-grid">
-                {#each templateAliasesForNode(settingsNode) as alias (alias)}
-                  <label>
-                    {alias}
-                    <input
-                      value={String(getNodeParameterOverrides(settingsNode)?.[alias] ?? '')}
-                      placeholder="переопределить значение"
-                      on:input={(e) => setNodeParameterOverride(settingsNode.id, alias, inputValue(e))}
-                    />
-                  </label>
-                {/each}
-              </div>
-              <div class="help">Если поле пустое, берется значение из конструктора API. Если заполнено, используется значение из ноды.</div>
-            </div>
-          {/if}
-          <div class="subbox">
-            <div class="subttl">Пагинация (узел API Request)</div>
-            <div class="actions-row">
-              <button class:active={settingsPagination.enabled} on:click={() => updatePaginationForNode(settingsNode.id, 'enabled', !settingsPagination.enabled)}>
-                {settingsPagination.enabled ? 'Пагинация: включена' : 'Пагинация: выключена'}
-              </button>
-            </div>
-            {#if settingsPagination.enabled}
-              <div class="interval-grid">
-                <label>
-                  Тип
-                  <select value={settingsPagination.mode} on:change={(e) => updatePaginationForNode(settingsNode.id, 'mode', selectValue(e))}>
-                    <option value="page_number">Номер страницы</option>
-                    <option value="offset_limit">Смещение + лимит</option>
-                    <option value="cursor">Курсор</option>
-                  </select>
-                </label>
-                <label>
-                  Куда подставлять
-                  <select value={settingsPagination.target} on:change={(e) => updatePaginationForNode(settingsNode.id, 'target', selectValue(e))}>
-                    <option value="query">Query</option>
-                    <option value="body">Body</option>
-                  </select>
-                </label>
-              </div>
-              <div class="interval-grid">
-                <label>
-                  Макс. страниц
-                  <input
-                    type="number"
-                    min="1"
-                    value={String(settingsPagination.maxPages)}
-                    on:input={(e) => updatePaginationForNode(settingsNode.id, 'maxPages', Number(inputValue(e) || 1))}
-                    disabled={!settingsPagination.useMaxPages}
-                  />
-                </label>
-                <label>
-                  Пауза между запросами (мс)
-                  <input
-                    type="number"
-                    min="0"
-                    value={String(settingsPagination.pauseMs)}
-                    on:input={(e) => updatePaginationForNode(settingsNode.id, 'pauseMs', Number(inputValue(e) || 0))}
-                    disabled={!settingsPagination.useDelay}
-                  />
-                </label>
-              </div>
-              <div class="actions-row">
-                <button class:active={settingsPagination.useMaxPages} on:click={() => updatePaginationForNode(settingsNode.id, 'useMaxPages', !settingsPagination.useMaxPages)}>
-                  {settingsPagination.useMaxPages ? 'Лимит страниц: вкл' : 'Лимит страниц: выкл'}
-                </button>
-                <button class:active={settingsPagination.useDelay} on:click={() => updatePaginationForNode(settingsNode.id, 'useDelay', !settingsPagination.useDelay)}>
-                  {settingsPagination.useDelay ? 'Пауза: вкл' : 'Пауза: выкл'}
-                </button>
-              </div>
-              <label>
-                Путь к массиву данных в ответе
-                <input value={settingsPagination.dataPath} on:input={(e) => updatePaginationForNode(settingsNode.id, 'dataPath', inputValue(e))} placeholder="response.cards" />
-              </label>
-              <div class="actions-row">
-                <button class:active={settingsPagination.stopOnMissingValue} on:click={() => updatePaginationForNode(settingsNode.id, 'stopOnMissingValue', !settingsPagination.stopOnMissingValue)}>
-                  {settingsPagination.stopOnMissingValue ? 'Стоп при отсутствии значений: вкл' : 'Стоп при отсутствии значений: выкл'}
-                </button>
-                <button class:active={settingsPagination.stopOnHttpError} on:click={() => updatePaginationForNode(settingsNode.id, 'stopOnHttpError', !settingsPagination.stopOnHttpError)}>
-                  {settingsPagination.stopOnHttpError ? 'Стоп при HTTP-ошибке: вкл' : 'Стоп при HTTP-ошибке: выкл'}
-                </button>
-                <button class:active={settingsPagination.stopOnSameResponse} on:click={() => updatePaginationForNode(settingsNode.id, 'stopOnSameResponse', !settingsPagination.stopOnSameResponse)}>
-                  {settingsPagination.stopOnSameResponse ? 'Стоп на одинаковых ответах: вкл' : 'Стоп на одинаковых ответах: выкл'}
-                </button>
-              </div>
-              <label>
-                Порог одинаковых ответов подряд
-                <input
-                  type="number"
-                  min="2"
-                  max="50"
-                  value={String(settingsPagination.sameResponseLimit)}
-                  on:input={(e) => updatePaginationForNode(settingsNode.id, 'sameResponseLimit', Number(inputValue(e) || 5))}
-                  disabled={!settingsPagination.stopOnSameResponse}
-                />
-              </label>
-              <label>
-                Условия ручной остановки (JSON массив)
-                <textarea
-                  rows="4"
-                  value={JSON.stringify(settingsPagination.stopRules || [], null, 2)}
-                  on:change={(e) => updatePaginationForNode(settingsNode.id, 'stopRules', parsePaginationStopRulesFromSetting(textareaValue(e)))}
-                  placeholder="JSON массив правил остановки"
-                ></textarea>
-              </label>
-              {#if settingsPagination.mode === 'page_number'}
-                <div class="interval-grid">
-                  <label>
-                    Параметр страницы
-                    <input value={settingsPagination.pageParam} on:input={(e) => updatePaginationForNode(settingsNode.id, 'pageParam', inputValue(e))} />
-                  </label>
-                  <label>
-                    Первая страница
-                    <input type="number" min="1" value={String(settingsPagination.startPage)} on:input={(e) => updatePaginationForNode(settingsNode.id, 'startPage', Number(inputValue(e) || 1))} />
-                  </label>
-                </div>
-                <div class="interval-grid">
-                  <label>
-                    Параметр лимита
-                    <input value={settingsPagination.limitParam} on:input={(e) => updatePaginationForNode(settingsNode.id, 'limitParam', inputValue(e))} />
-                  </label>
-                  <label>
-                    Лимит
-                    <input type="number" min="1" value={String(settingsPagination.limitValue)} on:input={(e) => updatePaginationForNode(settingsNode.id, 'limitValue', Number(inputValue(e) || 1))} />
-                  </label>
-                </div>
-              {/if}
-              {#if settingsPagination.mode === 'offset_limit'}
-                <div class="interval-grid">
-                  <label>
-                    Параметр смещения
-                    <input value={settingsPagination.offsetParam} on:input={(e) => updatePaginationForNode(settingsNode.id, 'offsetParam', inputValue(e))} />
-                  </label>
-                  <label>
-                    Стартовое смещение
-                    <input type="number" min="0" value={String(settingsPagination.startOffset)} on:input={(e) => updatePaginationForNode(settingsNode.id, 'startOffset', Number(inputValue(e) || 0))} />
-                  </label>
-                </div>
-                <div class="interval-grid">
-                  <label>
-                    Параметр лимита
-                    <input value={settingsPagination.limitParam} on:input={(e) => updatePaginationForNode(settingsNode.id, 'limitParam', inputValue(e))} />
-                  </label>
-                  <label>
-                    Лимит
-                    <input type="number" min="1" value={String(settingsPagination.limitValue)} on:input={(e) => updatePaginationForNode(settingsNode.id, 'limitValue', Number(inputValue(e) || 1))} />
-                  </label>
-                </div>
-              {/if}
-              {#if settingsPagination.mode === 'cursor'}
-                <div class="interval-grid">
-                  <label>
-                    Путь курсора в следующем запросе
-                    <input value={settingsPagination.cursorReqPath} on:input={(e) => updatePaginationForNode(settingsNode.id, 'cursorReqPath', inputValue(e))} placeholder="settings.cursor.updatedAt" />
-                  </label>
-                  <label>
-                    Путь курсора в ответе
-                    <input value={settingsPagination.cursorResPath} on:input={(e) => updatePaginationForNode(settingsNode.id, 'cursorResPath', inputValue(e))} placeholder="response.cursor.updatedAt" />
-                  </label>
-                </div>
-              {/if}
-            {/if}
-          </div>
-          <div class="actions-row">
-            <button class="primary-action" on:click={() => executeApiNode(settingsNode.id)} disabled={settingsApiLoading}>
-              {settingsApiLoading ? 'Выполнение...' : 'Execute Node'}
-            </button>
-            <button
-              class="primary-action"
-              on:click={() => saveNodeEditsToApiTemplate(settingsNode.id)}
-              disabled={Boolean(nodeTemplateSaving[settingsNode.id]) || !nodeTemplateStoreId(settingsNode)}
-              title={!nodeTemplateStoreId(settingsNode) ? 'Сначала выбери шаблон API' : ''}
-            >
-              {nodeTemplateSaving[settingsNode.id] ? 'Сохранение шаблона...' : 'Сохранить в хранилище API'}
-            </button>
-            <button on:click={() => openFullApiBuilder(settingsNode.id)}>Открыть полный конструктор API</button>
-          </div>
-          {#if settingsApiExecution}
-            <div class="exec-block">
-              <div class="exec-head">
-                <span>Статус: {settingsApiExecution.status || '-'}</span>
-                <span>Страниц: {settingsApiExecution.totalRequests || '-'}</span>
-                <span>Записей: {settingsApiExecution.payloadCount || '-'}</span>
-                <span>Размер: {Math.round((settingsApiExecution.payloadSize || 0) / 1024 * 10) / 10} KB</span>
-                <span>Время: {settingsApiExecution.durationMs} мс</span>
-              </div>
-              {#if settingsApiExecution.error}
-                <div class="issue error">{settingsApiExecution.error}</div>
-              {/if}
-              <div class="subbox">
-                <div class="subttl exec-preview-head">
-                  <span>Что ушло на сервер</span>
-                  <button type="button" class="view-toggle" on:click={() => (settingsRequestViewMode = settingsRequestViewMode === 'tree' ? 'raw' : 'tree')}>
-                    {settingsRequestViewMode === 'tree' ? 'RAW' : 'Дерево'}
-                  </button>
-                </div>
-                {#if settingsRequestViewMode === 'tree'}
-                  <div class="response-tree-wrap"><JsonTreeView node={settingsApiExecution.requestPreview} name="request" level={0} /></div>
-                {:else}
-                  <textarea readonly rows="10" value={JSON.stringify(settingsApiExecution.requestPreview, null, 2)}></textarea>
-                {/if}
-              </div>
-              <div class="subbox">
-                <div class="subttl exec-preview-head">
-                  <span>Предпросмотр ответа</span>
-                  <button type="button" class="view-toggle" on:click={() => (settingsResponseViewMode = settingsResponseViewMode === 'tree' ? 'raw' : 'tree')}>
-                    {settingsResponseViewMode === 'tree' ? 'RAW' : 'Дерево'}
-                  </button>
-                </div>
-                {#if settingsResponseViewMode === 'tree'}
-                  <div class="response-tree-wrap"><JsonTreeView node={settingsApiExecution.responsePreview} name="response" level={0} /></div>
-                {:else}
-                  <textarea readonly rows="12" value={JSON.stringify(settingsApiExecution.responsePreview, null, 2)}></textarea>
-                {/if}
-              </div>
-            </div>
+        <div class="node-modal-body node-modal-body-api">
+          {#if settingsNode}
+            {#key `${settingsNode.id}:${settingsApiBuilderStoreId || 0}`}
+              <ApiBuilderTab
+                apiBase={API_BASE}
+                apiJson={workflowApiJson}
+                headers={workflowApiHeaders}
+                existingTables={apiBuilderExistingTables}
+                refreshTables={refreshApiBuilderTables}
+                initialApiStoreId={settingsApiBuilderStoreId}
+              />
+            {/key}
           {/if}
         </div>
       {/if}
@@ -3627,6 +3381,7 @@
   .empty { color: #64748b; font-size: 12px; }
   .node-modal-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.48); z-index: 40; }
   .node-modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; background: #fff; border: 1px solid #dbe4f0; border-radius: 14px; box-shadow: 0 18px 48px rgba(15, 23, 42, 0.28); z-index: 41; }
+  .node-modal.node-modal-wide { width: min(1600px, calc(100vw - 24px)); max-height: calc(100vh - 24px); }
   .node-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; border-bottom: 1px solid #e2e8f0; position: sticky; top: 0; background: #fff; }
   .node-modal-head h4 { margin: 0; font-size: 16px; }
   .close-btn { border: 1px solid #dbe4f0; border-radius: 9px; background: #fff; cursor: pointer; padding: 4px 10px; }
@@ -3636,6 +3391,8 @@
   .node-modal-body select,
   .node-modal-body textarea { border: 1px solid #dbe4f0; border-radius: 8px; padding: 7px 8px; font-family: inherit; font-size: 13px; }
   .node-modal-body textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .node-modal-body-api { padding: 8px; background: #f8fafc; }
+  .node-modal-body-api :global(.panel) { border: 0; border-radius: 0; padding: 0; background: transparent; }
   .interval-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .help { font-size: 12px; color: #475569; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; }
   .actions-row { display: flex; gap: 8px; flex-wrap: wrap; }
