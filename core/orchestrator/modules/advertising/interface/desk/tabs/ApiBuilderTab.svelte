@@ -8438,104 +8438,110 @@ function syncParameterEditorsHeight() {
               <div class="response-head field-head parameter-subhead">
                 <small>Лимиты и безопасность</small>
               </div>
-              <div class="pagination-limit-toggles">
-                <button
-                  type="button"
-                  class="group-toggle group-toggle-sm"
-                  class:active-group-toggle={Boolean(selected?.paginationUseMaxPages)}
-                  on:click={togglePaginationUseMaxPages}
-                  aria-pressed={Boolean(selected?.paginationUseMaxPages)}
-                >
-                  <span>{selected?.paginationUseMaxPages ? 'Макс.страниц - Лимит страниц: вкл' : 'Макс.страниц - Лимит страниц: выкл'}</span>
-                  {#if Boolean(selected?.paginationUseMaxPages)}
-                    <span class="group-toggle-indicator"></span>
-                  {/if}
-                </button>
-                <button
-                  type="button"
-                  class="group-toggle group-toggle-sm"
-                  class:active-group-toggle={Boolean(selected?.paginationUseDelay)}
-                  on:click={togglePaginationUseDelay}
-                  aria-pressed={Boolean(selected?.paginationUseDelay)}
-                >
-                  <span>{selected?.paginationUseDelay ? 'Пауза между страницами: вкл' : 'Пауза между страницами: выкл'}</span>
-                  {#if Boolean(selected?.paginationUseDelay)}
-                    <span class="group-toggle-indicator"></span>
-                  {/if}
-                </button>
-                <button
-                  type="button"
-                  class="group-toggle group-toggle-sm"
-                  class:active-group-toggle={Boolean(selected?.paginationStopOnSameResponse)}
-                  on:click={togglePaginationStopOnSameResponse}
-                  aria-pressed={Boolean(selected?.paginationStopOnSameResponse)}
-                >
-                  <span>{selected?.paginationStopOnSameResponse ? 'Одинаковые ответы: вкл' : 'Одинаковые ответы: выкл'}</span>
-                  {#if Boolean(selected?.paginationStopOnSameResponse)}
-                    <span class="group-toggle-indicator"></span>
-                  {/if}
-                </button>
-              </div>
+              <div class="pagination-safety-layout">
+                <div class="pagination-safety-col">
+                  <div class="pagination-limit-toggles">
+                    <button
+                      type="button"
+                      class="group-toggle group-toggle-sm"
+                      class:active-group-toggle={Boolean(selected?.paginationUseMaxPages)}
+                      on:click={togglePaginationUseMaxPages}
+                      aria-pressed={Boolean(selected?.paginationUseMaxPages)}
+                    >
+                      <span>{selected?.paginationUseMaxPages ? 'Макс.страниц - Лимит страниц: вкл' : 'Макс.страниц - Лимит страниц: выкл'}</span>
+                      {#if Boolean(selected?.paginationUseMaxPages)}
+                        <span class="group-toggle-indicator"></span>
+                      {/if}
+                    </button>
+                    <button
+                      type="button"
+                      class="group-toggle group-toggle-sm"
+                      class:active-group-toggle={Boolean(selected?.paginationUseDelay)}
+                      on:click={togglePaginationUseDelay}
+                      aria-pressed={Boolean(selected?.paginationUseDelay)}
+                    >
+                      <span>{selected?.paginationUseDelay ? 'Пауза между страницами: вкл' : 'Пауза между страницами: выкл'}</span>
+                      {#if Boolean(selected?.paginationUseDelay)}
+                        <span class="group-toggle-indicator"></span>
+                      {/if}
+                    </button>
+                    <button
+                      type="button"
+                      class="group-toggle group-toggle-sm"
+                      class:active-group-toggle={Boolean(selected?.paginationStopOnSameResponse)}
+                      on:click={togglePaginationStopOnSameResponse}
+                      aria-pressed={Boolean(selected?.paginationStopOnSameResponse)}
+                    >
+                      <span>{selected?.paginationStopOnSameResponse ? 'Одинаковые ответы: вкл' : 'Одинаковые ответы: выкл'}</span>
+                      {#if Boolean(selected?.paginationStopOnSameResponse)}
+                        <span class="group-toggle-indicator"></span>
+                      {/if}
+                    </button>
+                  </div>
 
-              <div class="pagination-limit-values">
-                <div class="pagination-field">
-                  <small>Макс. количество страниц</small>
-                  <input
-                    type="number"
-                    min="1"
-                    value={selected?.paginationMaxPages || 1}
-                    on:input={(e) => mutateSelected((d) => (d.paginationMaxPages = Number(e.currentTarget.value) || 1))}
-                    disabled={!selected?.paginationUseMaxPages}
-                  />
+                  <div class="pagination-limit-values">
+                    <div class="pagination-field">
+                      <small>Макс. количество страниц</small>
+                      <input
+                        type="number"
+                        min="1"
+                        value={selected?.paginationMaxPages || 1}
+                        on:input={(e) => mutateSelected((d) => (d.paginationMaxPages = Number(e.currentTarget.value) || 1))}
+                        disabled={!selected?.paginationUseMaxPages}
+                      />
+                    </div>
+                    <div class="pagination-field">
+                      <small>Пауза между страницами (мс)</small>
+                      <input
+                        type="number"
+                        min="0"
+                        value={selected?.paginationDelayMs || 0}
+                        on:input={(e) => mutateSelected((d) => (d.paginationDelayMs = Number(e.currentTarget.value) || 0))}
+                        disabled={!selected?.paginationUseDelay}
+                      />
+                    </div>
+                    <div class="pagination-field">
+                      <small>Порог одинаковых ответов</small>
+                      <input
+                        type="number"
+                        min="2"
+                        max="50"
+                        value={selected?.paginationSameResponseLimit || 5}
+                        on:input={(e) => mutateSelected((d) => (d.paginationSameResponseLimit = Math.max(2, Math.min(50, Number(e.currentTarget.value) || 5))))}
+                        disabled={!selected?.paginationStopOnSameResponse}
+                      />
+                    </div>
+                  </div>
                 </div>
-                <div class="pagination-field">
-                  <small>Пауза между страницами (мс)</small>
-                  <input
-                    type="number"
-                    min="0"
-                    value={selected?.paginationDelayMs || 0}
-                    on:input={(e) => mutateSelected((d) => (d.paginationDelayMs = Number(e.currentTarget.value) || 0))}
-                    disabled={!selected?.paginationUseDelay}
-                  />
-                </div>
-                <div class="pagination-field">
-                  <small>Порог одинаковых ответов</small>
-                  <input
-                    type="number"
-                    min="2"
-                    max="50"
-                    value={selected?.paginationSameResponseLimit || 5}
-                    on:input={(e) => mutateSelected((d) => (d.paginationSameResponseLimit = Math.max(2, Math.min(50, Number(e.currentTarget.value) || 5))))}
-                    disabled={!selected?.paginationStopOnSameResponse}
-                  />
-                </div>
-              </div>
 
-              <div class="pagination-stop-conditions">
-                <button
-                  type="button"
-                  class="group-toggle group-toggle-sm"
-                  class:active-group-toggle={Boolean(selected?.paginationStopOnMissingValue)}
-                  on:click={togglePaginationStopOnMissingValue}
-                  aria-pressed={Boolean(selected?.paginationStopOnMissingValue)}
-                >
-                  <span>Остановка, если не найдено новое значение пагинации</span>
-                  {#if Boolean(selected?.paginationStopOnMissingValue)}
-                    <span class="group-toggle-indicator"></span>
-                  {/if}
-                </button>
-                <button
-                  type="button"
-                  class="group-toggle group-toggle-sm"
-                  class:active-group-toggle={Boolean(selected?.paginationStopOnHttpError)}
-                  on:click={togglePaginationStopOnHttpError}
-                  aria-pressed={Boolean(selected?.paginationStopOnHttpError)}
-                >
-                  <span>Остановка при HTTP ошибке</span>
-                  {#if Boolean(selected?.paginationStopOnHttpError)}
-                    <span class="group-toggle-indicator"></span>
-                  {/if}
-                </button>
+                <div class="pagination-safety-col">
+                  <div class="pagination-stop-conditions">
+                    <button
+                      type="button"
+                      class="group-toggle group-toggle-sm"
+                      class:active-group-toggle={Boolean(selected?.paginationStopOnMissingValue)}
+                      on:click={togglePaginationStopOnMissingValue}
+                      aria-pressed={Boolean(selected?.paginationStopOnMissingValue)}
+                    >
+                      <span>Остановка, если не найдено новое значение пагинации</span>
+                      {#if Boolean(selected?.paginationStopOnMissingValue)}
+                        <span class="group-toggle-indicator"></span>
+                      {/if}
+                    </button>
+                    <button
+                      type="button"
+                      class="group-toggle group-toggle-sm"
+                      class:active-group-toggle={Boolean(selected?.paginationStopOnHttpError)}
+                      on:click={togglePaginationStopOnHttpError}
+                      aria-pressed={Boolean(selected?.paginationStopOnHttpError)}
+                    >
+                      <span>Остановка при HTTP ошибке</span>
+                      {#if Boolean(selected?.paginationStopOnHttpError)}
+                        <span class="group-toggle-indicator"></span>
+                      {/if}
+                    </button>
+                  </div>
+                </div>
               </div>
               <div class="pagination-stop-rules">
                 <div class="response-head field-head parameter-subhead">
@@ -9054,17 +9060,27 @@ function syncParameterEditorsHeight() {
   .empty-preview-state { min-height:96px; display:flex; flex-direction:column; align-items:flex-start; justify-content:center; gap:8px; padding:10px; }
   .pagination-grid { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
   .pagination-field small { display:block; margin-bottom:4px; font-size:11px; color:#64748b; }
-  .pagination-limit-toggles {
+  .pagination-safety-layout {
     margin-top:8px;
     display:grid;
-    grid-template-columns: repeat(3, minmax(160px, 1fr));
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap:12px;
+    align-items:start;
+  }
+  .pagination-safety-col {
+    min-width:0;
+    display:flex;
+    flex-direction:column;
     gap:8px;
-    max-width:50%;
+  }
+  .pagination-limit-toggles {
+    display:grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap:8px;
   }
   .pagination-limit-values {
-    margin-top:8px;
     display:grid;
-    grid-template-columns: repeat(3, minmax(180px, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap:8px;
   }
   .pagination-param-editor { margin-top:8px; }
@@ -9074,10 +9090,9 @@ function syncParameterEditorsHeight() {
     align-items:end;
   }
   .pagination-stop-conditions {
-    margin-top:8px;
-    display:flex;
-    flex-direction:column;
-    gap:6px;
+    display:grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap:8px;
   }
   .pagination-stop-rules {
     margin-top:8px;
@@ -9119,9 +9134,12 @@ function syncParameterEditorsHeight() {
     .saved-inline-actions { grid-template-columns: 1fr; }
     .parameter-sources-grid { grid-template-columns: 1fr; }
     .data-row, .table-rule-row, .join-rule-row, .filter-rule-row, .param-row, .date-param-inline-row, .field-date-row { grid-template-columns: 1fr; }
+    .pagination-safety-layout {
+      grid-template-columns: 1fr;
+    }
     .pagination-limit-toggles,
-    .pagination-limit-values {
-      max-width:100%;
+    .pagination-limit-values,
+    .pagination-stop-conditions {
       grid-template-columns: 1fr;
     }
     .pagination-param-inline-row,
