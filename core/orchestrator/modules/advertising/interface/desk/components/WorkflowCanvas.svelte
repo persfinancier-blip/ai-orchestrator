@@ -147,6 +147,7 @@
   let settingsModalOpen = false;
   let nodeExecutions: Record<string, ApiNodeExecution> = {};
   let nodeExecutionLoading: Record<string, boolean> = {};
+  let nodeTemplateSaving: Record<string, boolean> = {};
   let settingsRequestViewMode: 'tree' | 'raw' = 'tree';
   let settingsResponseViewMode: 'tree' | 'raw' = 'tree';
   let chainRunActive = false;
@@ -1057,6 +1058,109 @@
     return normalizeApiRequest(undefined);
   }
 
+  function paginationModeFromTemplateRaw(rawRow: any): ApiPaginationMode {
+    const pagination = tryObj(rawRow?.pagination_json);
+    const strategy = String(rawRow?.pagination_strategy || pagination?.strategy || 'none').trim().toLowerCase();
+    if (strategy === 'page_number') return 'page_number';
+    if (strategy === 'offset_limit') return 'offset_limit';
+    if (strategy === 'cursor_fields' || strategy === 'cursor') return 'cursor';
+    return 'none';
+  }
+
+  function paginationStrategyForUpsert(mode: ApiPaginationMode, enabled: boolean) {
+    if (!enabled || mode === 'none') return 'none';
+    if (mode === 'page_number') return 'page_number';
+    if (mode === 'offset_limit') return 'offset_limit';
+    if (mode === 'cursor') return 'cursor_fields';
+    return 'none';
+  }
+
+  function paginationFromTemplateRaw(rawRow: any): ApiNodePagination {
+    const pagination = tryObj(rawRow?.pagination_json);
+    const enabledRaw = rawRow?.pagination_enabled;
+    const enabled =
+      enabledRaw === undefined || enabledRaw === null
+        ? Boolean(pagination?.enabled)
+        : Boolean(enabledRaw);
+    const mode = paginationModeFromTemplateRaw(rawRow);
+    const targetRaw = String(rawRow?.pagination_target || pagination?.target || 'query').trim().toLowerCase();
+    const target: ApiPaginationTarget = targetRaw === 'body' ? 'body' : 'query';
+    const maxPages = Number.isFinite(Number(rawRow?.pagination_max_pages))
+      ? Number(rawRow?.pagination_max_pages)
+      : Number.isFinite(Number(pagination?.max_pages))
+      ? Number(pagination?.max_pages)
+      : 10;
+    const pauseMs = Number.isFinite(Number(rawRow?.pagination_delay_ms))
+      ? Number(rawRow?.pagination_delay_ms)
+      : Number.isFinite(Number(pagination?.delay_ms))
+      ? Number(pagination?.delay_ms)
+      : 0;
+    const dataPath = String(rawRow?.pagination_data_path || pagination?.data_path || '').trim();
+    const pageParam = String(rawRow?.pagination_page_param || pagination?.page_param || 'page').trim() || 'page';
+    const startPage = Number.isFinite(Number(rawRow?.pagination_start_page))
+      ? Number(rawRow?.pagination_start_page)
+      : Number.isFinite(Number(pagination?.start_page))
+      ? Number(pagination?.start_page)
+      : 1;
+    const limitParam = String(rawRow?.pagination_limit_param || pagination?.limit_param || 'limit').trim() || 'limit';
+    const limitValue = Number.isFinite(Number(rawRow?.pagination_limit_value))
+      ? Number(rawRow?.pagination_limit_value)
+      : Number.isFinite(Number(pagination?.limit_value))
+      ? Number(pagination?.limit_value)
+      : 100;
+    const offsetParam = String(rawRow?.pagination_offset_param || pagination?.offset_param || 'offset').trim() || 'offset';
+    const startOffset = Number.isFinite(Number(rawRow?.pagination_start_offset))
+      ? Number(rawRow?.pagination_start_offset)
+      : Number.isFinite(Number(pagination?.start_offset))
+      ? Number(pagination?.start_offset)
+      : 0;
+    const cursorReqPath = String(rawRow?.pagination_cursor_req_path_1 || pagination?.cursor_req_path_1 || 'cursor').trim() || 'cursor';
+    const cursorResPath = String(rawRow?.pagination_cursor_res_path_1 || pagination?.cursor_res_path_1 || 'response.cursor').trim() || 'response.cursor';
+    return {
+      enabled: Boolean(enabled),
+      mode,
+      target,
+      maxPages: Math.max(1, Number(maxPages || 1)),
+      pauseMs: Math.max(0, Number(pauseMs || 0)),
+      dataPath,
+      stopOnEmpty: true,
+      pageParam,
+      startPage: Math.max(1, Number(startPage || 1)),
+      limitParam,
+      limitValue: Math.max(1, Number(limitValue || 1)),
+      offsetParam,
+      startOffset: Math.max(0, Number(startOffset || 0)),
+      cursorReqPath,
+      cursorResPath
+    };
+  }
+
+  function applyPaginationToNodeFromTemplate(nodeId: string, rawRow: any) {
+    const pg = paginationFromTemplateRaw(rawRow);
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    if (isApiNode(node)) {
+      updateDataNodeConfig(nodeId, { apiPagination: pg });
+      return;
+    }
+    if (!isApiToolNode(node)) return;
+    updateSetting(nodeId, 'paginationEnabled', pg.enabled ? 'true' : 'false');
+    updateSetting(nodeId, 'paginationMode', pg.mode);
+    updateSetting(nodeId, 'paginationTarget', pg.target);
+    updateSetting(nodeId, 'paginationMaxPages', String(pg.maxPages));
+    updateSetting(nodeId, 'paginationPauseMs', String(pg.pauseMs));
+    updateSetting(nodeId, 'paginationDataPath', pg.dataPath);
+    updateSetting(nodeId, 'paginationStopOnEmpty', pg.stopOnEmpty ? 'true' : 'false');
+    updateSetting(nodeId, 'paginationPageParam', pg.pageParam);
+    updateSetting(nodeId, 'paginationStartPage', String(pg.startPage));
+    updateSetting(nodeId, 'paginationLimitParam', pg.limitParam);
+    updateSetting(nodeId, 'paginationLimitValue', String(pg.limitValue));
+    updateSetting(nodeId, 'paginationOffsetParam', pg.offsetParam);
+    updateSetting(nodeId, 'paginationStartOffset', String(pg.startOffset));
+    updateSetting(nodeId, 'paginationCursorReqPath', pg.cursorReqPath);
+    updateSetting(nodeId, 'paginationCursorResPath', pg.cursorResPath);
+  }
+
   function updateApiToolRequest(nodeId: string, key: keyof ApiNodeRequest, value: string) {
     const map: Record<keyof ApiNodeRequest, string> = {
       method: 'apiMethod',
@@ -1082,6 +1186,7 @@
         templateId: src.id,
         templateStoreId: src.storeId ? String(src.storeId) : ''
       });
+      applyPaginationToNodeFromTemplate(nodeId, src.rawRow || {});
       return;
     }
     if (isApiToolNode(node)) {
@@ -1093,6 +1198,148 @@
       updateApiToolRequest(nodeId, 'headersText', tpl.headersText);
       updateApiToolRequest(nodeId, 'queryText', tpl.queryText);
       updateApiToolRequest(nodeId, 'bodyText', tpl.bodyText);
+      applyPaginationToNodeFromTemplate(nodeId, src.rawRow || {});
+    }
+  }
+
+  function parseUrlForTemplatePayload(urlRaw: string) {
+    const raw = String(urlRaw || '').trim();
+    const fallback = { baseUrl: '', path: '/', query: {} as Record<string, any> };
+    if (!raw) return fallback;
+    try {
+      const u = new URL(raw);
+      const query: Record<string, any> = {};
+      u.searchParams.forEach((value, key) => {
+        query[key] = value;
+      });
+      return {
+        baseUrl: `${u.protocol}//${u.host}`,
+        path: u.pathname || '/',
+        query
+      };
+    } catch {
+      return fallback;
+    }
+  }
+
+  function withApiRoleHeaders(): HeadersInit {
+    return {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'X-AO-ROLE': API_ROLE
+    };
+  }
+
+  async function saveNodeEditsToApiTemplate(nodeId: string) {
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node || (!isApiNode(node) && !isApiToolNode(node))) {
+      banner = 'Сохранение доступно только для API-нод';
+      return;
+    }
+    const request = getApiRequestForNode(node);
+    const templateSource = resolveTemplateSourceForNode(node, request);
+    const storeId = Number(templateSource?.storeId || nodeTemplateStoreId(node) || 0);
+    if (!Number.isFinite(storeId) || storeId <= 0) {
+      banner = 'Не найден ID шаблона API для сохранения. Выбери шаблон API в узле.';
+      return;
+    }
+    const raw = templateSource?.rawRow && typeof templateSource.rawRow === 'object' ? templateSource.rawRow : {};
+    const urlParts = parseUrlForTemplatePayload(request.url);
+    if (!urlParts.baseUrl || !urlParts.path) {
+      banner = 'Некорректный URL. Укажи полный URL перед сохранением в шаблон.';
+      return;
+    }
+
+    try {
+      nodeTemplateSaving = { ...nodeTemplateSaving, [nodeId]: true };
+      const method = String(request.method || 'GET').trim().toUpperCase() || 'GET';
+      const headersObj = parseObjectJsonSafe('Headers JSON', request.headersText);
+      const queryObj = parseObjectJsonSafe('Query JSON', request.queryText);
+      const bodyObj = parseAnyJsonSafe('Body JSON', request.bodyText);
+      const pagination = getPaginationForNode(node);
+      const paginationStrategy = paginationStrategyForUpsert(pagination.mode, pagination.enabled);
+      const mergedQuery = { ...urlParts.query, ...queryObj };
+      const basePagination = tryObj(raw?.pagination_json);
+      const baseStopConditions = tryObj(basePagination?.stop_conditions);
+      const paginationJson = {
+        ...basePagination,
+        enabled: Boolean(pagination.enabled),
+        strategy: paginationStrategy,
+        target: pagination.target,
+        data_path: String(pagination.dataPath || ''),
+        page_param: String(pagination.pageParam || 'page'),
+        start_page: Math.max(1, Number(pagination.startPage || 1)),
+        limit_param: String(pagination.limitParam || 'limit'),
+        limit_value: Math.max(1, Number(pagination.limitValue || 1)),
+        offset_param: String(pagination.offsetParam || 'offset'),
+        start_offset: Math.max(0, Number(pagination.startOffset || 0)),
+        cursor_req_path_1: String(pagination.cursorReqPath || ''),
+        cursor_res_path_1: String(pagination.cursorResPath || ''),
+        use_max_pages: true,
+        max_pages: Math.max(1, Number(pagination.maxPages || 1)),
+        use_delay: Math.max(0, Number(pagination.pauseMs || 0)) > 0,
+        delay_ms: Math.max(0, Number(pagination.pauseMs || 0)),
+        stop_conditions: {
+          ...baseStopConditions
+        }
+      };
+
+      const payload: Record<string, any> = {
+        ...raw,
+        id: Math.trunc(storeId),
+        expected_revision: Number.isFinite(Number(raw?.revision)) ? Math.max(1, Math.trunc(Number(raw.revision))) : 0,
+        api_name: String(raw?.api_name || templateSource?.name || node.config?.name || 'API').trim() || 'API',
+        method,
+        base_url: urlParts.baseUrl,
+        path: urlParts.path,
+        auth_mode: String(request.authMode || raw?.auth_mode || 'manual').trim() || 'manual',
+        headers_json: headersObj,
+        query_json: mergedQuery,
+        body_json: bodyObj,
+        pagination_json: paginationJson,
+        pagination_enabled: Boolean(pagination.enabled),
+        pagination_strategy: paginationStrategy,
+        pagination_target: pagination.target,
+        pagination_data_path: String(pagination.dataPath || ''),
+        pagination_page_param: String(pagination.pageParam || 'page'),
+        pagination_start_page: Math.max(1, Number(pagination.startPage || 1)),
+        pagination_limit_param: String(pagination.limitParam || 'limit'),
+        pagination_limit_value: Math.max(1, Number(pagination.limitValue || 1)),
+        pagination_offset_param: String(pagination.offsetParam || 'offset'),
+        pagination_start_offset: Math.max(0, Number(pagination.startOffset || 0)),
+        pagination_cursor_req_path_1: String(pagination.cursorReqPath || ''),
+        pagination_cursor_res_path_1: String(pagination.cursorResPath || ''),
+        pagination_use_max_pages: true,
+        pagination_max_pages: Math.max(1, Number(pagination.maxPages || 1)),
+        pagination_use_delay: Math.max(0, Number(pagination.pauseMs || 0)) > 0,
+        pagination_delay_ms: Math.max(0, Number(pagination.pauseMs || 0)),
+        updated_by: 'workflow_node'
+      };
+
+      const response = await fetch(`${API_BASE}/api-configs/upsert`, {
+        method: 'POST',
+        headers: withApiRoleHeaders(),
+        body: JSON.stringify(payload)
+      });
+      let body: any = {};
+      try {
+        body = await response.json();
+      } catch {
+        body = {};
+      }
+      if (!response.ok) {
+        const details = String(body?.details || body?.error || `HTTP ${response.status}`);
+        throw new Error(`Не удалось сохранить шаблон API: ${details}`);
+      }
+
+      await loadDynamicSourceCatalog();
+      const currentTemplateId = nodeTemplateId(node);
+      if (currentTemplateId) applyTemplateToNode(nodeId, currentTemplateId);
+      banner = `Шаблон API сохранен в хранилище (ID ${Math.trunc(storeId)})`;
+    } catch (e: any) {
+      banner = String(e?.message || e || 'Ошибка сохранения шаблона API');
+    } finally {
+      nodeTemplateSaving = { ...nodeTemplateSaving, [nodeId]: false };
     }
   }
 
@@ -2713,6 +2960,14 @@
           <div class="actions-row">
             <button class="primary-action" on:click={() => executeApiNode(settingsNode.id)} disabled={settingsApiLoading}>
               {settingsApiLoading ? 'Выполнение...' : 'Execute Node'}
+            </button>
+            <button
+              class="primary-action"
+              on:click={() => saveNodeEditsToApiTemplate(settingsNode.id)}
+              disabled={Boolean(nodeTemplateSaving[settingsNode.id]) || !nodeTemplateStoreId(settingsNode)}
+              title={!nodeTemplateStoreId(settingsNode) ? 'Сначала выбери шаблон API' : ''}
+            >
+              {nodeTemplateSaving[settingsNode.id] ? 'Сохранение шаблона...' : 'Сохранить в хранилище API'}
             </button>
             <button on:click={() => openFullApiBuilder(settingsNode.id)}>Открыть полный конструктор API</button>
           </div>
