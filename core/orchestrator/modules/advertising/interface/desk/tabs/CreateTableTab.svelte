@@ -131,11 +131,26 @@
     }
   }
 
+  function normalizeFieldType(value: any): string {
+    const raw = String(value || '').trim().toLowerCase();
+    if (!raw) return 'text';
+    if (raw === 'int' || raw === 'integer' || raw === 'int4') return 'int';
+    if (raw === 'bigint' || raw === 'int8' || raw === 'bigserial') return 'bigint';
+    if (raw.startsWith('numeric') || raw.startsWith('decimal')) return 'numeric';
+    if (raw === 'boolean' || raw === 'bool') return 'boolean';
+    if (raw === 'date') return 'date';
+    if (raw === 'timestamptz' || raw.includes('timestamp with time zone')) return 'timestamptz';
+    if (raw === 'json' || raw === 'jsonb') return 'jsonb';
+    if (raw === 'text' || raw === 'varchar' || raw.includes('character varying')) return 'text';
+    if (raw === 'uuid') return 'uuid';
+    return typeOptions.includes(raw) ? raw : 'text';
+  }
+
   function normalizeColumns(cols: ColumnDef[]) {
     return cols
       .map((c) => ({
         field_name: (c.field_name || '').trim(),
-        field_type: (c.field_type || '').trim(),
+        field_type: normalizeFieldType(c.field_type),
         description: (c.description || '').trim()
       }))
       .filter((c) => c.field_name.length > 0);
@@ -344,7 +359,7 @@
       table_class: 'custom',
       description: 'Системная таблица API-шаблонов (единый JSON-конфиг + служебные поля)',
       columns: withRequiredTableFields([
-        { field_name: 'id', field_type: 'bigserial', description: 'идентификатор API-шаблона' },
+        { field_name: 'id', field_type: 'bigint', description: 'идентификатор API-шаблона (автонумерация через sequence на сервере)' },
         { field_name: 'api_name', field_type: 'text', description: 'человекочитаемое название API-шаблона' },
         { field_name: 'config_json', field_type: 'jsonb', description: 'полное описание API-шаблона в JSON (метод, URL, параметры, пагинация, маппинги и т.д.)' },
         { field_name: 'schema_version', field_type: 'int', description: 'версия структуры config_json для миграций' },
@@ -371,7 +386,7 @@
       table_class: 'custom',
       description: 'Системная таблица рабочих столов: процессы и данные (единый JSON-конфиг)',
       columns: withRequiredTableFields([
-        { field_name: 'id', field_type: 'bigserial', description: 'идентификатор рабочего стола' },
+        { field_name: 'id', field_type: 'bigint', description: 'идентификатор рабочего стола (автонумерация через sequence на сервере)' },
         { field_name: 'desk_name', field_type: 'text', description: 'название рабочего стола' },
         { field_name: 'desk_type', field_type: 'text', description: 'тип рабочего стола (data/process)' },
         { field_name: 'config_json', field_type: 'jsonb', description: 'полное описание canvas: ноды, связи, viewport, настройки' },
@@ -506,7 +521,7 @@
           description: String(r?.description || ''),
           columns: parsedColumns.map((c: any) => ({
             field_name: String(c?.field_name || ''),
-            field_type: String(c?.field_type || 'text'),
+            field_type: normalizeFieldType(c?.field_type || c?.type || 'text'),
             description: String(c?.description || '')
           })),
           partition_enabled: Boolean(r?.partition_enabled),

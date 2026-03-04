@@ -642,6 +642,9 @@ async function ensureApiConfigsTable(client, config) {
   const schema = normalizeSettingIdent(config?.api_configs_schema, DEFAULT_CONFIG.api_configs_schema);
   const table = normalizeSettingIdent(config?.api_configs_table, DEFAULT_CONFIG.api_configs_table);
   const qn = `${qi(schema)}.${qi(table)}`;
+  const seqName = `${table}_id_seq`;
+  const seqQn = `${qi(schema)}.${qi(seqName)}`;
+  const seqReg = `${schema}.${seqName}`;
 
   await client.query(`CREATE SCHEMA IF NOT EXISTS ${qi(schema)}`);
   await client.query(`
@@ -667,6 +670,7 @@ async function ensureApiConfigsTable(client, config) {
   `);
   await client.query(`
     ALTER TABLE ${qn}
+      ADD COLUMN IF NOT EXISTS id bigint,
       ADD COLUMN IF NOT EXISTS config_json jsonb NOT NULL DEFAULT '{}'::jsonb,
       ADD COLUMN IF NOT EXISTS schema_version integer NOT NULL DEFAULT 1,
       ADD COLUMN IF NOT EXISTS revision integer NOT NULL DEFAULT 1,
@@ -674,6 +678,50 @@ async function ensureApiConfigsTable(client, config) {
       ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true,
       ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now(),
       ADD COLUMN IF NOT EXISTS updated_by text NOT NULL DEFAULT 'system'
+  `);
+  await client.query(`CREATE SEQUENCE IF NOT EXISTS ${seqQn}`);
+  await client.query(`ALTER SEQUENCE ${seqQn} OWNED BY ${qn}.id`);
+  await client.query(`
+    ALTER TABLE ${qn}
+      ALTER COLUMN id SET DEFAULT nextval(${qlit(seqReg)}::regclass)
+  `);
+  await client.query(`
+    WITH dup AS (
+      SELECT ctid, row_number() OVER (PARTITION BY id ORDER BY updated_at DESC NULLS LAST, ctid) AS rn
+      FROM ${qn}
+      WHERE id IS NOT NULL AND id > 0
+    )
+    UPDATE ${qn} t
+    SET id = nextval(${qlit(seqReg)}::regclass)
+    FROM dup
+    WHERE t.ctid = dup.ctid AND dup.rn > 1
+  `);
+  await client.query(`
+    UPDATE ${qn}
+    SET id = nextval(${qlit(seqReg)}::regclass)
+    WHERE id IS NULL OR id <= 0
+  `);
+  await client.query(`
+    SELECT setval(
+      ${qlit(seqReg)}::regclass,
+      GREATEST((SELECT COALESCE(MAX(id), 1) FROM ${qn}), 1),
+      true
+    )
+  `);
+  await client.query(`ALTER TABLE ${qn} ALTER COLUMN id SET NOT NULL`);
+  await client.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint c
+        WHERE c.conrelid = ${qlit(`${schema}.${table}`)}::regclass
+          AND c.contype = 'p'
+      ) THEN
+        ALTER TABLE ${qn}
+          ADD CONSTRAINT ${qi(`${table}_pkey`)} PRIMARY KEY (id);
+      END IF;
+    END $$;
   `);
   await ensureSystemContractColumns(client, qn);
   return qn;

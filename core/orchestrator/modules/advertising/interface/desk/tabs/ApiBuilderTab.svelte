@@ -5816,7 +5816,7 @@ function handleDefinitionInput(value: string) {
       });
       const id = parsePositiveInt(r?.id) || resolvedStoreId;
       if (!id) {
-        warn = 'Сервер сохранил шаблон, но не вернул числовой ID. Проверь таблицу хранилища API.';
+        throw new Error('Сервер не вернул числовой ID. Проверь структуру таблицы хранилища API (id bigint с авто-генерацией).');
       }
       await loadAll();
       if (Number.isFinite(id) && id > 0) {
