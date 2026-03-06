@@ -3,6 +3,11 @@
 import express from 'express';
 import { pool } from './db.mjs';
 import { bootstrapTableBuilder, tableBuilderRouter } from './tableBuilder.mjs';
+import {
+  bootstrapWorkflowAutomation,
+  startWorkflowScheduler,
+  workflowAutomationRouter
+} from './workflowAutomation.mjs';
 
 const app = express();
 const port = Number(process.env.SPACE_API_PORT || 8787);
@@ -14,6 +19,7 @@ app.use(express.json({ limit: '2mb' }));
 // - POST /ai-orchestrator/api/tables/create
 // - GET  /ai-orchestrator/api/preview
 app.use('/ai-orchestrator/api', tableBuilderRouter);
+app.use('/ai-orchestrator/api', workflowAutomationRouter);
 
 /**
  * GOLD витрина Advertising: showcase.advertising
@@ -60,6 +66,24 @@ try {
 } catch (e) {
   // eslint-disable-next-line no-console
   console.error('Table Builder bootstrap failed:', e);
+}
+
+try {
+  const boot = await bootstrapWorkflowAutomation();
+  // eslint-disable-next-line no-console
+  console.log('Workflow automation bootstrap:', boot);
+} catch (e) {
+  // eslint-disable-next-line no-console
+  console.error('Workflow automation bootstrap failed:', e);
+}
+
+try {
+  const scheduler = startWorkflowScheduler();
+  // eslint-disable-next-line no-console
+  console.log('Workflow scheduler:', scheduler);
+} catch (e) {
+  // eslint-disable-next-line no-console
+  console.error('Workflow scheduler start failed:', e);
 }
 
 app.listen(port, () => {
