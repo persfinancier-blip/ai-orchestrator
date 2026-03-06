@@ -74,7 +74,8 @@ const schedulerState = {
   workerLastTickAt: null,
   workerLastError: '',
   workerClaimedJobs: 0,
-  workerProcessedJobs: 0
+  workerProcessedJobs: 0,
+  workerSummaryRepaired: 0
 };
 
 export const workflowAutomationRouter = express.Router();
@@ -1526,6 +1527,38 @@ async function recomputeRunAggregation(client, config, runUid) {
     run_uid: runId,
     ...agg
   };
+}
+
+async function repairInconsistentRunSummaries(client, config, limit = 50) {
+  const runQn = workflowRunsQname(config);
+  const rows = await client.query(
+    `
+    SELECT run_uid
+    FROM ${runQn}
+    WHERE status IN ('completed', 'completed_with_errors', 'failed', 'cancelled', 'skipped')
+      AND (
+        COALESCE(summary_json->>'final_status', '') <> status
+        OR (summary_json ? 'progress_percent') = false
+        OR (summary_json ? 'total_jobs') = false
+      )
+    ORDER BY updated_at DESC
+    LIMIT $1
+    `,
+    [Math.max(1, Math.min(500, Math.trunc(Number(limit || 50))))]
+  );
+  const runRows = Array.isArray(rows.rows) ? rows.rows : [];
+  let repaired = 0;
+  for (const row of runRows) {
+    const runUid = String(row?.run_uid || '').trim();
+    if (!runUid) continue;
+    try {
+      await recomputeRunAggregation(client, config, runUid);
+      repaired += 1;
+    } catch {
+      // ignore one-off repair errors
+    }
+  }
+  return repaired;
 }
 
 async function enqueueWorkflowJob(client, config, job = {}) {
@@ -4941,6 +4974,7 @@ workflowAutomationRouter.get('/workflow-scheduler/state', requireDataAdmin, asyn
     worker_last_error: schedulerState.workerLastError,
     worker_claimed_jobs: schedulerState.workerClaimedJobs,
     worker_processed_jobs: schedulerState.workerProcessedJobs,
+    worker_summary_repaired: schedulerState.workerSummaryRepaired,
     metrics: {
       queue_depth: queueDepth,
       queue_running: queueRunning,
@@ -6347,6 +6381,7 @@ async function schedulerTickPublishedProcesses() {
   schedulerState.lastError = '';
   schedulerState.lastDiscoveryCount = 0;
   schedulerState.lastScheduledCount = 0;
+  schedulerState.workerSummaryRepaired = 0;
 
   let client = null;
   try {
@@ -6418,6 +6453,7 @@ async function schedulerTickPublishedProcesses() {
       }
       const dependencyEventsProcessed = await processDependencyEvents(client, config);
       const workerProcessed = await processQueuedJobsTick(client, config);
+      const repairedSummaries = await repairInconsistentRunSummaries(client, config, 100);
       await upsertWorkerLease(client, config, {
         worker_id: WORKER_ID,
         owner_id: WORKER_ID,
@@ -6426,12 +6462,14 @@ async function schedulerTickPublishedProcesses() {
         active_jobs: 0,
         meta_json: {
           processed_jobs: workerProcessed,
-          dependency_events: dependencyEventsProcessed
+          dependency_events: dependencyEventsProcessed,
+          repaired_summaries: repairedSummaries
         }
       });
       schedulerState.workerLastTickAt = new Date().toISOString();
       schedulerState.lastDiscoveryCount = discovered;
       schedulerState.lastScheduledCount = scheduled;
+      schedulerState.workerSummaryRepaired = repairedSummaries;
     });
   } catch (e) {
     schedulerState.lastError = String(e?.message || e || 'scheduler_tick_failed');
