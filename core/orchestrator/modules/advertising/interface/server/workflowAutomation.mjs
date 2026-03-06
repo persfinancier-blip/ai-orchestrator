@@ -1,4 +1,5 @@
 import express from 'express';
+import crypto from 'node:crypto';
 import { pool } from './db.mjs';
 import {
   shouldRetryStatus,
@@ -20,7 +21,18 @@ const DEFAULT_CONFIG = Object.freeze({
   workflow_run_steps_table: 'workflow_run_steps_store',
   workflow_process_overrides_table: 'workflow_process_overrides_store',
   workflow_process_locks_table: 'workflow_process_locks_store',
-  workflow_process_bus_table: 'workflow_process_bus_store'
+  workflow_process_bus_table: 'workflow_process_bus_store',
+  workflow_job_queue_table: 'workflow_job_queue_store',
+  workflow_incremental_state_table: 'workflow_incremental_state_store',
+  workflow_dependencies_table: 'workflow_process_dependencies_store',
+  workflow_rate_limit_policies_table: 'workflow_rate_limit_policies_store',
+  workflow_tenant_policies_table: 'workflow_tenant_policies_store',
+  workflow_run_aggregation_table: 'workflow_run_aggregation_store',
+  workflow_dead_jobs_table: 'workflow_dead_jobs_store',
+  workflow_scheduler_leases_table: 'workflow_scheduler_leases_store',
+  workflow_worker_leases_table: 'workflow_worker_leases_store',
+  workflow_provider_registry_table: 'workflow_provider_registry_store',
+  workflow_chunk_logs_table: 'workflow_chunk_logs_store'
 });
 
 const PARAMETER_TOKEN_RE = /\{\{\s*([^{}]+?)\s*\}\}/g;
@@ -37,6 +49,15 @@ const RETRY_MAX_MS = Math.max(RETRY_BASE_MS, Number(process.env.AO_WORKFLOW_RETR
 const MAX_PARALLEL_RUNS = Math.max(1, Number(process.env.AO_WORKFLOW_MAX_PARALLEL_RUNS || 3));
 const PROCESS_LOCK_TTL_MS = Math.max(30_000, Number(process.env.AO_WORKFLOW_LOCK_TTL_MS || 5 * 60_000));
 const SCHEDULER_LOCK_KEY = 89423011;
+const JOB_CLAIM_BATCH = Math.max(1, Number(process.env.AO_WORKFLOW_JOB_CLAIM_BATCH || 20));
+const JOB_LOCK_TTL_MS = Math.max(10_000, Number(process.env.AO_WORKFLOW_JOB_LOCK_TTL_MS || 120_000));
+const JOB_DEFAULT_MAX_ATTEMPTS = Math.max(1, Number(process.env.AO_WORKFLOW_JOB_MAX_ATTEMPTS || 5));
+const JOB_DEFAULT_PRIORITY = Math.max(1, Number(process.env.AO_WORKFLOW_JOB_DEFAULT_PRIORITY || 100));
+const CHUNK_SIZE_DEFAULT = Math.max(1, Number(process.env.AO_WORKFLOW_CHUNK_SIZE_DEFAULT || 200));
+const WORKER_ID = String(process.env.AO_WORKFLOW_WORKER_ID || `worker_${process.pid}`).trim();
+const SCHEDULER_ID = String(process.env.AO_WORKFLOW_SCHEDULER_ID || `scheduler_${process.pid}`).trim();
+const DEFAULT_TENANT_ID = String(process.env.AO_WORKFLOW_DEFAULT_TENANT_ID || 'default').trim() || 'default';
+const DEFAULT_TENANT_SQL = DEFAULT_TENANT_ID.replace(/'/g, "''");
 
 const schedulerState = {
   enabled: SCHEDULER_ENABLED,
@@ -47,7 +68,11 @@ const schedulerState = {
   lastError: '',
   lastDiscoveryCount: 0,
   lastScheduledCount: 0,
-  activeRuns: new Map()
+  activeRuns: new Map(),
+  workerLastTickAt: null,
+  workerLastError: '',
+  workerClaimedJobs: 0,
+  workerProcessedJobs: 0
 };
 
 export const workflowAutomationRouter = express.Router();
@@ -156,6 +181,30 @@ function setByPath(obj, path, value) {
 
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function stableJsonString(value) {
+  try {
+    return JSON.stringify(value ?? {});
+  } catch {
+    return '{}';
+  }
+}
+
+function sha1(value) {
+  return crypto.createHash('sha1').update(String(value || '')).digest('hex');
+}
+
+function dependencyDispatchMode(raw) {
+  const mode = String(raw || '').trim().toLowerCase();
+  if (mode === 'once_per_source_run' || mode === 'once_after_all_chunks' || mode === 'for_each_chunk') return mode;
+  return 'once_per_source_run';
+}
+
+function dependencyDedupeMode(raw) {
+  const mode = String(raw || '').trim().toLowerCase();
+  if (mode === 'skip_if_target_running' || mode === 'deduplicate_by_payload') return mode;
+  return 'none';
 }
 
 function findAliasInMap(map, rawAlias) {
@@ -277,6 +326,93 @@ function tryParseJson(raw, fallback = {}) {
   }
 }
 
+const STORAGE_OBJECT_KEYS = Object.freeze({
+  api_configs_storage: ['api_configs_schema', 'api_configs_table'],
+  workflow_desks_storage: ['workflow_desks_schema', 'workflow_desks_table'],
+  workflow_desk_versions_storage: ['workflow_desks_schema', 'workflow_desk_versions_table'],
+  workflow_runs_storage: ['workflow_runs_schema', 'workflow_runs_table'],
+  workflow_run_steps_storage: ['workflow_runs_schema', 'workflow_run_steps_table'],
+  workflow_process_overrides_storage: ['workflow_runs_schema', 'workflow_process_overrides_table'],
+  workflow_process_locks_storage: ['workflow_runs_schema', 'workflow_process_locks_table'],
+  workflow_process_bus_storage: ['workflow_runs_schema', 'workflow_process_bus_table'],
+  workflow_job_queue_storage: ['workflow_runs_schema', 'workflow_job_queue_table'],
+  workflow_incremental_state_storage: ['workflow_runs_schema', 'workflow_incremental_state_table'],
+  workflow_dependencies_storage: ['workflow_runs_schema', 'workflow_dependencies_table'],
+  workflow_rate_limit_policies_storage: ['workflow_runs_schema', 'workflow_rate_limit_policies_table'],
+  workflow_tenant_policies_storage: ['workflow_runs_schema', 'workflow_tenant_policies_table'],
+  workflow_run_aggregation_storage: ['workflow_runs_schema', 'workflow_run_aggregation_table'],
+  workflow_dead_jobs_storage: ['workflow_runs_schema', 'workflow_dead_jobs_table'],
+  workflow_scheduler_leases_storage: ['workflow_runs_schema', 'workflow_scheduler_leases_table'],
+  workflow_worker_leases_storage: ['workflow_runs_schema', 'workflow_worker_leases_table'],
+  workflow_provider_registry_storage: ['workflow_runs_schema', 'workflow_provider_registry_table'],
+  workflow_chunk_logs_storage: ['workflow_runs_schema', 'workflow_chunk_logs_table']
+});
+
+const STORAGE_SCHEMA_KEYS = Object.freeze({
+  api_configs_storage_schema: 'api_configs_schema',
+  workflow_desks_storage_schema: 'workflow_desks_schema',
+  workflow_desk_versions_storage_schema: 'workflow_desks_schema',
+  workflow_runs_storage_schema: 'workflow_runs_schema',
+  workflow_run_steps_storage_schema: 'workflow_runs_schema',
+  workflow_process_overrides_storage_schema: 'workflow_runs_schema',
+  workflow_process_locks_storage_schema: 'workflow_runs_schema',
+  workflow_process_bus_storage_schema: 'workflow_runs_schema',
+  workflow_job_queue_storage_schema: 'workflow_runs_schema',
+  workflow_incremental_state_storage_schema: 'workflow_runs_schema',
+  workflow_dependencies_storage_schema: 'workflow_runs_schema',
+  workflow_rate_limit_policies_storage_schema: 'workflow_runs_schema',
+  workflow_tenant_policies_storage_schema: 'workflow_runs_schema',
+  workflow_run_aggregation_storage_schema: 'workflow_runs_schema',
+  workflow_dead_jobs_storage_schema: 'workflow_runs_schema',
+  workflow_scheduler_leases_storage_schema: 'workflow_runs_schema',
+  workflow_worker_leases_storage_schema: 'workflow_runs_schema',
+  workflow_provider_registry_storage_schema: 'workflow_runs_schema',
+  workflow_chunk_logs_storage_schema: 'workflow_runs_schema'
+});
+
+const STORAGE_TABLE_KEYS = Object.freeze({
+  api_configs_storage_table: 'api_configs_table',
+  workflow_desks_storage_table: 'workflow_desks_table',
+  workflow_desk_versions_storage_table: 'workflow_desk_versions_table',
+  workflow_runs_storage_table: 'workflow_runs_table',
+  workflow_run_steps_storage_table: 'workflow_run_steps_table',
+  workflow_process_overrides_storage_table: 'workflow_process_overrides_table',
+  workflow_process_locks_storage_table: 'workflow_process_locks_table',
+  workflow_process_bus_storage_table: 'workflow_process_bus_table',
+  workflow_job_queue_storage_table: 'workflow_job_queue_table',
+  workflow_incremental_state_storage_table: 'workflow_incremental_state_table',
+  workflow_dependencies_storage_table: 'workflow_dependencies_table',
+  workflow_rate_limit_policies_storage_table: 'workflow_rate_limit_policies_table',
+  workflow_tenant_policies_storage_table: 'workflow_tenant_policies_table',
+  workflow_run_aggregation_storage_table: 'workflow_run_aggregation_table',
+  workflow_dead_jobs_storage_table: 'workflow_dead_jobs_table',
+  workflow_scheduler_leases_storage_table: 'workflow_scheduler_leases_table',
+  workflow_worker_leases_storage_table: 'workflow_worker_leases_table',
+  workflow_provider_registry_storage_table: 'workflow_provider_registry_table',
+  workflow_chunk_logs_storage_table: 'workflow_chunk_logs_table'
+});
+
+function applyStorageSetting(next, key, value) {
+  if (Object.prototype.hasOwnProperty.call(STORAGE_OBJECT_KEYS, key)) {
+    const [schemaKey, tableKey] = STORAGE_OBJECT_KEYS[key];
+    const parsed = parseStorageSettingValue(value);
+    next[schemaKey] = normalizeSettingIdent(parsed.schema, next[schemaKey]);
+    next[tableKey] = normalizeSettingIdent(parsed.table, next[tableKey]);
+    return true;
+  }
+  if (Object.prototype.hasOwnProperty.call(STORAGE_SCHEMA_KEYS, key)) {
+    const schemaKey = STORAGE_SCHEMA_KEYS[key];
+    next[schemaKey] = normalizeSettingIdent(value, next[schemaKey]);
+    return true;
+  }
+  if (Object.prototype.hasOwnProperty.call(STORAGE_TABLE_KEYS, key)) {
+    const tableKey = STORAGE_TABLE_KEYS[key];
+    next[tableKey] = normalizeSettingIdent(value, next[tableKey]);
+    return true;
+  }
+  return false;
+}
+
 async function tableExists(client, schema, table) {
   const r = await client.query(
     `
@@ -307,6 +443,7 @@ async function loadRuntimeStorageConfig(client) {
   for (const row of rows) {
     const key = String(row?.setting_key || '').trim();
     const value = row?.setting_value;
+    if (applyStorageSetting(next, key, value)) continue;
     if (key === 'api_configs_storage') {
       const parsed = parseStorageSettingValue(value);
       next.api_configs_schema = normalizeSettingIdent(parsed.schema, next.api_configs_schema);
@@ -383,6 +520,50 @@ function workflowProcessLocksQname(config) {
 
 function workflowProcessBusQname(config) {
   return qname(config.workflow_runs_schema, config.workflow_process_bus_table);
+}
+
+function workflowJobQueueQname(config) {
+  return qname(config.workflow_runs_schema, config.workflow_job_queue_table);
+}
+
+function workflowIncrementalStateQname(config) {
+  return qname(config.workflow_runs_schema, config.workflow_incremental_state_table);
+}
+
+function workflowDependenciesQname(config) {
+  return qname(config.workflow_runs_schema, config.workflow_dependencies_table);
+}
+
+function workflowRateLimitPoliciesQname(config) {
+  return qname(config.workflow_runs_schema, config.workflow_rate_limit_policies_table);
+}
+
+function workflowTenantPoliciesQname(config) {
+  return qname(config.workflow_runs_schema, config.workflow_tenant_policies_table);
+}
+
+function workflowRunAggregationQname(config) {
+  return qname(config.workflow_runs_schema, config.workflow_run_aggregation_table);
+}
+
+function workflowDeadJobsQname(config) {
+  return qname(config.workflow_runs_schema, config.workflow_dead_jobs_table);
+}
+
+function workflowSchedulerLeasesQname(config) {
+  return qname(config.workflow_runs_schema, config.workflow_scheduler_leases_table);
+}
+
+function workflowWorkerLeasesQname(config) {
+  return qname(config.workflow_runs_schema, config.workflow_worker_leases_table);
+}
+
+function workflowProviderRegistryQname(config) {
+  return qname(config.workflow_runs_schema, config.workflow_provider_registry_table);
+}
+
+function workflowChunkLogsQname(config) {
+  return qname(config.workflow_runs_schema, config.workflow_chunk_logs_table);
 }
 
 async function ensureWorkflowAutomationTables(client, config) {
@@ -558,6 +739,1702 @@ async function ensureWorkflowAutomationTables(client, config) {
     CREATE INDEX IF NOT EXISTS ao_workflow_run_steps_lookup_idx
     ON ${workflowRunStepsQname(config)} (run_uid, step_no)
   `);
+
+  await client.query(`
+    ALTER TABLE ${workflowProcessOverridesQname(config)}
+      ADD COLUMN IF NOT EXISTS tenant_id text NOT NULL DEFAULT 'default',
+      ADD COLUMN IF NOT EXISTS client_id text NOT NULL DEFAULT ''
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_workflow_process_overrides_tenant_idx
+    ON ${workflowProcessOverridesQname(config)} (tenant_id, desk_id, start_node_id)
+  `);
+
+  await client.query(`
+    ALTER TABLE ${workflowRunsQname(config)}
+      ADD COLUMN IF NOT EXISTS tenant_id text NOT NULL DEFAULT 'default',
+      ADD COLUMN IF NOT EXISTS client_id text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS orchestration_mode text NOT NULL DEFAULT 'queue_chunks'
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_workflow_runs_tenant_idx
+    ON ${workflowRunsQname(config)} (tenant_id, status, started_at DESC)
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ${workflowJobQueueQname(config)} (
+      job_id bigserial PRIMARY KEY,
+      tenant_id text NOT NULL DEFAULT 'default',
+      client_id text NOT NULL DEFAULT '',
+      desk_id bigint NOT NULL DEFAULT 0,
+      desk_version_id bigint NOT NULL DEFAULT 0,
+      start_node_id text NOT NULL DEFAULT '',
+      process_code text NOT NULL DEFAULT '',
+      parent_run_uid text NOT NULL DEFAULT '',
+      parent_job_id bigint NOT NULL DEFAULT 0,
+      job_type text NOT NULL DEFAULT '',
+      payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      dedupe_key text NOT NULL DEFAULT '',
+      priority integer NOT NULL DEFAULT ${JOB_DEFAULT_PRIORITY},
+      status text NOT NULL DEFAULT 'queued',
+      available_at timestamptz NOT NULL DEFAULT now(),
+      attempt_no integer NOT NULL DEFAULT 0,
+      max_attempts integer NOT NULL DEFAULT ${JOB_DEFAULT_MAX_ATTEMPTS},
+      locked_by text NOT NULL DEFAULT '',
+      locked_until timestamptz,
+      last_error text NOT NULL DEFAULT '',
+      last_response_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_workflow_job_queue_pick_idx
+    ON ${workflowJobQueueQname(config)} (status, available_at, priority, job_id)
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_workflow_job_queue_tenant_idx
+    ON ${workflowJobQueueQname(config)} (tenant_id, status, available_at)
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_workflow_job_queue_run_idx
+    ON ${workflowJobQueueQname(config)} (parent_run_uid, status, job_id)
+  `);
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS ao_workflow_job_queue_dedupe_idx
+    ON ${workflowJobQueueQname(config)} (dedupe_key)
+    WHERE dedupe_key <> '' AND status IN ('queued', 'locked', 'running')
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ${workflowIncrementalStateQname(config)} (
+      id bigserial PRIMARY KEY,
+      tenant_id text NOT NULL DEFAULT 'default',
+      desk_id bigint NOT NULL DEFAULT 0,
+      desk_version_id bigint NOT NULL DEFAULT 0,
+      start_node_id text NOT NULL DEFAULT '',
+      process_code text NOT NULL DEFAULT '',
+      state_key text NOT NULL DEFAULT 'default',
+      cursor_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      watermark_ts timestamptz,
+      last_successful_sync_at timestamptz,
+      last_attempt_at timestamptz,
+      slice_start text NOT NULL DEFAULT '',
+      slice_end text NOT NULL DEFAULT '',
+      etag text NOT NULL DEFAULT '',
+      page_marker text NOT NULL DEFAULT '',
+      sequence_value bigint NOT NULL DEFAULT 0,
+      extra_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE(tenant_id, desk_id, start_node_id, process_code, state_key)
+    )
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_workflow_incremental_state_lookup_idx
+    ON ${workflowIncrementalStateQname(config)} (tenant_id, desk_id, process_code, updated_at DESC)
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ${workflowDependenciesQname(config)} (
+      id bigserial PRIMARY KEY,
+      tenant_id text NOT NULL DEFAULT 'default',
+      desk_id bigint NOT NULL DEFAULT 0,
+      source_start_node_id text NOT NULL DEFAULT '',
+      target_start_node_id text NOT NULL DEFAULT '',
+      trigger_event_type text NOT NULL DEFAULT '',
+      trigger_status text NOT NULL DEFAULT '',
+      condition_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      dispatch_mode text NOT NULL DEFAULT 'enqueue',
+      dedupe_policy text NOT NULL DEFAULT 'event_once',
+      is_enabled boolean NOT NULL DEFAULT true,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      updated_by text NOT NULL DEFAULT 'system'
+    )
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_workflow_dependencies_source_idx
+    ON ${workflowDependenciesQname(config)} (tenant_id, desk_id, source_start_node_id, is_enabled)
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ${workflowRateLimitPoliciesQname(config)} (
+      id bigserial PRIMARY KEY,
+      tenant_id text NOT NULL DEFAULT '*',
+      provider_code text NOT NULL DEFAULT '*',
+      endpoint_code text NOT NULL DEFAULT '*',
+      max_rps numeric NOT NULL DEFAULT 0,
+      max_parallel_jobs integer NOT NULL DEFAULT 0,
+      burst_limit integer NOT NULL DEFAULT 0,
+      cooldown_ms integer NOT NULL DEFAULT 0,
+      retry_policy_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      is_enabled boolean NOT NULL DEFAULT true,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE(tenant_id, provider_code, endpoint_code)
+    )
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ${workflowTenantPoliciesQname(config)} (
+      tenant_id text PRIMARY KEY,
+      max_parallel_runs integer NOT NULL DEFAULT ${MAX_PARALLEL_RUNS},
+      max_parallel_jobs integer NOT NULL DEFAULT ${MAX_PARALLEL_RUNS * 4},
+      max_queue_depth integer NOT NULL DEFAULT 50000,
+      default_priority integer NOT NULL DEFAULT ${JOB_DEFAULT_PRIORITY},
+      weight integer NOT NULL DEFAULT 1,
+      is_enabled boolean NOT NULL DEFAULT true,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ${workflowRunAggregationQname(config)} (
+      run_uid text PRIMARY KEY,
+      tenant_id text NOT NULL DEFAULT 'default',
+      desk_id bigint NOT NULL DEFAULT 0,
+      desk_version_id bigint NOT NULL DEFAULT 0,
+      start_node_id text NOT NULL DEFAULT '',
+      process_code text NOT NULL DEFAULT '',
+      total_jobs integer NOT NULL DEFAULT 0,
+      queued_jobs integer NOT NULL DEFAULT 0,
+      running_jobs integer NOT NULL DEFAULT 0,
+      completed_jobs integer NOT NULL DEFAULT 0,
+      failed_jobs integer NOT NULL DEFAULT 0,
+      dead_letter_jobs integer NOT NULL DEFAULT 0,
+      skipped_jobs integer NOT NULL DEFAULT 0,
+      progress_percent numeric NOT NULL DEFAULT 0,
+      final_status text NOT NULL DEFAULT 'running',
+      last_job_at timestamptz,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_workflow_run_aggregation_lookup_idx
+    ON ${workflowRunAggregationQname(config)} (tenant_id, desk_id, final_status, updated_at DESC)
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ${workflowDeadJobsQname(config)} (
+      id bigserial PRIMARY KEY,
+      job_id bigint NOT NULL,
+      run_uid text NOT NULL DEFAULT '',
+      tenant_id text NOT NULL DEFAULT 'default',
+      desk_id bigint NOT NULL DEFAULT 0,
+      desk_version_id bigint NOT NULL DEFAULT 0,
+      start_node_id text NOT NULL DEFAULT '',
+      process_code text NOT NULL DEFAULT '',
+      job_type text NOT NULL DEFAULT '',
+      dedupe_key text NOT NULL DEFAULT '',
+      payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      attempt_no integer NOT NULL DEFAULT 0,
+      max_attempts integer NOT NULL DEFAULT 0,
+      error_text text NOT NULL DEFAULT '',
+      failed_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_workflow_dead_jobs_lookup_idx
+    ON ${workflowDeadJobsQname(config)} (tenant_id, desk_id, failed_at DESC)
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ${workflowSchedulerLeasesQname(config)} (
+      lease_key text PRIMARY KEY,
+      owner_id text NOT NULL DEFAULT '',
+      locked_at timestamptz NOT NULL DEFAULT now(),
+      locked_until timestamptz NOT NULL DEFAULT now(),
+      meta_json jsonb NOT NULL DEFAULT '{}'::jsonb
+    )
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ${workflowWorkerLeasesQname(config)} (
+      worker_id text PRIMARY KEY,
+      owner_id text NOT NULL DEFAULT '',
+      tenant_id text NOT NULL DEFAULT 'default',
+      status text NOT NULL DEFAULT 'idle',
+      heartbeat_at timestamptz NOT NULL DEFAULT now(),
+      lease_until timestamptz NOT NULL DEFAULT now(),
+      active_jobs integer NOT NULL DEFAULT 0,
+      meta_json jsonb NOT NULL DEFAULT '{}'::jsonb
+    )
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_workflow_worker_leases_lookup_idx
+    ON ${workflowWorkerLeasesQname(config)} (status, lease_until, heartbeat_at DESC)
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ${workflowProviderRegistryQname(config)} (
+      id bigserial PRIMARY KEY,
+      provider_code text NOT NULL DEFAULT '',
+      endpoint_code text NOT NULL DEFAULT '',
+      base_url text NOT NULL DEFAULT '',
+      endpoint_path text NOT NULL DEFAULT '',
+      source_type text NOT NULL DEFAULT 'http',
+      auth_mode text NOT NULL DEFAULT '',
+      metadata_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      is_enabled boolean NOT NULL DEFAULT true,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE(provider_code, endpoint_code)
+    )
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ${workflowChunkLogsQname(config)} (
+      id bigserial PRIMARY KEY,
+      job_id bigint NOT NULL DEFAULT 0,
+      run_uid text NOT NULL DEFAULT '',
+      tenant_id text NOT NULL DEFAULT 'default',
+      desk_id bigint NOT NULL DEFAULT 0,
+      desk_version_id bigint NOT NULL DEFAULT 0,
+      start_node_id text NOT NULL DEFAULT '',
+      process_code text NOT NULL DEFAULT '',
+      provider_code text NOT NULL DEFAULT '',
+      endpoint_code text NOT NULL DEFAULT '',
+      chunk_key text NOT NULL DEFAULT '',
+      chunk_no integer NOT NULL DEFAULT 1,
+      status text NOT NULL DEFAULT 'ok',
+      started_at timestamptz NOT NULL DEFAULT now(),
+      finished_at timestamptz NOT NULL DEFAULT now(),
+      duration_ms integer NOT NULL DEFAULT 0,
+      input_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      output_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      metrics_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      error_text text NOT NULL DEFAULT ''
+    )
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_workflow_chunk_logs_lookup_idx
+    ON ${workflowChunkLogsQname(config)} (tenant_id, run_uid, started_at DESC)
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_workflow_chunk_logs_rate_idx
+    ON ${workflowChunkLogsQname(config)} (tenant_id, provider_code, endpoint_code, finished_at DESC)
+  `);
+}
+
+function parseJsonb(v, fallback = {}) {
+  if (v && typeof v === 'object') return v;
+  if (typeof v !== 'string') return fallback;
+  try {
+    const parsed = JSON.parse(v);
+    return parsed && typeof parsed === 'object' ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function isTerminalRunStatus(statusRaw) {
+  const s = String(statusRaw || '').trim().toLowerCase();
+  return s === 'completed' || s === 'completed_with_errors' || s === 'failed' || s === 'cancelled' || s === 'skipped';
+}
+
+async function upsertSchedulerLease(client, config, patch = {}) {
+  const qn = workflowSchedulerLeasesQname(config);
+  const ttlMs = Math.max(5_000, Number(patch?.ttl_ms || schedulerState.tickMs * 3 || 30_000));
+  await client.query(
+    `
+    INSERT INTO ${qn} (lease_key, owner_id, locked_at, locked_until, meta_json)
+    VALUES ('main_scheduler', $1, now(), now() + ($2 || ' milliseconds')::interval, $3::jsonb)
+    ON CONFLICT (lease_key) DO UPDATE
+    SET owner_id = EXCLUDED.owner_id,
+        locked_at = EXCLUDED.locked_at,
+        locked_until = EXCLUDED.locked_until,
+        meta_json = EXCLUDED.meta_json
+    `,
+    [String(patch?.owner_id || SCHEDULER_ID).trim(), String(ttlMs), stableJsonString(patch?.meta_json || {})]
+  );
+}
+
+async function upsertWorkerLease(client, config, patch = {}) {
+  const qn = workflowWorkerLeasesQname(config);
+  const ttlMs = Math.max(5_000, Number(patch?.ttl_ms || schedulerState.tickMs * 3 || 30_000));
+  await client.query(
+    `
+    INSERT INTO ${qn}
+      (worker_id, owner_id, tenant_id, status, heartbeat_at, lease_until, active_jobs, meta_json)
+    VALUES
+      ($1, $2, $3, $4, now(), now() + ($5 || ' milliseconds')::interval, $6, $7::jsonb)
+    ON CONFLICT (worker_id) DO UPDATE
+    SET owner_id = EXCLUDED.owner_id,
+        tenant_id = EXCLUDED.tenant_id,
+        status = EXCLUDED.status,
+        heartbeat_at = EXCLUDED.heartbeat_at,
+        lease_until = EXCLUDED.lease_until,
+        active_jobs = EXCLUDED.active_jobs,
+        meta_json = EXCLUDED.meta_json
+    `,
+    [
+      String(patch?.worker_id || WORKER_ID).trim(),
+      String(patch?.owner_id || WORKER_ID).trim(),
+      String(patch?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+      String(patch?.status || 'running').trim(),
+      String(ttlMs),
+      Math.max(0, Math.trunc(Number(patch?.active_jobs || 0))),
+      stableJsonString(patch?.meta_json || {})
+    ]
+  );
+}
+
+async function upsertRunAggregationRow(client, config, payload = {}) {
+  const qn = workflowRunAggregationQname(config);
+  await client.query(
+    `
+    INSERT INTO ${qn}
+      (run_uid, tenant_id, desk_id, desk_version_id, start_node_id, process_code, final_status, updated_at)
+    VALUES
+      ($1, $2, $3, $4, $5, $6, 'running', now())
+    ON CONFLICT (run_uid) DO UPDATE
+    SET tenant_id = EXCLUDED.tenant_id,
+        desk_id = EXCLUDED.desk_id,
+        desk_version_id = EXCLUDED.desk_version_id,
+        start_node_id = EXCLUDED.start_node_id,
+        process_code = EXCLUDED.process_code,
+        updated_at = now()
+    `,
+    [
+      String(payload?.run_uid || '').trim(),
+      String(payload?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+      Math.trunc(Number(payload?.desk_id || 0)),
+      Math.trunc(Number(payload?.desk_version_id || 0)),
+      String(payload?.start_node_id || '').trim(),
+      String(payload?.process_code || '').trim()
+    ]
+  );
+}
+
+async function recomputeRunAggregation(client, config, runUid) {
+  const queueQn = workflowJobQueueQname(config);
+  const aggQn = workflowRunAggregationQname(config);
+  const runQn = workflowRunsQname(config);
+  const runId = String(runUid || '').trim();
+  if (!runId) return null;
+
+  const countRes = await client.query(
+    `
+    SELECT
+      COUNT(*)::int AS total_jobs,
+      COUNT(*) FILTER (WHERE status = 'queued')::int AS queued_jobs,
+      COUNT(*) FILTER (WHERE status IN ('locked', 'running'))::int AS running_jobs,
+      COUNT(*) FILTER (WHERE status = 'completed')::int AS completed_jobs,
+      COUNT(*) FILTER (WHERE status = 'failed')::int AS failed_jobs,
+      COUNT(*) FILTER (WHERE status = 'dead_letter')::int AS dead_letter_jobs,
+      COUNT(*) FILTER (WHERE status = 'cancelled')::int AS skipped_jobs
+    FROM ${queueQn}
+    WHERE parent_run_uid = $1
+    `,
+    [runId]
+  );
+  const c = countRes.rows?.[0] || {};
+  const totalJobs = Math.max(0, Number(c.total_jobs || 0));
+  const queuedJobs = Math.max(0, Number(c.queued_jobs || 0));
+  const runningJobs = Math.max(0, Number(c.running_jobs || 0));
+  const completedJobs = Math.max(0, Number(c.completed_jobs || 0));
+  const failedJobs = Math.max(0, Number(c.failed_jobs || 0));
+  const deadJobs = Math.max(0, Number(c.dead_letter_jobs || 0));
+  const skippedJobs = Math.max(0, Number(c.skipped_jobs || 0));
+  const doneJobs = completedJobs + failedJobs + deadJobs + skippedJobs;
+  const progressPercent = totalJobs > 0 ? Math.min(100, (doneJobs / totalJobs) * 100) : 0;
+
+  let finalStatus = 'running';
+  if (totalJobs > 0 && queuedJobs === 0 && runningJobs === 0) {
+    if (deadJobs > 0 || failedJobs > 0) finalStatus = 'failed';
+    else finalStatus = 'completed';
+  }
+
+  await client.query(
+    `
+    UPDATE ${aggQn}
+    SET
+      total_jobs = $2,
+      queued_jobs = $3,
+      running_jobs = $4,
+      completed_jobs = $5,
+      failed_jobs = $6,
+      dead_letter_jobs = $7,
+      skipped_jobs = $8,
+      progress_percent = $9,
+      final_status = $10,
+      last_job_at = now(),
+      updated_at = now()
+    WHERE run_uid = $1
+    `,
+    [runId, totalJobs, queuedJobs, runningJobs, completedJobs, failedJobs, deadJobs, skippedJobs, progressPercent, finalStatus]
+  );
+
+  if (finalStatus !== 'running') {
+    const runRes = await client.query(
+      `
+      SELECT status
+      FROM ${runQn}
+      WHERE run_uid = $1
+      LIMIT 1
+      `,
+      [runId]
+    );
+    const currentStatus = String(runRes.rows?.[0]?.status || '').trim();
+    if (!isTerminalRunStatus(currentStatus)) {
+      const summary = {
+        total_jobs: totalJobs,
+        completed_jobs: completedJobs,
+        failed_jobs: failedJobs,
+        dead_letter_jobs: deadJobs,
+        skipped_jobs: skippedJobs,
+        progress_percent: progressPercent
+      };
+      await updateRunRow(client, config, runId, {
+        status: finalStatus === 'completed' ? 'completed' : 'failed',
+        finished_at: new Date().toISOString(),
+        duration_ms: 0,
+        summary_json: summary,
+        error_text: finalStatus === 'completed' ? '' : 'chunk_jobs_failed'
+      });
+    }
+  }
+
+  return {
+    run_uid: runId,
+    total_jobs: totalJobs,
+    queued_jobs: queuedJobs,
+    running_jobs: runningJobs,
+    completed_jobs: completedJobs,
+    failed_jobs: failedJobs,
+    dead_letter_jobs: deadJobs,
+    skipped_jobs: skippedJobs,
+    progress_percent: progressPercent,
+    final_status: finalStatus
+  };
+}
+
+async function enqueueWorkflowJob(client, config, job = {}) {
+  const qn = workflowJobQueueQname(config);
+  const dedupeKey = String(job?.dedupe_key || '').trim();
+  const r = await client.query(
+    `
+    INSERT INTO ${qn}
+      (
+        tenant_id,
+        client_id,
+        desk_id,
+        desk_version_id,
+        start_node_id,
+        process_code,
+        parent_run_uid,
+        parent_job_id,
+        job_type,
+        payload_json,
+        dedupe_key,
+        priority,
+        status,
+        available_at,
+        attempt_no,
+        max_attempts,
+        locked_by,
+        locked_until,
+        last_error,
+        last_response_json,
+        created_at,
+        updated_at
+      )
+    VALUES
+      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, 'queued', COALESCE($13::timestamptz, now()), 0, $14, '', null, '', '{}'::jsonb, now(), now())
+    ON CONFLICT (dedupe_key) WHERE dedupe_key <> '' AND status IN ('queued', 'locked', 'running')
+    DO NOTHING
+    RETURNING job_id
+    `,
+    [
+      String(job?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+      String(job?.client_id || '').trim(),
+      Math.trunc(Number(job?.desk_id || 0)),
+      Math.trunc(Number(job?.desk_version_id || 0)),
+      String(job?.start_node_id || '').trim(),
+      String(job?.process_code || '').trim(),
+      String(job?.parent_run_uid || '').trim(),
+      Math.trunc(Number(job?.parent_job_id || 0)),
+      String(job?.job_type || '').trim(),
+      stableJsonString(job?.payload_json || {}),
+      dedupeKey,
+      Math.max(1, Math.trunc(Number(job?.priority || JOB_DEFAULT_PRIORITY))),
+      job?.available_at ? String(job.available_at) : null,
+      Math.max(1, Math.trunc(Number(job?.max_attempts || JOB_DEFAULT_MAX_ATTEMPTS)))
+    ]
+  );
+  return Number(r.rows?.[0]?.job_id || 0);
+}
+
+async function claimWorkflowJobs(client, config, limit = JOB_CLAIM_BATCH) {
+  const qn = workflowJobQueueQname(config);
+  const r = await client.query(
+    `
+    WITH pick AS (
+      SELECT job_id
+      FROM ${qn}
+      WHERE status = 'queued'
+        AND available_at <= now()
+      ORDER BY priority ASC, available_at ASC, job_id ASC
+      LIMIT $1
+      FOR UPDATE SKIP LOCKED
+    )
+    UPDATE ${qn} q
+    SET
+      status = 'running',
+      locked_by = $2,
+      locked_until = now() + ($3 || ' milliseconds')::interval,
+      attempt_no = q.attempt_no + 1,
+      updated_at = now()
+    FROM pick
+    WHERE q.job_id = pick.job_id
+    RETURNING q.*
+    `,
+    [Math.max(1, Math.min(500, Math.trunc(Number(limit || JOB_CLAIM_BATCH)))), WORKER_ID, String(JOB_LOCK_TTL_MS)]
+  );
+  return Array.isArray(r.rows) ? r.rows : [];
+}
+
+async function completeWorkflowJob(client, config, jobId, response = {}) {
+  const qn = workflowJobQueueQname(config);
+  await client.query(
+    `
+    UPDATE ${qn}
+    SET
+      status = 'completed',
+      locked_until = now(),
+      last_response_json = $2::jsonb,
+      updated_at = now()
+    WHERE job_id = $1
+    `,
+    [Math.trunc(Number(jobId || 0)), stableJsonString(response || {})]
+  );
+}
+
+async function requeueWorkflowJob(client, config, jobId, patch = {}) {
+  const qn = workflowJobQueueQname(config);
+  const preserveAttempt = Boolean(patch?.preserve_attempt);
+  await client.query(
+    `
+    UPDATE ${qn}
+    SET
+      status = 'queued',
+      available_at = COALESCE($2::timestamptz, now()),
+      locked_until = null,
+      last_error = $3,
+      attempt_no = CASE WHEN $4 THEN GREATEST(0, attempt_no - 1) ELSE attempt_no END,
+      updated_at = now()
+    WHERE job_id = $1
+    `,
+    [
+      Math.trunc(Number(jobId || 0)),
+      patch?.available_at ? String(patch.available_at) : null,
+      String(patch?.error_text || '').trim(),
+      preserveAttempt
+    ]
+  );
+}
+
+async function failWorkflowJob(client, config, job, errorText = '') {
+  const qn = workflowJobQueueQname(config);
+  const deadQn = workflowDeadJobsQname(config);
+  const jobId = Math.trunc(Number(job?.job_id || 0));
+  const attempts = Math.trunc(Number(job?.attempt_no || 0));
+  const maxAttempts = Math.max(1, Math.trunc(Number(job?.max_attempts || JOB_DEFAULT_MAX_ATTEMPTS)));
+  if (!jobId) return;
+  if (attempts < maxAttempts) {
+    const backoffMs = Math.min(60_000, retryDelayMs(attempts, RETRY_BASE_MS, RETRY_MAX_MS));
+    const availableAt = new Date(Date.now() + backoffMs).toISOString();
+    await requeueWorkflowJob(client, config, jobId, { available_at: availableAt, error_text: errorText, preserve_attempt: false });
+    return;
+  }
+  await client.query(
+    `
+    UPDATE ${qn}
+    SET
+      status = 'dead_letter',
+      locked_until = now(),
+      last_error = $2,
+      updated_at = now()
+    WHERE job_id = $1
+    `,
+    [jobId, String(errorText || '').trim()]
+  );
+  await client.query(
+    `
+    INSERT INTO ${deadQn}
+      (job_id, run_uid, tenant_id, desk_id, desk_version_id, start_node_id, process_code, job_type, dedupe_key, payload_json, attempt_no, max_attempts, error_text, failed_at)
+    VALUES
+      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, now())
+    `,
+    [
+      jobId,
+      String(job?.parent_run_uid || '').trim(),
+      String(job?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+      Math.trunc(Number(job?.desk_id || 0)),
+      Math.trunc(Number(job?.desk_version_id || 0)),
+      String(job?.start_node_id || '').trim(),
+      String(job?.process_code || '').trim(),
+      String(job?.job_type || '').trim(),
+      String(job?.dedupe_key || '').trim(),
+      stableJsonString(job?.payload_json || {}),
+      attempts,
+      maxAttempts,
+      String(errorText || '').trim()
+    ]
+  );
+}
+
+async function emitWorkflowEvent(client, config, payload = {}) {
+  const eventType = String(payload?.event_type || '').trim().toLowerCase();
+  if (!eventType) return 0;
+  const busId = await writeBusMessage(client, config, {
+    desk_id: Math.trunc(Number(payload?.desk_id || 0)),
+    run_uid: String(payload?.run_uid || '').trim(),
+    process_code: String(payload?.process_code || '').trim(),
+    channel: 'workflow_event',
+    payload_json: {
+      event_type: eventType,
+      source_run_uid: String(payload?.source_run_uid || payload?.run_uid || '').trim(),
+      tenant_id: String(payload?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+      client_id: String(payload?.client_id || '').trim(),
+      desk_id: Math.trunc(Number(payload?.desk_id || 0)),
+      desk_version_id: Math.trunc(Number(payload?.desk_version_id || 0)),
+      start_node_id: String(payload?.start_node_id || '').trim(),
+      process_code: String(payload?.process_code || '').trim(),
+      status: String(payload?.status || '').trim(),
+      trigger_type: String(payload?.trigger_type || '').trim(),
+      chunk_key: String(payload?.chunk_key || '').trim(),
+      chunk_no: Math.max(1, Math.trunc(Number(payload?.chunk_no || 1))),
+      all_chunks_done: Boolean(payload?.all_chunks_done),
+      metrics: payload?.metrics || {},
+      payload: payload?.payload || {},
+      created_at: new Date().toISOString()
+    }
+  });
+  return busId;
+}
+
+async function claimWorkflowEvents(client, config, limit = 100) {
+  const qn = workflowProcessBusQname(config);
+  const r = await client.query(
+    `
+    WITH pick AS (
+      SELECT id
+      FROM ${qn}
+      WHERE status = 'new'
+        AND channel = 'workflow_event'
+      ORDER BY id ASC
+      LIMIT $1
+      FOR UPDATE SKIP LOCKED
+    )
+    UPDATE ${qn} b
+    SET status = 'processing',
+        consumed_by = $2,
+        consumed_at = now()
+    FROM pick
+    WHERE b.id = pick.id
+    RETURNING b.id, b.desk_id, b.run_uid, b.process_code, b.payload_json, b.created_at
+    `,
+    [Math.max(1, Math.min(1000, Math.trunc(Number(limit || 100)))), WORKER_ID]
+  );
+  return Array.isArray(r.rows) ? r.rows : [];
+}
+
+async function finishWorkflowEvent(client, config, eventId, status = 'consumed') {
+  const qn = workflowProcessBusQname(config);
+  await client.query(
+    `
+    UPDATE ${qn}
+    SET status = $2,
+        consumed_at = now(),
+        consumed_by = $3
+    WHERE id = $1
+    `,
+    [Math.trunc(Number(eventId || 0)), String(status || 'consumed').trim(), WORKER_ID]
+  );
+}
+
+async function listDependencyRulesForEvent(client, config, eventPayload = {}) {
+  const qn = workflowDependenciesQname(config);
+  const sourceStartNodeId = String(eventPayload?.start_node_id || '').trim();
+  const eventType = String(eventPayload?.event_type || '').trim().toLowerCase();
+  if (!sourceStartNodeId || !eventType) return [];
+  const r = await client.query(
+    `
+    SELECT
+      id,
+      tenant_id,
+      desk_id,
+      source_start_node_id,
+      target_start_node_id,
+      trigger_event_type,
+      trigger_status,
+      condition_json,
+      dispatch_mode,
+      dedupe_policy,
+      is_enabled
+    FROM ${qn}
+    WHERE is_enabled = true
+      AND source_start_node_id = $1
+      AND trigger_event_type = $2
+      AND (tenant_id = $3 OR tenant_id = '*' OR tenant_id = '')
+      AND (desk_id = 0 OR desk_id = $4)
+    ORDER BY id ASC
+    `,
+    [
+      sourceStartNodeId,
+      eventType,
+      String(eventPayload?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+      Math.trunc(Number(eventPayload?.desk_id || 0))
+    ]
+  );
+  return Array.isArray(r.rows) ? r.rows : [];
+}
+
+async function isTargetProcessBusy(client, config, tenantId, deskId, targetStartNodeId) {
+  const qn = workflowRunsQname(config);
+  const r = await client.query(
+    `
+    SELECT 1
+    FROM ${qn}
+    WHERE tenant_id = $1
+      AND desk_id = $2
+      AND start_node_id = $3
+      AND status IN ('queued', 'running')
+    LIMIT 1
+    `,
+    [String(tenantId || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID, Math.trunc(Number(deskId || 0)), String(targetStartNodeId || '').trim()]
+  );
+  return Boolean(r.rows?.length);
+}
+
+function dependencyShouldDispatch(rule, eventPayload = {}) {
+  const eventType = String(eventPayload?.event_type || '').trim().toLowerCase();
+  const eventStatus = String(eventPayload?.status || '').trim().toLowerCase();
+  const ruleStatus = String(rule?.trigger_status || '').trim().toLowerCase();
+  if (ruleStatus && eventStatus && ruleStatus !== eventStatus) return false;
+
+  const mode = dependencyDispatchMode(rule?.dispatch_mode);
+  if (mode === 'once_after_all_chunks') {
+    if (eventType !== 'process_completed') return false;
+    if (!Boolean(eventPayload?.all_chunks_done)) return false;
+  }
+  if (mode === 'for_each_chunk') {
+    if (eventType !== 'chunk_completed' && eventType !== 'chunk_failed') return false;
+  }
+  return true;
+}
+
+function buildDependencyDispatchDedupeKey(rule, eventPayload = {}) {
+  const mode = dependencyDispatchMode(rule?.dispatch_mode);
+  const dedupeMode = dependencyDedupeMode(rule?.dedupe_policy);
+  const sourceRunUid = String(eventPayload?.source_run_uid || eventPayload?.run_uid || '').trim();
+  const ruleId = Math.trunc(Number(rule?.id || 0));
+  const targetStartNodeId = String(rule?.target_start_node_id || '').trim();
+  const chunkKey = String(eventPayload?.chunk_key || '').trim();
+  let key = `dep:${ruleId}:${sourceRunUid}:${targetStartNodeId}:${mode}`;
+  if (mode === 'for_each_chunk') {
+    key += `:${chunkKey || Math.trunc(Number(eventPayload?.chunk_no || 1))}`;
+  }
+  if (dedupeMode === 'deduplicate_by_payload') {
+    key += `:${sha1(stableJsonString(eventPayload?.payload || {}))}`;
+  }
+  return key;
+}
+
+async function enqueueDependencyDispatchJobs(client, config, eventPayload = {}) {
+  const rules = await listDependencyRulesForEvent(client, config, eventPayload);
+  let enqueued = 0;
+  for (const rule of rules) {
+    if (!dependencyShouldDispatch(rule, eventPayload)) continue;
+
+    const tenantId = String(rule?.tenant_id || eventPayload?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID;
+    const deskId = Math.trunc(Number(rule?.desk_id || eventPayload?.desk_id || 0));
+    const targetStartNodeId = String(rule?.target_start_node_id || '').trim();
+    if (!deskId || !targetStartNodeId) continue;
+    const tenantPolicy = await loadTenantExecutionPolicy(client, config, tenantId);
+    if (!tenantPolicy.is_enabled) continue;
+    const queueDepth = await countTenantQueueDepth(client, config, tenantId);
+    if (queueDepth >= tenantPolicy.max_queue_depth) continue;
+
+    const dedupeMode = dependencyDedupeMode(rule?.dedupe_policy);
+    if (dedupeMode === 'skip_if_target_running') {
+      const busy = await isTargetProcessBusy(client, config, tenantId, deskId, targetStartNodeId);
+      if (busy) continue;
+    }
+
+    const dedupeKey = buildDependencyDispatchDedupeKey(rule, eventPayload);
+    const jobId = await enqueueWorkflowJob(client, config, {
+      tenant_id: tenantId,
+      client_id: String(eventPayload?.client_id || '').trim(),
+      desk_id: deskId,
+      desk_version_id: Math.trunc(Number(eventPayload?.desk_version_id || 0)),
+      start_node_id: targetStartNodeId,
+      process_code: String(eventPayload?.process_code || '').trim(),
+      parent_run_uid: String(eventPayload?.source_run_uid || eventPayload?.run_uid || '').trim(),
+      parent_job_id: 0,
+      job_type: 'dependency_dispatch',
+      payload_json: {
+        dependency_rule_id: Math.trunc(Number(rule?.id || 0)),
+        source_event: eventPayload,
+        target_start_node_id: targetStartNodeId,
+        dispatch_mode: dependencyDispatchMode(rule?.dispatch_mode),
+        dedupe_policy: dedupeMode
+      },
+      dedupe_key: dedupeKey,
+      priority: Math.max(1, JOB_DEFAULT_PRIORITY - 20),
+      max_attempts: JOB_DEFAULT_MAX_ATTEMPTS
+    });
+    if (jobId > 0) {
+      enqueued += 1;
+      await emitWorkflowEvent(client, config, {
+        event_type: 'chunk_enqueued',
+        tenant_id: tenantId,
+        desk_id: deskId,
+        start_node_id: targetStartNodeId,
+        process_code: `dependency:${Math.trunc(Number(rule?.id || 0))}`,
+        run_uid: String(eventPayload?.source_run_uid || eventPayload?.run_uid || '').trim(),
+        source_run_uid: String(eventPayload?.source_run_uid || eventPayload?.run_uid || '').trim(),
+        payload: {
+          dependency_rule_id: Math.trunc(Number(rule?.id || 0)),
+          dispatch_job_id: jobId,
+          dispatch_mode: dependencyDispatchMode(rule?.dispatch_mode),
+          dedupe_policy: dedupeMode
+        }
+      });
+    }
+    if (enqueued >= 1000) break;
+  }
+  return enqueued;
+}
+
+async function processDependencyEvents(client, config) {
+  const events = await claimWorkflowEvents(client, config, 100);
+  if (!events.length) return 0;
+  let processed = 0;
+  for (const eventRow of events) {
+    const payload = parseJsonb(eventRow?.payload_json, {});
+    try {
+      await enqueueDependencyDispatchJobs(client, config, payload);
+      await finishWorkflowEvent(client, config, Number(eventRow?.id || 0), 'consumed');
+      processed += 1;
+    } catch (e) {
+      await finishWorkflowEvent(client, config, Number(eventRow?.id || 0), 'new');
+      schedulerState.workerLastError = String(e?.message || e || 'dependency_event_failed');
+    }
+  }
+  return processed;
+}
+
+async function loadTenantExecutionPolicy(client, config, tenantId) {
+  const qn = workflowTenantPoliciesQname(config);
+  const tenant = String(tenantId || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID;
+  const r = await client.query(
+    `
+    SELECT tenant_id, max_parallel_runs, max_parallel_jobs, max_queue_depth, default_priority, weight, is_enabled
+    FROM ${qn}
+    WHERE tenant_id = $1
+    LIMIT 1
+    `,
+    [tenant]
+  );
+  const row = r.rows?.[0];
+  if (!row) {
+    return {
+      tenant_id: tenant,
+      max_parallel_runs: MAX_PARALLEL_RUNS,
+      max_parallel_jobs: MAX_PARALLEL_RUNS * 4,
+      max_queue_depth: 50_000,
+      default_priority: JOB_DEFAULT_PRIORITY,
+      weight: 1,
+      is_enabled: true
+    };
+  }
+  return {
+    tenant_id: String(row.tenant_id || tenant).trim() || tenant,
+    max_parallel_runs: Math.max(1, Math.trunc(Number(row.max_parallel_runs || MAX_PARALLEL_RUNS))),
+    max_parallel_jobs: Math.max(1, Math.trunc(Number(row.max_parallel_jobs || MAX_PARALLEL_RUNS * 4))),
+    max_queue_depth: Math.max(1, Math.trunc(Number(row.max_queue_depth || 50_000))),
+    default_priority: Math.max(1, Math.trunc(Number(row.default_priority || JOB_DEFAULT_PRIORITY))),
+    weight: Math.max(1, Math.trunc(Number(row.weight || 1))),
+    is_enabled: Boolean(row.is_enabled)
+  };
+}
+
+async function countTenantRunningJobs(client, config, tenantId) {
+  const qn = workflowJobQueueQname(config);
+  const r = await client.query(
+    `
+    SELECT COUNT(*)::int AS c
+    FROM ${qn}
+    WHERE tenant_id = $1
+      AND status IN ('locked', 'running')
+    `,
+    [String(tenantId || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID]
+  );
+  return Math.max(0, Number(r.rows?.[0]?.c || 0));
+}
+
+async function countTenantQueueDepth(client, config, tenantId) {
+  const qn = workflowJobQueueQname(config);
+  const r = await client.query(
+    `
+    SELECT COUNT(*)::int AS c
+    FROM ${qn}
+    WHERE tenant_id = $1
+      AND status IN ('queued', 'locked', 'running')
+    `,
+    [String(tenantId || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID]
+  );
+  return Math.max(0, Number(r.rows?.[0]?.c || 0));
+}
+
+async function loadRateLimitPolicy(client, config, tenantId, providerCode, endpointCode) {
+  const qn = workflowRateLimitPoliciesQname(config);
+  const tenant = String(tenantId || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID;
+  const provider = String(providerCode || '*').trim() || '*';
+  const endpoint = String(endpointCode || '*').trim() || '*';
+  const r = await client.query(
+    `
+    SELECT tenant_id, provider_code, endpoint_code, max_rps, max_parallel_jobs, burst_limit, cooldown_ms, retry_policy_json
+    FROM ${qn}
+    WHERE is_enabled = true
+      AND tenant_id IN ($1, '*')
+      AND provider_code IN ($2, '*')
+      AND endpoint_code IN ($3, '*')
+    ORDER BY
+      CASE WHEN tenant_id = $1 THEN 0 ELSE 1 END,
+      CASE WHEN provider_code = $2 THEN 0 ELSE 1 END,
+      CASE WHEN endpoint_code = $3 THEN 0 ELSE 1 END,
+      id ASC
+    LIMIT 1
+    `,
+    [tenant, provider, endpoint]
+  );
+  const row = r.rows?.[0];
+  if (!row) {
+    return {
+      tenant_id: tenant,
+      provider_code: provider,
+      endpoint_code: endpoint,
+      max_rps: 0,
+      max_parallel_jobs: 0,
+      burst_limit: 0,
+      cooldown_ms: 0,
+      retry_policy_json: {}
+    };
+  }
+  return {
+    tenant_id: String(row.tenant_id || tenant).trim() || tenant,
+    provider_code: String(row.provider_code || provider).trim() || provider,
+    endpoint_code: String(row.endpoint_code || endpoint).trim() || endpoint,
+    max_rps: Number(row.max_rps || 0),
+    max_parallel_jobs: Math.max(0, Math.trunc(Number(row.max_parallel_jobs || 0))),
+    burst_limit: Math.max(0, Math.trunc(Number(row.burst_limit || 0))),
+    cooldown_ms: Math.max(0, Math.trunc(Number(row.cooldown_ms || 0))),
+    retry_policy_json: parseJsonb(row.retry_policy_json, {})
+  };
+}
+
+function providerEndpointFromTemplate(template) {
+  const urlRaw = String(template?.url || '').trim();
+  let provider = String(template?.provider_code || '').trim();
+  let endpoint = String(template?.endpoint_code || '').trim();
+  if (urlRaw) {
+    try {
+      const u = new URL(urlRaw);
+      if (!provider) provider = String(u.hostname || '').trim().toLowerCase();
+      if (!endpoint) endpoint = String(u.pathname || '').trim().toLowerCase();
+    } catch {
+      // ignore invalid url
+    }
+  }
+  if (!provider) provider = 'generic_http';
+  if (!endpoint) endpoint = String(template?.name || template?.id || 'default_endpoint').trim().toLowerCase();
+  return { provider_code: provider, endpoint_code: endpoint };
+}
+
+async function upsertProviderRegistry(client, config, template, providerCode, endpointCode) {
+  const qn = workflowProviderRegistryQname(config);
+  const urlRaw = String(template?.url || '').trim();
+  let baseUrl = '';
+  let endpointPath = '';
+  if (urlRaw) {
+    try {
+      const u = new URL(urlRaw);
+      baseUrl = `${u.protocol}//${u.host}`;
+      endpointPath = String(u.pathname || '').trim();
+    } catch {
+      // ignore invalid url
+    }
+  }
+  await client.query(
+    `
+    INSERT INTO ${qn}
+      (provider_code, endpoint_code, base_url, endpoint_path, source_type, auth_mode, metadata_json, is_enabled, updated_at)
+    VALUES
+      ($1, $2, $3, $4, 'http', $5, $6::jsonb, true, now())
+    ON CONFLICT (provider_code, endpoint_code) DO UPDATE
+    SET
+      base_url = EXCLUDED.base_url,
+      endpoint_path = EXCLUDED.endpoint_path,
+      auth_mode = EXCLUDED.auth_mode,
+      metadata_json = EXCLUDED.metadata_json,
+      updated_at = now()
+    `,
+    [
+      String(providerCode || 'generic_http').trim(),
+      String(endpointCode || 'default_endpoint').trim(),
+      baseUrl,
+      endpointPath,
+      String(template?.auth_mode || '').trim(),
+      stableJsonString({
+        method: String(template?.method || '').trim(),
+        source_id: Number(template?.id || 0) || undefined,
+        source_name: String(template?.name || '').trim()
+      })
+    ]
+  );
+}
+
+async function getLatestChunkLogTs(client, config, tenantId, providerCode, endpointCode) {
+  const qn = workflowChunkLogsQname(config);
+  const r = await client.query(
+    `
+    SELECT finished_at
+    FROM ${qn}
+    WHERE tenant_id = $1
+      AND provider_code = $2
+      AND endpoint_code = $3
+    ORDER BY finished_at DESC
+    LIMIT 1
+    `,
+    [String(tenantId || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID, String(providerCode || '').trim(), String(endpointCode || '').trim()]
+  );
+  return r.rows?.[0]?.finished_at || null;
+}
+
+async function getRunningEndpointJobs(client, config, tenantId, providerCode, endpointCode) {
+  const qn = workflowJobQueueQname(config);
+  const r = await client.query(
+    `
+    SELECT COUNT(*)::int AS c
+    FROM ${qn}
+    WHERE tenant_id = $1
+      AND status IN ('running', 'locked')
+      AND payload_json->>'provider_code' = $2
+      AND payload_json->>'endpoint_code' = $3
+    `,
+    [String(tenantId || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID, String(providerCode || '').trim(), String(endpointCode || '').trim()]
+  );
+  return Math.max(0, Number(r.rows?.[0]?.c || 0));
+}
+
+async function shouldDelayByRatePolicy(client, config, tenantId, providerCode, endpointCode) {
+  const policy = await loadRateLimitPolicy(client, config, tenantId, providerCode, endpointCode);
+  if (!policy) return 0;
+  if (policy.max_parallel_jobs > 0) {
+    const running = await getRunningEndpointJobs(client, config, tenantId, providerCode, endpointCode);
+    if (running >= policy.max_parallel_jobs) return Math.max(500, policy.cooldown_ms || 1000);
+  }
+  if (policy.cooldown_ms > 0) {
+    const lastTs = await getLatestChunkLogTs(client, config, tenantId, providerCode, endpointCode);
+    if (lastTs) {
+      const ageMs = Date.now() - new Date(lastTs).getTime();
+      if (ageMs < policy.cooldown_ms) return Math.max(100, policy.cooldown_ms - ageMs);
+    }
+  }
+  return 0;
+}
+
+async function writeChunkLog(client, config, payload = {}) {
+  const qn = workflowChunkLogsQname(config);
+  await client.query(
+    `
+    INSERT INTO ${qn}
+      (
+        job_id,
+        run_uid,
+        tenant_id,
+        desk_id,
+        desk_version_id,
+        start_node_id,
+        process_code,
+        provider_code,
+        endpoint_code,
+        chunk_key,
+        chunk_no,
+        status,
+        started_at,
+        finished_at,
+        duration_ms,
+        input_json,
+        output_json,
+        metrics_json,
+        error_text
+      )
+    VALUES
+      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::timestamptz, $14::timestamptz, $15, $16::jsonb, $17::jsonb, $18::jsonb, $19)
+    `,
+    [
+      Math.trunc(Number(payload?.job_id || 0)),
+      String(payload?.run_uid || '').trim(),
+      String(payload?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+      Math.trunc(Number(payload?.desk_id || 0)),
+      Math.trunc(Number(payload?.desk_version_id || 0)),
+      String(payload?.start_node_id || '').trim(),
+      String(payload?.process_code || '').trim(),
+      String(payload?.provider_code || '').trim(),
+      String(payload?.endpoint_code || '').trim(),
+      String(payload?.chunk_key || '').trim(),
+      Math.max(1, Math.trunc(Number(payload?.chunk_no || 1))),
+      String(payload?.status || 'ok').trim(),
+      payload?.started_at ? String(payload.started_at) : new Date().toISOString(),
+      payload?.finished_at ? String(payload.finished_at) : new Date().toISOString(),
+      Math.max(0, Math.trunc(Number(payload?.duration_ms || 0))),
+      stableJsonString(payload?.input_json || {}),
+      stableJsonString(payload?.output_json || {}),
+      stableJsonString(payload?.metrics_json || {}),
+      String(payload?.error_text || '').trim()
+    ]
+  );
+}
+
+async function loadRunRow(client, config, runUid) {
+  const qn = workflowRunsQname(config);
+  const r = await client.query(
+    `
+    SELECT run_uid, tenant_id, client_id, desk_id, desk_name, desk_version_id, start_node_id, process_code, run_policy, orchestration_mode, trigger_source, trigger_type, trigger_key, trigger_meta, status
+    FROM ${qn}
+    WHERE run_uid = $1
+    LIMIT 1
+    `,
+    [String(runUid || '').trim()]
+  );
+  return r.rows?.[0] || null;
+}
+
+async function findProcessByStartNode(client, config, deskRow, startNodeId) {
+  const processes = await discoverDeskProcesses(client, config, deskRow);
+  return processes.find((p) => String(p?.start_node_id || '').trim() === String(startNodeId || '').trim()) || null;
+}
+
+async function enqueueProcessRunQueued(client, config, runInput = {}) {
+  const deskRow = runInput?.desk_row || {};
+  const process = runInput?.process || {};
+  const runUid = String(runInput?.run_uid || buildRunUid('wf_run')).trim() || buildRunUid('wf_run');
+  const tenantId = String(process?.tenant_id || runInput?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID;
+  const clientId = String(process?.client_id || runInput?.client_id || '').trim();
+  const runPolicy = normalizeRunPolicy(process?.run_policy);
+  const triggerType = String(runInput?.trigger_type || 'manual').trim() || 'manual';
+  const triggerMeta = runInput?.trigger_meta && typeof runInput.trigger_meta === 'object' ? runInput.trigger_meta : {};
+  let lockAcquired = false;
+
+  if (runPolicy === 'single_instance') {
+    const busy = await isTargetProcessBusy(client, config, tenantId, Number(deskRow?.desk_id || 0), String(process?.start_node_id || ''));
+    if (busy) {
+      return { accepted: false, run_uid: '', reason: 'single_instance_busy' };
+    }
+    lockAcquired = await acquireProcessLock(client, config, {
+      desk_id: Number(deskRow?.desk_id || 0),
+      start_node_id: String(process?.start_node_id || ''),
+      lock_key: String(process?.process_key || `${deskRow?.desk_id}:${process?.start_node_id}`).trim(),
+      owner_id: runUid,
+      ttl_ms: PROCESS_LOCK_TTL_MS
+    });
+    if (!lockAcquired) {
+      return { accepted: false, run_uid: '', reason: 'single_instance_lock_conflict' };
+    }
+  }
+
+  const tenantPolicy = await loadTenantExecutionPolicy(client, config, tenantId);
+  if (!tenantPolicy.is_enabled) {
+    return { accepted: false, run_uid: '', reason: 'tenant_disabled' };
+  }
+  const queueDepth = await countTenantQueueDepth(client, config, tenantId);
+  if (queueDepth >= tenantPolicy.max_queue_depth) {
+    return { accepted: false, run_uid: '', reason: 'tenant_queue_depth_limit' };
+  }
+
+  await insertProcessRunRow(client, config, {
+    run_uid: runUid,
+    tenant_id: tenantId,
+    client_id: clientId,
+    desk_id: Number(deskRow?.desk_id || 0),
+    desk_name: String(deskRow?.desk_name || ''),
+    desk_version_id: Number(deskRow?.desk_version_id || 0),
+    start_node_id: String(process?.start_node_id || ''),
+    process_code: String(process?.process_code || ''),
+    run_policy: runPolicy,
+    orchestration_mode: 'queue_chunks',
+    trigger_source: String(runInput?.trigger_source || 'manual'),
+    trigger_type: triggerType,
+    trigger_key: String(runInput?.trigger_key || ''),
+    trigger_meta: triggerMeta,
+    status: 'queued',
+    created_by: String(runInput?.created_by || 'scheduler')
+  });
+
+  await upsertRunAggregationRow(client, config, {
+    run_uid: runUid,
+    tenant_id: tenantId,
+    desk_id: Number(deskRow?.desk_id || 0),
+    desk_version_id: Number(deskRow?.desk_version_id || 0),
+    start_node_id: String(process?.start_node_id || ''),
+    process_code: String(process?.process_code || '')
+  });
+
+  const dedupeKey = `run_plan:${runUid}`;
+  const planJobId = await enqueueWorkflowJob(client, config, {
+    tenant_id: tenantId,
+    client_id: clientId,
+    desk_id: Number(deskRow?.desk_id || 0),
+    desk_version_id: Number(deskRow?.desk_version_id || 0),
+    start_node_id: String(process?.start_node_id || ''),
+    process_code: String(process?.process_code || ''),
+    parent_run_uid: runUid,
+    parent_job_id: 0,
+    job_type: 'process_plan',
+    payload_json: {
+      desk_row: deskRow,
+      process,
+      run_uid: runUid,
+      trigger_type: triggerType
+    },
+    dedupe_key: dedupeKey,
+    priority: Math.max(1, Math.trunc(Number(tenantPolicy.default_priority || JOB_DEFAULT_PRIORITY))),
+    max_attempts: JOB_DEFAULT_MAX_ATTEMPTS
+  });
+
+  if (!planJobId) {
+    await updateRunRow(client, config, runUid, {
+      status: 'failed',
+      finished_at: new Date().toISOString(),
+      duration_ms: 0,
+      summary_json: { error: 'plan_job_deduped_or_not_created' },
+      error_text: 'plan_job_not_created'
+    });
+    if (lockAcquired) {
+      await releaseProcessLock(client, config, {
+        desk_id: Number(deskRow?.desk_id || 0),
+        start_node_id: String(process?.start_node_id || ''),
+        owner_id: runUid
+      });
+    }
+    return { accepted: false, run_uid: runUid, reason: 'plan_job_not_created' };
+  }
+
+  await emitWorkflowEvent(client, config, {
+    event_type: 'process_started',
+    tenant_id: tenantId,
+    client_id: clientId,
+    desk_id: Number(deskRow?.desk_id || 0),
+    desk_version_id: Number(deskRow?.desk_version_id || 0),
+    start_node_id: String(process?.start_node_id || ''),
+    process_code: String(process?.process_code || ''),
+    run_uid: runUid,
+    trigger_type: triggerType,
+    payload: {
+      mode: 'queued',
+      plan_job_id: planJobId
+    }
+  });
+  await recomputeRunAggregation(client, config, runUid);
+  return { accepted: true, run_uid: runUid, plan_job_id: planJobId };
+}
+
+async function finalizeRunAfterQueue(client, config, runUid, status, errorText = '') {
+  const run = await loadRunRow(client, config, runUid);
+  if (!run) return;
+  if (isTerminalRunStatus(run.status)) return;
+  const agg = await recomputeRunAggregation(client, config, runUid);
+  await updateRunRow(client, config, runUid, {
+    status: String(status || 'completed').trim(),
+    finished_at: new Date().toISOString(),
+    duration_ms: 0,
+    summary_json: agg || {},
+    error_text: String(errorText || '').trim()
+  });
+  if (run.run_policy === 'single_instance') {
+    await releaseProcessLock(client, config, {
+      desk_id: Number(run.desk_id || 0),
+      start_node_id: String(run.start_node_id || ''),
+      owner_id: runUid
+    });
+  }
+  await emitWorkflowEvent(client, config, {
+    event_type: status === 'completed' ? 'process_completed' : 'process_failed',
+    tenant_id: String(run.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+    client_id: String(run.client_id || '').trim(),
+    desk_id: Number(run.desk_id || 0),
+    desk_version_id: Number(run.desk_version_id || 0),
+    start_node_id: String(run.start_node_id || ''),
+    process_code: String(run.process_code || ''),
+    run_uid: String(run.run_uid || ''),
+    source_run_uid: String(run.run_uid || ''),
+    status: status,
+    trigger_type: String(run.trigger_type || ''),
+    all_chunks_done: true,
+    payload: {
+      error_text: String(errorText || '').trim(),
+      aggregation: agg || {}
+    }
+  });
+}
+
+async function handleDependencyDispatchJob(client, config, job, payload = {}) {
+  const sourceEvent = payload?.source_event && typeof payload.source_event === 'object' ? payload.source_event : {};
+  const deskId = Math.trunc(Number(job?.desk_id || sourceEvent?.desk_id || 0));
+  const targetStartNodeId = String(payload?.target_start_node_id || job?.start_node_id || '').trim();
+  if (!deskId || !targetStartNodeId) return { skipped: true, reason: 'invalid_dependency_target' };
+
+  const desk = await loadPublishedDeskById(client, config, deskId);
+  if (!desk) return { skipped: true, reason: 'published_desk_not_found' };
+  const process = await findProcessByStartNode(client, config, desk, targetStartNodeId);
+  if (!process) return { skipped: true, reason: 'target_process_not_found' };
+
+  const ruleId = Math.trunc(Number(payload?.dependency_rule_id || 0));
+  const triggerMeta = {
+    source_run_uid: String(sourceEvent?.source_run_uid || sourceEvent?.run_uid || '').trim(),
+    source_start_node_id: String(sourceEvent?.start_node_id || '').trim(),
+    source_event_type: String(sourceEvent?.event_type || '').trim(),
+    source_event_payload: sourceEvent?.payload || {},
+    dependency_rule_id: ruleId,
+    dispatch_mode: String(payload?.dispatch_mode || '').trim(),
+    dedupe_policy: String(payload?.dedupe_policy || '').trim()
+  };
+  const queued = await enqueueProcessRunQueued(client, config, {
+    desk_row: desk,
+    process,
+    trigger_source: 'dependency_event',
+    trigger_type: 'dependency',
+    trigger_key: `dependency:${ruleId}:${triggerMeta.source_run_uid}`,
+    trigger_meta: triggerMeta,
+    created_by: 'dependency_engine',
+    tenant_id: String(job?.tenant_id || sourceEvent?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+    client_id: String(job?.client_id || sourceEvent?.client_id || '').trim()
+  });
+  return queued.accepted
+    ? { queued: true, run_uid: queued.run_uid, source_run_uid: triggerMeta.source_run_uid }
+    : { skipped: true, reason: queued.reason || 'not_enqueued' };
+}
+
+async function handleProcessPlanJob(client, config, job, payload = {}) {
+  const runUid = String(payload?.run_uid || job?.parent_run_uid || '').trim();
+  const process = payload?.process && typeof payload.process === 'object' ? payload.process : {};
+  const subgraph = process?.subgraph && typeof process.subgraph === 'object' ? process.subgraph : {};
+  const order = Array.isArray(subgraph?.order) ? subgraph.order : [];
+  if (!runUid || !order.length) {
+    throw new Error('process_plan_invalid_payload');
+  }
+  const firstNode = order[0];
+  const nodeJobId = await enqueueWorkflowJob(client, config, {
+    tenant_id: String(job?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+    client_id: String(job?.client_id || '').trim(),
+    desk_id: Number(job?.desk_id || 0),
+    desk_version_id: Number(job?.desk_version_id || 0),
+    start_node_id: String(job?.start_node_id || process?.start_node_id || '').trim(),
+    process_code: String(job?.process_code || process?.process_code || '').trim(),
+    parent_run_uid: runUid,
+    parent_job_id: Math.trunc(Number(job?.job_id || 0)),
+    job_type: 'process_node',
+    payload_json: {
+      run_uid: runUid,
+      desk_row: payload?.desk_row || {},
+      process,
+      node_index: 0,
+      node: firstNode,
+      input_value: {}
+    },
+    dedupe_key: `run_node:${runUid}:0`,
+    priority: Math.max(1, Math.trunc(Number(job?.priority || JOB_DEFAULT_PRIORITY))),
+    max_attempts: JOB_DEFAULT_MAX_ATTEMPTS
+  });
+  if (!nodeJobId) throw new Error('first_node_job_not_created');
+  const runQn = workflowRunsQname(config);
+  await client.query(`UPDATE ${runQn} SET status = 'running', updated_at = now() WHERE run_uid = $1`, [runUid]);
+  await emitWorkflowEvent(client, config, {
+    event_type: 'chunk_enqueued',
+    tenant_id: String(job?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+    client_id: String(job?.client_id || '').trim(),
+    desk_id: Number(job?.desk_id || 0),
+    desk_version_id: Number(job?.desk_version_id || 0),
+    start_node_id: String(job?.start_node_id || process?.start_node_id || ''),
+    process_code: String(job?.process_code || process?.process_code || ''),
+    run_uid: runUid,
+    source_run_uid: runUid,
+    chunk_key: `node_0`,
+    chunk_no: 1,
+    payload: { job_id: nodeJobId, node_id: String(firstNode?.id || '') }
+  });
+  return { enqueued_node_job_id: nodeJobId };
+}
+
+async function handleProcessNodeJob(client, config, job, payload = {}) {
+  const runUid = String(payload?.run_uid || job?.parent_run_uid || '').trim();
+  const process = payload?.process && typeof payload.process === 'object' ? payload.process : {};
+  const subgraph = process?.subgraph && typeof process.subgraph === 'object' ? process.subgraph : {};
+  const order = Array.isArray(subgraph?.order) ? subgraph.order : [];
+  const nodeIndex = Math.max(0, Math.trunc(Number(payload?.node_index || 0)));
+  const node = order[nodeIndex] || payload?.node;
+  if (!runUid || !node) throw new Error('process_node_invalid_payload');
+
+  const processCtx = {
+    run_uid: runUid,
+    desk_id: Math.trunc(Number(job?.desk_id || payload?.desk_row?.desk_id || 0)),
+    desk_version_id: Math.trunc(Number(job?.desk_version_id || payload?.desk_row?.desk_version_id || 0)),
+    start_node_id: String(job?.start_node_id || process?.start_node_id || '').trim(),
+    process_code: String(job?.process_code || process?.process_code || '').trim(),
+    tenant_id: String(job?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+    client_id: String(job?.client_id || '').trim()
+  };
+  const templates = await loadActiveApiConfigs(client, config);
+  const stepStarted = Date.now();
+  let status = 'ok';
+  let output = {};
+  let metrics = {};
+  let reqPayload = {};
+  let respPayload = {};
+  let errorText = '';
+  let providerCode = '';
+  let endpointCode = '';
+  try {
+    if (isApiNode(node) || isApiToolNode(node)) {
+      const refs = nodeTemplateRefs(node);
+      const template = templates.find((tpl) => refs.some((ref) => sourceMatchesTemplateRef(tpl, ref)));
+      if (template) {
+        const pe = providerEndpointFromTemplate(template);
+        providerCode = pe.provider_code;
+        endpointCode = pe.endpoint_code;
+        await upsertProviderRegistry(client, config, template, providerCode, endpointCode);
+        const delay = await shouldDelayByRatePolicy(client, config, processCtx.tenant_id, providerCode, endpointCode);
+        if (delay > 0) {
+          const retryAt = new Date(Date.now() + delay).toISOString();
+          await requeueWorkflowJob(client, config, Number(job?.job_id || 0), {
+            available_at: retryAt,
+            error_text: `rate_limit_delay_${delay}ms`,
+            preserve_attempt: true
+          });
+          return { deferred: true, delay_ms: delay };
+        }
+      }
+    }
+    const exec = await executeProcessNode(client, config, processCtx, node, templates, payload?.input_value ?? {});
+    output = exec.output ?? {};
+    metrics = exec.metrics || {};
+    reqPayload = exec.request_payload || {};
+    respPayload = exec.response_payload || {};
+    if (Number(metrics?.failed || 0) > 0) status = 'warn';
+  } catch (e) {
+    status = 'error';
+    errorText = String(e?.message || e || 'process_node_failed');
+    output = { error: errorText };
+    metrics = { failed: true };
+    respPayload = { error: errorText };
+  }
+  const durationMs = Date.now() - stepStarted;
+  const stepOrder = nodeIndex + 1;
+  await insertProcessStepRow(client, config, {
+    run_uid: runUid,
+    step_order: stepOrder,
+    node_id: String(node?.id || ''),
+    node_name: String(node?.config?.name || node?.id || '').trim(),
+    node_type: String(node?.config?.toolType || node?.type || '').trim(),
+    status,
+    started_at: new Date(stepStarted).toISOString(),
+    finished_at: new Date().toISOString(),
+    duration_ms: durationMs,
+    input_json: reqPayload,
+    output_json: output,
+    request_payload: reqPayload,
+    response_payload: respPayload,
+    metrics_json: metrics,
+    error_text: errorText
+  });
+
+  await writeChunkLog(client, config, {
+    job_id: Number(job?.job_id || 0),
+    run_uid: runUid,
+    tenant_id: processCtx.tenant_id,
+    desk_id: processCtx.desk_id,
+    desk_version_id: processCtx.desk_version_id,
+    start_node_id: processCtx.start_node_id,
+    process_code: processCtx.process_code,
+    provider_code: providerCode,
+    endpoint_code: endpointCode,
+    chunk_key: `node_${nodeIndex}`,
+    chunk_no: stepOrder,
+    status: status === 'error' ? 'failed' : 'ok',
+    started_at: new Date(stepStarted).toISOString(),
+    finished_at: new Date().toISOString(),
+    duration_ms: durationMs,
+    input_json: reqPayload,
+    output_json: output,
+    metrics_json: metrics,
+    error_text: errorText
+  });
+
+  await emitWorkflowEvent(client, config, {
+    event_type: status === 'error' ? 'chunk_failed' : 'chunk_completed',
+    tenant_id: processCtx.tenant_id,
+    client_id: processCtx.client_id,
+    desk_id: processCtx.desk_id,
+    desk_version_id: processCtx.desk_version_id,
+    start_node_id: processCtx.start_node_id,
+    process_code: processCtx.process_code,
+    run_uid: runUid,
+    source_run_uid: runUid,
+    status: status,
+    chunk_key: `node_${nodeIndex}`,
+    chunk_no: stepOrder,
+    payload: {
+      node_id: String(node?.id || ''),
+      node_name: String(node?.config?.name || node?.id || ''),
+      node_type: String(node?.config?.toolType || node?.type || ''),
+      output
+    },
+    metrics
+  });
+
+  if (status === 'error') {
+    await finalizeRunAfterQueue(client, config, runUid, 'failed', errorText || 'process_node_failed');
+    return { failed: true, error_text: errorText };
+  }
+
+  if (nodeIndex >= order.length - 1 || String(node?.config?.toolType || '').trim().toLowerCase() === 'end_process') {
+    await finalizeRunAfterQueue(client, config, runUid, 'completed', '');
+    return { completed: true };
+  }
+
+  const nextIndex = nodeIndex + 1;
+  const nextNode = order[nextIndex];
+  const nextJobId = await enqueueWorkflowJob(client, config, {
+    tenant_id: processCtx.tenant_id,
+    client_id: processCtx.client_id,
+    desk_id: processCtx.desk_id,
+    desk_version_id: processCtx.desk_version_id,
+    start_node_id: processCtx.start_node_id,
+    process_code: processCtx.process_code,
+    parent_run_uid: runUid,
+    parent_job_id: Math.trunc(Number(job?.job_id || 0)),
+    job_type: 'process_node',
+    payload_json: {
+      run_uid: runUid,
+      desk_row: payload?.desk_row || {},
+      process,
+      node_index: nextIndex,
+      node: nextNode,
+      input_value: output
+    },
+    dedupe_key: `run_node:${runUid}:${nextIndex}`,
+    priority: Math.max(1, Math.trunc(Number(job?.priority || JOB_DEFAULT_PRIORITY))),
+    max_attempts: JOB_DEFAULT_MAX_ATTEMPTS
+  });
+  if (!nextJobId) {
+    throw new Error(`next_node_job_not_created:${nextIndex}`);
+  }
+  await emitWorkflowEvent(client, config, {
+    event_type: 'chunk_enqueued',
+    tenant_id: processCtx.tenant_id,
+    client_id: processCtx.client_id,
+    desk_id: processCtx.desk_id,
+    desk_version_id: processCtx.desk_version_id,
+    start_node_id: processCtx.start_node_id,
+    process_code: processCtx.process_code,
+    run_uid: runUid,
+    source_run_uid: runUid,
+    chunk_key: `node_${nextIndex}`,
+    chunk_no: nextIndex + 1,
+    payload: { job_id: nextJobId, node_id: String(nextNode?.id || '') }
+  });
+
+  const cursorCandidate = getByPath({ response: output }, 'response.cursor');
+  if (cursorCandidate !== undefined) {
+    const incQn = workflowIncrementalStateQname(config);
+    await client.query(
+      `
+      INSERT INTO ${incQn}
+        (tenant_id, desk_id, desk_version_id, start_node_id, process_code, state_key, cursor_json, last_successful_sync_at, last_attempt_at, updated_at)
+      VALUES
+        ($1, $2, $3, $4, $5, 'default', $6::jsonb, now(), now(), now())
+      ON CONFLICT (tenant_id, desk_id, start_node_id, process_code, state_key) DO UPDATE
+      SET cursor_json = EXCLUDED.cursor_json,
+          last_successful_sync_at = EXCLUDED.last_successful_sync_at,
+          last_attempt_at = EXCLUDED.last_attempt_at,
+          updated_at = now()
+      `,
+      [processCtx.tenant_id, processCtx.desk_id, processCtx.desk_version_id, processCtx.start_node_id, processCtx.process_code, stableJsonString(cursorCandidate)]
+    );
+  }
+  return { next_job_id: nextJobId };
+}
+
+async function executeWorkflowJobByType(client, config, job) {
+  const payload = parseJsonb(job?.payload_json, {});
+  const type = String(job?.job_type || '').trim().toLowerCase();
+  if (type === 'process_plan') return handleProcessPlanJob(client, config, job, payload);
+  if (type === 'process_node') return handleProcessNodeJob(client, config, job, payload);
+  if (type === 'dependency_dispatch') return handleDependencyDispatchJob(client, config, job, payload);
+  return { skipped: true, reason: `unsupported_job_type:${type}` };
+}
+
+async function processQueuedJobsTick(client, config) {
+  const claimed = await claimWorkflowJobs(client, config, JOB_CLAIM_BATCH);
+  schedulerState.workerClaimedJobs = claimed.length;
+  let processed = 0;
+  for (const job of claimed) {
+    const tenantId = String(job?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID;
+    const tenantPolicy = await loadTenantExecutionPolicy(client, config, tenantId);
+    const runningTenantJobs = await countTenantRunningJobs(client, config, tenantId);
+    if (runningTenantJobs > tenantPolicy.max_parallel_jobs) {
+      await requeueWorkflowJob(client, config, Number(job?.job_id || 0), {
+        available_at: new Date(Date.now() + 1500).toISOString(),
+        error_text: 'tenant_parallel_limit',
+        preserve_attempt: true
+      });
+      continue;
+    }
+    try {
+      const out = await executeWorkflowJobByType(client, config, job);
+      if (!out?.deferred) {
+        await completeWorkflowJob(client, config, Number(job?.job_id || 0), out || {});
+      }
+    } catch (e) {
+      const err = String(e?.message || e || 'job_failed');
+      await failWorkflowJob(client, config, job, err);
+    } finally {
+      await recomputeRunAggregation(client, config, String(job?.parent_run_uid || '').trim());
+    }
+    processed += 1;
+  }
+  schedulerState.workerProcessedJobs = processed;
+  return processed;
+}
+
+async function waitRunsToFinish(client, config, runUids, timeoutMs = 120_000) {
+  const runIds = Array.isArray(runUids) ? runUids.map((x) => String(x || '').trim()).filter(Boolean) : [];
+  if (!runIds.length) return [];
+  const qn = workflowRunsQname(config);
+  const started = Date.now();
+  while (Date.now() - started < Math.max(1_000, Number(timeoutMs || 120_000))) {
+    const r = await client.query(
+      `
+      SELECT run_uid, status, summary_json, error_text, started_at, finished_at, trigger_type, trigger_meta
+      FROM ${qn}
+      WHERE run_uid = ANY($1::text[])
+      `,
+      [runIds]
+    );
+    const rows = Array.isArray(r.rows) ? r.rows : [];
+    if (rows.length && rows.every((x) => isTerminalRunStatus(x?.status))) return rows;
+    await delayMs(500);
+  }
+  const r = await client.query(
+    `
+    SELECT run_uid, status, summary_json, error_text, started_at, finished_at, trigger_type, trigger_meta
+    FROM ${qn}
+    WHERE run_uid = ANY($1::text[])
+    `,
+    [runIds]
+  );
+  return Array.isArray(r.rows) ? r.rows : [];
 }
 
 function normalizeStopRuleOperator(raw) {
@@ -2169,6 +4046,54 @@ export function stopWorkflowScheduler() {
 }
 
 workflowAutomationRouter.get('/workflow-scheduler/state', requireDataAdmin, async (_req, res) => {
+  let queueDepth = 0;
+  let queueRunning = 0;
+  let queueDead = 0;
+  let dependencyBacklog = 0;
+  let activeWorkers = 0;
+  try {
+    const client = await pool.connect();
+    try {
+      const config = await loadRuntimeStorageConfig(client);
+      await ensureWorkflowAutomationTables(client, config);
+      const queueQn = workflowJobQueueQname(config);
+      const busQn = workflowProcessBusQname(config);
+      const workerQn = workflowWorkerLeasesQname(config);
+      const q = await client.query(
+        `
+        SELECT
+          COUNT(*) FILTER (WHERE status = 'queued')::int AS queued,
+          COUNT(*) FILTER (WHERE status IN ('running', 'locked'))::int AS running,
+          COUNT(*) FILTER (WHERE status = 'dead_letter')::int AS dead
+        FROM ${queueQn}
+        `
+      );
+      queueDepth = Math.max(0, Number(q.rows?.[0]?.queued || 0));
+      queueRunning = Math.max(0, Number(q.rows?.[0]?.running || 0));
+      queueDead = Math.max(0, Number(q.rows?.[0]?.dead || 0));
+      const b = await client.query(
+        `
+        SELECT COUNT(*)::int AS c
+        FROM ${busQn}
+        WHERE status = 'new'
+          AND channel = 'workflow_event'
+        `
+      );
+      dependencyBacklog = Math.max(0, Number(b.rows?.[0]?.c || 0));
+      const w = await client.query(
+        `
+        SELECT COUNT(*)::int AS c
+        FROM ${workerQn}
+        WHERE lease_until >= now()
+        `
+      );
+      activeWorkers = Math.max(0, Number(w.rows?.[0]?.c || 0));
+    } finally {
+      client.release();
+    }
+  } catch {
+    // ignore metric read errors for state endpoint
+  }
   return res.json({
     ok: true,
     enabled: schedulerState.enabled,
@@ -2183,9 +4108,20 @@ workflowAutomationRouter.get('/workflow-scheduler/state', requireDataAdmin, asyn
       started_at: x?.startedAt || ''
     })),
     last_tick_at: schedulerState.lastTickAt,
+    worker_last_tick_at: schedulerState.workerLastTickAt,
     last_discovery_count: schedulerState.lastDiscoveryCount,
     last_scheduled_count: schedulerState.lastScheduledCount,
-    last_error: schedulerState.lastError
+    last_error: schedulerState.lastError,
+    worker_last_error: schedulerState.workerLastError,
+    worker_claimed_jobs: schedulerState.workerClaimedJobs,
+    worker_processed_jobs: schedulerState.workerProcessedJobs,
+    metrics: {
+      queue_depth: queueDepth,
+      queue_running: queueRunning,
+      queue_dead_letter: queueDead,
+      dependency_event_backlog: dependencyBacklog,
+      active_workers: activeWorkers
+    }
   });
 });
 
@@ -2286,6 +4222,8 @@ function processConfigFromStartNode(startNode, deskId, override = null) {
   return {
     start_node_id: String(startNode.id || '').trim(),
     name: String(startNode?.config?.name || 'Start').trim() || 'Start',
+    tenant_id: String(override?.tenant_id || settings?.tenantId || settings?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+    client_id: String(override?.client_id || settings?.clientId || settings?.client_id || '').trim(),
     is_enabled: boolFromAny(override?.is_enabled, boolFromAny(settings?.isEnabled ?? settings?.enabled ?? settings?.is_enabled, true)),
     trigger_type: triggerType,
     schedule_value: scheduleValue,
@@ -2307,6 +4245,8 @@ function buildOverridesMap(rows) {
     if (!nodeId) return;
     map.set(nodeId, {
       start_node_id: nodeId,
+      tenant_id: String(r?.tenant_id || '').trim(),
+      client_id: String(r?.client_id || '').trim(),
       is_enabled: r?.is_enabled,
       trigger_type: String(r?.trigger_type || '').trim(),
       schedule_value: String(r?.schedule_value || '').trim(),
@@ -2346,7 +4286,7 @@ async function loadProcessOverrides(client, config, deskId) {
   const qn = workflowProcessOverridesQname(config);
   const r = await client.query(
     `
-    SELECT desk_id, start_node_id, is_enabled, trigger_type, schedule_value, timezone, run_policy, process_code, input_scope, output_scope
+    SELECT desk_id, start_node_id, tenant_id, client_id, is_enabled, trigger_type, schedule_value, timezone, run_policy, process_code, input_scope, output_scope
     FROM ${qn}
     WHERE desk_id = $1
     `,
@@ -2434,12 +4374,15 @@ async function insertProcessRunRow(client, config, payload) {
     INSERT INTO ${qn}
       (
         run_uid,
+        tenant_id,
+        client_id,
         desk_id,
         desk_name,
         desk_version_id,
         start_node_id,
         process_code,
         run_policy,
+        orchestration_mode,
         trigger_source,
         trigger_type,
         trigger_key,
@@ -2450,20 +4393,24 @@ async function insertProcessRunRow(client, config, payload) {
         updated_at
       )
     VALUES
-      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, 'running', now(), $12, now())
+      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15, now(), $16, now())
     `,
     [
       String(payload.run_uid || '').trim(),
+      String(payload.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+      String(payload.client_id || '').trim(),
       Math.trunc(Number(payload.desk_id || 0)),
       String(payload.desk_name || '').trim(),
       Math.trunc(Number(payload.desk_version_id || 0)),
       String(payload.start_node_id || '').trim(),
       String(payload.process_code || '').trim(),
       String(payload.run_policy || 'single_instance').trim(),
+      String(payload.orchestration_mode || 'queue_chunks').trim(),
       String(payload.trigger_source || 'manual').trim(),
       String(payload.trigger_type || 'manual').trim(),
       String(payload.trigger_key || '').trim(),
       JSON.stringify(payload.trigger_meta || {}),
+      String(payload.status || 'running').trim(),
       String(payload.created_by || 'system').trim()
     ]
   );
@@ -3012,6 +4959,11 @@ async function schedulerTickPublishedProcesses() {
     await withSchedulerLock(client, async () => {
       const config = await loadRuntimeStorageConfig(client);
       await ensureWorkflowAutomationTables(client, config);
+      await upsertSchedulerLease(client, config, {
+        owner_id: SCHEDULER_ID,
+        ttl_ms: Math.max(schedulerState.tickMs * 3, 30_000),
+        meta_json: { tick_ms: schedulerState.tickMs, phase: 'scheduling' }
+      });
       const desks = await listPublishedDesks(client, config, 500);
       let discovered = 0;
       let scheduled = 0;
@@ -3039,7 +4991,7 @@ async function schedulerTickPublishedProcesses() {
             }
           }
           if (!due) continue;
-          const launch = launchProcessRunV2({
+          const queued = await enqueueProcessRunQueued(client, config, {
             desk_row: desk,
             process,
             trigger_source: triggerType === 'interval' ? 'schedule_interval' : 'schedule_cron',
@@ -3052,16 +5004,33 @@ async function schedulerTickPublishedProcesses() {
               process_code: String(process?.process_code || ''),
               schedule_value: String(process?.schedule_value || '')
             },
-            created_by: 'scheduler'
+            created_by: 'scheduler',
+            tenant_id: String(process?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+            client_id: String(process?.client_id || '').trim()
           });
-          if (launch.accepted) scheduled += 1;
+          if (queued.accepted) scheduled += 1;
         }
       }
+      const dependencyEventsProcessed = await processDependencyEvents(client, config);
+      const workerProcessed = await processQueuedJobsTick(client, config);
+      await upsertWorkerLease(client, config, {
+        worker_id: WORKER_ID,
+        owner_id: WORKER_ID,
+        status: 'running',
+        ttl_ms: Math.max(schedulerState.tickMs * 3, 30_000),
+        active_jobs: 0,
+        meta_json: {
+          processed_jobs: workerProcessed,
+          dependency_events: dependencyEventsProcessed
+        }
+      });
+      schedulerState.workerLastTickAt = new Date().toISOString();
       schedulerState.lastDiscoveryCount = discovered;
       schedulerState.lastScheduledCount = scheduled;
     });
   } catch (e) {
     schedulerState.lastError = String(e?.message || e || 'scheduler_tick_failed');
+    schedulerState.workerLastError = schedulerState.lastError;
   } finally {
     schedulerState.running = false;
     if (client) client.release();
@@ -3180,12 +5149,15 @@ async function listProcessRunsHandler(req, res) {
       `
       SELECT
         run_uid,
+        tenant_id,
+        client_id,
         desk_id,
         desk_name,
         desk_version_id,
         start_node_id,
         process_code,
         run_policy,
+        orchestration_mode,
         trigger_source,
         trigger_type,
         trigger_key,
@@ -3225,12 +5197,15 @@ async function getProcessRunHandler(req, res) {
       `
       SELECT
         run_uid,
+        tenant_id,
+        client_id,
         desk_id,
         desk_name,
         desk_version_id,
         start_node_id,
         process_code,
         run_policy,
+        orchestration_mode,
         trigger_source,
         trigger_type,
         trigger_key,
@@ -3302,25 +5277,26 @@ async function triggerProcessRunsHandler(req, res) {
     if (!selected.length) {
       return res.status(404).json({ error: 'not_found', details: 'no matching process for trigger' });
     }
-    const launches = selected
-      .filter((p) => p?.is_enabled)
-      .map((process) =>
-        launchProcessRunV2({
-          desk_row: desk,
-          process,
-          trigger_source: 'manual',
-          trigger_type: 'manual',
-          trigger_key: `manual:${deskId}:${process.start_node_id}`,
-          trigger_meta: {
-            note: String(req.body?.note || '').trim(),
-            requested_start_node_id: startNodeId || '',
-            desk_id: Math.trunc(Number(deskId || 0)),
-            desk_version_id: Number(desk?.desk_version_id || 0)
-          },
-          created_by: String(req.body?.created_by || 'manual').trim() || 'manual'
-        })
-      );
-    const accepted = launches.filter((x) => x.accepted);
+    const accepted = [];
+    for (const process of selected.filter((p) => p?.is_enabled)) {
+      const queued = await enqueueProcessRunQueued(client, config, {
+        desk_row: desk,
+        process,
+        trigger_source: 'manual',
+        trigger_type: 'manual',
+        trigger_key: `manual:${deskId}:${process.start_node_id}`,
+        trigger_meta: {
+          note: String(req.body?.note || '').trim(),
+          requested_start_node_id: startNodeId || '',
+          desk_id: Math.trunc(Number(deskId || 0)),
+          desk_version_id: Number(desk?.desk_version_id || 0)
+        },
+        created_by: String(req.body?.created_by || 'manual').trim() || 'manual',
+        tenant_id: String(process?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+        client_id: String(process?.client_id || '').trim()
+      });
+      if (queued.accepted) accepted.push(queued);
+    }
     if (!accepted.length) {
       return res.status(429).json({ error: 'busy', details: 'parallel_limit_or_process_busy' });
     }
@@ -3328,10 +5304,15 @@ async function triggerProcessRunsHandler(req, res) {
       return res.json({
         ok: true,
         accepted: true,
-        runs: accepted.map((x) => ({ run_uid: x.run_uid }))
+        runs: accepted.map((x) => ({ run_uid: x.run_uid, status: 'queued' }))
       });
     }
-    const results = await Promise.all(accepted.map((x) => x.promise));
+    const results = await waitRunsToFinish(
+      client,
+      config,
+      accepted.map((x) => x.run_uid),
+      Math.max(5_000, Math.trunc(Number(req.body?.wait_timeout_ms || 120_000)))
+    );
     return res.json({
       ok: true,
       accepted: true,
@@ -3421,6 +5402,337 @@ async function setProcessEnabledHandler(req, res, enabled) {
   }
 }
 
+async function listWorkflowJobsHandler(req, res) {
+  const status = String(req.query?.status || '').trim();
+  const runUid = String(req.query?.run_uid || '').trim();
+  const tenantId = String(req.query?.tenant_id || '').trim();
+  const limit = Math.max(1, Math.min(500, Math.trunc(Number(req.query?.limit || 100))));
+  let client = null;
+  try {
+    client = await pool.connect();
+    const config = await loadRuntimeStorageConfig(client);
+    await ensureWorkflowAutomationTables(client, config);
+    const qn = workflowJobQueueQname(config);
+    const params = [];
+    let whereSql = 'WHERE 1=1';
+    if (status) {
+      params.push(status);
+      whereSql += ` AND status = $${params.length}`;
+    }
+    if (runUid) {
+      params.push(runUid);
+      whereSql += ` AND parent_run_uid = $${params.length}`;
+    }
+    if (tenantId) {
+      params.push(tenantId);
+      whereSql += ` AND tenant_id = $${params.length}`;
+    }
+    params.push(limit);
+    const r = await client.query(
+      `
+      SELECT
+        job_id,
+        tenant_id,
+        client_id,
+        desk_id,
+        desk_version_id,
+        start_node_id,
+        process_code,
+        parent_run_uid,
+        parent_job_id,
+        job_type,
+        dedupe_key,
+        priority,
+        status,
+        available_at,
+        attempt_no,
+        max_attempts,
+        locked_by,
+        locked_until,
+        last_error,
+        created_at,
+        updated_at
+      FROM ${qn}
+      ${whereSql}
+      ORDER BY job_id DESC
+      LIMIT $${params.length}
+      `,
+      params
+    );
+    return res.json({ jobs: r.rows || [] });
+  } catch (e) {
+    return res.status(500).json({ error: 'workflow_jobs_list_failed', details: String(e?.message || e) });
+  } finally {
+    if (client) client.release();
+  }
+}
+
+async function getWorkflowJobHandler(req, res) {
+  const jobId = Math.trunc(Number(req.params?.job_id || 0));
+  if (!jobId) return res.status(400).json({ error: 'bad_request', details: 'job_id is required' });
+  let client = null;
+  try {
+    client = await pool.connect();
+    const config = await loadRuntimeStorageConfig(client);
+    await ensureWorkflowAutomationTables(client, config);
+    const qn = workflowJobQueueQname(config);
+    const r = await client.query(`SELECT * FROM ${qn} WHERE job_id = $1 LIMIT 1`, [jobId]);
+    if (!r.rows?.length) return res.status(404).json({ error: 'not_found', details: 'job not found' });
+    return res.json({ job: r.rows[0] });
+  } catch (e) {
+    return res.status(500).json({ error: 'workflow_job_get_failed', details: String(e?.message || e) });
+  } finally {
+    if (client) client.release();
+  }
+}
+
+async function retryDeadJobHandler(req, res) {
+  const jobId = Math.trunc(Number(req.body?.job_id || 0));
+  if (!jobId) return res.status(400).json({ error: 'bad_request', details: 'job_id is required' });
+  let client = null;
+  try {
+    client = await pool.connect();
+    const config = await loadRuntimeStorageConfig(client);
+    await ensureWorkflowAutomationTables(client, config);
+    const qn = workflowJobQueueQname(config);
+    const r = await client.query(
+      `
+      UPDATE ${qn}
+      SET status = 'queued',
+          attempt_no = 0,
+          available_at = now(),
+          locked_by = '',
+          locked_until = null,
+          last_error = '',
+          updated_at = now()
+      WHERE job_id = $1
+        AND status IN ('dead_letter', 'failed')
+      RETURNING job_id
+      `,
+      [jobId]
+    );
+    if (!r.rows?.length) return res.status(404).json({ error: 'not_found', details: 'dead/failed job not found' });
+    return res.json({ ok: true, job_id: jobId, status: 'queued' });
+  } catch (e) {
+    return res.status(500).json({ error: 'workflow_job_retry_failed', details: String(e?.message || e) });
+  } finally {
+    if (client) client.release();
+  }
+}
+
+async function listDependenciesHandler(req, res) {
+  const deskId = Math.trunc(Number(req.query?.desk_id || 0));
+  let client = null;
+  try {
+    client = await pool.connect();
+    const config = await loadRuntimeStorageConfig(client);
+    await ensureWorkflowAutomationTables(client, config);
+    const qn = workflowDependenciesQname(config);
+    const params = [];
+    let whereSql = 'WHERE 1=1';
+    if (deskId > 0) {
+      params.push(deskId);
+      whereSql += ` AND desk_id = $${params.length}`;
+    }
+    const r = await client.query(
+      `
+      SELECT
+        id,
+        tenant_id,
+        desk_id,
+        source_start_node_id,
+        target_start_node_id,
+        trigger_event_type,
+        trigger_status,
+        condition_json,
+        dispatch_mode,
+        dedupe_policy,
+        is_enabled,
+        updated_at,
+        updated_by
+      FROM ${qn}
+      ${whereSql}
+      ORDER BY id DESC
+      `,
+      params
+    );
+    return res.json({ dependencies: r.rows || [] });
+  } catch (e) {
+    return res.status(500).json({ error: 'dependencies_list_failed', details: String(e?.message || e) });
+  } finally {
+    if (client) client.release();
+  }
+}
+
+async function upsertDependencyHandler(req, res) {
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const depId = Math.trunc(Number(body?.id || 0));
+  const tenantId = String(body?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID;
+  const deskId = Math.trunc(Number(body?.desk_id || 0));
+  const sourceStart = String(body?.source_start_node_id || '').trim();
+  const targetStart = String(body?.target_start_node_id || '').trim();
+  const triggerEvent = String(body?.trigger_event_type || '').trim().toLowerCase();
+  const triggerStatus = String(body?.trigger_status || '').trim().toLowerCase();
+  const dispatchMode = dependencyDispatchMode(body?.dispatch_mode);
+  const dedupePolicy = dependencyDedupeMode(body?.dedupe_policy);
+  const conditionJson = body?.condition_json && typeof body.condition_json === 'object' ? body.condition_json : {};
+  const isEnabled = body?.is_enabled === undefined ? true : Boolean(body?.is_enabled);
+  const updatedBy = String(body?.updated_by || req.header('X-AO-ROLE') || 'data_admin').trim() || 'data_admin';
+
+  if (!deskId || !sourceStart || !targetStart || !triggerEvent) {
+    return res.status(400).json({ error: 'bad_request', details: 'desk_id/source_start_node_id/target_start_node_id/trigger_event_type are required' });
+  }
+  let client = null;
+  try {
+    client = await pool.connect();
+    const config = await loadRuntimeStorageConfig(client);
+    await ensureWorkflowAutomationTables(client, config);
+    const qn = workflowDependenciesQname(config);
+    if (depId > 0) {
+      const r = await client.query(
+        `
+        UPDATE ${qn}
+        SET
+          tenant_id = $2,
+          desk_id = $3,
+          source_start_node_id = $4,
+          target_start_node_id = $5,
+          trigger_event_type = $6,
+          trigger_status = $7,
+          condition_json = $8::jsonb,
+          dispatch_mode = $9,
+          dedupe_policy = $10,
+          is_enabled = $11,
+          updated_at = now(),
+          updated_by = $12
+        WHERE id = $1
+        RETURNING id
+        `,
+        [depId, tenantId, deskId, sourceStart, targetStart, triggerEvent, triggerStatus, stableJsonString(conditionJson), dispatchMode, dedupePolicy, isEnabled, updatedBy]
+      );
+      if (!r.rows?.length) return res.status(404).json({ error: 'not_found', details: 'dependency not found' });
+      return res.json({ ok: true, id: depId, updated: true });
+    }
+    const r = await client.query(
+      `
+      INSERT INTO ${qn}
+        (tenant_id, desk_id, source_start_node_id, target_start_node_id, trigger_event_type, trigger_status, condition_json, dispatch_mode, dedupe_policy, is_enabled, updated_at, updated_by)
+      VALUES
+        ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, now(), $11)
+      RETURNING id
+      `,
+      [tenantId, deskId, sourceStart, targetStart, triggerEvent, triggerStatus, stableJsonString(conditionJson), dispatchMode, dedupePolicy, isEnabled, updatedBy]
+    );
+    return res.json({ ok: true, id: Number(r.rows?.[0]?.id || 0), created: true });
+  } catch (e) {
+    return res.status(500).json({ error: 'dependency_upsert_failed', details: String(e?.message || e) });
+  } finally {
+    if (client) client.release();
+  }
+}
+
+async function deleteDependencyHandler(req, res) {
+  const depId = Math.trunc(Number(req.body?.id || 0));
+  if (!depId) return res.status(400).json({ error: 'bad_request', details: 'id is required' });
+  let client = null;
+  try {
+    client = await pool.connect();
+    const config = await loadRuntimeStorageConfig(client);
+    await ensureWorkflowAutomationTables(client, config);
+    const qn = workflowDependenciesQname(config);
+    const r = await client.query(`DELETE FROM ${qn} WHERE id = $1 RETURNING id`, [depId]);
+    if (!r.rows?.length) return res.status(404).json({ error: 'not_found', details: 'dependency not found' });
+    return res.json({ ok: true, id: depId, deleted: true });
+  } catch (e) {
+    return res.status(500).json({ error: 'dependency_delete_failed', details: String(e?.message || e) });
+  } finally {
+    if (client) client.release();
+  }
+}
+
+async function listRunAggregationHandler(req, res) {
+  const runUid = String(req.query?.run_uid || '').trim();
+  const deskId = Math.trunc(Number(req.query?.desk_id || 0));
+  const limit = Math.max(1, Math.min(200, Math.trunc(Number(req.query?.limit || 50))));
+  let client = null;
+  try {
+    client = await pool.connect();
+    const config = await loadRuntimeStorageConfig(client);
+    await ensureWorkflowAutomationTables(client, config);
+    const qn = workflowRunAggregationQname(config);
+    const params = [];
+    let whereSql = 'WHERE 1=1';
+    if (runUid) {
+      params.push(runUid);
+      whereSql += ` AND run_uid = $${params.length}`;
+    }
+    if (deskId > 0) {
+      params.push(deskId);
+      whereSql += ` AND desk_id = $${params.length}`;
+    }
+    params.push(limit);
+    const r = await client.query(
+      `
+      SELECT *
+      FROM ${qn}
+      ${whereSql}
+      ORDER BY updated_at DESC
+      LIMIT $${params.length}
+      `,
+      params
+    );
+    return res.json({ aggregation: r.rows || [] });
+  } catch (e) {
+    return res.status(500).json({ error: 'run_aggregation_list_failed', details: String(e?.message || e) });
+  } finally {
+    if (client) client.release();
+  }
+}
+
+async function listIncrementalStateHandler(req, res) {
+  const deskId = Math.trunc(Number(req.query?.desk_id || 0));
+  const startNodeId = String(req.query?.start_node_id || '').trim();
+  const tenantId = String(req.query?.tenant_id || '').trim();
+  const limit = Math.max(1, Math.min(500, Math.trunc(Number(req.query?.limit || 100))));
+  let client = null;
+  try {
+    client = await pool.connect();
+    const config = await loadRuntimeStorageConfig(client);
+    await ensureWorkflowAutomationTables(client, config);
+    const qn = workflowIncrementalStateQname(config);
+    const params = [];
+    let whereSql = 'WHERE 1=1';
+    if (tenantId) {
+      params.push(tenantId);
+      whereSql += ` AND tenant_id = $${params.length}`;
+    }
+    if (deskId > 0) {
+      params.push(deskId);
+      whereSql += ` AND desk_id = $${params.length}`;
+    }
+    if (startNodeId) {
+      params.push(startNodeId);
+      whereSql += ` AND start_node_id = $${params.length}`;
+    }
+    params.push(limit);
+    const r = await client.query(
+      `
+      SELECT *
+      FROM ${qn}
+      ${whereSql}
+      ORDER BY updated_at DESC
+      LIMIT $${params.length}
+      `,
+      params
+    );
+    return res.json({ incremental_state: r.rows || [] });
+  } catch (e) {
+    return res.status(500).json({ error: 'incremental_state_list_failed', details: String(e?.message || e) });
+  } finally {
+    if (client) client.release();
+  }
+}
+
 workflowAutomationRouter.get('/process-runs', requireDataAdmin, listProcessRunsHandler);
 workflowAutomationRouter.get('/process-runs/:run_uid', requireDataAdmin, getProcessRunHandler);
 workflowAutomationRouter.post('/process-runs/trigger', requireDataAdmin, triggerProcessRunsHandler);
@@ -3431,3 +5743,11 @@ workflowAutomationRouter.post('/processes/:desk_id/:start_node_id/enable', requi
 workflowAutomationRouter.post('/processes/:desk_id/:start_node_id/disable', requireDataAdmin, async (req, res) =>
   setProcessEnabledHandler(req, res, false)
 );
+workflowAutomationRouter.get('/workflow-jobs', requireDataAdmin, listWorkflowJobsHandler);
+workflowAutomationRouter.get('/workflow-jobs/:job_id', requireDataAdmin, getWorkflowJobHandler);
+workflowAutomationRouter.post('/workflow-jobs/retry', requireDataAdmin, retryDeadJobHandler);
+workflowAutomationRouter.get('/process-dependencies', requireDataAdmin, listDependenciesHandler);
+workflowAutomationRouter.post('/process-dependencies/upsert', requireDataAdmin, upsertDependencyHandler);
+workflowAutomationRouter.post('/process-dependencies/delete', requireDataAdmin, deleteDependencyHandler);
+workflowAutomationRouter.get('/process-runs/aggregation', requireDataAdmin, listRunAggregationHandler);
+workflowAutomationRouter.get('/process-state/incremental', requireDataAdmin, listIncrementalStateHandler);
