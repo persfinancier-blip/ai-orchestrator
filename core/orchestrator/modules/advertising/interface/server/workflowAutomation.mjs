@@ -5734,6 +5734,7 @@ async function listIncrementalStateHandler(req, res) {
 }
 
 workflowAutomationRouter.get('/process-runs', requireDataAdmin, listProcessRunsHandler);
+workflowAutomationRouter.get('/process-runs/aggregation', requireDataAdmin, listRunAggregationHandler);
 workflowAutomationRouter.get('/process-runs/:run_uid', requireDataAdmin, getProcessRunHandler);
 workflowAutomationRouter.post('/process-runs/trigger', requireDataAdmin, triggerProcessRunsHandler);
 workflowAutomationRouter.post('/desks/:desk_id/publish', requireDataAdmin, publishDeskHandler);
@@ -5749,5 +5750,4 @@ workflowAutomationRouter.post('/workflow-jobs/retry', requireDataAdmin, retryDea
 workflowAutomationRouter.get('/process-dependencies', requireDataAdmin, listDependenciesHandler);
 workflowAutomationRouter.post('/process-dependencies/upsert', requireDataAdmin, upsertDependencyHandler);
 workflowAutomationRouter.post('/process-dependencies/delete', requireDataAdmin, deleteDependencyHandler);
-workflowAutomationRouter.get('/process-runs/aggregation', requireDataAdmin, listRunAggregationHandler);
 workflowAutomationRouter.get('/process-state/incremental', requireDataAdmin, listIncrementalStateHandler);
