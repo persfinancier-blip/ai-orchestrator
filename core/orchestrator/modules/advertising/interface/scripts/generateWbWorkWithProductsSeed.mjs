@@ -4,11 +4,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const SOURCE_URL = 'https://dev.wildberries.ru/en/docs/openapi/work-with-products';
+const SOURCE_URL = 'https://dev.wildberries.ru/docs/openapi/work-with-products';
 const SOURCE_SLUG = 'wb_openapi_work_with_products';
 const TARGET_SCHEMA = 'system';
 const TARGET_TABLE = 'api_configs_store';
 const UPDATED_BY = 'wb_seed_work_with_products';
+const DESCRIPTION_PREFIX = '\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043c\u0435\u0442\u043e\u0434\u0430';
+const DESCRIPTION_SOURCE_LABEL = '\u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,7 +35,7 @@ function cleanText(value) {
 function clampText(value, max = 600) {
   const text = cleanText(value);
   if (text.length <= max) return text;
-  return `${text.slice(0, max - 1)}…`;
+  return `${text.slice(0, max - 3)}...`;
 }
 
 function toArray(value) {
@@ -258,7 +260,7 @@ function pruneValue(value, depth = 0) {
   if (depth > 4) return {};
   if (value == null) return value;
   if (typeof value === 'string') {
-    return value.length > 280 ? `${value.slice(0, 279)}…` : value;
+    return value.length > 280 ? `${value.slice(0, 277)}...` : value;
   }
   if (typeof value === 'number' || typeof value === 'boolean') return value;
   if (Array.isArray(value)) {
@@ -393,8 +395,8 @@ function buildOperationRecords(spec) {
       };
 
       const pTemplate = pathTemplate(apiPath);
-      const name = sanitizeApiName(`WB Work with Products :: ${summary} (${methodUpper} ${apiPath})`);
-      const fullDescription = normalizeDescription(`${tag}. ${summary}. Source: ${SOURCE_URL}`);
+      const name = sanitizeApiName(summary || `${methodUpper} ${apiPath}`);
+      const fullDescription = normalizeDescription(`${DESCRIPTION_PREFIX}: ${name}. ${DESCRIPTION_SOURCE_LABEL}: ${SOURCE_URL}`);
 
       const configJson = {
         api_name: name,

@@ -1,19 +1,19 @@
 {
-  "generated_at": "2026-03-06T22:52:36.694Z",
-  "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+  "generated_at": "2026-03-06T23:33:39.234Z",
+  "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
   "source_slug": "wb_openapi_work_with_products",
   "target_table": "system.api_configs_store",
   "total_endpoints": 49,
   "endpoints": [
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Categories, Subjects, and Characteristics",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Категории, предметы и характеристики",
       "method": "GET",
       "path": "/api/content/v1/brands",
       "path_template": "/api/content/v1/brands",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Brands (GET /api/content/v1/brands)",
-      "description": "Categories, Subjects, and Characteristics. Brands. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Бренды",
+      "description": "Описание метода: Бренды. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -22,13 +22,13 @@
         {
           "name": "subjectId",
           "required": true,
-          "description": "Subject ID",
+          "description": "ID предмета",
           "schema_type": "integer"
         },
         {
           "name": "next",
           "required": false,
-          "description": "Pagination parameter. Use the `next` value from the response to get the next data batch",
+          "description": "Параметр пагинации. Используйте значение `next` из ответа, чтобы получить следующий пакет данных",
           "schema_type": "integer"
         }
       ],
@@ -39,13 +39,13 @@
       "response_example_media_type": "application/json",
       "response_example": {},
       "row_payload": {
-        "api_name": "WB Work with Products :: Brands (GET /api/content/v1/brands)",
-        "description": "Categories, Subjects, and Characteristics. Brands. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Бренды",
+        "description": "Описание метода: Бренды. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Brands (GET /api/content/v1/brands)",
+          "api_name": "Бренды",
           "method": "GET",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/api/content/v1/brands",
@@ -114,10 +114,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Categories, Subjects, and Characteristics",
+            "tag": "Категории, предметы и характеристики",
             "auth": {
               "required": true,
               "schemes": [
@@ -148,20 +148,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Categories, Subjects, and Characteristics. Brands. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Бренды. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Creating Product Cards",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Создание карточек товаров",
       "method": "POST",
       "path": "/content/v2/barcodes",
       "path_template": "/content/v2/barcodes",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Generation of SKUs (POST /content/v2/barcodes)",
-      "description": "Creating Product Cards. Generation of SKUs. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Генерация баркодов",
+      "description": "Описание метода: Генерация баркодов. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -183,13 +183,13 @@
         "additionalErrors": ""
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Generation of SKUs (POST /content/v2/barcodes)",
-        "description": "Creating Product Cards. Generation of SKUs. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Генерация баркодов",
+        "description": "Описание метода: Генерация баркодов. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Generation of SKUs (POST /content/v2/barcodes)",
+          "api_name": "Генерация баркодов",
           "method": "POST",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/barcodes",
@@ -257,10 +257,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Creating Product Cards",
+            "tag": "Создание карточек товаров",
             "auth": {
               "required": true,
               "schemes": [
@@ -280,20 +280,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Creating Product Cards. Generation of SKUs. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Генерация баркодов. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Product Cards",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Карточки товаров",
       "method": "POST",
       "path": "/content/v2/cards/delete/trash",
       "path_template": "/content/v2/cards/delete/trash",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Transfer Product Card to Trash (POST /content/v2/cards/delete/trash)",
-      "description": "Product Cards. Transfer Product Card to Trash. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Перенос карточек товаров в корзину",
+      "description": "Описание метода: Перенос карточек товаров в корзину. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -316,13 +316,13 @@
         "additionalErrors": {}
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Transfer Product Card to Trash (POST /content/v2/cards/delete/trash)",
-        "description": "Product Cards. Transfer Product Card to Trash. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Перенос карточек товаров в корзину",
+        "description": "Описание метода: Перенос карточек товаров в корзину. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Transfer Product Card to Trash (POST /content/v2/cards/delete/trash)",
+          "api_name": "Перенос карточек товаров в корзину",
           "method": "POST",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/cards/delete/trash",
@@ -393,10 +393,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Product Cards",
+            "tag": "Карточки товаров",
             "auth": {
               "required": true,
               "schemes": [
@@ -416,20 +416,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Product Cards. Transfer Product Card to Trash. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Перенос карточек товаров в корзину. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Product Cards",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Карточки товаров",
       "method": "POST",
       "path": "/content/v2/cards/error/list",
       "path_template": "/content/v2/cards/error/list",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: List of Failed Product Cards with Errors (POST /content/v2/cards/error/list)",
-      "description": "Product Cards. List of Failed Product Cards with Errors. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Список несозданных карточек товаров с ошибками",
+      "description": "Описание метода: Список несозданных карточек товаров с ошибками. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -438,7 +438,7 @@
         {
           "name": "locale",
           "required": false,
-          "description": "Language of subject names: - `ru` — Russian - `en` — English - `zh` — Chinese",
+          "description": "Язык названий предметов: - `ru` — русский - `en` — английский - `zh` — китайский",
           "schema_type": "string"
         }
       ],
@@ -509,13 +509,13 @@
         "additionalErrors": null
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: List of Failed Product Cards with Errors (POST /content/v2/cards/error/list)",
-        "description": "Product Cards. List of Failed Product Cards with Errors. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Список несозданных карточек товаров с ошибками",
+        "description": "Описание метода: Список несозданных карточек товаров с ошибками. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: List of Failed Product Cards with Errors (POST /content/v2/cards/error/list)",
+          "api_name": "Список несозданных карточек товаров с ошибками",
           "method": "POST",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/cards/error/list",
@@ -592,10 +592,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Product Cards",
+            "tag": "Карточки товаров",
             "auth": {
               "required": true,
               "schemes": [
@@ -621,20 +621,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Product Cards. List of Failed Product Cards with Errors. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Список несозданных карточек товаров с ошибками. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Creating Product Cards",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Создание карточек товаров",
       "method": "GET",
       "path": "/content/v2/cards/limits",
       "path_template": "/content/v2/cards/limits",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Limits for the Product Cards (GET /content/v2/cards/limits)",
-      "description": "Creating Product Cards. Limits for the Product Cards. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Лимиты карточек товаров",
+      "description": "Описание метода: Лимиты карточек товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -655,13 +655,13 @@
         "additionalErrors": null
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Limits for the Product Cards (GET /content/v2/cards/limits)",
-        "description": "Creating Product Cards. Limits for the Product Cards. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Лимиты карточек товаров",
+        "description": "Описание метода: Лимиты карточек товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Limits for the Product Cards (GET /content/v2/cards/limits)",
+          "api_name": "Лимиты карточек товаров",
           "method": "GET",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/cards/limits",
@@ -727,10 +727,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Creating Product Cards",
+            "tag": "Создание карточек товаров",
             "auth": {
               "required": true,
               "schemes": [
@@ -750,20 +750,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Creating Product Cards. Limits for the Product Cards. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Лимиты карточек товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Product Cards",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Карточки товаров",
       "method": "POST",
       "path": "/content/v2/cards/moveNm",
       "path_template": "/content/v2/cards/moveNm",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Merging or Separating of Product Cards (POST /content/v2/cards/moveNm)",
-      "description": "Product Cards. Merging or Separating of Product Cards. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Объединение и разъединение карточек товаров",
+      "description": "Описание метода: Объединение и разъединение карточек товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -781,13 +781,13 @@
         "additionalErrors": {}
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Merging or Separating of Product Cards (POST /content/v2/cards/moveNm)",
-        "description": "Product Cards. Merging or Separating of Product Cards. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Объединение и разъединение карточек товаров",
+        "description": "Описание метода: Объединение и разъединение карточек товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Merging or Separating of Product Cards (POST /content/v2/cards/moveNm)",
+          "api_name": "Объединение и разъединение карточек товаров",
           "method": "POST",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/cards/moveNm",
@@ -853,10 +853,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Product Cards",
+            "tag": "Карточки товаров",
             "auth": {
               "required": true,
               "schemes": [
@@ -876,20 +876,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Product Cards. Merging or Separating of Product Cards. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Объединение и разъединение карточек товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Product Cards",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Карточки товаров",
       "method": "POST",
       "path": "/content/v2/cards/recover",
       "path_template": "/content/v2/cards/recover",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Recover Product Card from Trash (POST /content/v2/cards/recover)",
-      "description": "Product Cards. Recover Product Card from Trash. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Восстановление карточек товаров из корзины",
+      "description": "Описание метода: Восстановление карточек товаров из корзины. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -912,13 +912,13 @@
         "additionalErrors": {}
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Recover Product Card from Trash (POST /content/v2/cards/recover)",
-        "description": "Product Cards. Recover Product Card from Trash. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Восстановление карточек товаров из корзины",
+        "description": "Описание метода: Восстановление карточек товаров из корзины. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Recover Product Card from Trash (POST /content/v2/cards/recover)",
+          "api_name": "Восстановление карточек товаров из корзины",
           "method": "POST",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/cards/recover",
@@ -989,10 +989,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Product Cards",
+            "tag": "Карточки товаров",
             "auth": {
               "required": true,
               "schemes": [
@@ -1012,20 +1012,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Product Cards. Recover Product Card from Trash. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Восстановление карточек товаров из корзины. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Product Cards",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Карточки товаров",
       "method": "POST",
       "path": "/content/v2/cards/update",
       "path_template": "/content/v2/cards/update",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Update Product Cards (POST /content/v2/cards/update)",
-      "description": "Product Cards. Update Product Cards. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Редактирование карточек товаров",
+      "description": "Описание метода: Редактирование карточек товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -1081,13 +1081,13 @@
         "additionalErrors": {}
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Update Product Cards (POST /content/v2/cards/update)",
-        "description": "Product Cards. Update Product Cards. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Редактирование карточек товаров",
+        "description": "Описание метода: Редактирование карточек товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Update Product Cards (POST /content/v2/cards/update)",
+          "api_name": "Редактирование карточек товаров",
           "method": "POST",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/cards/update",
@@ -1191,10 +1191,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Product Cards",
+            "tag": "Карточки товаров",
             "auth": {
               "required": true,
               "schemes": [
@@ -1214,20 +1214,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Product Cards. Update Product Cards. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Редактирование карточек товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Creating Product Cards",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Создание карточек товаров",
       "method": "POST",
       "path": "/content/v2/cards/upload/add",
       "path_template": "/content/v2/cards/upload/add",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Create Product Cards with Merge (POST /content/v2/cards/upload/add)",
-      "description": "Creating Product Cards. Create Product Cards with Merge. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Создание карточек товаров с присоединением",
+      "description": "Описание метода: Создание карточек товаров с присоединением. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -1315,13 +1315,13 @@
         "additionalErrors": {}
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Create Product Cards with Merge (POST /content/v2/cards/upload/add)",
-        "description": "Creating Product Cards. Create Product Cards with Merge. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Создание карточек товаров с присоединением",
+        "description": "Описание метода: Создание карточек товаров с присоединением. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Create Product Cards with Merge (POST /content/v2/cards/upload/add)",
+          "api_name": "Создание карточек товаров с присоединением",
           "method": "POST",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/cards/upload/add",
@@ -1457,10 +1457,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Creating Product Cards",
+            "tag": "Создание карточек товаров",
             "auth": {
               "required": true,
               "schemes": [
@@ -1480,20 +1480,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Creating Product Cards. Create Product Cards with Merge. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Создание карточек товаров с присоединением. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Creating Product Cards",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Создание карточек товаров",
       "method": "POST",
       "path": "/content/v2/cards/upload",
       "path_template": "/content/v2/cards/upload",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Create Product Cards (POST /content/v2/cards/upload)",
-      "description": "Creating Product Cards. Create Product Cards. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Создание карточек товаров",
+      "description": "Описание метода: Создание карточек товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -1539,13 +1539,13 @@
         "additionalErrors": {}
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Create Product Cards (POST /content/v2/cards/upload)",
-        "description": "Creating Product Cards. Create Product Cards. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Создание карточек товаров",
+        "description": "Описание метода: Создание карточек товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Create Product Cards (POST /content/v2/cards/upload)",
+          "api_name": "Создание карточек товаров",
           "method": "POST",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/cards/upload",
@@ -1639,10 +1639,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Creating Product Cards",
+            "tag": "Создание карточек товаров",
             "auth": {
               "required": true,
               "schemes": [
@@ -1662,20 +1662,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Creating Product Cards. Create Product Cards. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Создание карточек товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Categories, Subjects, and Characteristics",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Категории, предметы и характеристики",
       "method": "GET",
       "path": "/content/v2/directory/colors",
       "path_template": "/content/v2/directory/colors",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Color (GET /content/v2/directory/colors)",
-      "description": "Categories, Subjects, and Characteristics. Color. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Цвет",
+      "description": "Описание метода: Цвет. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -1684,7 +1684,7 @@
         {
           "name": "locale",
           "required": false,
-          "description": "Language for response of the `subjectName` and `name` fields: - `ru` — Russian - `en` — English - `zh` — Chinese Not used in the sandbox",
+          "description": "Язык полей ответа `subjectName` и `name`: - `ru` — русский - `en` — английский - `zh` — китайский Не используется в песочнице",
           "schema_type": "string"
         }
       ],
@@ -1700,13 +1700,13 @@
         "additionalErrors": ""
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Color (GET /content/v2/directory/colors)",
-        "description": "Categories, Subjects, and Characteristics. Color. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Цвет",
+        "description": "Описание метода: Цвет. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Color (GET /content/v2/directory/colors)",
+          "api_name": "Цвет",
           "method": "GET",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/directory/colors",
@@ -1774,10 +1774,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Categories, Subjects, and Characteristics",
+            "tag": "Категории, предметы и характеристики",
             "auth": {
               "required": true,
               "schemes": [
@@ -1803,20 +1803,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Categories, Subjects, and Characteristics. Color. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Цвет. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Categories, Subjects, and Characteristics",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Категории, предметы и характеристики",
       "method": "GET",
       "path": "/content/v2/directory/countries",
       "path_template": "/content/v2/directory/countries",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Country of Origin (GET /content/v2/directory/countries)",
-      "description": "Categories, Subjects, and Characteristics. Country of Origin. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Страна производства",
+      "description": "Описание метода: Страна производства. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -1825,7 +1825,7 @@
         {
           "name": "locale",
           "required": false,
-          "description": "Language for response of the `subjectName` and `name` fields: - `ru` — Russian - `en` — English - `zh` — Chinese Not used in the sandbox",
+          "description": "Язык полей ответа `subjectName` и `name`: - `ru` — русский - `en` — английский - `zh` — китайский Не используется в песочнице",
           "schema_type": "string"
         }
       ],
@@ -1841,13 +1841,13 @@
         "additionalErrors": ""
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Country of Origin (GET /content/v2/directory/countries)",
-        "description": "Categories, Subjects, and Characteristics. Country of Origin. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Страна производства",
+        "description": "Описание метода: Страна производства. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Country of Origin (GET /content/v2/directory/countries)",
+          "api_name": "Страна производства",
           "method": "GET",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/directory/countries",
@@ -1915,10 +1915,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Categories, Subjects, and Characteristics",
+            "tag": "Категории, предметы и характеристики",
             "auth": {
               "required": true,
               "schemes": [
@@ -1944,20 +1944,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Categories, Subjects, and Characteristics. Country of Origin. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Страна производства. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Categories, Subjects, and Characteristics",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Категории, предметы и характеристики",
       "method": "GET",
       "path": "/content/v2/directory/kinds",
       "path_template": "/content/v2/directory/kinds",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Gender (GET /content/v2/directory/kinds)",
-      "description": "Categories, Subjects, and Characteristics. Gender. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Пол",
+      "description": "Описание метода: Пол. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -1966,7 +1966,7 @@
         {
           "name": "locale",
           "required": false,
-          "description": "Language for response of the `subjectName` and `name` fields: - `ru` — Russian - `en` — English - `zh` — Chinese Not used in the sandbox",
+          "description": "Язык полей ответа `subjectName` и `name`: - `ru` — русский - `en` — английский - `zh` — китайский Не используется в песочнице",
           "schema_type": "string"
         }
       ],
@@ -1984,13 +1984,13 @@
         "additionalErrors": ""
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Gender (GET /content/v2/directory/kinds)",
-        "description": "Categories, Subjects, and Characteristics. Gender. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Пол",
+        "description": "Описание метода: Пол. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Gender (GET /content/v2/directory/kinds)",
+          "api_name": "Пол",
           "method": "GET",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/directory/kinds",
@@ -2058,10 +2058,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Categories, Subjects, and Characteristics",
+            "tag": "Категории, предметы и характеристики",
             "auth": {
               "required": true,
               "schemes": [
@@ -2087,20 +2087,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Categories, Subjects, and Characteristics. Gender. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Пол. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Categories, Subjects, and Characteristics",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Категории, предметы и характеристики",
       "method": "GET",
       "path": "/content/v2/directory/seasons",
       "path_template": "/content/v2/directory/seasons",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Season (GET /content/v2/directory/seasons)",
-      "description": "Categories, Subjects, and Characteristics. Season. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Сезон",
+      "description": "Описание метода: Сезон. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -2109,7 +2109,7 @@
         {
           "name": "locale",
           "required": false,
-          "description": "Language for response of the `subjectName` and `name` fields: - `ru` — Russian - `en` — English - `zh` — Chinese Not used in the sandbox",
+          "description": "Язык полей ответа `subjectName` и `name`: - `ru` — русский - `en` — английский - `zh` — китайский Не используется в песочнице",
           "schema_type": "string"
         }
       ],
@@ -2127,13 +2127,13 @@
         "additionalErrors": ""
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Season (GET /content/v2/directory/seasons)",
-        "description": "Categories, Subjects, and Characteristics. Season. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Сезон",
+        "description": "Описание метода: Сезон. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Season (GET /content/v2/directory/seasons)",
+          "api_name": "Сезон",
           "method": "GET",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/directory/seasons",
@@ -2201,10 +2201,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Categories, Subjects, and Characteristics",
+            "tag": "Категории, предметы и характеристики",
             "auth": {
               "required": true,
               "schemes": [
@@ -2230,20 +2230,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Categories, Subjects, and Characteristics. Season. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Сезон. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Categories, Subjects, and Characteristics",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Категории, предметы и характеристики",
       "method": "GET",
       "path": "/content/v2/directory/tnved",
       "path_template": "/content/v2/directory/tnved",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: HS-codes (GET /content/v2/directory/tnved)",
-      "description": "Categories, Subjects, and Characteristics. HS-codes. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "ТНВЭД-код",
+      "description": "Описание метода: ТНВЭД-код. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -2252,19 +2252,19 @@
         {
           "name": "subjectID",
           "required": true,
-          "description": "Subject ID",
+          "description": "ID предмета",
           "schema_type": "integer"
         },
         {
           "name": "search",
           "required": false,
-          "description": "Search by HS-code. Works only with the subjectID parameter",
+          "description": "Поиск по ТНВЭД-коду. Работает только в паре с `subjectID`",
           "schema_type": "integer"
         },
         {
           "name": "locale",
           "required": false,
-          "description": "Language for response of the `subjectName` and `name` fields: - `ru` — Russian - `en` — English - `zh` — Chinese Not used in the sandbox",
+          "description": "Язык полей ответа: - `ru` — русский - `en` — английский - `zh` — китайский Не используется в песочнице",
           "schema_type": "string"
         }
       ],
@@ -2285,13 +2285,13 @@
         "additionalErrors": null
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: HS-codes (GET /content/v2/directory/tnved)",
-        "description": "Categories, Subjects, and Characteristics. HS-codes. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "ТНВЭД-код",
+        "description": "Описание метода: ТНВЭД-код. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: HS-codes (GET /content/v2/directory/tnved)",
+          "api_name": "ТНВЭД-код",
           "method": "GET",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/directory/tnved",
@@ -2361,10 +2361,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Categories, Subjects, and Characteristics",
+            "tag": "Категории, предметы и характеристики",
             "auth": {
               "required": true,
               "schemes": [
@@ -2400,20 +2400,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Categories, Subjects, and Characteristics. HS-codes. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: ТНВЭД-код. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Categories, Subjects, and Characteristics",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Категории, предметы и характеристики",
       "method": "GET",
       "path": "/content/v2/directory/vat",
       "path_template": "/content/v2/directory/vat",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: VAT Rate (GET /content/v2/directory/vat)",
-      "description": "Categories, Subjects, and Characteristics. VAT Rate. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Ставка НДС",
+      "description": "Описание метода: Ставка НДС. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -2422,7 +2422,7 @@
         {
           "name": "locale",
           "required": false,
-          "description": "Language for response of the `subjectName` and `name` fields: - `ru` — Russian - `en` — English - `zh` — Chinese Not used in the sandbox",
+          "description": "Язык полей ответа `subjectName` и `name`: - `ru` — русский - `en` — английский - `zh` — китайский Не используется в песочнице",
           "schema_type": "string"
         }
       ],
@@ -2444,13 +2444,13 @@
         "additionalErrors": null
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: VAT Rate (GET /content/v2/directory/vat)",
-        "description": "Categories, Subjects, and Characteristics. VAT Rate. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Ставка НДС",
+        "description": "Описание метода: Ставка НДС. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: VAT Rate (GET /content/v2/directory/vat)",
+          "api_name": "Ставка НДС",
           "method": "GET",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/directory/vat",
@@ -2518,10 +2518,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Categories, Subjects, and Characteristics",
+            "tag": "Категории, предметы и характеристики",
             "auth": {
               "required": true,
               "schemes": [
@@ -2547,20 +2547,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Categories, Subjects, and Characteristics. VAT Rate. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Ставка НДС. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Product Cards",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Карточки товаров",
       "method": "POST",
       "path": "/content/v2/get/cards/list",
       "path_template": "/content/v2/get/cards/list",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Product Cards List (POST /content/v2/get/cards/list)",
-      "description": "Product Cards. Product Cards List. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Список карточек товаров",
+      "description": "Описание метода: Список карточек товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -2569,7 +2569,7 @@
         {
           "name": "locale",
           "required": false,
-          "description": "Language for response of the `name`, `value` and `object` fields: - `ru` — Russian - `en` — English - `zh` — Chinese Not used in the sandbox",
+          "description": "Язык полей ответа `name`, `value` и `object`: - `ru` — русский - `en` — английский - `zh` — китайский Не используется в песочнице",
           "schema_type": "string"
         }
       ],
@@ -2673,13 +2673,13 @@
         }
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Product Cards List (POST /content/v2/get/cards/list)",
-        "description": "Product Cards. Product Cards List. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Список карточек товаров",
+        "description": "Описание метода: Список карточек товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Product Cards List (POST /content/v2/get/cards/list)",
+          "api_name": "Список карточек товаров",
           "method": "POST",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/get/cards/list",
@@ -2776,10 +2776,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Product Cards",
+            "tag": "Карточки товаров",
             "auth": {
               "required": true,
               "schemes": [
@@ -2805,20 +2805,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Product Cards. Product Cards List. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Список карточек товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Product Cards",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Карточки товаров",
       "method": "POST",
       "path": "/content/v2/get/cards/trash",
       "path_template": "/content/v2/get/cards/trash",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Product Cards in Trash List (POST /content/v2/get/cards/trash)",
-      "description": "Product Cards. Product Cards in Trash List. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Список карточек товаров в корзине",
+      "description": "Описание метода: Список карточек товаров в корзине. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -2827,7 +2827,7 @@
         {
           "name": "locale",
           "required": false,
-          "description": "Language for response of the `name`, `value` and `object` fields: - `ru` — Russian - `en` — English - `zh` — Chinese Not used in the sandbox",
+          "description": "Язык полей ответа `name`, `value` и `object`: - `ru` — русский - `en` — английский - `zh` — китайский Не используется в песочнице",
           "schema_type": "string"
         }
       ],
@@ -2896,13 +2896,13 @@
         }
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Product Cards in Trash List (POST /content/v2/get/cards/trash)",
-        "description": "Product Cards. Product Cards in Trash List. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Список карточек товаров в корзине",
+        "description": "Описание метода: Список карточек товаров в корзине. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Product Cards in Trash List (POST /content/v2/get/cards/trash)",
+          "api_name": "Список карточек товаров в корзине",
           "method": "POST",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/get/cards/trash",
@@ -2984,10 +2984,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Product Cards",
+            "tag": "Карточки товаров",
             "auth": {
               "required": true,
               "schemes": [
@@ -3013,20 +3013,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Product Cards. Product Cards in Trash List. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Список карточек товаров в корзине. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Categories, Subjects, and Characteristics",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Категории, предметы и характеристики",
       "method": "GET",
       "path": "/content/v2/object/all",
       "path_template": "/content/v2/object/all",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Subjects List (GET /content/v2/object/all)",
-      "description": "Categories, Subjects, and Characteristics. Subjects List. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Список предметов",
+      "description": "Описание метода: Список предметов. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -3035,31 +3035,31 @@
         {
           "name": "locale",
           "required": false,
-          "description": "Language for response of the `name` field: - `ru` — Russian - `en` — English - `zh` — Chinese Not used in the sandbox",
+          "description": "Язык полей ответа: - `ru` — русский - `en` — английский - `zh` — китайский Не используется в песочнице",
           "schema_type": "string"
         },
         {
           "name": "name",
           "required": false,
-          "description": "Search by item name (Socks), the search works by substring and can be conducted in any of the supported languages",
+          "description": "Поиск по названию предмета (Носки), поиск работает по подстроке, искать можно на любом из поддерживаемых языков",
           "schema_type": "string"
         },
         {
           "name": "limit",
           "required": false,
-          "description": "Number of search results, maximum 1,000",
+          "description": "Количество предметов, максимум 1000",
           "schema_type": "integer"
         },
         {
           "name": "offset",
           "required": false,
-          "description": "How many results to skip. For example, with value `10`, the response will start with the 11 element",
+          "description": "Сколько элементов пропустить. Например, для значения `10` ответ начнется с 11 элемента",
           "schema_type": "integer"
         },
         {
           "name": "parentID",
           "required": false,
-          "description": "Subject parent category ID",
+          "description": "ID родительской категории предмета",
           "schema_type": "integer"
         }
       ],
@@ -3088,13 +3088,13 @@
         "additionalErrors": null
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Subjects List (GET /content/v2/object/all)",
-        "description": "Categories, Subjects, and Characteristics. Subjects List. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Список предметов",
+        "description": "Описание метода: Список предметов. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Subjects List (GET /content/v2/object/all)",
+          "api_name": "Список предметов",
           "method": "GET",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/object/all",
@@ -3166,10 +3166,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Categories, Subjects, and Characteristics",
+            "tag": "Категории, предметы и характеристики",
             "auth": {
               "required": true,
               "schemes": [
@@ -3215,20 +3215,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Categories, Subjects, and Characteristics. Subjects List. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Список предметов. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Categories, Subjects, and Characteristics",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Категории, предметы и характеристики",
       "method": "GET",
       "path": "/content/v2/object/charcs/{subjectId}",
       "path_template": "/content/v2/object/charcs/{{subjectId}}",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Subject Characteristics (GET /content/v2/object/charcs/{subjectId})",
-      "description": "Categories, Subjects, and Characteristics. Subject Characteristics. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Характеристики предмета",
+      "description": "Описание метода: Характеристики предмета. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -3237,7 +3237,7 @@
         {
           "name": "locale",
           "required": false,
-          "description": "Language for response of the `subjectName` and `name` fields: - `ru` — Russian - `en` — English - `zh` — Chinese Not used in the sandbox",
+          "description": "Язык полей ответа `subjectName` и `name`: - `ru` — русский - `en` — английский - `zh` — китайский Не используется в песочнице",
           "schema_type": "string"
         }
       ],
@@ -3245,7 +3245,7 @@
         {
           "name": "subjectId",
           "required": true,
-          "description": "Subject ID",
+          "description": "ID предмета",
           "schema_type": "integer"
         }
       ],
@@ -3272,13 +3272,13 @@
         "additionalErrors": null
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Subject Characteristics (GET /content/v2/object/charcs/{subjectId})",
-        "description": "Categories, Subjects, and Characteristics. Subject Characteristics. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Характеристики предмета",
+        "description": "Описание метода: Характеристики предмета. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Subject Characteristics (GET /content/v2/object/charcs/{subjectId})",
+          "api_name": "Характеристики предмета",
           "method": "GET",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/object/charcs/{{subjectId}}",
@@ -3346,10 +3346,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Categories, Subjects, and Characteristics",
+            "tag": "Категории, предметы и характеристики",
             "auth": {
               "required": true,
               "schemes": [
@@ -3381,20 +3381,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Categories, Subjects, and Characteristics. Subject Characteristics. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Характеристики предмета. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Categories, Subjects, and Characteristics",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Категории, предметы и характеристики",
       "method": "GET",
       "path": "/content/v2/object/parent/all",
       "path_template": "/content/v2/object/parent/all",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Products Parent Categories (GET /content/v2/object/parent/all)",
-      "description": "Categories, Subjects, and Characteristics. Products Parent Categories. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Родительские категории товаров",
+      "description": "Описание метода: Родительские категории товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -3403,7 +3403,7 @@
         {
           "name": "locale",
           "required": false,
-          "description": "Language for response of the `name` field: - `ru` — Russian - `en` — English - `zh` — Chinese Not used in the sandbox",
+          "description": "Язык поля ответа `name`: - `ru` — русский - `en` — английский - `zh` — китайский Не используется в песочнице",
           "schema_type": "string"
         }
       ],
@@ -3419,13 +3419,13 @@
         "additionalErrors": ""
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Products Parent Categories (GET /content/v2/object/parent/all)",
-        "description": "Categories, Subjects, and Characteristics. Products Parent Categories. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Родительские категории товаров",
+        "description": "Описание метода: Родительские категории товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Products Parent Categories (GET /content/v2/object/parent/all)",
+          "api_name": "Родительские категории товаров",
           "method": "GET",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/object/parent/all",
@@ -3493,10 +3493,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Categories, Subjects, and Characteristics",
+            "tag": "Категории, предметы и характеристики",
             "auth": {
               "required": true,
               "schemes": [
@@ -3522,20 +3522,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Categories, Subjects, and Characteristics. Products Parent Categories. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Родительские категории товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Tags",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Ярлыки",
       "method": "DELETE",
       "path": "/content/v2/tag/{id}",
       "path_template": "/content/v2/tag/{{id}}",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Delete the Tag (DELETE /content/v2/tag/{id})",
-      "description": "Tags. Delete the Tag. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Удаление ярлыка",
+      "description": "Описание метода: Удаление ярлыка. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -3545,7 +3545,7 @@
         {
           "name": "id",
           "required": true,
-          "description": "Numeric tag ID",
+          "description": "Числовой ID ярлыка",
           "schema_type": "integer"
         }
       ],
@@ -3555,13 +3555,13 @@
       "response_example_media_type": "application/json",
       "response_example": {},
       "row_payload": {
-        "api_name": "WB Work with Products :: Delete the Tag (DELETE /content/v2/tag/{id})",
-        "description": "Tags. Delete the Tag. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Удаление ярлыка",
+        "description": "Описание метода: Удаление ярлыка. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Delete the Tag (DELETE /content/v2/tag/{id})",
+          "api_name": "Удаление ярлыка",
           "method": "DELETE",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/tag/{{id}}",
@@ -3627,10 +3627,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Tags",
+            "tag": "Ярлыки",
             "auth": {
               "required": true,
               "schemes": [
@@ -3656,20 +3656,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Tags. Delete the Tag. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Удаление ярлыка. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Tags",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Ярлыки",
       "method": "PATCH",
       "path": "/content/v2/tag/{id}",
       "path_template": "/content/v2/tag/{{id}}",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Update the Tag (PATCH /content/v2/tag/{id})",
-      "description": "Tags. Update the Tag. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Изменение ярлыка",
+      "description": "Описание метода: Изменение ярлыка. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -3679,7 +3679,7 @@
         {
           "name": "id",
           "required": true,
-          "description": "Numeric tag ID",
+          "description": "Числовой ID ярлыка",
           "schema_type": "integer"
         }
       ],
@@ -3692,13 +3692,13 @@
       "response_example_media_type": "application/json",
       "response_example": {},
       "row_payload": {
-        "api_name": "WB Work with Products :: Update the Tag (PATCH /content/v2/tag/{id})",
-        "description": "Tags. Update the Tag. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Изменение ярлыка",
+        "description": "Описание метода: Изменение ярлыка. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Update the Tag (PATCH /content/v2/tag/{id})",
+          "api_name": "Изменение ярлыка",
           "method": "PATCH",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/tag/{{id}}",
@@ -3767,10 +3767,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Tags",
+            "tag": "Ярлыки",
             "auth": {
               "required": true,
               "schemes": [
@@ -3796,20 +3796,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Tags. Update the Tag. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Изменение ярлыка. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Tags",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Ярлыки",
       "method": "POST",
       "path": "/content/v2/tag/nomenclature/link",
       "path_template": "/content/v2/tag/nomenclature/link",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Tag Management in the Product Card (POST /content/v2/tag/nomenclature/link)",
-      "description": "Tags. Tag Management in the Product Card. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Управление ярлыками в карточке товара",
+      "description": "Описание метода: Управление ярлыками в карточке товара. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -3827,13 +3827,13 @@
       "response_example_media_type": "application/json",
       "response_example": {},
       "row_payload": {
-        "api_name": "WB Work with Products :: Tag Management in the Product Card (POST /content/v2/tag/nomenclature/link)",
-        "description": "Tags. Tag Management in the Product Card. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Управление ярлыками в карточке товара",
+        "description": "Описание метода: Управление ярлыками в карточке товара. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Tag Management in the Product Card (POST /content/v2/tag/nomenclature/link)",
+          "api_name": "Управление ярлыками в карточке товара",
           "method": "POST",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/tag/nomenclature/link",
@@ -3904,10 +3904,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Tags",
+            "tag": "Ярлыки",
             "auth": {
               "required": true,
               "schemes": [
@@ -3927,20 +3927,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Tags. Tag Management in the Product Card. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Управление ярлыками в карточке товара. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Tags",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Ярлыки",
       "method": "POST",
       "path": "/content/v2/tag",
       "path_template": "/content/v2/tag",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Create a Tag (POST /content/v2/tag)",
-      "description": "Tags. Create a Tag. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Создание ярлыка",
+      "description": "Описание метода: Создание ярлыка. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -3956,13 +3956,13 @@
       "response_example_media_type": "application/json",
       "response_example": {},
       "row_payload": {
-        "api_name": "WB Work with Products :: Create a Tag (POST /content/v2/tag)",
-        "description": "Tags. Create a Tag. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Создание ярлыка",
+        "description": "Описание метода: Создание ярлыка. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Create a Tag (POST /content/v2/tag)",
+          "api_name": "Создание ярлыка",
           "method": "POST",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/tag",
@@ -4031,10 +4031,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Tags",
+            "tag": "Ярлыки",
             "auth": {
               "required": true,
               "schemes": [
@@ -4054,20 +4054,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Tags. Create a Tag. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Создание ярлыка. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Tags",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Ярлыки",
       "method": "GET",
       "path": "/content/v2/tags",
       "path_template": "/content/v2/tags",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Tags List (GET /content/v2/tags)",
-      "description": "Tags. Tags List. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Список ярлыков",
+      "description": "Описание метода: Список ярлыков. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -4091,13 +4091,13 @@
         "additionalErrors": ""
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Tags List (GET /content/v2/tags)",
-        "description": "Tags. Tags List. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Список ярлыков",
+        "description": "Описание метода: Список ярлыков. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Tags List (GET /content/v2/tags)",
+          "api_name": "Список ярлыков",
           "method": "GET",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v2/tags",
@@ -4163,10 +4163,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Tags",
+            "tag": "Ярлыки",
             "auth": {
               "required": true,
               "schemes": [
@@ -4186,20 +4186,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Tags. Tags List. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Список ярлыков. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Media Files",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Медиафайлы",
       "method": "POST",
       "path": "/content/v3/media/file",
       "path_template": "/content/v3/media/file",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Upload Media File (POST /content/v3/media/file)",
-      "description": "Media Files. Upload Media File. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Загрузить медиафайл",
+      "description": "Описание метода: Загрузить медиафайл. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -4219,13 +4219,13 @@
         "additionalErrors": null
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Upload Media File (POST /content/v3/media/file)",
-        "description": "Media Files. Upload Media File. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Загрузить медиафайл",
+        "description": "Описание метода: Загрузить медиафайл. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Upload Media File (POST /content/v3/media/file)",
+          "api_name": "Загрузить медиафайл",
           "method": "POST",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v3/media/file",
@@ -4293,10 +4293,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Media Files",
+            "tag": "Медиафайлы",
             "auth": {
               "required": true,
               "schemes": [
@@ -4316,20 +4316,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Media Files. Upload Media File. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Загрузить медиафайл. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Media Files",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Медиафайлы",
       "method": "POST",
       "path": "/content/v3/media/save",
       "path_template": "/content/v3/media/save",
       "base_url": "https://content-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Upload Media Files via Links (POST /content/v3/media/save)",
-      "description": "Media Files. Upload Media Files via Links. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Загрузить медиафайлы по ссылкам",
+      "description": "Описание метода: Загрузить медиафайлы по ссылкам. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -4353,13 +4353,13 @@
         "additionalErrors": null
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Upload Media Files via Links (POST /content/v3/media/save)",
-        "description": "Media Files. Upload Media Files via Links. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Загрузить медиафайлы по ссылкам",
+        "description": "Описание метода: Загрузить медиафайлы по ссылкам. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Upload Media Files via Links (POST /content/v3/media/save)",
+          "api_name": "Загрузить медиафайлы по ссылкам",
           "method": "POST",
           "base_url": "https://content-api.wildberries.ru",
           "path": "/content/v3/media/save",
@@ -4431,10 +4431,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Media Files",
+            "tag": "Медиафайлы",
             "auth": {
               "required": true,
               "schemes": [
@@ -4454,20 +4454,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Media Files. Upload Media Files via Links. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Загрузить медиафайлы по ссылкам. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Prices and Discounts",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Цены и скидки",
       "method": "GET",
       "path": "/api/v2/buffer/goods/task",
       "path_template": "/api/v2/buffer/goods/task",
       "base_url": "https://discounts-prices-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Unprocessed Upload Details (GET /api/v2/buffer/goods/task)",
-      "description": "Prices and Discounts. Unprocessed Upload Details. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Детализация необработанной загрузки",
+      "description": "Описание метода: Детализация необработанной загрузки. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -4480,13 +4480,13 @@
       "response_example_media_type": "application/json",
       "response_example": {},
       "row_payload": {
-        "api_name": "WB Work with Products :: Unprocessed Upload Details (GET /api/v2/buffer/goods/task)",
-        "description": "Prices and Discounts. Unprocessed Upload Details. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Детализация необработанной загрузки",
+        "description": "Описание метода: Детализация необработанной загрузки. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Unprocessed Upload Details (GET /api/v2/buffer/goods/task)",
+          "api_name": "Детализация необработанной загрузки",
           "method": "GET",
           "base_url": "https://discounts-prices-api.wildberries.ru",
           "path": "/api/v2/buffer/goods/task",
@@ -4552,10 +4552,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Prices and Discounts",
+            "tag": "Цены и скидки",
             "auth": {
               "required": true,
               "schemes": [
@@ -4575,20 +4575,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Prices and Discounts. Unprocessed Upload Details. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Детализация необработанной загрузки. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Prices and Discounts",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Цены и скидки",
       "method": "GET",
       "path": "/api/v2/buffer/tasks",
       "path_template": "/api/v2/buffer/tasks",
       "base_url": "https://discounts-prices-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Unprocessed Upload State (GET /api/v2/buffer/tasks)",
-      "description": "Prices and Discounts. Unprocessed Upload State. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Состояние необработанной загрузки",
+      "description": "Описание метода: Состояние необработанной загрузки. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -4601,13 +4601,13 @@
       "response_example_media_type": "application/json",
       "response_example": {},
       "row_payload": {
-        "api_name": "WB Work with Products :: Unprocessed Upload State (GET /api/v2/buffer/tasks)",
-        "description": "Prices and Discounts. Unprocessed Upload State. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Состояние необработанной загрузки",
+        "description": "Описание метода: Состояние необработанной загрузки. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Unprocessed Upload State (GET /api/v2/buffer/tasks)",
+          "api_name": "Состояние необработанной загрузки",
           "method": "GET",
           "base_url": "https://discounts-prices-api.wildberries.ru",
           "path": "/api/v2/buffer/tasks",
@@ -4673,10 +4673,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Prices and Discounts",
+            "tag": "Цены и скидки",
             "auth": {
               "required": true,
               "schemes": [
@@ -4696,20 +4696,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Prices and Discounts. Unprocessed Upload State. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Состояние необработанной загрузки. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Prices and Discounts",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Цены и скидки",
       "method": "GET",
       "path": "/api/v2/history/goods/task",
       "path_template": "/api/v2/history/goods/task",
       "base_url": "https://discounts-prices-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Processed Upload Details (GET /api/v2/history/goods/task)",
-      "description": "Prices and Discounts. Processed Upload Details. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Детализация обработанной загрузки",
+      "description": "Описание метода: Детализация обработанной загрузки. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -4722,13 +4722,13 @@
       "response_example_media_type": "application/json",
       "response_example": {},
       "row_payload": {
-        "api_name": "WB Work with Products :: Processed Upload Details (GET /api/v2/history/goods/task)",
-        "description": "Prices and Discounts. Processed Upload Details. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Детализация обработанной загрузки",
+        "description": "Описание метода: Детализация обработанной загрузки. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Processed Upload Details (GET /api/v2/history/goods/task)",
+          "api_name": "Детализация обработанной загрузки",
           "method": "GET",
           "base_url": "https://discounts-prices-api.wildberries.ru",
           "path": "/api/v2/history/goods/task",
@@ -4794,10 +4794,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Prices and Discounts",
+            "tag": "Цены и скидки",
             "auth": {
               "required": true,
               "schemes": [
@@ -4817,20 +4817,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Prices and Discounts. Processed Upload Details. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Детализация обработанной загрузки. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Prices and Discounts",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Цены и скидки",
       "method": "GET",
       "path": "/api/v2/history/tasks",
       "path_template": "/api/v2/history/tasks",
       "base_url": "https://discounts-prices-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Processed Upload State (GET /api/v2/history/tasks)",
-      "description": "Prices and Discounts. Processed Upload State. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Состояние обработанной загрузки",
+      "description": "Описание метода: Состояние обработанной загрузки. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -4843,13 +4843,13 @@
       "response_example_media_type": "application/json",
       "response_example": {},
       "row_payload": {
-        "api_name": "WB Work with Products :: Processed Upload State (GET /api/v2/history/tasks)",
-        "description": "Prices and Discounts. Processed Upload State. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Состояние обработанной загрузки",
+        "description": "Описание метода: Состояние обработанной загрузки. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Processed Upload State (GET /api/v2/history/tasks)",
+          "api_name": "Состояние обработанной загрузки",
           "method": "GET",
           "base_url": "https://discounts-prices-api.wildberries.ru",
           "path": "/api/v2/history/tasks",
@@ -4915,10 +4915,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Prices and Discounts",
+            "tag": "Цены и скидки",
             "auth": {
               "required": true,
               "schemes": [
@@ -4938,20 +4938,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Prices and Discounts. Processed Upload State. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Состояние обработанной загрузки. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Prices and Discounts",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Цены и скидки",
       "method": "GET",
       "path": "/api/v2/list/goods/filter",
       "path_template": "/api/v2/list/goods/filter",
       "base_url": "https://discounts-prices-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Get Products with Prices (GET /api/v2/list/goods/filter)",
-      "description": "Prices and Discounts. Get Products with Prices. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Получить товары с ценами",
+      "description": "Описание метода: Получить товары с ценами. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -4964,13 +4964,13 @@
       "response_example_media_type": "application/json",
       "response_example": {},
       "row_payload": {
-        "api_name": "WB Work with Products :: Get Products with Prices (GET /api/v2/list/goods/filter)",
-        "description": "Prices and Discounts. Get Products with Prices. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Получить товары с ценами",
+        "description": "Описание метода: Получить товары с ценами. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Get Products with Prices (GET /api/v2/list/goods/filter)",
+          "api_name": "Получить товары с ценами",
           "method": "GET",
           "base_url": "https://discounts-prices-api.wildberries.ru",
           "path": "/api/v2/list/goods/filter",
@@ -5036,10 +5036,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Prices and Discounts",
+            "tag": "Цены и скидки",
             "auth": {
               "required": true,
               "schemes": [
@@ -5059,20 +5059,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Prices and Discounts. Get Products with Prices. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Получить товары с ценами. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Prices and Discounts",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Цены и скидки",
       "method": "POST",
       "path": "/api/v2/list/goods/filter",
       "path_template": "/api/v2/list/goods/filter",
       "base_url": "https://discounts-prices-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Get Products with Prices by Articles (POST /api/v2/list/goods/filter)",
-      "description": "Prices and Discounts. Get Products with Prices by Articles. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Получить товары с ценами по артикулам",
+      "description": "Описание метода: Получить товары с ценами по артикулам. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -5085,13 +5085,13 @@
       "response_example_media_type": "application/json",
       "response_example": {},
       "row_payload": {
-        "api_name": "WB Work with Products :: Get Products with Prices by Articles (POST /api/v2/list/goods/filter)",
-        "description": "Prices and Discounts. Get Products with Prices by Articles. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Получить товары с ценами по артикулам",
+        "description": "Описание метода: Получить товары с ценами по артикулам. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Get Products with Prices by Articles (POST /api/v2/list/goods/filter)",
+          "api_name": "Получить товары с ценами по артикулам",
           "method": "POST",
           "base_url": "https://discounts-prices-api.wildberries.ru",
           "path": "/api/v2/list/goods/filter",
@@ -5157,10 +5157,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Prices and Discounts",
+            "tag": "Цены и скидки",
             "auth": {
               "required": true,
               "schemes": [
@@ -5180,20 +5180,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Prices and Discounts. Get Products with Prices by Articles. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Получить товары с ценами по артикулам. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Prices and Discounts",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Цены и скидки",
       "method": "GET",
       "path": "/api/v2/list/goods/size/nm",
       "path_template": "/api/v2/list/goods/size/nm",
       "base_url": "https://discounts-prices-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Get Product Sizes with Prices (GET /api/v2/list/goods/size/nm)",
-      "description": "Prices and Discounts. Get Product Sizes with Prices. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Получить размеры товара с ценами",
+      "description": "Описание метода: Получить размеры товара с ценами. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -5206,13 +5206,13 @@
       "response_example_media_type": "application/json",
       "response_example": {},
       "row_payload": {
-        "api_name": "WB Work with Products :: Get Product Sizes with Prices (GET /api/v2/list/goods/size/nm)",
-        "description": "Prices and Discounts. Get Product Sizes with Prices. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Получить размеры товара с ценами",
+        "description": "Описание метода: Получить размеры товара с ценами. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Get Product Sizes with Prices (GET /api/v2/list/goods/size/nm)",
+          "api_name": "Получить размеры товара с ценами",
           "method": "GET",
           "base_url": "https://discounts-prices-api.wildberries.ru",
           "path": "/api/v2/list/goods/size/nm",
@@ -5278,10 +5278,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Prices and Discounts",
+            "tag": "Цены и скидки",
             "auth": {
               "required": true,
               "schemes": [
@@ -5301,20 +5301,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Prices and Discounts. Get Product Sizes with Prices. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Получить размеры товара с ценами. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Prices and Discounts",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Цены и скидки",
       "method": "GET",
       "path": "/api/v2/quarantine/goods",
       "path_template": "/api/v2/quarantine/goods",
       "base_url": "https://discounts-prices-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Get Products in Quarantine (GET /api/v2/quarantine/goods)",
-      "description": "Prices and Discounts. Get Products in Quarantine. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Получить товары в карантине",
+      "description": "Описание метода: Получить товары в карантине. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -5327,13 +5327,13 @@
       "response_example_media_type": "application/json",
       "response_example": {},
       "row_payload": {
-        "api_name": "WB Work with Products :: Get Products in Quarantine (GET /api/v2/quarantine/goods)",
-        "description": "Prices and Discounts. Get Products in Quarantine. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Получить товары в карантине",
+        "description": "Описание метода: Получить товары в карантине. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Get Products in Quarantine (GET /api/v2/quarantine/goods)",
+          "api_name": "Получить товары в карантине",
           "method": "GET",
           "base_url": "https://discounts-prices-api.wildberries.ru",
           "path": "/api/v2/quarantine/goods",
@@ -5399,10 +5399,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Prices and Discounts",
+            "tag": "Цены и скидки",
             "auth": {
               "required": true,
               "schemes": [
@@ -5422,20 +5422,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Prices and Discounts. Get Products in Quarantine. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Получить товары в карантине. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Prices and Discounts",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Цены и скидки",
       "method": "POST",
       "path": "/api/v2/upload/task/club-discount",
       "path_template": "/api/v2/upload/task/club-discount",
       "base_url": "https://discounts-prices-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Set WB Club Discounts (POST /api/v2/upload/task/club-discount)",
-      "description": "Prices and Discounts. Set WB Club Discounts. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Установить скидки WB Клуба",
+      "description": "Описание метода: Установить скидки WB Клуба. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -5448,13 +5448,13 @@
       "response_example_media_type": "application/json",
       "response_example": {},
       "row_payload": {
-        "api_name": "WB Work with Products :: Set WB Club Discounts (POST /api/v2/upload/task/club-discount)",
-        "description": "Prices and Discounts. Set WB Club Discounts. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Установить скидки WB Клуба",
+        "description": "Описание метода: Установить скидки WB Клуба. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Set WB Club Discounts (POST /api/v2/upload/task/club-discount)",
+          "api_name": "Установить скидки WB Клуба",
           "method": "POST",
           "base_url": "https://discounts-prices-api.wildberries.ru",
           "path": "/api/v2/upload/task/club-discount",
@@ -5520,10 +5520,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Prices and Discounts",
+            "tag": "Цены и скидки",
             "auth": {
               "required": true,
               "schemes": [
@@ -5543,20 +5543,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Prices and Discounts. Set WB Club Discounts. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Установить скидки WB Клуба. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Prices and Discounts",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Цены и скидки",
       "method": "POST",
       "path": "/api/v2/upload/task/size",
       "path_template": "/api/v2/upload/task/size",
       "base_url": "https://discounts-prices-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Set Size Prices (POST /api/v2/upload/task/size)",
-      "description": "Prices and Discounts. Set Size Prices. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Установить цены для размеров",
+      "description": "Описание метода: Установить цены для размеров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -5569,13 +5569,13 @@
       "response_example_media_type": "application/json",
       "response_example": {},
       "row_payload": {
-        "api_name": "WB Work with Products :: Set Size Prices (POST /api/v2/upload/task/size)",
-        "description": "Prices and Discounts. Set Size Prices. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Установить цены для размеров",
+        "description": "Описание метода: Установить цены для размеров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Set Size Prices (POST /api/v2/upload/task/size)",
+          "api_name": "Установить цены для размеров",
           "method": "POST",
           "base_url": "https://discounts-prices-api.wildberries.ru",
           "path": "/api/v2/upload/task/size",
@@ -5641,10 +5641,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Prices and Discounts",
+            "tag": "Цены и скидки",
             "auth": {
               "required": true,
               "schemes": [
@@ -5664,20 +5664,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Prices and Discounts. Set Size Prices. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Установить цены для размеров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Prices and Discounts",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Цены и скидки",
       "method": "POST",
       "path": "/api/v2/upload/task",
       "path_template": "/api/v2/upload/task",
       "base_url": "https://discounts-prices-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Set Prices and Discounts (POST /api/v2/upload/task)",
-      "description": "Prices and Discounts. Set Prices and Discounts. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Установить цены и скидки",
+      "description": "Описание метода: Установить цены и скидки. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -5690,13 +5690,13 @@
       "response_example_media_type": "application/json",
       "response_example": {},
       "row_payload": {
-        "api_name": "WB Work with Products :: Set Prices and Discounts (POST /api/v2/upload/task)",
-        "description": "Prices and Discounts. Set Prices and Discounts. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Установить цены и скидки",
+        "description": "Описание метода: Установить цены и скидки. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Set Prices and Discounts (POST /api/v2/upload/task)",
+          "api_name": "Установить цены и скидки",
           "method": "POST",
           "base_url": "https://discounts-prices-api.wildberries.ru",
           "path": "/api/v2/upload/task",
@@ -5762,10 +5762,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Prices and Discounts",
+            "tag": "Цены и скидки",
             "auth": {
               "required": true,
               "schemes": [
@@ -5785,20 +5785,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Prices and Discounts. Set Prices and Discounts. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Установить цены и скидки. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Seller Warehouses",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Склады продавца",
       "method": "GET",
       "path": "/api/v3/dbw/warehouses/{warehouseId}/contacts",
       "path_template": "/api/v3/dbw/warehouses/{{warehouseId}}/contacts",
       "base_url": "https://marketplace-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Contacts List (GET /api/v3/dbw/warehouses/{warehouseId}/contacts)",
-      "description": "Seller Warehouses. Contacts List. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Список контактов",
+      "description": "Описание метода: Список контактов. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -5818,13 +5818,13 @@
         ]
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Contacts List (GET /api/v3/dbw/warehouses/{warehouseId}/contacts)",
-        "description": "Seller Warehouses. Contacts List. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Список контактов",
+        "description": "Описание метода: Список контактов. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Contacts List (GET /api/v3/dbw/warehouses/{warehouseId}/contacts)",
+          "api_name": "Список контактов",
           "method": "GET",
           "base_url": "https://marketplace-api.wildberries.ru",
           "path": "/api/v3/dbw/warehouses/{{warehouseId}}/contacts",
@@ -5890,10 +5890,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Seller Warehouses",
+            "tag": "Склады продавца",
             "auth": {
               "required": true,
               "schemes": [
@@ -5913,20 +5913,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Seller Warehouses. Contacts List. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Список контактов. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Seller Warehouses",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Склады продавца",
       "method": "PUT",
       "path": "/api/v3/dbw/warehouses/{warehouseId}/contacts",
       "path_template": "/api/v3/dbw/warehouses/{{warehouseId}}/contacts",
       "base_url": "https://marketplace-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Update Contacts List (PUT /api/v3/dbw/warehouses/{warehouseId}/contacts)",
-      "description": "Seller Warehouses. Update Contacts List. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Обновить список контактов",
+      "description": "Описание метода: Обновить список контактов. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -5939,13 +5939,13 @@
       "response_example_media_type": "",
       "response_example": null,
       "row_payload": {
-        "api_name": "WB Work with Products :: Update Contacts List (PUT /api/v3/dbw/warehouses/{warehouseId}/contacts)",
-        "description": "Seller Warehouses. Update Contacts List. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Обновить список контактов",
+        "description": "Описание метода: Обновить список контактов. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Update Contacts List (PUT /api/v3/dbw/warehouses/{warehouseId}/contacts)",
+          "api_name": "Обновить список контактов",
           "method": "PUT",
           "base_url": "https://marketplace-api.wildberries.ru",
           "path": "/api/v3/dbw/warehouses/{{warehouseId}}/contacts",
@@ -6011,10 +6011,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Seller Warehouses",
+            "tag": "Склады продавца",
             "auth": {
               "required": true,
               "schemes": [
@@ -6034,20 +6034,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Seller Warehouses. Update Contacts List. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Обновить список контактов. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Seller Warehouses",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Склады продавца",
       "method": "GET",
       "path": "/api/v3/offices",
       "path_template": "/api/v3/offices",
       "base_url": "https://marketplace-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Get Offices (GET /api/v3/offices)",
-      "description": "Seller Warehouses. Get Offices. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Получить список складов WB",
+      "description": "Описание метода: Получить список складов WB. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -6062,13 +6062,13 @@
         {}
       ],
       "row_payload": {
-        "api_name": "WB Work with Products :: Get Offices (GET /api/v3/offices)",
-        "description": "Seller Warehouses. Get Offices. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Получить список складов WB",
+        "description": "Описание метода: Получить список складов WB. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Get Offices (GET /api/v3/offices)",
+          "api_name": "Получить список складов WB",
           "method": "GET",
           "base_url": "https://marketplace-api.wildberries.ru",
           "path": "/api/v3/offices",
@@ -6134,10 +6134,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Seller Warehouses",
+            "tag": "Склады продавца",
             "auth": {
               "required": true,
               "schemes": [
@@ -6157,20 +6157,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Seller Warehouses. Get Offices. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Получить список складов WB. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Seller Warehouses Inventory",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Остатки на складах продавца",
       "method": "DELETE",
       "path": "/api/v3/stocks/{warehouseId}",
       "path_template": "/api/v3/stocks/{{warehouseId}}",
       "base_url": "https://marketplace-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Delete Inventory (DELETE /api/v3/stocks/{warehouseId})",
-      "description": "Seller Warehouses Inventory. Delete Inventory. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Удалить остатки товаров",
+      "description": "Описание метода: Удалить остатки товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -6187,13 +6187,13 @@
       "response_example_media_type": "",
       "response_example": null,
       "row_payload": {
-        "api_name": "WB Work with Products :: Delete Inventory (DELETE /api/v3/stocks/{warehouseId})",
-        "description": "Seller Warehouses Inventory. Delete Inventory. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Удалить остатки товаров",
+        "description": "Описание метода: Удалить остатки товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Delete Inventory (DELETE /api/v3/stocks/{warehouseId})",
+          "api_name": "Удалить остатки товаров",
           "method": "DELETE",
           "base_url": "https://marketplace-api.wildberries.ru",
           "path": "/api/v3/stocks/{{warehouseId}}",
@@ -6263,10 +6263,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Seller Warehouses Inventory",
+            "tag": "Остатки на складах продавца",
             "auth": {
               "required": true,
               "schemes": [
@@ -6286,20 +6286,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Seller Warehouses Inventory. Delete Inventory. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Удалить остатки товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Seller Warehouses Inventory",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Остатки на складах продавца",
       "method": "POST",
       "path": "/api/v3/stocks/{warehouseId}",
       "path_template": "/api/v3/stocks/{{warehouseId}}",
       "base_url": "https://marketplace-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Get Inventory (POST /api/v3/stocks/{warehouseId})",
-      "description": "Seller Warehouses Inventory. Get Inventory. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Получить остатки товаров",
+      "description": "Описание метода: Получить остатки товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -6323,13 +6323,13 @@
         ]
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Get Inventory (POST /api/v3/stocks/{warehouseId})",
-        "description": "Seller Warehouses Inventory. Get Inventory. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Получить остатки товаров",
+        "description": "Описание метода: Получить остатки товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Get Inventory (POST /api/v3/stocks/{warehouseId})",
+          "api_name": "Получить остатки товаров",
           "method": "POST",
           "base_url": "https://marketplace-api.wildberries.ru",
           "path": "/api/v3/stocks/{{warehouseId}}",
@@ -6399,10 +6399,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Seller Warehouses Inventory",
+            "tag": "Остатки на складах продавца",
             "auth": {
               "required": true,
               "schemes": [
@@ -6422,20 +6422,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Seller Warehouses Inventory. Get Inventory. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Получить остатки товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Seller Warehouses Inventory",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Остатки на складах продавца",
       "method": "PUT",
       "path": "/api/v3/stocks/{warehouseId}",
       "path_template": "/api/v3/stocks/{{warehouseId}}",
       "base_url": "https://marketplace-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Update Inventory (PUT /api/v3/stocks/{warehouseId})",
-      "description": "Seller Warehouses Inventory. Update Inventory. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Обновить остатки товаров",
+      "description": "Описание метода: Обновить остатки товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -6455,13 +6455,13 @@
       "response_example_media_type": "",
       "response_example": null,
       "row_payload": {
-        "api_name": "WB Work with Products :: Update Inventory (PUT /api/v3/stocks/{warehouseId})",
-        "description": "Seller Warehouses Inventory. Update Inventory. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Обновить остатки товаров",
+        "description": "Описание метода: Обновить остатки товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Update Inventory (PUT /api/v3/stocks/{warehouseId})",
+          "api_name": "Обновить остатки товаров",
           "method": "PUT",
           "base_url": "https://marketplace-api.wildberries.ru",
           "path": "/api/v3/stocks/{{warehouseId}}",
@@ -6534,10 +6534,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Seller Warehouses Inventory",
+            "tag": "Остатки на складах продавца",
             "auth": {
               "required": true,
               "schemes": [
@@ -6557,20 +6557,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Seller Warehouses Inventory. Update Inventory. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Обновить остатки товаров. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Seller Warehouses",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Склады продавца",
       "method": "DELETE",
       "path": "/api/v3/warehouses/{warehouseId}",
       "path_template": "/api/v3/warehouses/{{warehouseId}}",
       "base_url": "https://marketplace-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Delete Warehouse (DELETE /api/v3/warehouses/{warehouseId})",
-      "description": "Seller Warehouses. Delete Warehouse. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Удалить склад продавца",
+      "description": "Описание метода: Удалить склад продавца. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -6583,13 +6583,13 @@
       "response_example_media_type": "",
       "response_example": null,
       "row_payload": {
-        "api_name": "WB Work with Products :: Delete Warehouse (DELETE /api/v3/warehouses/{warehouseId})",
-        "description": "Seller Warehouses. Delete Warehouse. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Удалить склад продавца",
+        "description": "Описание метода: Удалить склад продавца. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Delete Warehouse (DELETE /api/v3/warehouses/{warehouseId})",
+          "api_name": "Удалить склад продавца",
           "method": "DELETE",
           "base_url": "https://marketplace-api.wildberries.ru",
           "path": "/api/v3/warehouses/{{warehouseId}}",
@@ -6655,10 +6655,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Seller Warehouses",
+            "tag": "Склады продавца",
             "auth": {
               "required": true,
               "schemes": [
@@ -6678,20 +6678,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Seller Warehouses. Delete Warehouse. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Удалить склад продавца. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Seller Warehouses",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Склады продавца",
       "method": "PUT",
       "path": "/api/v3/warehouses/{warehouseId}",
       "path_template": "/api/v3/warehouses/{{warehouseId}}",
       "base_url": "https://marketplace-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Update Warehouse (PUT /api/v3/warehouses/{warehouseId})",
-      "description": "Seller Warehouses. Update Warehouse. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Обновить склад продавца",
+      "description": "Описание метода: Обновить склад продавца. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -6700,20 +6700,20 @@
       "path_parameters": [],
       "request_body_media_type": "application/json",
       "request_body_template": {
-        "name": "Koledino",
+        "name": "Склад Коледино",
         "officeId": 15
       },
       "response_example_status": "204",
       "response_example_media_type": "",
       "response_example": null,
       "row_payload": {
-        "api_name": "WB Work with Products :: Update Warehouse (PUT /api/v3/warehouses/{warehouseId})",
-        "description": "Seller Warehouses. Update Warehouse. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Обновить склад продавца",
+        "description": "Описание метода: Обновить склад продавца. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Update Warehouse (PUT /api/v3/warehouses/{warehouseId})",
+          "api_name": "Обновить склад продавца",
           "method": "PUT",
           "base_url": "https://marketplace-api.wildberries.ru",
           "path": "/api/v3/warehouses/{{warehouseId}}",
@@ -6722,7 +6722,7 @@
           },
           "query_json": {},
           "body_json": {
-            "name": "Koledino",
+            "name": "Склад Коледино",
             "officeId": 15
           },
           "pagination_json": {
@@ -6782,10 +6782,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Seller Warehouses",
+            "tag": "Склады продавца",
             "auth": {
               "required": true,
               "schemes": [
@@ -6805,20 +6805,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Seller Warehouses. Update Warehouse. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Обновить склад продавца. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Seller Warehouses",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Склады продавца",
       "method": "GET",
       "path": "/api/v3/warehouses",
       "path_template": "/api/v3/warehouses",
       "base_url": "https://marketplace-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Get Warehouses (GET /api/v3/warehouses)",
-      "description": "Seller Warehouses. Get Warehouses. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Получить список складов продавца",
+      "description": "Описание метода: Получить список складов продавца. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -6833,13 +6833,13 @@
         {}
       ],
       "row_payload": {
-        "api_name": "WB Work with Products :: Get Warehouses (GET /api/v3/warehouses)",
-        "description": "Seller Warehouses. Get Warehouses. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Получить список складов продавца",
+        "description": "Описание метода: Получить список складов продавца. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Get Warehouses (GET /api/v3/warehouses)",
+          "api_name": "Получить список складов продавца",
           "method": "GET",
           "base_url": "https://marketplace-api.wildberries.ru",
           "path": "/api/v3/warehouses",
@@ -6905,10 +6905,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Seller Warehouses",
+            "tag": "Склады продавца",
             "auth": {
               "required": true,
               "schemes": [
@@ -6928,20 +6928,20 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Seller Warehouses. Get Warehouses. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Получить список складов продавца. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
     },
     {
-      "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
-      "tag": "Seller Warehouses",
+      "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
+      "tag": "Склады продавца",
       "method": "POST",
       "path": "/api/v3/warehouses",
       "path_template": "/api/v3/warehouses",
       "base_url": "https://marketplace-api.wildberries.ru",
-      "api_name": "WB Work with Products :: Create Warehouse (POST /api/v3/warehouses)",
-      "description": "Seller Warehouses. Create Warehouse. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+      "api_name": "Создать склад продавца",
+      "description": "Описание метода: Создать склад продавца. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
       "auth_required": true,
       "auth_schemes": [
         "HeaderApiKey"
@@ -6950,7 +6950,7 @@
       "path_parameters": [],
       "request_body_media_type": "application/json",
       "request_body_template": {
-        "name": "Koledino 2",
+        "name": "Склад Коледино",
         "officeId": 15
       },
       "response_example_status": "201",
@@ -6959,13 +6959,13 @@
         "id": 2
       },
       "row_payload": {
-        "api_name": "WB Work with Products :: Create Warehouse (POST /api/v3/warehouses)",
-        "description": "Seller Warehouses. Create Warehouse. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+        "api_name": "Создать склад продавца",
+        "description": "Описание метода: Создать склад продавца. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
         "schema_version": 1,
         "is_active": true,
         "updated_by": "wb_seed_work_with_products",
         "config_json": {
-          "api_name": "WB Work with Products :: Create Warehouse (POST /api/v3/warehouses)",
+          "api_name": "Создать склад продавца",
           "method": "POST",
           "base_url": "https://marketplace-api.wildberries.ru",
           "path": "/api/v3/warehouses",
@@ -6974,7 +6974,7 @@
           },
           "query_json": {},
           "body_json": {
-            "name": "Koledino 2",
+            "name": "Склад Коледино",
             "officeId": 15
           },
           "pagination_json": {
@@ -7034,10 +7034,10 @@
               "provider": "wildberries",
               "catalog": "openapi",
               "section": "work-with-products",
-              "source_url": "https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+              "source_url": "https://dev.wildberries.ru/docs/openapi/work-with-products",
               "source_slug": "wb_openapi_work_with_products"
             },
-            "tag": "Seller Warehouses",
+            "tag": "Склады продавца",
             "auth": {
               "required": true,
               "schemes": [
@@ -7057,7 +7057,7 @@
           "parameter_definitions": [],
           "response_targets": [],
           "picked_paths": [],
-          "description": "Seller Warehouses. Create Warehouse. Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products",
+          "description": "Описание метода: Создать склад продавца. Источник: https://dev.wildberries.ru/docs/openapi/work-with-products",
           "is_active": true
         }
       }
