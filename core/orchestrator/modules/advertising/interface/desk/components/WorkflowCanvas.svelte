@@ -159,6 +159,11 @@
     scope_type: string;
     scope_ref: string;
   };
+  type ProcessCodeConflict = {
+    normalized_code: string;
+    display_code: string;
+    node_ids: string[];
+  };
   type SchedulerStateView = {
     enabled: boolean;
     last_tick_at: string;
@@ -262,6 +267,7 @@
   let publishedProcesses: DeskProcessSummary[] = [];
   let draftProcesses: DraftProcessSummary[] = [];
   let outdatedPublishedProcesses: DeskProcessSummary[] = [];
+  let processCodeConflicts: ProcessCodeConflict[] = [];
   let processRuns: ProcessRunRow[] = [];
   let workflowJobs: WorkflowJobRow[] = [];
 
@@ -384,6 +390,7 @@
   $: outdatedPublishedProcesses = publishedProcesses.filter(
     (pp) => !draftProcesses.some((dp) => String(dp.start_node_id || '').trim() === String(pp.start_node_id || '').trim())
   );
+  $: processCodeConflicts = findProcessCodeConflicts(nodes);
   $: ensureStartProcessCodes();
 
   function prettyJson(value: any) {
@@ -476,6 +483,68 @@
     if (byName) return byName;
     const fallback = normalizeProcessCodePart(nodeId).slice(-12);
     return fallback ? `process_${fallback}` : `process_${Date.now()}`;
+  }
+
+  function resolveUniqueProcessCodeCandidate(baseCode: string, nodeId = '') {
+    const base = normalizeProcessCodePart(baseCode) || generateProcessCodeFromNodeName('', nodeId);
+    const usedCodes = new Set(
+      nodes
+        .filter((node) => node.type === 'tool' && toolCfg(node).toolType === 'start_process' && node.id !== nodeId)
+        .map((node) => normalizeProcessCodePart(String(toolCfg(node).settings.processCode || '').trim()))
+        .filter(Boolean)
+    );
+    let candidate = base;
+    let idx = 2;
+    while (usedCodes.has(candidate)) {
+      candidate = `${base}_${idx}`;
+      idx += 1;
+    }
+    return candidate;
+  }
+
+  function assignUniqueStartProcessCode(nodeId: string) {
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node || node.type !== 'tool' || toolCfg(node).toolType !== 'start_process') return;
+    const cfg = toolCfg(node);
+    const base = String(cfg.settings.processCode || '').trim() || String(cfg.name || '').trim() || node.id;
+    const uniqueCode = resolveUniqueProcessCodeCandidate(base, nodeId);
+    updateSetting(nodeId, 'processCode', uniqueCode);
+  }
+
+  function findProcessCodeConflicts(nodesList: WorkflowNode[]): ProcessCodeConflict[] {
+    const byCode = new Map<string, { display_code: string; node_ids: string[] }>();
+    (Array.isArray(nodesList) ? nodesList : [])
+      .filter((node) => node.type === 'tool' && toolCfg(node).toolType === 'start_process')
+      .forEach((node) => {
+        const raw = String(toolCfg(node).settings.processCode || '').trim();
+        if (!raw) return;
+        const normalized = normalizeProcessCodePart(raw);
+        if (!normalized) return;
+        const current = byCode.get(normalized) || { display_code: raw, node_ids: [] };
+        current.node_ids.push(String(node.id || '').trim());
+        byCode.set(normalized, current);
+      });
+    const out: ProcessCodeConflict[] = [];
+    byCode.forEach((value, normalized_code) => {
+      if (value.node_ids.length > 1) {
+        out.push({
+          normalized_code,
+          display_code: value.display_code || normalized_code,
+          node_ids: value.node_ids
+        });
+      }
+    });
+    return out;
+  }
+
+  function processCodeConflictByNodeId(nodeId: string) {
+    const target = String(nodeId || '').trim();
+    if (!target) return null;
+    return processCodeConflicts.find((conflict) => conflict.node_ids.includes(target)) || null;
+  }
+
+  function hasProcessCodeConflicts() {
+    return processCodeConflicts.length > 0;
   }
 
   function ensureStartProcessCodes() {
@@ -968,6 +1037,11 @@
 
   async function publishDeskVersion() {
     if (!deskId || publishBusy) return;
+    if (hasProcessCodeConflicts()) {
+      const codes = processCodeConflicts.map((c) => c.display_code || c.normalized_code).join(', ');
+      banner = `Нельзя опубликовать: внутренний код процесса должен быть уникальным. Дубли: ${codes}`;
+      return;
+    }
     publishBusy = true;
     try {
       if (deskDirty) {
@@ -2965,6 +3039,10 @@
     }
     if (!nodes.some((n) => n.type === 'tool' && toolCfg(n).toolType === 'start_process')) out.push({ level: 'error', text: 'Нет узла Старт процесса' });
     if (!nodes.some((n) => n.type === 'tool' && toolCfg(n).toolType === 'end_process')) out.push({ level: 'error', text: 'Нет узла Конец процесса' });
+    if (processCodeConflicts.length) {
+      const dup = processCodeConflicts.map((c) => c.display_code || c.normalized_code).join(', ');
+      out.push({ level: 'error', text: `Дубли внутренних кодов процесса: ${dup}` });
+    }
     nodes.filter((n) => n.type === 'tool' && toolCfg(n).toolType === 'db_write').forEach((n) => {
       if (!String(toolCfg(n).settings.targetTable || '').trim()) out.push({ level: 'error', text: `Узел ${toolCfg(n).name} без таблицы записи` });
     });
@@ -3607,7 +3685,7 @@
             class="mini primary"
             title="Фиксирует текущую схему как опубликованную версию, по которой работает сервер."
             on:click={publishDeskVersion}
-            disabled={!deskId || publishBusy || deskLoading || deskSaving}
+            disabled={!deskId || publishBusy || deskLoading || deskSaving || hasProcessCodeConflicts()}
           >
             {publishBusy ? 'Публикация...' : 'Опубликовать рабочий стол'}
           </button>
@@ -3634,6 +3712,12 @@
             {publishedDeskReady ? 'Опубликовано' : 'Публикации нет'}
           </span>
         </div>
+        {#if processCodeConflicts.length}
+          <div class="ops-error">
+            Внутренний код процесса должен быть уникальным. Найдены дубли:
+            {processCodeConflicts.map((c) => c.display_code || c.normalized_code).join(', ')}
+          </div>
+        {/if}
         <div class="ops-grid ops-grid-side">
           <div class="ops-card">
             <h5>Планировщик</h5>
@@ -3974,6 +4058,16 @@
               placeholder="Например: client_cards_sync"
             />
             <span class="hint">Это внутренний код процесса. Нужен серверу, чтобы отличать процессы друг от друга. Обычно менять не нужно.</span>
+            {#if processCodeConflictByNodeId(settingsNode.id)}
+              <span class="code-error">
+                Код должен быть уникальным. Найден дубль: {processCodeConflictByNodeId(settingsNode.id)?.display_code || processCodeConflictByNodeId(settingsNode.id)?.normalized_code}
+              </span>
+              <button class="mini" type="button" on:click={() => assignUniqueStartProcessCode(settingsNode.id)}>
+                Исправить автоматически
+              </button>
+            {:else}
+              <span class="code-ok">Код уникален.</span>
+            {/if}
           </label>
           <label>
             Тип запуска
@@ -4408,6 +4502,8 @@
   .interval-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .help { font-size: 12px; color: #475569; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; }
   .hint { font-size: 11px; color: #64748b; line-height: 1.35; }
+  .code-ok { font-size: 11px; color: #166534; }
+  .code-error { font-size: 11px; color: #b91c1c; font-weight: 600; }
   .advanced-box {
     border: 1px solid #dbe4f0;
     border-radius: 10px;
