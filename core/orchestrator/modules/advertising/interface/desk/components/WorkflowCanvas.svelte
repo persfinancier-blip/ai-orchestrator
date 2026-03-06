@@ -3544,132 +3544,6 @@
     {/if}
   </div>
 
-  <div class="ops-bar">
-    <div class="ops-actions">
-      <button
-        class="mini primary"
-        title="Фиксирует текущую схему как опубликованную версию, по которой работает сервер."
-        on:click={publishDeskVersion}
-        disabled={!deskId || publishBusy || deskLoading || deskSaving}
-      >
-        {publishBusy ? 'Публикация...' : 'Опубликовать рабочий стол'}
-      </button>
-      <button
-        class="mini"
-        title="Запускает все включенные старт-процессы вручную."
-        on:click={() => triggerPublishedProcess('')}
-        disabled={!deskId || triggerBusy || !publishedDeskReady}
-      >
-        {triggerBusy ? 'Запуск...' : 'Ручной запуск'}
-      </button>
-      <button
-        class="mini"
-        title="Обновляет статусы планировщика, процессов, запусков и очереди."
-        on:click={refreshAutomationContour}
-        disabled={monitorBusy || !deskId}
-      >
-        {monitorBusy ? 'Обновление...' : 'Обновить мониторинг'}
-      </button>
-      <span class="ops-ref">
-        Опубликованная версия: <strong>{publishedDeskVersionId || '-'}</strong>
-      </span>
-      <span class={publishedDeskReady ? 'clean-flag' : 'dirty-flag'}>
-        {publishedDeskReady ? 'Опубликовано' : 'Публикации нет'}
-      </span>
-    </div>
-    <div class="ops-grid">
-      <div class="ops-card">
-        <h5>Планировщик</h5>
-        <div class="kv"><span>Состояние</span><strong>{schedulerView.enabled ? 'Включен' : 'Выключен'}</strong></div>
-        <div class="kv"><span>Последний тик</span><strong>{schedulerView.last_tick_at || '-'}</strong></div>
-        <div class="kv"><span>Тик воркера</span><strong>{schedulerView.worker_last_tick_at || '-'}</strong></div>
-        <div class="kv"><span>Очередь</span><strong>{schedulerView.queue_depth} / в работе {schedulerView.queue_running}</strong></div>
-        <div class="kv"><span>Ошибочные задания</span><strong>{schedulerView.queue_dead_letter}</strong></div>
-        <div class="kv"><span>Событий в ожидании</span><strong>{schedulerView.dependency_event_backlog}</strong></div>
-        {#if schedulerView.last_error}
-          <div class="ops-error">Ошибка планировщика: {schedulerView.last_error}</div>
-        {/if}
-        {#if schedulerView.worker_last_error}
-          <div class="ops-error">Ошибка воркера: {schedulerView.worker_last_error}</div>
-        {/if}
-      </div>
-      <div class="ops-card">
-        <h5>Старт-процессы ({publishedProcesses.length})</h5>
-        {#if publishedProcesses.length}
-          {#each publishedProcesses as p (p.start_node_id)}
-            <div class="process-row">
-              <div class="process-main">
-                <strong>{p.name || p.start_node_id}</strong>
-                <span title="Внутренний код процесса">Код: {p.process_code}</span>
-                <span>Тип запуска: {triggerLabel(p.trigger_type)}</span>
-                <span>{processScopeBadge(p)}</span>
-              </div>
-              <div class="process-actions">
-                <button
-                  class="mini toggle-btn"
-                  title={Boolean(p.is_enabled) ? 'Отключить процесс в автозапуске' : 'Включить процесс в автозапуске'}
-                  class:active={Boolean(p.is_enabled)}
-                  on:click={() => togglePublishedProcess(p.start_node_id, !p.is_enabled)}
-                  disabled={Boolean(processBusyByNode[p.start_node_id])}
-                >
-                  {Boolean(p.is_enabled) ? 'Включен' : 'Выключен'}
-                </button>
-                <button
-                  class="mini"
-                  title="Запустить только этот процесс вручную."
-                  on:click={() => triggerPublishedProcess(p.start_node_id)}
-                  disabled={triggerBusy || !Boolean(p.is_enabled)}
-                >
-                  Запустить
-                </button>
-              </div>
-              {#if p.last_run}
-                <div class="process-last">
-                  Последний запуск: {p.last_run.status || '-'} / {triggerLabel(p.last_run.trigger_type || p.trigger_type)} / {p.last_run.started_at || '-'}
-                </div>
-              {/if}
-            </div>
-          {/each}
-        {:else}
-          <div class="empty">Старт-процессы появятся после публикации</div>
-        {/if}
-      </div>
-      <div class="ops-card">
-        <h5>Запуски и очередь</h5>
-        <div class="ops-columns">
-          <div>
-            <div class="ops-subhead">Запуски ({processRuns.length})</div>
-            {#if processRuns.length}
-              {#each processRuns.slice(0, 8) as run (run.run_uid)}
-                <div class="compact-row">
-                  <span>{run.status}</span>
-                  <span>{run.start_node_id}</span>
-                  <code>{run.run_uid}</code>
-                </div>
-              {/each}
-            {:else}
-              <div class="empty">Нет запусков</div>
-            {/if}
-          </div>
-          <div>
-            <div class="ops-subhead">Задания очереди ({workflowJobs.length})</div>
-            {#if workflowJobs.length}
-              {#each workflowJobs.slice(0, 8) as job (`${job.job_id}`)}
-                <div class="compact-row">
-                  <span>{job.status}</span>
-                  <span>{job.job_type}</span>
-                  <span>#{job.job_id}</span>
-                </div>
-              {/each}
-            {:else}
-              <div class="empty">Нет jobs</div>
-            {/if}
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <div class="topbar">
     <button title="Удаляет ноды и связи на текущем рабочем поле." on:click={resetCanvas}>Очистить рабочее поле</button>
     <button title="Обновляет список API-шаблонов и таблиц для настроек нод." on:click={loadDynamicSourceCatalog} disabled={sourceCatalogLoading}>
@@ -3682,6 +3556,134 @@
   </div>
 
   <div class="workspace">
+    <aside class="ops-pane">
+      <div class="ops-bar ops-bar-side">
+        <div class="ops-actions">
+          <button
+            class="mini primary"
+            title="Фиксирует текущую схему как опубликованную версию, по которой работает сервер."
+            on:click={publishDeskVersion}
+            disabled={!deskId || publishBusy || deskLoading || deskSaving}
+          >
+            {publishBusy ? 'Публикация...' : 'Опубликовать рабочий стол'}
+          </button>
+          <button
+            class="mini"
+            title="Запускает все включенные старт-процессы вручную."
+            on:click={() => triggerPublishedProcess('')}
+            disabled={!deskId || triggerBusy || !publishedDeskReady}
+          >
+            {triggerBusy ? 'Запуск...' : 'Ручной запуск'}
+          </button>
+          <button
+            class="mini"
+            title="Обновляет статусы планировщика, процессов, запусков и очереди."
+            on:click={refreshAutomationContour}
+            disabled={monitorBusy || !deskId}
+          >
+            {monitorBusy ? 'Обновление...' : 'Обновить мониторинг'}
+          </button>
+          <span class="ops-ref">
+            Опубликованная версия: <strong>{publishedDeskVersionId || '-'}</strong>
+          </span>
+          <span class={publishedDeskReady ? 'clean-flag' : 'dirty-flag'}>
+            {publishedDeskReady ? 'Опубликовано' : 'Публикации нет'}
+          </span>
+        </div>
+        <div class="ops-grid ops-grid-side">
+          <div class="ops-card">
+            <h5>Планировщик</h5>
+            <div class="kv"><span>Состояние</span><strong>{schedulerView.enabled ? 'Включен' : 'Выключен'}</strong></div>
+            <div class="kv"><span>Последний тик</span><strong>{schedulerView.last_tick_at || '-'}</strong></div>
+            <div class="kv"><span>Тик воркера</span><strong>{schedulerView.worker_last_tick_at || '-'}</strong></div>
+            <div class="kv"><span>Очередь</span><strong>{schedulerView.queue_depth} / в работе {schedulerView.queue_running}</strong></div>
+            <div class="kv"><span>Ошибочные задания</span><strong>{schedulerView.queue_dead_letter}</strong></div>
+            <div class="kv"><span>Событий в ожидании</span><strong>{schedulerView.dependency_event_backlog}</strong></div>
+            {#if schedulerView.last_error}
+              <div class="ops-error">Ошибка планировщика: {schedulerView.last_error}</div>
+            {/if}
+            {#if schedulerView.worker_last_error}
+              <div class="ops-error">Ошибка воркера: {schedulerView.worker_last_error}</div>
+            {/if}
+          </div>
+          <div class="ops-card">
+            <h5>Старт-процессы ({publishedProcesses.length})</h5>
+            {#if publishedProcesses.length}
+              {#each publishedProcesses as p (p.start_node_id)}
+                <div class="process-row">
+                  <div class="process-main">
+                    <strong>{p.name || p.start_node_id}</strong>
+                    <span title="Внутренний код процесса">Код: {p.process_code}</span>
+                    <span>Тип запуска: {triggerLabel(p.trigger_type)}</span>
+                    <span>{processScopeBadge(p)}</span>
+                  </div>
+                  <div class="process-actions">
+                    <button
+                      class="mini toggle-btn"
+                      title={Boolean(p.is_enabled) ? 'Отключить процесс в автозапуске' : 'Включить процесс в автозапуске'}
+                      class:active={Boolean(p.is_enabled)}
+                      on:click={() => togglePublishedProcess(p.start_node_id, !p.is_enabled)}
+                      disabled={Boolean(processBusyByNode[p.start_node_id])}
+                    >
+                      {Boolean(p.is_enabled) ? 'Включен' : 'Выключен'}
+                    </button>
+                    <button
+                      class="mini"
+                      title="Запустить только этот процесс вручную."
+                      on:click={() => triggerPublishedProcess(p.start_node_id)}
+                      disabled={triggerBusy || !Boolean(p.is_enabled)}
+                    >
+                      Запустить
+                    </button>
+                  </div>
+                  {#if p.last_run}
+                    <div class="process-last">
+                      Последний запуск: {p.last_run.status || '-'} / {triggerLabel(p.last_run.trigger_type || p.trigger_type)} / {p.last_run.started_at || '-'}
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            {:else}
+              <div class="empty">Старт-процессы появятся после публикации</div>
+            {/if}
+          </div>
+          <div class="ops-card">
+            <h5>Запуски и очередь</h5>
+            <div class="ops-columns">
+              <div>
+                <div class="ops-subhead">Запуски ({processRuns.length})</div>
+                {#if processRuns.length}
+                  {#each processRuns.slice(0, 8) as run (run.run_uid)}
+                    <div class="compact-row">
+                      <span>{run.status}</span>
+                      <span>{run.start_node_id}</span>
+                      <code>{run.run_uid}</code>
+                    </div>
+                  {/each}
+                {:else}
+                  <div class="empty">Нет запусков</div>
+                {/if}
+              </div>
+              <div>
+                <div class="ops-subhead">Задания очереди ({workflowJobs.length})</div>
+                {#if workflowJobs.length}
+                  {#each workflowJobs.slice(0, 8) as job (`${job.job_id}`)}
+                    <div class="compact-row">
+                      <span>{job.status}</span>
+                      <span>{job.job_type}</span>
+                      <span>#{job.job_id}</span>
+                    </div>
+                  {/each}
+                {:else}
+                  <div class="empty">Нет jobs</div>
+                {/if}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
     <div class="canvas-wrap" bind:this={canvasEl} on:drop={onDrop} on:dragover={onDragOver} on:wheel={onWheel} on:mousedown={startPan} on:mousemove={onMouseMove} on:mouseup={stopAll} on:mouseleave={stopAll}>
       <div class="canvas" style={`transform: translate(${panX}px, ${panY}px) scale(${zoom});`}>
         <svg class="edges" width="3000" height="2000">
@@ -4162,10 +4164,22 @@
     font-size: 12px;
     color: #334155;
   }
+  .ops-pane {
+    min-width: 0;
+    display: flex;
+  }
+  .ops-bar-side {
+    width: 100%;
+    max-height: 100%;
+    overflow: auto;
+  }
   .ops-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 10px;
+  }
+  .ops-grid-side {
+    grid-template-columns: 1fr;
   }
   .ops-card {
     border: 1px solid #e2e8f0;
@@ -4228,6 +4242,9 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
   }
+  .ops-grid-side .ops-columns {
+    grid-template-columns: 1fr;
+  }
   .ops-subhead {
     font-size: 11px;
     color: #475569;
@@ -4255,7 +4272,7 @@
   .topbar button { border: 1px solid #dbe4f0; background: #fff; border-radius: 9px; padding: 6px 10px; cursor: pointer; }
   .topbar .primary { background: #0f172a; color: #fff; border-color: #0f172a; }
   .summary { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; color: #334155; }
-  .workspace { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 10px; min-height: 720px; }
+  .workspace { display: grid; grid-template-columns: 380px minmax(0, 1fr) 360px; gap: 10px; min-height: 720px; }
   .tools { border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px; background: #f8fbff; display: flex; flex-direction: column; gap: 8px; overflow: auto; }
   .mini { border: 1px solid #dbe4f0; background: #fff; border-radius: 8px; padding: 4px 8px; font-size: 11px; cursor: pointer; }
   .mini.primary { background: #0f172a; color: #fff; border-color: #0f172a; }
@@ -4372,7 +4389,10 @@
     .desk-actions {
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
-    .ops-grid {
+    .workspace {
+      grid-template-columns: 340px minmax(0, 1fr) 340px;
+    }
+    .ops-grid:not(.ops-grid-side) {
       grid-template-columns: 1fr;
     }
   }
