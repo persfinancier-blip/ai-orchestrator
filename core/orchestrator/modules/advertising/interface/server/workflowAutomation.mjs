@@ -1259,6 +1259,77 @@ function isTerminalRunStatus(statusRaw) {
   return s === 'completed' || s === 'completed_with_errors' || s === 'failed' || s === 'cancelled' || s === 'skipped';
 }
 
+function normalizeRunStatus(statusRaw, fallback = 'running') {
+  const s = String(statusRaw || '').trim().toLowerCase();
+  return s || String(fallback || 'running').trim().toLowerCase() || 'running';
+}
+
+function buildRunAggregationSnapshot(counts = {}, runStatusRaw = '') {
+  const totalJobs = Math.max(0, Number(counts.total_jobs || 0));
+  const queuedJobs = Math.max(0, Number(counts.queued_jobs || 0));
+  const runningJobs = Math.max(0, Number(counts.running_jobs || 0));
+  const completedJobs = Math.max(0, Number(counts.completed_jobs || 0));
+  const failedJobs = Math.max(0, Number(counts.failed_jobs || 0));
+  const deadJobs = Math.max(0, Number(counts.dead_letter_jobs || 0));
+  const skippedJobs = Math.max(0, Number(counts.skipped_jobs || 0));
+  const totalSteps = Math.max(0, Number(counts.total_steps || 0));
+  const okSteps = Math.max(0, Number(counts.ok_steps || 0));
+  const warnSteps = Math.max(0, Number(counts.warn_steps || 0));
+  const errorSteps = Math.max(0, Number(counts.error_steps || 0));
+
+  const doneJobs = completedJobs + failedJobs + deadJobs + skippedJobs;
+  const hasActiveJobs = queuedJobs > 0 || runningJobs > 0;
+  const runStatus = normalizeRunStatus(runStatusRaw, 'running');
+  const runTerminal = isTerminalRunStatus(runStatus);
+
+  let progressPercent = totalJobs > 0 ? Math.min(100, (doneJobs / totalJobs) * 100) : 0;
+  if (runTerminal && (totalJobs === 0 || !hasActiveJobs)) progressPercent = 100;
+  progressPercent = Number(progressPercent.toFixed(2));
+
+  let finalStatus = 'running';
+  if (runTerminal) {
+    finalStatus = runStatus;
+  } else if (totalJobs > 0 && !hasActiveJobs) {
+    finalStatus = deadJobs > 0 || failedJobs > 0 ? 'failed' : 'completed';
+  }
+
+  return {
+    total_jobs: totalJobs,
+    queued_jobs: queuedJobs,
+    running_jobs: runningJobs,
+    completed_jobs: completedJobs,
+    failed_jobs: failedJobs,
+    dead_letter_jobs: deadJobs,
+    skipped_jobs: skippedJobs,
+    total_steps: totalSteps,
+    ok_steps: okSteps,
+    warn_steps: warnSteps,
+    error_steps: errorSteps,
+    progress_percent: progressPercent,
+    final_status: finalStatus
+  };
+}
+
+function buildRunSummaryFromAggregation(agg = {}, base = {}) {
+  const source = base && typeof base === 'object' ? base : {};
+  return {
+    ...source,
+    total_jobs: Math.max(0, Number(agg.total_jobs || 0)),
+    queued_jobs: Math.max(0, Number(agg.queued_jobs || 0)),
+    running_jobs: Math.max(0, Number(agg.running_jobs || 0)),
+    completed_jobs: Math.max(0, Number(agg.completed_jobs || 0)),
+    failed_jobs: Math.max(0, Number(agg.failed_jobs || 0)),
+    dead_letter_jobs: Math.max(0, Number(agg.dead_letter_jobs || 0)),
+    skipped_jobs: Math.max(0, Number(agg.skipped_jobs || 0)),
+    total_steps: Math.max(0, Number(agg.total_steps || 0)),
+    ok_steps: Math.max(0, Number(agg.ok_steps || 0)),
+    warn_steps: Math.max(0, Number(agg.warn_steps || 0)),
+    error_steps: Math.max(0, Number(agg.error_steps || 0)),
+    progress_percent: Number(agg.progress_percent || 0),
+    final_status: String(agg.final_status || 'running').trim() || 'running'
+  };
+}
+
 async function upsertSchedulerLease(client, config, patch = {}) {
   const qn = workflowSchedulerLeasesQname(config);
   const ttlMs = Math.max(5_000, Number(patch?.ttl_ms || schedulerState.tickMs * 3 || 30_000));
@@ -1341,8 +1412,21 @@ async function recomputeRunAggregation(client, config, runUid) {
   const queueQn = workflowJobQueueQname(config);
   const aggQn = workflowRunAggregationQname(config);
   const runQn = workflowRunsQname(config);
+  const stepQn = workflowRunStepsQname(config);
   const runId = String(runUid || '').trim();
   if (!runId) return null;
+
+  const runRes = await client.query(
+    `
+    SELECT status, started_at, summary_json, error_text
+    FROM ${runQn}
+    WHERE run_uid = $1
+    LIMIT 1
+    `,
+    [runId]
+  );
+  const runRow = runRes.rows?.[0] || null;
+  const runStatus = normalizeRunStatus(runRow?.status, 'running');
 
   const countRes = await client.query(
     `
@@ -1359,22 +1443,25 @@ async function recomputeRunAggregation(client, config, runUid) {
     `,
     [runId]
   );
-  const c = countRes.rows?.[0] || {};
-  const totalJobs = Math.max(0, Number(c.total_jobs || 0));
-  const queuedJobs = Math.max(0, Number(c.queued_jobs || 0));
-  const runningJobs = Math.max(0, Number(c.running_jobs || 0));
-  const completedJobs = Math.max(0, Number(c.completed_jobs || 0));
-  const failedJobs = Math.max(0, Number(c.failed_jobs || 0));
-  const deadJobs = Math.max(0, Number(c.dead_letter_jobs || 0));
-  const skippedJobs = Math.max(0, Number(c.skipped_jobs || 0));
-  const doneJobs = completedJobs + failedJobs + deadJobs + skippedJobs;
-  const progressPercent = totalJobs > 0 ? Math.min(100, (doneJobs / totalJobs) * 100) : 0;
-
-  let finalStatus = 'running';
-  if (totalJobs > 0 && queuedJobs === 0 && runningJobs === 0) {
-    if (deadJobs > 0 || failedJobs > 0) finalStatus = 'failed';
-    else finalStatus = 'completed';
-  }
+  const stepRes = await client.query(
+    `
+    SELECT
+      COUNT(*)::int AS total_steps,
+      COUNT(*) FILTER (WHERE status = 'ok')::int AS ok_steps,
+      COUNT(*) FILTER (WHERE status = 'warn')::int AS warn_steps,
+      COUNT(*) FILTER (WHERE status = 'error')::int AS error_steps
+    FROM ${stepQn}
+    WHERE run_uid = $1
+    `,
+    [runId]
+  );
+  const agg = buildRunAggregationSnapshot(
+    {
+      ...(countRes.rows?.[0] || {}),
+      ...(stepRes.rows?.[0] || {})
+    },
+    runStatus
+  );
 
   await client.query(
     `
@@ -1393,50 +1480,51 @@ async function recomputeRunAggregation(client, config, runUid) {
       updated_at = now()
     WHERE run_uid = $1
     `,
-    [runId, totalJobs, queuedJobs, runningJobs, completedJobs, failedJobs, deadJobs, skippedJobs, progressPercent, finalStatus]
+    [
+      runId,
+      agg.total_jobs,
+      agg.queued_jobs,
+      agg.running_jobs,
+      agg.completed_jobs,
+      agg.failed_jobs,
+      agg.dead_letter_jobs,
+      agg.skipped_jobs,
+      agg.progress_percent,
+      agg.final_status
+    ]
   );
 
-  if (finalStatus !== 'running') {
-    const runRes = await client.query(
-      `
-      SELECT status
-      FROM ${runQn}
-      WHERE run_uid = $1
-      LIMIT 1
-      `,
-      [runId]
-    );
-    const currentStatus = String(runRes.rows?.[0]?.status || '').trim();
-    if (!isTerminalRunStatus(currentStatus)) {
-      const summary = {
-        total_jobs: totalJobs,
-        completed_jobs: completedJobs,
-        failed_jobs: failedJobs,
-        dead_letter_jobs: deadJobs,
-        skipped_jobs: skippedJobs,
-        progress_percent: progressPercent
-      };
-      await updateRunRow(client, config, runId, {
-        status: finalStatus === 'completed' ? 'completed' : 'failed',
-        finished_at: new Date().toISOString(),
-        duration_ms: 0,
-        summary_json: summary,
-        error_text: finalStatus === 'completed' ? '' : 'chunk_jobs_failed'
-      });
-    }
+  const mergedSummary = buildRunSummaryFromAggregation(agg, parseJsonb(runRow?.summary_json, {}));
+  await client.query(
+    `
+    UPDATE ${runQn}
+    SET
+      summary_json = $2::jsonb,
+      updated_at = now()
+    WHERE run_uid = $1
+    `,
+    [runId, stableJsonString(mergedSummary)]
+  );
+
+  if (agg.final_status !== 'running' && !isTerminalRunStatus(runStatus)) {
+    const nowIso = new Date().toISOString();
+    const startedAtMs = runRow?.started_at ? new Date(runRow.started_at).getTime() : 0;
+    const durationMs = startedAtMs > 0 ? Math.max(0, Date.now() - startedAtMs) : 0;
+    const finalRunStatus = normalizeRunStatus(agg.final_status, 'failed');
+    const isSuccessLike =
+      finalRunStatus === 'completed' || finalRunStatus === 'completed_with_errors' || finalRunStatus === 'skipped';
+    await updateRunRow(client, config, runId, {
+      status: finalRunStatus,
+      finished_at: nowIso,
+      duration_ms: durationMs,
+      summary_json: mergedSummary,
+      error_text: isSuccessLike ? '' : String(runRow?.error_text || 'chunk_jobs_failed').trim()
+    });
   }
 
   return {
     run_uid: runId,
-    total_jobs: totalJobs,
-    queued_jobs: queuedJobs,
-    running_jobs: runningJobs,
-    completed_jobs: completedJobs,
-    failed_jobs: failedJobs,
-    dead_letter_jobs: deadJobs,
-    skipped_jobs: skippedJobs,
-    progress_percent: progressPercent,
-    final_status: finalStatus
+    ...agg
   };
 }
 
@@ -1540,19 +1628,24 @@ async function claimWorkflowJobs(client, config, limit = JOB_CLAIM_BATCH) {
   return Array.isArray(r.rows) ? r.rows : [];
 }
 
-async function completeWorkflowJob(client, config, jobId, response = {}) {
+async function completeWorkflowJob(client, config, jobId, response = {}, options = {}) {
   const qn = workflowJobQueueQname(config);
+  const statusRaw = String(options?.status || 'completed').trim().toLowerCase();
+  const status =
+    statusRaw === 'failed' || statusRaw === 'cancelled' || statusRaw === 'skipped' ? statusRaw : 'completed';
+  const errorText = String(options?.error_text || '').trim();
   await client.query(
     `
     UPDATE ${qn}
     SET
-      status = 'completed',
+      status = $2,
       locked_until = now(),
-      last_response_json = $2::jsonb,
+      last_response_json = $3::jsonb,
+      last_error = $4,
       updated_at = now()
     WHERE job_id = $1
     `,
-    [Math.trunc(Number(jobId || 0)), stableJsonString(response || {})]
+    [Math.trunc(Number(jobId || 0)), status, stableJsonString(response || {}), errorText]
   );
 }
 
@@ -1586,12 +1679,12 @@ async function failWorkflowJob(client, config, job, errorText = '') {
   const jobId = Math.trunc(Number(job?.job_id || 0));
   const attempts = Math.trunc(Number(job?.attempt_no || 0));
   const maxAttempts = Math.max(1, Math.trunc(Number(job?.max_attempts || JOB_DEFAULT_MAX_ATTEMPTS)));
-  if (!jobId) return;
+  if (!jobId) return { requeued: false, dead_letter: false };
   if (attempts < maxAttempts) {
     const backoffMs = Math.min(60_000, retryDelayMs(attempts, RETRY_BASE_MS, RETRY_MAX_MS));
     const availableAt = new Date(Date.now() + backoffMs).toISOString();
     await requeueWorkflowJob(client, config, jobId, { available_at: availableAt, error_text: errorText, preserve_attempt: false });
-    return;
+    return { requeued: true, dead_letter: false };
   }
   await client.query(
     `
@@ -1631,6 +1724,7 @@ async function failWorkflowJob(client, config, job, errorText = '') {
       String(errorText || '').trim()
     ]
   );
+  return { requeued: false, dead_letter: true };
 }
 
 async function emitWorkflowEvent(client, config, payload = {}) {
@@ -2280,7 +2374,12 @@ async function loadRunRow(client, config, runUid) {
       trigger_type,
       trigger_key,
       trigger_meta,
-      status
+      status,
+      started_at,
+      finished_at,
+      duration_ms,
+      summary_json,
+      error_text
     FROM ${qn}
     WHERE run_uid = $1
     LIMIT 1
@@ -2577,14 +2676,20 @@ async function enqueueProcessRunQueued(client, config, runInput = {}) {
 async function finalizeRunAfterQueue(client, config, runUid, status, errorText = '') {
   const run = await loadRunRow(client, config, runUid);
   if (!run) return;
-  if (isTerminalRunStatus(run.status)) return;
   const agg = await recomputeRunAggregation(client, config, runUid);
+  const mergedSummary = buildRunSummaryFromAggregation(agg || {}, parseJsonb(run.summary_json, {}));
+  if (isTerminalRunStatus(run.status)) return;
+  const nextStatus = normalizeRunStatus(status, 'completed');
+  const nowIso = new Date().toISOString();
+  const startedAtMs = run?.started_at ? new Date(run.started_at).getTime() : 0;
+  const durationMs = startedAtMs > 0 ? Math.max(0, Date.now() - startedAtMs) : 0;
+  const isSuccessLike = nextStatus === 'completed' || nextStatus === 'completed_with_errors' || nextStatus === 'skipped';
   await updateRunRow(client, config, runUid, {
-    status: String(status || 'completed').trim(),
-    finished_at: new Date().toISOString(),
-    duration_ms: 0,
-    summary_json: agg || {},
-    error_text: String(errorText || '').trim()
+    status: nextStatus,
+    finished_at: nowIso,
+    duration_ms: durationMs,
+    summary_json: mergedSummary,
+    error_text: isSuccessLike ? '' : String(errorText || run?.error_text || 'chunk_jobs_failed').trim()
   });
   if (run.run_policy === 'single_instance') {
     await releaseProcessLock(client, config, {
@@ -2918,13 +3023,24 @@ async function handleProcessNodeJob(client, config, job, payload = {}) {
   });
 
   if (status === 'error') {
-    await finalizeRunAfterQueue(client, config, runUid, 'failed', errorText || 'process_node_failed');
-    return { failed: true, error_text: errorText };
+    return {
+      failed: true,
+      error_text: errorText,
+      finalize_run: {
+        status: 'failed',
+        error_text: errorText || 'process_node_failed'
+      }
+    };
   }
 
   if (nodeIndex >= order.length - 1 || String(node?.config?.toolType || '').trim().toLowerCase() === 'end_process') {
-    await finalizeRunAfterQueue(client, config, runUid, 'completed', '');
-    return { completed: true };
+    return {
+      completed: true,
+      finalize_run: {
+        status: 'completed',
+        error_text: ''
+      }
+    };
   }
 
   const nextIndex = nodeIndex + 1;
@@ -3037,11 +3153,32 @@ async function processQueuedJobsTick(client, config) {
     try {
       const out = await executeWorkflowJobByType(client, config, job);
       if (!out?.deferred) {
-        await completeWorkflowJob(client, config, Number(job?.job_id || 0), out || {});
+        await completeWorkflowJob(client, config, Number(job?.job_id || 0), out || {}, {
+          status: out?.failed ? 'failed' : 'completed',
+          error_text: out?.failed ? String(out?.error_text || '').trim() : ''
+        });
+        if (out?.finalize_run && typeof out.finalize_run === 'object') {
+          const runUid = String(job?.parent_run_uid || '').trim();
+          if (runUid) {
+            await finalizeRunAfterQueue(
+              client,
+              config,
+              runUid,
+              String(out.finalize_run.status || '').trim(),
+              String(out.finalize_run.error_text || '').trim()
+            );
+          }
+        }
       }
     } catch (e) {
       const err = String(e?.message || e || 'job_failed');
-      await failWorkflowJob(client, config, job, err);
+      const failedOut = await failWorkflowJob(client, config, job, err);
+      if (failedOut?.dead_letter) {
+        const runUid = String(job?.parent_run_uid || '').trim();
+        if (runUid) {
+          await finalizeRunAfterQueue(client, config, runUid, 'failed', err);
+        }
+      }
     } finally {
       await recomputeRunAggregation(client, config, String(job?.parent_run_uid || '').trim());
     }
@@ -7134,6 +7271,8 @@ export const workflowAutomationTestkit = {
   dependencyDedupeMode,
   dependencyShouldDispatch,
   buildDependencyDispatchDedupeKey,
+  buildRunAggregationSnapshot,
+  buildRunSummaryFromAggregation,
   composeNodeOutputEnvelope,
   normalizeNodeIoEnvelope,
   compareByOperator,

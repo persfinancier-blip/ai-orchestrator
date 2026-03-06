@@ -19,6 +19,8 @@ const {
   resolveExecutionScopesFromValues,
   dependencyShouldDispatch,
   buildDependencyDispatchDedupeKey,
+  buildRunAggregationSnapshot,
+  buildRunSummaryFromAggregation,
   normalizeNodeIoEnvelope,
   composeNodeOutputEnvelope,
   executeTableParserNode,
@@ -272,4 +274,95 @@ test('start settings sync contract: execution scope mode values stay from UI opt
   assert.equal(processCfg.scope_type, 'partition');
   assert.equal(processCfg.scope_ref, 'part_01');
   assert.equal(processCfg.run_policy, 'single_instance');
+});
+
+test('aggregation summary: completed run stays consistent with progress and final status', () => {
+  const agg = buildRunAggregationSnapshot({
+    total_jobs: 4,
+    queued_jobs: 0,
+    running_jobs: 0,
+    completed_jobs: 4,
+    failed_jobs: 0,
+    dead_letter_jobs: 0,
+    skipped_jobs: 0,
+    total_steps: 4,
+    ok_steps: 4,
+    warn_steps: 0,
+    error_steps: 0
+  });
+  const summary = buildRunSummaryFromAggregation(agg, { trigger_type: 'manual' });
+  assert.equal(agg.final_status, 'completed');
+  assert.equal(agg.progress_percent, 100);
+  assert.equal(summary.final_status, 'completed');
+  assert.equal(summary.progress_percent, 100);
+  assert.equal(summary.completed_jobs, 4);
+  assert.equal(summary.total_steps, 4);
+});
+
+test('aggregation summary: failed run keeps failed final_status even when all jobs are done', () => {
+  const agg = buildRunAggregationSnapshot({
+    total_jobs: 3,
+    queued_jobs: 0,
+    running_jobs: 0,
+    completed_jobs: 3,
+    failed_jobs: 0,
+    dead_letter_jobs: 0,
+    skipped_jobs: 0,
+    total_steps: 2,
+    ok_steps: 1,
+    warn_steps: 0,
+    error_steps: 1
+  }, 'failed');
+  const summary = buildRunSummaryFromAggregation(agg, {});
+  assert.equal(agg.final_status, 'failed');
+  assert.equal(agg.progress_percent, 100);
+  assert.equal(summary.final_status, 'failed');
+  assert.equal(summary.error_steps, 1);
+});
+
+test('aggregation race safety: summary changes from running(80) to completed(100) after last job completion', () => {
+  const before = buildRunAggregationSnapshot({
+    total_jobs: 5,
+    queued_jobs: 0,
+    running_jobs: 1,
+    completed_jobs: 4,
+    failed_jobs: 0,
+    dead_letter_jobs: 0,
+    skipped_jobs: 0
+  }, 'running');
+  const after = buildRunAggregationSnapshot({
+    total_jobs: 5,
+    queued_jobs: 0,
+    running_jobs: 0,
+    completed_jobs: 5,
+    failed_jobs: 0,
+    dead_letter_jobs: 0,
+    skipped_jobs: 0
+  }, 'running');
+  assert.equal(before.final_status, 'running');
+  assert.equal(before.progress_percent, 80);
+  assert.equal(after.final_status, 'completed');
+  assert.equal(after.progress_percent, 100);
+});
+
+test('aggregation consistency: manual trigger and scheduler trigger produce identical aggregate fields', () => {
+  const counts = {
+    total_jobs: 6,
+    queued_jobs: 0,
+    running_jobs: 0,
+    completed_jobs: 6,
+    failed_jobs: 0,
+    dead_letter_jobs: 0,
+    skipped_jobs: 0,
+    total_steps: 6,
+    ok_steps: 6,
+    warn_steps: 0,
+    error_steps: 0
+  };
+  const manualSummary = buildRunSummaryFromAggregation(buildRunAggregationSnapshot(counts, 'running'), { trigger_type: 'manual' });
+  const schedulerSummary = buildRunSummaryFromAggregation(buildRunAggregationSnapshot(counts, 'running'), { trigger_type: 'interval' });
+  assert.equal(manualSummary.final_status, schedulerSummary.final_status);
+  assert.equal(manualSummary.progress_percent, schedulerSummary.progress_percent);
+  assert.equal(manualSummary.total_jobs, schedulerSummary.total_jobs);
+  assert.equal(manualSummary.completed_jobs, schedulerSummary.completed_jobs);
 });
