@@ -134,6 +134,61 @@
     updated_by?: string;
   };
   type ExistingTable = { schema_name: string; table_name: string };
+  type DeskProcessSummary = {
+    start_node_id: string;
+    process_code: string;
+    name: string;
+    is_enabled: boolean;
+    trigger_type: string;
+    schedule_value: string;
+    timezone: string;
+    run_policy: string;
+    execution_scope_mode: string;
+    scope_type: string;
+    scope_ref: string;
+    tenant_id: string | null;
+    context_json: Record<string, any>;
+    scope_source: Record<string, any>;
+    input_scope?: string;
+    output_scope?: string;
+    last_run?: any;
+  };
+  type SchedulerStateView = {
+    enabled: boolean;
+    last_tick_at: string;
+    last_error: string;
+    worker_last_tick_at: string;
+    worker_last_error: string;
+    queue_depth: number;
+    queue_running: number;
+    queue_dead_letter: number;
+    dependency_event_backlog: number;
+    active_workers: number;
+  };
+  type ProcessRunRow = {
+    run_uid: string;
+    status: string;
+    start_node_id: string;
+    process_code: string;
+    trigger_type: string;
+    started_at: string;
+    finished_at?: string;
+    error_text?: string;
+    scope_type?: string;
+    scope_ref?: string;
+  };
+  type WorkflowJobRow = {
+    job_id: number;
+    status: string;
+    parent_run_uid: string;
+    start_node_id: string;
+    job_type: string;
+    attempt_no: number;
+    max_attempts: number;
+    error_text?: string;
+    created_at?: string;
+    updated_at?: string;
+  };
 
   let activeTab: SourceGroup = 'data_tables';
   let nodes: WorkflowNode[] = [];
@@ -181,6 +236,27 @@
   let deskLastSavedSignature = '';
   let deskCurrentSignature = '';
   let deskAutosaveTimer: any = null;
+  let publishBusy = false;
+  let triggerBusy = false;
+  let monitorBusy = false;
+  let processBusyByNode: Record<string, boolean> = {};
+  let schedulerView: SchedulerStateView = {
+    enabled: false,
+    last_tick_at: '',
+    last_error: '',
+    worker_last_tick_at: '',
+    worker_last_error: '',
+    queue_depth: 0,
+    queue_running: 0,
+    queue_dead_letter: 0,
+    dependency_event_backlog: 0,
+    active_workers: 0
+  };
+  let publishedDeskVersionId = 0;
+  let publishedDeskReady = false;
+  let publishedProcesses: DeskProcessSummary[] = [];
+  let processRuns: ProcessRunRow[] = [];
+  let workflowJobs: WorkflowJobRow[] = [];
 
   let canvasEl: HTMLDivElement;
   let panX = 0;
@@ -553,6 +629,240 @@
 
   async function reloadDeskFromServer() {
     await loadWorkflowDeskFromServer();
+    await refreshAutomationContour();
+  }
+
+  async function refreshSchedulerState() {
+    const resp = await fetch(`${API_BASE}/workflow-scheduler/state`, {
+      method: 'GET',
+      headers: { Accept: 'application/json', 'X-AO-ROLE': API_ROLE }
+    });
+    let payload: any = {};
+    try {
+      payload = await resp.json();
+    } catch {
+      payload = {};
+    }
+    if (!resp.ok) {
+      throw new Error(String(payload?.details || payload?.error || `${resp.status} ${resp.statusText}`));
+    }
+    const queue = payload?.queue && typeof payload.queue === 'object' ? payload.queue : {};
+    schedulerView = {
+      enabled: Boolean(payload?.enabled),
+      last_tick_at: String(payload?.last_tick_at || ''),
+      last_error: String(payload?.last_error || ''),
+      worker_last_tick_at: String(payload?.worker_last_tick_at || ''),
+      worker_last_error: String(payload?.worker_last_error || ''),
+      queue_depth: Number(queue?.queue_depth || 0),
+      queue_running: Number(queue?.queue_running || 0),
+      queue_dead_letter: Number(queue?.queue_dead_letter || 0),
+      dependency_event_backlog: Number(queue?.dependency_event_backlog || 0),
+      active_workers: Number(queue?.active_workers || 0)
+    };
+  }
+
+  async function refreshDeskProcesses() {
+    if (!deskId) {
+      publishedProcesses = [];
+      publishedDeskVersionId = 0;
+      publishedDeskReady = false;
+      return;
+    }
+    const resp = await fetch(`${API_BASE}/desks/${deskId}/processes`, {
+      method: 'GET',
+      headers: { Accept: 'application/json', 'X-AO-ROLE': API_ROLE }
+    });
+    let payload: any = {};
+    try {
+      payload = await resp.json();
+    } catch {
+      payload = {};
+    }
+    if (!resp.ok) {
+      throw new Error(String(payload?.details || payload?.error || `${resp.status} ${resp.statusText}`));
+    }
+    publishedDeskVersionId = Math.max(0, Number(payload?.desk_version_id || 0));
+    publishedDeskReady = Boolean(payload?.published);
+    publishedProcesses = Array.isArray(payload?.processes) ? payload.processes : [];
+  }
+
+  async function refreshRunsAndJobs() {
+    if (!deskId) {
+      processRuns = [];
+      workflowJobs = [];
+      return;
+    }
+    const [runsResp, jobsResp] = await Promise.all([
+      fetch(`${API_BASE}/process-runs?desk_id=${deskId}&limit=30`, {
+        method: 'GET',
+        headers: { Accept: 'application/json', 'X-AO-ROLE': API_ROLE }
+      }),
+      fetch(`${API_BASE}/workflow-jobs?limit=120`, {
+        method: 'GET',
+        headers: { Accept: 'application/json', 'X-AO-ROLE': API_ROLE }
+      })
+    ]);
+    let runsPayload: any = {};
+    let jobsPayload: any = {};
+    try {
+      runsPayload = await runsResp.json();
+    } catch {
+      runsPayload = {};
+    }
+    try {
+      jobsPayload = await jobsResp.json();
+    } catch {
+      jobsPayload = {};
+    }
+    if (!runsResp.ok) {
+      throw new Error(String(runsPayload?.details || runsPayload?.error || `${runsResp.status} ${runsResp.statusText}`));
+    }
+    if (!jobsResp.ok) {
+      throw new Error(String(jobsPayload?.details || jobsPayload?.error || `${jobsResp.status} ${jobsResp.statusText}`));
+    }
+    processRuns = Array.isArray(runsPayload?.runs) ? runsPayload.runs : [];
+    const jobs = Array.isArray(jobsPayload?.jobs) ? jobsPayload.jobs : [];
+    workflowJobs = jobs
+      .filter((j: any) => Number(j?.desk_id || 0) === Number(deskId))
+      .sort((a: any, b: any) => Number(b?.job_id || 0) - Number(a?.job_id || 0))
+      .slice(0, 120);
+  }
+
+  async function refreshAutomationContour() {
+    monitorBusy = true;
+    try {
+      await Promise.all([refreshSchedulerState(), refreshDeskProcesses(), refreshRunsAndJobs()]);
+    } catch (e: any) {
+      banner = String(e?.message || e || 'Ошибка обновления мониторинга');
+    } finally {
+      monitorBusy = false;
+    }
+  }
+
+  async function publishDeskVersion() {
+    if (!deskId || publishBusy) return;
+    publishBusy = true;
+    try {
+      if (deskDirty) {
+        const saved = await saveDesk(true);
+        if (!saved) throw new Error('Не удалось сохранить рабочий стол перед публикацией');
+      }
+      const resp = await fetch(`${API_BASE}/desks/${deskId}/publish`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-AO-ROLE': API_ROLE
+        },
+        body: JSON.stringify({ published_by: API_ROLE })
+      });
+      let payload: any = {};
+      try {
+        payload = await resp.json();
+      } catch {
+        payload = {};
+      }
+      if (!resp.ok) {
+        throw new Error(String(payload?.details || payload?.error || `${resp.status} ${resp.statusText}`));
+      }
+      publishedDeskVersionId = Math.max(0, Number(payload?.desk_version_id || 0));
+      publishedDeskReady = true;
+      await refreshAutomationContour();
+      banner = `Опубликована версия desk #${publishedDeskVersionId}`;
+    } catch (e: any) {
+      banner = String(e?.message || e || 'Ошибка публикации');
+    } finally {
+      publishBusy = false;
+    }
+  }
+
+  async function togglePublishedProcess(startNodeId: string, enabled: boolean) {
+    if (!deskId || !startNodeId) return;
+    processBusyByNode = { ...processBusyByNode, [startNodeId]: true };
+    try {
+      const action = enabled ? 'enable' : 'disable';
+      const resp = await fetch(`${API_BASE}/processes/${deskId}/${encodeURIComponent(startNodeId)}/${action}`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-AO-ROLE': API_ROLE
+        },
+        body: JSON.stringify({ updated_by: API_ROLE })
+      });
+      let payload: any = {};
+      try {
+        payload = await resp.json();
+      } catch {
+        payload = {};
+      }
+      if (!resp.ok) {
+        throw new Error(String(payload?.details || payload?.error || `${resp.status} ${resp.statusText}`));
+      }
+      publishedProcesses = publishedProcesses.map((p) =>
+        String(p.start_node_id || '') === startNodeId ? { ...p, is_enabled: Boolean(enabled) } : p
+      );
+      banner = enabled ? `Start ${startNodeId} включен` : `Start ${startNodeId} выключен`;
+      await refreshRunsAndJobs();
+    } catch (e: any) {
+      banner = String(e?.message || e || 'Ошибка переключения Start-процесса');
+    } finally {
+      processBusyByNode = { ...processBusyByNode, [startNodeId]: false };
+    }
+  }
+
+  async function triggerPublishedProcess(startNodeId = '') {
+    if (!deskId || triggerBusy) return;
+    triggerBusy = true;
+    try {
+      const resp = await fetch(`${API_BASE}/process-runs/trigger`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-AO-ROLE': API_ROLE
+        },
+        body: JSON.stringify({
+          desk_id: deskId,
+          start_node_id: startNodeId || undefined,
+          wait: false,
+          created_by: API_ROLE,
+          note: 'workflow_ui_trigger'
+        })
+      });
+      let payload: any = {};
+      try {
+        payload = await resp.json();
+      } catch {
+        payload = {};
+      }
+      if (!resp.ok) {
+        throw new Error(String(payload?.details || payload?.error || `${resp.status} ${resp.statusText}`));
+      }
+      const runs = Array.isArray(payload?.runs) ? payload.runs.length : 0;
+      banner = runs > 0 ? `Триггер запущен, queued runs: ${runs}` : 'Триггер отправлен';
+      await refreshAutomationContour();
+    } catch (e: any) {
+      banner = String(e?.message || e || 'Ошибка ручного trigger');
+    } finally {
+      triggerBusy = false;
+    }
+  }
+
+  function applyScopeTypeByMode(nodeId: string, mode: string) {
+    const normalizedMode = String(mode || '').trim();
+    if (normalizedMode === 'single_global') {
+      updateSetting(nodeId, 'scopeType', 'global');
+      updateSetting(nodeId, 'scopeRef', 'global');
+      return;
+    }
+    if (normalizedMode === 'for_each_tenant') updateSetting(nodeId, 'scopeType', 'tenant');
+    if (normalizedMode === 'for_each_source_account') updateSetting(nodeId, 'scopeType', 'source_account');
+    if (normalizedMode === 'for_each_segment') updateSetting(nodeId, 'scopeType', 'segment');
+    if (normalizedMode === 'for_each_partition') updateSetting(nodeId, 'scopeType', 'partition');
+    const current = nodes.find((n) => n.id === nodeId);
+    const scopeRef = String((current && current.type === 'tool' && toolCfg(current).settings.scopeRef) || '').trim();
+    if (!scopeRef) updateSetting(nodeId, 'scopeRef', 'default');
   }
 
   function restartDeskAutosaveTimer() {
@@ -1874,7 +2184,25 @@
   }
 
   function defaultSettings(toolType: ToolType) {
-    if (toolType === 'start_process') return { triggerType: 'interval', intervalValue: '1', intervalUnit: 'minutes' };
+    if (toolType === 'start_process')
+      return {
+        isEnabled: 'true',
+        processCode: '',
+        triggerType: 'interval',
+        intervalValue: '1',
+        intervalUnit: 'minutes',
+        cron: '0 * * * *',
+        timezone: 'UTC',
+        runPolicy: 'single_instance',
+        executionScopeMode: 'single_global',
+        scopeType: 'global',
+        scopeRef: 'global',
+        tenantId: '',
+        contextJson: '{}',
+        scopeSource: '{}',
+        inputScope: '',
+        outputScope: ''
+      };
     if (toolType === 'schedule_process') return { cron: '0 * * * *', mode: 'sync' };
     if (toolType === 'api_request')
       return {
@@ -1908,8 +2236,32 @@
         paginationCursorReqPath: 'cursor',
         paginationCursorResPath: 'response.cursor'
       };
-    if (toolType === 'table_parser') return { parserMultiplier: '1' };
-    if (toolType === 'db_write') return { targetSchema: 'ao_data', targetTable: 'bronze_result', writeSuccessRate: '98' };
+    if (toolType === 'table_parser')
+      return {
+        sourceMode: 'input',
+        sourceSchema: '',
+        sourceTable: '',
+        channel: '',
+        limit: '1000',
+        inputPath: '',
+        recordPath: '',
+        selectFields: '',
+        renameMap: '{}',
+        filterField: '',
+        filterOperator: '',
+        filterValue: '',
+        parserMultiplier: '1'
+      };
+    if (toolType === 'db_write')
+      return {
+        targetSchema: 'ao_data',
+        targetTable: 'bronze_result',
+        writeMode: 'insert',
+        keyColumns: '',
+        batchSize: '500',
+        channel: '',
+        writeSuccessRate: '98'
+      };
     return {};
   }
 
@@ -2957,6 +3309,7 @@
     resetCanvas();
     await loadDynamicSourceCatalog();
     await loadWorkflowDeskFromServer();
+    await refreshAutomationContour();
     deskInitialized = true;
     restartDeskAutosaveTimer();
   });
@@ -3004,6 +3357,111 @@
     {#if deskSaveError}
       <div class="desk-error">{deskSaveError}</div>
     {/if}
+  </div>
+
+  <div class="ops-bar">
+    <div class="ops-actions">
+      <button class="mini primary" on:click={publishDeskVersion} disabled={!deskId || publishBusy || deskLoading || deskSaving}>
+        {publishBusy ? 'Публикация...' : 'Publish desk'}
+      </button>
+      <button class="mini" on:click={() => triggerPublishedProcess('')} disabled={!deskId || triggerBusy || !publishedDeskReady}>
+        {triggerBusy ? 'Запуск...' : 'Trigger manual'}
+      </button>
+      <button class="mini" on:click={refreshAutomationContour} disabled={monitorBusy || !deskId}>
+        {monitorBusy ? 'Обновление...' : 'Обновить мониторинг'}
+      </button>
+      <span class="ops-ref">
+        Published version: <strong>{publishedDeskVersionId || '-'}</strong>
+      </span>
+      <span class={publishedDeskReady ? 'clean-flag' : 'dirty-flag'}>
+        {publishedDeskReady ? 'Опубликовано' : 'Публикации нет'}
+      </span>
+    </div>
+    <div class="ops-grid">
+      <div class="ops-card">
+        <h5>Scheduler</h5>
+        <div class="kv"><span>enabled</span><strong>{schedulerView.enabled ? 'yes' : 'no'}</strong></div>
+        <div class="kv"><span>last tick</span><strong>{schedulerView.last_tick_at || '-'}</strong></div>
+        <div class="kv"><span>worker tick</span><strong>{schedulerView.worker_last_tick_at || '-'}</strong></div>
+        <div class="kv"><span>queue</span><strong>{schedulerView.queue_depth} / running {schedulerView.queue_running}</strong></div>
+        <div class="kv"><span>dead letter</span><strong>{schedulerView.queue_dead_letter}</strong></div>
+        <div class="kv"><span>events backlog</span><strong>{schedulerView.dependency_event_backlog}</strong></div>
+        {#if schedulerView.last_error}
+          <div class="ops-error">scheduler error: {schedulerView.last_error}</div>
+        {/if}
+        {#if schedulerView.worker_last_error}
+          <div class="ops-error">worker error: {schedulerView.worker_last_error}</div>
+        {/if}
+      </div>
+      <div class="ops-card">
+        <h5>Start-процессы ({publishedProcesses.length})</h5>
+        {#if publishedProcesses.length}
+          {#each publishedProcesses as p (p.start_node_id)}
+            <div class="process-row">
+              <div class="process-main">
+                <strong>{p.name || p.start_node_id}</strong>
+                <span>{p.process_code}</span>
+                <span>{p.trigger_type} / {p.execution_scope_mode}</span>
+                <span>{p.scope_type}:{p.scope_ref}</span>
+              </div>
+              <div class="process-actions">
+                <button
+                  class="mini toggle-btn"
+                  class:active={Boolean(p.is_enabled)}
+                  on:click={() => togglePublishedProcess(p.start_node_id, !p.is_enabled)}
+                  disabled={Boolean(processBusyByNode[p.start_node_id])}
+                >
+                  {Boolean(p.is_enabled) ? 'Вкл' : 'Выкл'}
+                </button>
+                <button class="mini" on:click={() => triggerPublishedProcess(p.start_node_id)} disabled={triggerBusy || !Boolean(p.is_enabled)}>
+                  Trigger
+                </button>
+              </div>
+              {#if p.last_run}
+                <div class="process-last">
+                  last: {p.last_run.status} / {p.last_run.trigger_type} / {p.last_run.started_at || '-'}
+                </div>
+              {/if}
+            </div>
+          {/each}
+        {:else}
+          <div class="empty">Start-процессы появятся после публикации</div>
+        {/if}
+      </div>
+      <div class="ops-card">
+        <h5>Runs / Jobs</h5>
+        <div class="ops-columns">
+          <div>
+            <div class="ops-subhead">Runs ({processRuns.length})</div>
+            {#if processRuns.length}
+              {#each processRuns.slice(0, 8) as run (run.run_uid)}
+                <div class="compact-row">
+                  <span>{run.status}</span>
+                  <span>{run.start_node_id}</span>
+                  <code>{run.run_uid}</code>
+                </div>
+              {/each}
+            {:else}
+              <div class="empty">Нет запусков</div>
+            {/if}
+          </div>
+          <div>
+            <div class="ops-subhead">Jobs ({workflowJobs.length})</div>
+            {#if workflowJobs.length}
+              {#each workflowJobs.slice(0, 8) as job (`${job.job_id}`)}
+                <div class="compact-row">
+                  <span>{job.status}</span>
+                  <span>{job.job_type}</span>
+                  <span>#{job.job_id}</span>
+                </div>
+              {/each}
+            {:else}
+              <div class="empty">Нет jobs</div>
+            {/if}
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="topbar">
@@ -3143,11 +3601,47 @@
             <label>Cron<input value={toolCfg(selectedNode).settings.cron || ''} on:input={(e) => onSettingInput(selectedNode.id, 'cron', e)} /></label>
           {/if}
           {#if toolCfg(selectedNode).toolType === 'table_parser'}
+            <label>
+              Источник
+              <select
+                value={toolCfg(selectedNode).settings.sourceMode || 'input'}
+                on:change={(e) => updateSetting(selectedNode.id, 'sourceMode', selectValue(e))}
+              >
+                <option value="input">Вход предыдущей ноды</option>
+                <option value="table">Таблица</option>
+                <option value="process_bus">Process bus</option>
+              </select>
+            </label>
+            <label>Схема<input value={toolCfg(selectedNode).settings.sourceSchema || ''} on:input={(e) => onSettingInput(selectedNode.id, 'sourceSchema', e)} /></label>
+            <label>Таблица<input value={toolCfg(selectedNode).settings.sourceTable || ''} on:input={(e) => onSettingInput(selectedNode.id, 'sourceTable', e)} /></label>
+            <label>Канал bus<input value={toolCfg(selectedNode).settings.channel || ''} on:input={(e) => onSettingInput(selectedNode.id, 'channel', e)} /></label>
+            <label>Лимит<input value={toolCfg(selectedNode).settings.limit || ''} on:input={(e) => onSettingInput(selectedNode.id, 'limit', e)} /></label>
+            <label>Путь во входе<input value={toolCfg(selectedNode).settings.inputPath || ''} on:input={(e) => onSettingInput(selectedNode.id, 'inputPath', e)} /></label>
+            <label>Путь записи<input value={toolCfg(selectedNode).settings.recordPath || ''} on:input={(e) => onSettingInput(selectedNode.id, 'recordPath', e)} /></label>
+            <label>Поля (csv)<input value={toolCfg(selectedNode).settings.selectFields || ''} on:input={(e) => onSettingInput(selectedNode.id, 'selectFields', e)} /></label>
+            <label>Переименовать JSON<input value={toolCfg(selectedNode).settings.renameMap || ''} on:input={(e) => onSettingInput(selectedNode.id, 'renameMap', e)} /></label>
+            <label>Фильтр: поле<input value={toolCfg(selectedNode).settings.filterField || ''} on:input={(e) => onSettingInput(selectedNode.id, 'filterField', e)} /></label>
+            <label>Фильтр: оператор<input value={toolCfg(selectedNode).settings.filterOperator || ''} on:input={(e) => onSettingInput(selectedNode.id, 'filterOperator', e)} /></label>
+            <label>Фильтр: значение<input value={toolCfg(selectedNode).settings.filterValue || ''} on:input={(e) => onSettingInput(selectedNode.id, 'filterValue', e)} /></label>
             <label>Множитель парсинга<input value={toolCfg(selectedNode).settings.parserMultiplier || ''} on:input={(e) => onSettingInput(selectedNode.id, 'parserMultiplier', e)} /></label>
           {/if}
           {#if toolCfg(selectedNode).toolType === 'db_write'}
             <label>Схема<input value={toolCfg(selectedNode).settings.targetSchema || ''} on:input={(e) => onSettingInput(selectedNode.id, 'targetSchema', e)} /></label>
             <label>Таблица<input value={toolCfg(selectedNode).settings.targetTable || ''} on:input={(e) => onSettingInput(selectedNode.id, 'targetTable', e)} /></label>
+            <label>
+              Режим записи
+              <select
+                value={toolCfg(selectedNode).settings.writeMode || 'insert'}
+                on:change={(e) => updateSetting(selectedNode.id, 'writeMode', selectValue(e))}
+              >
+                <option value="insert">insert</option>
+                <option value="upsert">upsert</option>
+                <option value="update_by_key">update_by_key</option>
+              </select>
+            </label>
+            <label>Ключевые колонки (csv)<input value={toolCfg(selectedNode).settings.keyColumns || ''} on:input={(e) => onSettingInput(selectedNode.id, 'keyColumns', e)} /></label>
+            <label>Batch size<input value={toolCfg(selectedNode).settings.batchSize || ''} on:input={(e) => onSettingInput(selectedNode.id, 'batchSize', e)} /></label>
+            <label>Канал fallback<input value={toolCfg(selectedNode).settings.channel || ''} on:input={(e) => onSettingInput(selectedNode.id, 'channel', e)} /></label>
             <label>Успешная запись, %<input value={toolCfg(selectedNode).settings.writeSuccessRate || ''} on:input={(e) => onSettingInput(selectedNode.id, 'writeSuccessRate', e)} /></label>
           {/if}
         {:else}
@@ -3189,7 +3683,25 @@
 
       {#if settingsNode.type === 'tool' && toolCfg(settingsNode).toolType === 'start_process'}
         <div class="node-modal-body">
-          <div class="help">Интервал запуска в стиле n8n: каждые N секунд/минут/часов.</div>
+          <div class="help">Настройка серверного процесса: расписание, scope и политика запуска.</div>
+          <label>
+            Активен
+            <select
+              value={toolCfg(settingsNode).settings.isEnabled || 'true'}
+              on:change={(e) => updateSetting(settingsNode.id, 'isEnabled', selectValue(e))}
+            >
+              <option value="true">Да</option>
+              <option value="false">Нет</option>
+            </select>
+          </label>
+          <label>
+            Process code
+            <input
+              value={toolCfg(settingsNode).settings.processCode || ''}
+              on:input={(e) => onSettingInput(settingsNode.id, 'processCode', e)}
+              placeholder="например client_cards_sync"
+            />
+          </label>
           <label>
             Тип запуска
             <select
@@ -3197,6 +3709,7 @@
               on:change={(e) => updateSetting(settingsNode.id, 'triggerType', selectValue(e))}
             >
               <option value="interval">Интервал</option>
+              <option value="cron">Cron</option>
               <option value="manual">Ручной</option>
             </select>
           </label>
@@ -3223,7 +3736,99 @@
                 </select>
               </label>
             </div>
+          {:else if (toolCfg(settingsNode).settings.triggerType || 'interval') === 'cron'}
+            <label>
+              Cron выражение
+              <input
+                value={toolCfg(settingsNode).settings.cron || '0 * * * *'}
+                on:input={(e) => onSettingInput(settingsNode.id, 'cron', e)}
+                placeholder="0 * * * *"
+              />
+            </label>
           {/if}
+          <div class="interval-grid">
+            <label>
+              Timezone
+              <input value={toolCfg(settingsNode).settings.timezone || 'UTC'} on:input={(e) => onSettingInput(settingsNode.id, 'timezone', e)} />
+            </label>
+            <label>
+              Run policy
+              <select
+                value={toolCfg(settingsNode).settings.runPolicy || 'single_instance'}
+                on:change={(e) => updateSetting(settingsNode.id, 'runPolicy', selectValue(e))}
+              >
+                <option value="single_instance">single_instance</option>
+                <option value="allow_parallel">allow_parallel</option>
+              </select>
+            </label>
+          </div>
+          <label>
+            Execution scope mode
+            <select
+              value={toolCfg(settingsNode).settings.executionScopeMode || 'single_global'}
+              on:change={(e) => {
+                const mode = selectValue(e);
+                updateSetting(settingsNode.id, 'executionScopeMode', mode);
+                applyScopeTypeByMode(settingsNode.id, mode);
+              }}
+            >
+              <option value="single_global">single_global</option>
+              <option value="for_each_tenant">for_each_tenant</option>
+              <option value="for_each_source_account">for_each_source_account</option>
+              <option value="for_each_segment">for_each_segment</option>
+              <option value="for_each_partition">for_each_partition</option>
+            </select>
+          </label>
+          <div class="interval-grid">
+            <label>
+              Scope type
+              <select
+                value={toolCfg(settingsNode).settings.scopeType || 'global'}
+                on:change={(e) => updateSetting(settingsNode.id, 'scopeType', selectValue(e))}
+              >
+                <option value="global">global</option>
+                <option value="tenant">tenant</option>
+                <option value="source_account">source_account</option>
+                <option value="segment">segment</option>
+                <option value="partition">partition</option>
+                <option value="system">system</option>
+              </select>
+            </label>
+            <label>
+              Scope ref
+              <input value={toolCfg(settingsNode).settings.scopeRef || ''} on:input={(e) => onSettingInput(settingsNode.id, 'scopeRef', e)} />
+            </label>
+          </div>
+          <div class="interval-grid">
+            <label>
+              Tenant id (nullable)
+              <input value={toolCfg(settingsNode).settings.tenantId || ''} on:input={(e) => onSettingInput(settingsNode.id, 'tenantId', e)} />
+            </label>
+            <label>
+              Input scope
+              <input value={toolCfg(settingsNode).settings.inputScope || ''} on:input={(e) => onSettingInput(settingsNode.id, 'inputScope', e)} />
+            </label>
+          </div>
+          <label>
+            Output scope
+            <input value={toolCfg(settingsNode).settings.outputScope || ''} on:input={(e) => onSettingInput(settingsNode.id, 'outputScope', e)} />
+          </label>
+          <label>
+            context_json
+            <textarea
+              rows="5"
+              value={toolCfg(settingsNode).settings.contextJson || '{}'}
+              on:input={(e) => onSettingInput(settingsNode.id, 'contextJson', e)}
+            ></textarea>
+          </label>
+          <label>
+            scope_source
+            <textarea
+              rows="5"
+              value={toolCfg(settingsNode).settings.scopeSource || '{}'}
+              on:input={(e) => onSettingInput(settingsNode.id, 'scopeSource', e)}
+            ></textarea>
+          </label>
         </div>
       {/if}
 
@@ -3311,6 +3916,114 @@
     padding: 6px 8px;
     font-size: 12px;
   }
+  .ops-bar {
+    border: 1px solid #dbe4f0;
+    border-radius: 12px;
+    padding: 10px;
+    background: #fff;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .ops-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+  .ops-ref {
+    font-size: 12px;
+    color: #334155;
+  }
+  .ops-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .ops-card {
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background: #f8fafc;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-height: 180px;
+  }
+  .ops-card h5 {
+    margin: 0;
+    font-size: 13px;
+    color: #0f172a;
+  }
+  .kv {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 12px;
+    color: #334155;
+  }
+  .ops-error {
+    border: 1px solid #fecaca;
+    border-radius: 7px;
+    background: #fef2f2;
+    color: #991b1b;
+    padding: 4px 6px;
+    font-size: 11px;
+  }
+  .process-row {
+    border: 1px solid #dbeafe;
+    border-radius: 8px;
+    background: #eff6ff;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .process-main {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 11px;
+    color: #1e293b;
+    align-items: center;
+  }
+  .process-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .process-last {
+    font-size: 11px;
+    color: #334155;
+  }
+  .ops-columns {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .ops-subhead {
+    font-size: 11px;
+    color: #475569;
+    margin-bottom: 4px;
+  }
+  .compact-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1.6fr;
+    gap: 6px;
+    align-items: center;
+    font-size: 11px;
+    border: 1px solid #e2e8f0;
+    border-radius: 7px;
+    background: #fff;
+    padding: 4px 6px;
+    margin-bottom: 4px;
+  }
+  .compact-row code {
+    font-size: 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .topbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .topbar button { border: 1px solid #dbe4f0; background: #fff; border-radius: 9px; padding: 6px 10px; cursor: pointer; }
   .topbar .primary { background: #0f172a; color: #fff; border-color: #0f172a; }
@@ -3319,6 +4032,7 @@
   .sources,.tools { border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px; background: #f8fbff; display: flex; flex-direction: column; gap: 8px; overflow: auto; }
   .source-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .mini { border: 1px solid #dbe4f0; background: #fff; border-radius: 8px; padding: 4px 8px; font-size: 11px; cursor: pointer; }
+  .mini.primary { background: #0f172a; color: #fff; border-color: #0f172a; }
   .source-error { border: 1px solid #fecaca; background: #fef2f2; color: #991b1b; border-radius: 8px; padding: 6px 8px; font-size: 11px; }
   .tabs { display: grid; gap: 6px; }
   .tabs button { border: 1px solid #dbe4f0; background: #fff; border-radius: 8px; padding: 6px; text-align: left; cursor: pointer; }
@@ -3411,6 +4125,9 @@
     .desk-actions {
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
+    .ops-grid {
+      grid-template-columns: 1fr;
+    }
   }
   @media (max-width: 1100px) {
     .workspace {
@@ -3421,6 +4138,9 @@
       grid-template-columns: 1fr;
     }
     .params-grid {
+      grid-template-columns: 1fr;
+    }
+    .ops-columns {
       grid-template-columns: 1fr;
     }
   }

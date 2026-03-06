@@ -3913,7 +3913,7 @@ async function executeHttpWithRetry({ method, url, headers, body }) {
   );
 }
 
-async function executeApiNode(client, node, template) {
+async function executeApiNode(client, node, template, processCtx = {}) {
   const request = normalizeApiRequestFromTemplateRow(template);
   const method = String(request.method || 'GET').trim().toUpperCase() || 'GET';
   const urlRaw = String(request.url || '').trim();
@@ -3975,7 +3975,29 @@ async function executeApiNode(client, node, template) {
   }
 
   const nodeOverrides = getNodeParameterOverrides(node);
-  const finalEntityMaps = (entityParameterMaps.length ? entityParameterMaps : [{}]).map((m) => ({ ...m, ...nodeOverrides }));
+  const scopeOverrides = {};
+  const scopeType = String(processCtx?.scope_type || '').trim();
+  const scopeRef = String(processCtx?.scope_ref || '').trim();
+  const tenantId = processCtx?.tenant_id === null || processCtx?.tenant_id === undefined ? '' : String(processCtx?.tenant_id || '').trim();
+  if (scopeType) {
+    scopeOverrides.scope_type = scopeType;
+    scopeOverrides.__scope_type = scopeType;
+  }
+  if (scopeRef) {
+    scopeOverrides.scope_ref = scopeRef;
+    scopeOverrides.__scope_ref = scopeRef;
+  }
+  if (tenantId) {
+    scopeOverrides.tenant_id = tenantId;
+    scopeOverrides.__tenant_id = tenantId;
+  }
+  const scopeContext = processCtx?.context_json && typeof processCtx.context_json === 'object' ? processCtx.context_json : {};
+  Object.entries(scopeContext).forEach(([k, v]) => {
+    const key = String(k || '').trim();
+    if (!key) return;
+    scopeOverrides[`scope_ctx_${key}`] = v;
+  });
+  const finalEntityMaps = (entityParameterMaps.length ? entityParameterMaps : [{}]).map((m) => ({ ...m, ...scopeOverrides, ...nodeOverrides }));
   const paginationAliasesLower = new Set(
     (template?.paginationParameters || [])
       .map((p) => String(p?.alias || '').trim().toLowerCase())
@@ -5463,74 +5485,362 @@ async function readBusMessages(client, config, { desk_id, channel, run_uid, limi
   return rows;
 }
 
-async function executeTableParserNode(client, config, processCtx, node) {
+function toArrayRows(value) {
+  if (Array.isArray(value)) return value;
+  if (value === undefined || value === null) return [];
+  return [value];
+}
+
+function normalizeNodeIoEnvelope(inputValue, processCtx = {}) {
+  const src = inputValue && typeof inputValue === 'object' ? inputValue : null;
+  if (src && String(src.contract_version || '').trim() === 'node_io_v1' && Array.isArray(src.rows)) {
+    return {
+      contract_version: 'node_io_v1',
+      rows: src.rows,
+      row_count: Math.max(0, Math.trunc(Number(src.row_count || src.rows.length || 0))),
+      meta: src.meta && typeof src.meta === 'object' ? src.meta : {},
+      trace: src.trace && typeof src.trace === 'object' ? src.trace : {}
+    };
+  }
+
+  const rows =
+    Array.isArray(src?.rows)
+      ? src.rows
+      : Array.isArray(src?.responsePreview?.responses)
+        ? src.responsePreview.responses
+            .map((item) => item?.response)
+            .flatMap((resp) => (Array.isArray(resp) ? resp : resp === undefined ? [] : [resp]))
+        : Array.isArray(src?.response?.responses)
+          ? src.response.responses
+              .map((item) => item?.response)
+              .flatMap((resp) => (Array.isArray(resp) ? resp : resp === undefined ? [] : [resp]))
+          : Array.isArray(src?.responses)
+            ? src.responses.map((item) => item?.response || item).flatMap((x) => (Array.isArray(x) ? x : [x]))
+            : Array.isArray(src?.cards)
+              ? src.cards
+              : toArrayRows(inputValue);
+  return {
+    contract_version: 'node_io_v1',
+    rows,
+    row_count: rows.length,
+    meta: {
+      source_type: src && typeof src === 'object' ? 'upstream_object' : 'upstream_value',
+      run_uid: String(processCtx?.run_uid || '').trim(),
+      process_code: String(processCtx?.process_code || '').trim()
+    },
+    trace: {}
+  };
+}
+
+function applySelectAndRename(row, selectFields = [], renameMap = {}) {
+  const src = row && typeof row === 'object' && !Array.isArray(row) ? row : { value: row };
+  const keys = selectFields.length ? selectFields : Object.keys(src);
+  const out = {};
+  keys.forEach((k) => {
+    if (!Object.prototype.hasOwnProperty.call(src, k)) return;
+    const dst = String(renameMap?.[k] || k).trim() || k;
+    out[dst] = src[k];
+  });
+  return out;
+}
+
+function compareByOperator(left, operator, right) {
+  const op = String(operator || '').trim().toLowerCase();
+  if (!op || op === '=' || op === 'eq') return String(left ?? '') === String(right ?? '');
+  if (op === '!=' || op === '<>' || op === 'neq') return String(left ?? '') !== String(right ?? '');
+  if (op === '>') return Number(left) > Number(right);
+  if (op === '>=') return Number(left) >= Number(right);
+  if (op === '<') return Number(left) < Number(right);
+  if (op === '<=') return Number(left) <= Number(right);
+  if (op === 'contains') return String(left ?? '').includes(String(right ?? ''));
+  if (op === 'not_contains') return !String(left ?? '').includes(String(right ?? ''));
+  if (op === 'empty') return left === undefined || left === null || String(left) === '';
+  if (op === 'not_empty' || op === 'exists') return !(left === undefined || left === null || String(left) === '');
+  return String(left ?? '') === String(right ?? '');
+}
+
+function parseCsvList(raw) {
+  return String(raw || '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function parseJsonObjectSafe(raw, fallback = {}) {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  const txt = String(raw || '').trim();
+  if (!txt) return fallback;
+  try {
+    const parsed = JSON.parse(txt);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+  } catch {
+    // ignore
+  }
+  return fallback;
+}
+
+function composeNodeOutputEnvelope(processCtx, node, rows, extraMeta = {}, extraTrace = {}) {
+  const safeRows = Array.isArray(rows) ? rows : toArrayRows(rows);
+  return {
+    contract_version: 'node_io_v1',
+    rows: safeRows,
+    row_count: safeRows.length,
+    meta: {
+      node_id: String(node?.id || '').trim(),
+      node_name: String(node?.config?.name || node?.id || '').trim(),
+      node_type: String(node?.config?.toolType || node?.type || '').trim(),
+      run_uid: String(processCtx?.run_uid || '').trim(),
+      process_code: String(processCtx?.process_code || '').trim(),
+      ...extraMeta
+    },
+    trace: {
+      ...extraTrace
+    }
+  };
+}
+
+async function executeTableParserNode(client, config, processCtx, node, inputValue) {
   const settings = node?.config?.settings && typeof node.config.settings === 'object' ? node.config.settings : {};
   const sourceSchema = String(settings.sourceSchema || settings.source_schema || '').trim();
   const sourceTable = String(settings.sourceTable || settings.source_table || '').trim();
+  const sourceModeRaw = String(settings.sourceMode || settings.source_mode || '').trim().toLowerCase();
+  const sourceMode = sourceModeRaw || (isIdent(sourceSchema) && isIdent(sourceTable) ? 'table' : 'input');
   const channel = String(settings.channel || sourceTable || processCtx.process_code || '').trim();
-  const limit = Math.max(1, Math.min(5000, Math.trunc(Number(settings.limit || 100))));
-  if (isIdent(sourceSchema) && isIdent(sourceTable)) {
+  const limit = Math.max(1, Math.min(5000, Math.trunc(Number(settings.limit || 1000))));
+  const inputPath = String(settings.inputPath || settings.input_path || '').trim();
+  const recordPath = String(settings.recordPath || settings.record_path || '').trim();
+  const selectFields = parseCsvList(settings.selectFields || settings.select_fields || '');
+  const renameMap = parseJsonObjectSafe(settings.renameMap || settings.rename_map || '{}', {});
+  const filterField = String(settings.filterField || settings.filter_field || '').trim();
+  const filterOperator = String(settings.filterOperator || settings.filter_operator || '').trim();
+  const filterValue = settings.filterValue ?? settings.filter_value ?? '';
+  const parserMultiplier = Math.max(1, Math.trunc(Number(settings.parserMultiplier || settings.parser_multiplier || 1)));
+
+  const inputEnvelope = normalizeNodeIoEnvelope(inputValue, processCtx);
+  let sourceRows = [];
+  let sourceType = 'input';
+  if (sourceMode === 'table' && isIdent(sourceSchema) && isIdent(sourceTable)) {
     const qn = `${qi(sourceSchema)}.${qi(sourceTable)}`;
     const r = await client.query(`SELECT * FROM ${qn} LIMIT ${limit}`);
-    return {
-      output: { rows: r.rows || [], source: `${sourceSchema}.${sourceTable}` },
-      metrics: { rows: Number(r.rows?.length || 0), source_type: 'table' }
-    };
+    sourceRows = Array.isArray(r.rows) ? r.rows : [];
+    sourceType = 'table';
+  } else if (sourceMode === 'process_bus') {
+    const consume = boolFromAny(settings.consume, true);
+    const messages = await readBusMessages(client, config, {
+      desk_id: processCtx.desk_id,
+      channel,
+      run_uid: processCtx.run_uid,
+      limit,
+      consume
+    });
+    sourceRows = messages.map((m) => m?.payload_json).filter((x) => x !== undefined);
+    sourceType = 'process_bus';
+  } else {
+    const candidate = inputPath ? getByPath({ input: inputValue, envelope: inputEnvelope }, inputPath) : inputEnvelope.rows;
+    sourceRows = toArrayRows(candidate);
+    sourceType = 'input';
   }
-  const consume = boolFromAny(settings.consume, true);
-  const messages = await readBusMessages(client, config, {
-    desk_id: processCtx.desk_id,
-    channel,
-    run_uid: processCtx.run_uid,
-    limit,
-    consume
-  });
-  return {
-    output: {
-      rows: messages.map((m) => m?.payload_json).filter((x) => x !== undefined),
-      source: 'process_bus',
-      channel
+
+  let records = [];
+  for (const row of sourceRows) {
+    const extracted = recordPath ? getByPath({ row }, recordPath) : row;
+    if (Array.isArray(extracted)) records.push(...extracted);
+    else if (extracted !== undefined) records.push(extracted);
+  }
+
+  records = records.map((row) => applySelectAndRename(row, selectFields, renameMap));
+  if (filterField || filterOperator) {
+    records = records.filter((row) => compareByOperator(row?.[filterField], filterOperator, filterValue));
+  }
+  if (parserMultiplier > 1 && records.length) {
+    const expanded = [];
+    records.forEach((row) => {
+      for (let i = 0; i < parserMultiplier; i += 1) expanded.push(deepClone(row));
+    });
+    records = expanded;
+  }
+  if (records.length > limit) records = records.slice(0, limit);
+
+  const envelope = composeNodeOutputEnvelope(
+    processCtx,
+    node,
+    records,
+    {
+      source_type: sourceType,
+      source_ref: sourceType === 'table' ? `${sourceSchema}.${sourceTable}` : sourceType === 'process_bus' ? channel : 'upstream'
     },
-    metrics: { rows: messages.length, source_type: 'process_bus', channel }
+    {
+      input_rows: inputEnvelope.row_count,
+      source_rows: sourceRows.length,
+      parsed_rows: records.length
+    }
+  );
+  return {
+    output: envelope,
+    metrics: {
+      rows: records.length,
+      source_rows: sourceRows.length,
+      source_type: sourceType
+    }
   };
+}
+
+async function tableColumnNames(client, schema, table) {
+  const r = await client.query(
+    `
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = $1
+      AND table_name = $2
+    ORDER BY ordinal_position ASC
+    `,
+    [String(schema || '').trim(), String(table || '').trim()]
+  );
+  return (Array.isArray(r.rows) ? r.rows : []).map((x) => String(x?.column_name || '').trim()).filter(Boolean);
+}
+
+function chunkRows(rows = [], batchSize = 500) {
+  const safeBatch = Math.max(1, Math.trunc(Number(batchSize || 500)));
+  const out = [];
+  for (let i = 0; i < rows.length; i += safeBatch) {
+    out.push(rows.slice(i, i + safeBatch));
+  }
+  return out;
 }
 
 async function executeDbWriteNode(client, config, processCtx, node, inputValue) {
   const settings = node?.config?.settings && typeof node.config.settings === 'object' ? node.config.settings : {};
   const targetSchema = String(settings.targetSchema || settings.target_schema || '').trim();
   const targetTable = String(settings.targetTable || settings.target_table || '').trim();
+  const writeMode = String(settings.writeMode || settings.write_mode || 'insert').trim().toLowerCase() || 'insert';
+  const keyColumns = parseCsvList(settings.keyColumns || settings.key_columns || '');
+  const batchSize = Math.max(1, Math.min(5000, Math.trunc(Number(settings.batchSize || settings.batch_size || 500))));
   const channel = String(settings.channel || targetTable || processCtx.process_code || '').trim();
+
+  const inputEnvelope = normalizeNodeIoEnvelope(inputValue, processCtx);
+  const rows = (Array.isArray(inputEnvelope.rows) ? inputEnvelope.rows : []).map((row) =>
+    row && typeof row === 'object' && !Array.isArray(row) ? row : { value: row }
+  );
+  if (!rows.length) {
+    const emptyOut = composeNodeOutputEnvelope(processCtx, node, [], {
+      target: isIdent(targetSchema) && isIdent(targetTable) ? `${targetSchema}.${targetTable}` : 'process_bus',
+      write_mode: writeMode
+    });
+    return { output: { ...emptyOut, wrote: 0 }, metrics: { wrote: 0, mode: writeMode, target_type: 'none' } };
+  }
+
   if (isIdent(targetSchema) && isIdent(targetTable)) {
     const exists = await tableExists(client, targetSchema, targetTable);
     if (exists) {
+      const cols = await tableColumnNames(client, targetSchema, targetTable);
+      const hasPayloadJson = cols.includes('payload_json');
+      const unionKeys = [...new Set(rows.flatMap((row) => Object.keys(row || {})))].filter((k) => isIdent(k) && cols.includes(k));
       const qn = `${qi(targetSchema)}.${qi(targetTable)}`;
-      try {
-        await client.query(
-          `
-          INSERT INTO ${qn} (payload_json)
-          VALUES ($1::jsonb)
-          `,
-          [JSON.stringify(inputValue === undefined ? {} : inputValue)]
-        );
-        return {
-          output: { wrote: 1, target: `${targetSchema}.${targetTable}` },
-          metrics: { wrote: 1, target_type: 'table' }
-        };
-      } catch {
-        // fallback to process_bus when target table does not support payload_json
+      let wrote = 0;
+
+      if (unionKeys.length) {
+        const writeCols = unionKeys;
+        const keys = keyColumns.filter((k) => writeCols.includes(k));
+        const nonKeys = writeCols.filter((k) => !keys.includes(k));
+        const batches = chunkRows(rows, batchSize);
+        for (const batch of batches) {
+          if (!batch.length) continue;
+          if (writeMode === 'update' || writeMode === 'update_by_key') {
+            if (!keys.length || !nonKeys.length) throw new Error('db_write_update_requires_key_and_nonkey_columns');
+            for (const row of batch) {
+              const values = [];
+              const setSql = nonKeys
+                .map((col) => {
+                  values.push(row[col] ?? null);
+                  return `${qi(col)} = $${values.length}`;
+                })
+                .join(', ');
+              const whereSql = keys
+                .map((col) => {
+                  values.push(row[col] ?? null);
+                  return `${qi(col)} = $${values.length}`;
+                })
+                .join(' AND ');
+              const sql = `UPDATE ${qn} SET ${setSql} WHERE ${whereSql}`;
+              const upd = await client.query(sql, values);
+              wrote += Math.max(0, Number(upd.rowCount || 0));
+            }
+            continue;
+          }
+
+          const values = [];
+          const tupleSql = batch
+            .map((row) => {
+              const t = writeCols.map((col) => {
+                values.push(row[col] ?? null);
+                return `$${values.length}`;
+              });
+              return `(${t.join(', ')})`;
+            })
+            .join(', ');
+          const insertSqlBase = `INSERT INTO ${qn} (${writeCols.map((c) => qi(c)).join(', ')}) VALUES ${tupleSql}`;
+          let finalSql = insertSqlBase;
+          if (writeMode === 'upsert') {
+            if (!keys.length) throw new Error('db_write_upsert_requires_key_columns');
+            if (nonKeys.length) {
+              finalSql += ` ON CONFLICT (${keys.map((k) => qi(k)).join(', ')}) DO UPDATE SET ${nonKeys
+                .map((col) => `${qi(col)} = EXCLUDED.${qi(col)}`)
+                .join(', ')}`;
+            } else {
+              finalSql += ` ON CONFLICT (${keys.map((k) => qi(k)).join(', ')}) DO NOTHING`;
+            }
+          }
+          const ins = await client.query(finalSql, values);
+          wrote += Math.max(0, Number(ins.rowCount || 0));
+        }
+      } else if (hasPayloadJson) {
+        const batches = chunkRows(rows, batchSize);
+        for (const batch of batches) {
+          const values = [];
+          const tupleSql = batch
+            .map((row) => {
+              values.push(JSON.stringify(row));
+              return `($${values.length}::jsonb)`;
+            })
+            .join(', ');
+          const ins = await client.query(`INSERT INTO ${qn} (payload_json) VALUES ${tupleSql}`, values);
+          wrote += Math.max(0, Number(ins.rowCount || 0));
+        }
+      } else {
+        throw new Error(`db_write_no_matching_columns:${targetSchema}.${targetTable}`);
       }
+
+      const envelope = composeNodeOutputEnvelope(processCtx, node, rows, {
+        target: `${targetSchema}.${targetTable}`,
+        write_mode: writeMode,
+        key_columns: keyColumns
+      });
+      return {
+        output: { ...envelope, wrote, target: `${targetSchema}.${targetTable}` },
+        metrics: { wrote, target_type: 'table', mode: writeMode, batches: chunkRows(rows, batchSize).length }
+      };
     }
   }
+
   const id = await writeBusMessage(client, config, {
     desk_id: processCtx.desk_id,
     run_uid: processCtx.run_uid,
     process_code: processCtx.process_code,
     channel,
-    payload_json: inputValue === undefined ? {} : inputValue
+    payload_json: {
+      contract_version: 'node_io_v1',
+      rows,
+      row_count: rows.length
+    }
+  });
+  const envelope = composeNodeOutputEnvelope(processCtx, node, rows, {
+    target: 'process_bus',
+    channel,
+    write_mode: writeMode
   });
   return {
-    output: { wrote: 1, target: 'process_bus', message_id: id, channel },
-    metrics: { wrote: 1, target_type: 'process_bus', channel }
+    output: { ...envelope, wrote: rows.length, target: 'process_bus', message_id: id, channel },
+    metrics: { wrote: rows.length, target_type: 'process_bus', channel, mode: writeMode }
   };
 }
 
@@ -5539,9 +5849,25 @@ async function executeProcessNode(client, config, processCtx, node, templates, i
     const refs = nodeTemplateRefs(node);
     const template = templates.find((tpl) => refs.some((ref) => sourceMatchesTemplateRef(tpl, ref)));
     if (!template) throw new Error(`api_template_not_found:${requestSignature(node)}`);
-    const exec = await executeApiNode(client, node, template);
+    const exec = await executeApiNode(client, node, template, processCtx || {});
+    const outputEnvelope = composeNodeOutputEnvelope(
+      processCtx,
+      node,
+      Array.isArray(exec?.responsePreview?.responses) ? exec.responsePreview.responses : [exec.responsePreview || {}],
+      {
+        source_type: 'api_request',
+        request_count: Number(exec?.metrics?.requestCount || 0),
+        success: Number(exec?.metrics?.success || 0),
+        failed: Number(exec?.metrics?.failed || 0),
+        template_store_id: Number(template?.id || 0) || undefined
+      },
+      {
+        request_preview: exec.requestPreview || {},
+        response_preview: exec.responsePreview || {}
+      }
+    );
     return {
-      output: exec.responsePreview || {},
+      output: outputEnvelope,
       metrics: exec.metrics || {},
       request_payload: exec.requestPreview || {},
       response_payload: exec.responsePreview || {}
@@ -5563,11 +5889,14 @@ async function executeProcessNode(client, config, processCtx, node, templates, i
     };
   }
   if (toolType === 'table_parser') {
-    const parser = await executeTableParserNode(client, config, processCtx, node);
+    const parser = await executeTableParserNode(client, config, processCtx, node, inputValue);
     return {
       output: parser.output,
       metrics: parser.metrics,
-      request_payload: { mode: 'table_parser' },
+      request_payload: {
+        mode: 'table_parser',
+        input_contract: normalizeNodeIoEnvelope(inputValue, processCtx)
+      },
       response_payload: parser.output
     };
   }
@@ -6360,6 +6689,77 @@ async function setProcessEnabledHandler(req, res, enabled) {
   }
 }
 
+async function listDeskProcessesHandler(req, res) {
+  const deskId = Number(req.params?.desk_id || req.query?.desk_id || 0);
+  if (!Number.isFinite(deskId) || deskId <= 0) {
+    return res.status(400).json({ error: 'bad_request', details: 'invalid desk_id' });
+  }
+  let client = null;
+  try {
+    client = await pool.connect();
+    const config = await loadRuntimeStorageConfig(client);
+    await ensureWorkflowAutomationTables(client, config);
+    const published = await loadPublishedDeskById(client, config, deskId);
+    if (!published) {
+      return res.json({
+        ok: true,
+        desk_id: Math.trunc(deskId),
+        desk_version_id: 0,
+        published: false,
+        processes: []
+      });
+    }
+    const processes = await discoverDeskProcesses(client, config, published);
+    const runQn = workflowRunsQname(config);
+    const out = [];
+    for (const process of processes) {
+      const run = await client.query(
+        `
+        SELECT run_uid, status, started_at, finished_at, trigger_type, scope_type, scope_ref, error_text
+        FROM ${runQn}
+        WHERE desk_id = $1
+          AND desk_version_id = $2
+          AND start_node_id = $3
+        ORDER BY started_at DESC
+        LIMIT 1
+        `,
+        [Math.trunc(Number(published?.desk_id || 0)), Math.trunc(Number(published?.desk_version_id || 0)), String(process?.start_node_id || '').trim()]
+      );
+      const lastRun = run.rows?.[0] || null;
+      out.push({
+        start_node_id: String(process?.start_node_id || '').trim(),
+        process_code: String(process?.process_code || '').trim(),
+        name: String(process?.name || '').trim(),
+        is_enabled: Boolean(process?.is_enabled),
+        trigger_type: normalizeTriggerType(process?.trigger_type),
+        schedule_value: String(process?.schedule_value || '').trim(),
+        timezone: String(process?.timezone || 'UTC').trim() || 'UTC',
+        run_policy: normalizeRunPolicy(process?.run_policy),
+        execution_scope_mode: normalizeExecutionScopeMode(process?.execution_scope_mode),
+        scope_type: normalizeScopeType(process?.scope_type, 'global'),
+        scope_ref: normalizeScopeRef(process?.scope_ref, 'global'),
+        tenant_id: normalizeOptionalScopeTenant(process?.tenant_id),
+        scope_source: normalizeScopeSource(process?.scope_source || {}),
+        context_json: normalizeScopeContext(process?.context_json || {}, {}),
+        input_scope: String(process?.input_scope || '').trim(),
+        output_scope: String(process?.output_scope || '').trim(),
+        last_run: lastRun
+      });
+    }
+    return res.json({
+      ok: true,
+      desk_id: Math.trunc(Number(published?.desk_id || 0)),
+      desk_version_id: Math.trunc(Number(published?.desk_version_id || 0)),
+      published: true,
+      processes: out
+    });
+  } catch (e) {
+    return res.status(500).json({ error: 'desk_processes_list_failed', details: String(e?.message || e) });
+  } finally {
+    if (client) client.release();
+  }
+}
+
 async function listWorkflowJobsHandler(req, res) {
   const status = String(req.query?.status || '').trim();
   const runUid = String(req.query?.run_uid || '').trim();
@@ -6699,6 +7099,7 @@ workflowAutomationRouter.get('/process-runs/aggregation', requireDataAdmin, list
 workflowAutomationRouter.get('/process-runs/:run_uid', requireDataAdmin, getProcessRunHandler);
 workflowAutomationRouter.post('/process-runs/trigger', requireDataAdmin, triggerProcessRunsHandler);
 workflowAutomationRouter.post('/desks/:desk_id/publish', requireDataAdmin, publishDeskHandler);
+workflowAutomationRouter.get('/desks/:desk_id/processes', requireDataAdmin, listDeskProcessesHandler);
 workflowAutomationRouter.post('/processes/:desk_id/:start_node_id/enable', requireDataAdmin, async (req, res) =>
   setProcessEnabledHandler(req, res, true)
 );
@@ -6712,3 +7113,36 @@ workflowAutomationRouter.get('/process-dependencies', requireDataAdmin, listDepe
 workflowAutomationRouter.post('/process-dependencies/upsert', requireDataAdmin, upsertDependencyHandler);
 workflowAutomationRouter.post('/process-dependencies/delete', requireDataAdmin, deleteDependencyHandler);
 workflowAutomationRouter.get('/process-state/incremental', requireDataAdmin, listIncrementalStateHandler);
+
+export const workflowAutomationTestkit = {
+  parseIntervalToMs,
+  cronMatchesNow,
+  normalizeTriggerType,
+  normalizeRunPolicy,
+  normalizeExecutionScopeMode,
+  normalizeScopeType,
+  normalizeScopeRef,
+  normalizeScopeSource,
+  buildExecutionScope,
+  dedupeScopes,
+  scopeSignature,
+  buildScopeSqlFilter,
+  processConfigFromStartNode,
+  discoverProcessesFromGraph,
+  resolveExecutionScopesFromValues,
+  dependencyDispatchMode,
+  dependencyDedupeMode,
+  dependencyShouldDispatch,
+  buildDependencyDispatchDedupeKey,
+  composeNodeOutputEnvelope,
+  normalizeNodeIoEnvelope,
+  compareByOperator,
+  parseCsvList,
+  executeTableParserNode,
+  executeDbWriteNode,
+  _testReserveRunSlotForProcess: reserveRunSlotForProcess,
+  _testReleaseRunSlotForProcess: releaseRunSlotForProcess,
+  _testClearActiveRunSlots() {
+    schedulerState.activeRuns.clear();
+  }
+};
