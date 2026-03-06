@@ -58,6 +58,8 @@ const WORKER_ID = String(process.env.AO_WORKFLOW_WORKER_ID || `worker_${process.
 const SCHEDULER_ID = String(process.env.AO_WORKFLOW_SCHEDULER_ID || `scheduler_${process.pid}`).trim();
 const DEFAULT_TENANT_ID = String(process.env.AO_WORKFLOW_DEFAULT_TENANT_ID || 'default').trim() || 'default';
 const DEFAULT_TENANT_SQL = DEFAULT_TENANT_ID.replace(/'/g, "''");
+const DEPENDENCY_MAX_CHAIN_DEPTH = Math.max(1, Number(process.env.AO_WORKFLOW_DEPENDENCY_MAX_CHAIN_DEPTH || 12));
+const DEPENDENCY_MAX_RUNS_PER_ROOT = Math.max(1, Number(process.env.AO_WORKFLOW_DEPENDENCY_MAX_RUNS_PER_ROOT || 2000));
 
 const schedulerState = {
   enabled: SCHEDULER_ENABLED,
@@ -706,6 +708,10 @@ async function ensureWorkflowAutomationTables(client, config) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS ao_workflow_runs_process_lookup_idx
     ON ${workflowRunsQname(config)} (desk_id, desk_version_id, start_node_id, started_at DESC)
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_workflow_runs_trigger_dedupe_lookup_idx
+    ON ${workflowRunsQname(config)} (tenant_id, desk_id, start_node_id, trigger_type, trigger_key, started_at DESC)
   `);
 
   await client.query(`
@@ -1911,6 +1917,59 @@ async function loadRunRow(client, config, runUid) {
   return r.rows?.[0] || null;
 }
 
+function extractRootSourceRunUidFromMeta(meta) {
+  if (!meta || typeof meta !== 'object') return '';
+  return String(meta?.root_source_run_uid || '').trim();
+}
+
+function extractDependencyChainDepthFromMeta(meta) {
+  if (!meta || typeof meta !== 'object') return 0;
+  return Math.max(0, Math.trunc(Number(meta?.chain_depth || 0)));
+}
+
+async function dependencyRunAlreadyExistsByTriggerKey(client, config, payload = {}) {
+  const triggerKey = String(payload?.trigger_key || '').trim();
+  if (!triggerKey) return false;
+  const qn = workflowRunsQname(config);
+  const r = await client.query(
+    `
+    SELECT 1
+    FROM ${qn}
+    WHERE tenant_id = $1
+      AND desk_id = $2
+      AND start_node_id = $3
+      AND trigger_type = 'dependency'
+      AND trigger_key = $4
+      AND status IN ('queued', 'running', 'completed', 'failed')
+    LIMIT 1
+    `,
+    [
+      String(payload?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+      Math.trunc(Number(payload?.desk_id || 0)),
+      String(payload?.start_node_id || '').trim(),
+      triggerKey
+    ]
+  );
+  return Boolean(r.rows?.length);
+}
+
+async function countDependencyRunsByRoot(client, config, payload = {}) {
+  const rootSourceRunUid = String(payload?.root_source_run_uid || '').trim();
+  if (!rootSourceRunUid) return 0;
+  const qn = workflowRunsQname(config);
+  const r = await client.query(
+    `
+    SELECT count(*)::bigint AS c
+    FROM ${qn}
+    WHERE tenant_id = $1
+      AND trigger_type = 'dependency'
+      AND trigger_meta->>'root_source_run_uid' = $2
+    `,
+    [String(payload?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID, rootSourceRunUid]
+  );
+  return Math.max(0, Number(r.rows?.[0]?.c || 0));
+}
+
 async function findProcessByStartNode(client, config, deskRow, startNodeId) {
   const processes = await discoverDeskProcesses(client, config, deskRow);
   return processes.find((p) => String(p?.start_node_id || '').trim() === String(startNodeId || '').trim()) || null;
@@ -1926,6 +1985,28 @@ async function enqueueProcessRunQueued(client, config, runInput = {}) {
   const triggerType = String(runInput?.trigger_type || 'manual').trim() || 'manual';
   const triggerMeta = runInput?.trigger_meta && typeof runInput.trigger_meta === 'object' ? runInput.trigger_meta : {};
   let lockAcquired = false;
+
+  if (triggerType === 'dependency') {
+    const exists = await dependencyRunAlreadyExistsByTriggerKey(client, config, {
+      tenant_id: tenantId,
+      desk_id: Number(deskRow?.desk_id || 0),
+      start_node_id: String(process?.start_node_id || ''),
+      trigger_key: String(runInput?.trigger_key || '')
+    });
+    if (exists) {
+      return { accepted: false, run_uid: '', reason: 'dependency_trigger_deduplicated' };
+    }
+    const rootSourceRunUid = extractRootSourceRunUidFromMeta(triggerMeta);
+    if (rootSourceRunUid) {
+      const totalByRoot = await countDependencyRunsByRoot(client, config, {
+        tenant_id: tenantId,
+        root_source_run_uid: rootSourceRunUid
+      });
+      if (totalByRoot >= DEPENDENCY_MAX_RUNS_PER_ROOT) {
+        return { accepted: false, run_uid: '', reason: 'dependency_root_fanout_limit' };
+      }
+    }
+  }
 
   if (runPolicy === 'single_instance') {
     const busy = await isTargetProcessBusy(client, config, tenantId, Number(deskRow?.desk_id || 0), String(process?.start_node_id || ''));
@@ -2091,21 +2172,45 @@ async function handleDependencyDispatchJob(client, config, job, payload = {}) {
   if (!process) return { skipped: true, reason: 'target_process_not_found' };
 
   const ruleId = Math.trunc(Number(payload?.dependency_rule_id || 0));
+  const dispatchMode = dependencyDispatchMode(payload?.dispatch_mode);
+  const dedupePolicy = dependencyDedupeMode(payload?.dedupe_policy);
+  const sourceRunUid = String(sourceEvent?.source_run_uid || sourceEvent?.run_uid || '').trim();
+  const sourceChunkKey = String(sourceEvent?.chunk_key || '').trim() || `chunk_${Math.max(1, Math.trunc(Number(sourceEvent?.chunk_no || 1)))}`;
+  let sourceChainDepth = 0;
+  let rootSourceRunUid = sourceRunUid;
+  if (sourceRunUid) {
+    const sourceRun = await loadRunRow(client, config, sourceRunUid);
+    sourceChainDepth = extractDependencyChainDepthFromMeta(sourceRun?.trigger_meta);
+    rootSourceRunUid = extractRootSourceRunUidFromMeta(sourceRun?.trigger_meta) || sourceRunUid;
+  }
+  if (sourceChainDepth >= DEPENDENCY_MAX_CHAIN_DEPTH) {
+    return { skipped: true, reason: 'dependency_chain_depth_limit' };
+  }
+  let triggerKey = `dependency:${ruleId}:${sourceRunUid}:${targetStartNodeId}:${dispatchMode}`;
+  if (dispatchMode === 'for_each_chunk') {
+    triggerKey += `:${sourceChunkKey}`;
+  }
+  if (dedupePolicy === 'deduplicate_by_payload') {
+    triggerKey += `:${sha1(stableJsonString(sourceEvent?.payload || {}))}`;
+  }
   const triggerMeta = {
-    source_run_uid: String(sourceEvent?.source_run_uid || sourceEvent?.run_uid || '').trim(),
+    source_run_uid: sourceRunUid,
+    root_source_run_uid: rootSourceRunUid,
+    chain_depth: sourceChainDepth + 1,
     source_start_node_id: String(sourceEvent?.start_node_id || '').trim(),
     source_event_type: String(sourceEvent?.event_type || '').trim(),
     source_event_payload: sourceEvent?.payload || {},
+    source_chunk_key: sourceChunkKey,
     dependency_rule_id: ruleId,
-    dispatch_mode: String(payload?.dispatch_mode || '').trim(),
-    dedupe_policy: String(payload?.dedupe_policy || '').trim()
+    dispatch_mode: dispatchMode,
+    dedupe_policy: dedupePolicy
   };
   const queued = await enqueueProcessRunQueued(client, config, {
     desk_row: desk,
     process,
     trigger_source: 'dependency_event',
     trigger_type: 'dependency',
-    trigger_key: `dependency:${ruleId}:${triggerMeta.source_run_uid}`,
+    trigger_key: triggerKey,
     trigger_meta: triggerMeta,
     created_by: 'dependency_engine',
     tenant_id: String(job?.tenant_id || sourceEvent?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
@@ -2416,7 +2521,16 @@ async function waitRunsToFinish(client, config, runUids, timeoutMs = 120_000) {
   while (Date.now() - started < Math.max(1_000, Number(timeoutMs || 120_000))) {
     const r = await client.query(
       `
-      SELECT run_uid, status, summary_json, error_text, started_at, finished_at, trigger_type, trigger_meta
+      SELECT
+        run_uid,
+        status,
+        summary_json,
+        error_text,
+        started_at,
+        finished_at,
+        trigger_type,
+        trigger_meta,
+        COALESCE(NULLIF(trigger_meta->>'source_run_uid', ''), '') AS source_run_uid
       FROM ${qn}
       WHERE run_uid = ANY($1::text[])
       `,
@@ -2428,7 +2542,16 @@ async function waitRunsToFinish(client, config, runUids, timeoutMs = 120_000) {
   }
   const r = await client.query(
     `
-    SELECT run_uid, status, summary_json, error_text, started_at, finished_at, trigger_type, trigger_meta
+    SELECT
+      run_uid,
+      status,
+      summary_json,
+      error_text,
+      started_at,
+      finished_at,
+      trigger_type,
+      trigger_meta,
+      COALESCE(NULLIF(trigger_meta->>'source_run_uid', ''), '') AS source_run_uid
     FROM ${qn}
     WHERE run_uid = ANY($1::text[])
     `,
@@ -5162,6 +5285,7 @@ async function listProcessRunsHandler(req, res) {
         trigger_type,
         trigger_key,
         trigger_meta,
+        COALESCE(NULLIF(trigger_meta->>'source_run_uid', ''), '') AS source_run_uid,
         status,
         started_at,
         finished_at,
@@ -5210,6 +5334,7 @@ async function getProcessRunHandler(req, res) {
         trigger_type,
         trigger_key,
         trigger_meta,
+        COALESCE(NULLIF(trigger_meta->>'source_run_uid', ''), '') AS source_run_uid,
         status,
         started_at,
         finished_at,
