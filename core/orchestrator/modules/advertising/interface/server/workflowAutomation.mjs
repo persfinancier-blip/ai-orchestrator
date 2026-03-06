@@ -209,6 +209,104 @@ function dependencyDedupeMode(raw) {
   return 'none';
 }
 
+function normalizeExecutionScopeMode(raw) {
+  const mode = String(raw || '').trim().toLowerCase();
+  if (
+    mode === 'single_global' ||
+    mode === 'for_each_tenant' ||
+    mode === 'for_each_source_account' ||
+    mode === 'for_each_segment' ||
+    mode === 'for_each_partition'
+  ) {
+    return mode;
+  }
+  return 'single_global';
+}
+
+function normalizeScopeType(raw, fallback = 'global') {
+  const value = String(raw || '').trim().toLowerCase();
+  if (
+    value === 'global' ||
+    value === 'tenant' ||
+    value === 'source_account' ||
+    value === 'segment' ||
+    value === 'partition' ||
+    value === 'system'
+  ) {
+    return value;
+  }
+  return String(fallback || 'global').trim().toLowerCase() || 'global';
+}
+
+function normalizeScopeRef(raw, fallback = 'global') {
+  const ref = String(raw ?? '').trim();
+  if (ref) return ref;
+  return String(fallback || 'global').trim() || 'global';
+}
+
+function normalizeOptionalScopeTenant(raw) {
+  const tenant = String(raw ?? '').trim();
+  return tenant ? tenant : null;
+}
+
+function normalizeScopeContext(raw, fallback = {}) {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  if (typeof raw !== 'string') return fallback;
+  const txt = String(raw || '').trim();
+  if (!txt) return fallback;
+  try {
+    const parsed = JSON.parse(txt);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeScopeSource(raw) {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  if (typeof raw !== 'string') return {};
+  const txt = String(raw || '').trim();
+  if (!txt) return {};
+  try {
+    const parsed = JSON.parse(txt);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function scopeSignature(scope = {}) {
+  const scopeType = normalizeScopeType(scope?.scope_type, 'global');
+  const scopeRef = normalizeScopeRef(scope?.scope_ref, scopeType === 'global' ? 'global' : 'default');
+  return `${scopeType}:${scopeRef}`;
+}
+
+function buildExecutionScope(scope = {}, fallback = {}) {
+  const scopeType = normalizeScopeType(scope?.scope_type, fallback?.scope_type || 'global');
+  const scopeRef = normalizeScopeRef(scope?.scope_ref, fallback?.scope_ref || (scopeType === 'global' ? 'global' : 'default'));
+  const tenantId = normalizeOptionalScopeTenant(scope?.tenant_id ?? fallback?.tenant_id);
+  const contextJson = normalizeScopeContext(scope?.context_json ?? fallback?.context_json, {});
+  return {
+    scope_type: scopeType,
+    scope_ref: scopeRef,
+    tenant_id: tenantId,
+    context_json: contextJson
+  };
+}
+
+function dedupeScopes(scopes = []) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of Array.isArray(scopes) ? scopes : []) {
+    const scope = buildExecutionScope(raw, {});
+    const key = `${scopeSignature(scope)}:${scope.tenant_id || ''}:${sha1(stableJsonString(scope.context_json || {}))}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(scope);
+  }
+  return out;
+}
+
 function findAliasInMap(map, rawAlias) {
   const alias = String(rawAlias || '').trim();
   if (!alias || !map || typeof map !== 'object') return { found: false, key: '' };
@@ -619,26 +717,76 @@ async function ensureWorkflowAutomationTables(client, config) {
       process_code text NOT NULL DEFAULT '',
       input_scope text NOT NULL DEFAULT '',
       output_scope text NOT NULL DEFAULT '',
+      execution_scope_mode text NOT NULL DEFAULT 'single_global',
+      scope_source jsonb NOT NULL DEFAULT '{}'::jsonb,
+      scope_type text NOT NULL DEFAULT 'global',
+      scope_ref text NOT NULL DEFAULT 'global',
+      context_json jsonb NOT NULL DEFAULT '{}'::jsonb,
       updated_at timestamptz NOT NULL DEFAULT now(),
       updated_by text NOT NULL DEFAULT 'system',
       PRIMARY KEY (desk_id, start_node_id)
     )
   `);
   await client.query(`
+    ALTER TABLE ${workflowProcessOverridesQname(config)}
+      ADD COLUMN IF NOT EXISTS execution_scope_mode text NOT NULL DEFAULT 'single_global',
+      ADD COLUMN IF NOT EXISTS scope_source jsonb NOT NULL DEFAULT '{}'::jsonb,
+      ADD COLUMN IF NOT EXISTS scope_type text NOT NULL DEFAULT 'global',
+      ADD COLUMN IF NOT EXISTS scope_ref text NOT NULL DEFAULT 'global',
+      ADD COLUMN IF NOT EXISTS context_json jsonb NOT NULL DEFAULT '{}'::jsonb
+  `);
+  await client.query(`
     CREATE INDEX IF NOT EXISTS ao_workflow_process_overrides_lookup_idx
     ON ${workflowProcessOverridesQname(config)} (desk_id, updated_at DESC)
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_workflow_process_overrides_scope_idx
+    ON ${workflowProcessOverridesQname(config)} (desk_id, execution_scope_mode, scope_type, scope_ref)
   `);
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS ${workflowProcessLocksQname(config)} (
       desk_id bigint NOT NULL,
       start_node_id text NOT NULL,
+      scope_type text NOT NULL DEFAULT 'global',
+      scope_ref text NOT NULL DEFAULT 'global',
       lock_key text NOT NULL DEFAULT '',
       locked_at timestamptz NOT NULL DEFAULT now(),
       locked_until timestamptz NOT NULL DEFAULT now(),
       owner_id text NOT NULL DEFAULT '',
-      PRIMARY KEY (desk_id, start_node_id)
+      PRIMARY KEY (desk_id, start_node_id, scope_type, scope_ref)
     )
+  `);
+  await client.query(`
+    ALTER TABLE ${workflowProcessLocksQname(config)}
+      ADD COLUMN IF NOT EXISTS scope_type text NOT NULL DEFAULT 'global',
+      ADD COLUMN IF NOT EXISTS scope_ref text NOT NULL DEFAULT 'global'
+  `);
+  await client.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = ${`'${config.workflow_process_locks_table}_pkey'`}
+      ) THEN
+        BEGIN
+          ALTER TABLE ${workflowProcessLocksQname(config)} DROP CONSTRAINT ${qi(`${config.workflow_process_locks_table}_pkey`)};
+        EXCEPTION
+          WHEN undefined_object THEN
+            NULL;
+        END;
+      END IF;
+      BEGIN
+        ALTER TABLE ${workflowProcessLocksQname(config)}
+          ADD CONSTRAINT ${qi(`${config.workflow_process_locks_table}_pkey`)} PRIMARY KEY (desk_id, start_node_id, scope_type, scope_ref);
+      EXCEPTION
+        WHEN duplicate_table THEN
+          NULL;
+        WHEN duplicate_object THEN
+          NULL;
+      END;
+    END$$;
   `);
   await client.query(`
     CREATE INDEX IF NOT EXISTS ao_workflow_process_locks_until_idx
@@ -673,6 +821,9 @@ async function ensureWorkflowAutomationTables(client, config) {
       desk_version_id bigint NOT NULL DEFAULT 0,
       start_node_id text NOT NULL DEFAULT '',
       process_code text NOT NULL DEFAULT '',
+      scope_type text NOT NULL DEFAULT 'global',
+      scope_ref text NOT NULL DEFAULT 'global',
+      context_json jsonb NOT NULL DEFAULT '{}'::jsonb,
       run_policy text NOT NULL DEFAULT 'single_instance',
       trigger_source text NOT NULL DEFAULT 'manual',
       trigger_type text NOT NULL DEFAULT 'manual',
@@ -693,8 +844,15 @@ async function ensureWorkflowAutomationTables(client, config) {
       ADD COLUMN IF NOT EXISTS desk_version_id bigint NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS start_node_id text NOT NULL DEFAULT '',
       ADD COLUMN IF NOT EXISTS process_code text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS scope_type text NOT NULL DEFAULT 'global',
+      ADD COLUMN IF NOT EXISTS scope_ref text NOT NULL DEFAULT 'global',
+      ADD COLUMN IF NOT EXISTS context_json jsonb NOT NULL DEFAULT '{}'::jsonb,
       ADD COLUMN IF NOT EXISTS run_policy text NOT NULL DEFAULT 'single_instance',
       ADD COLUMN IF NOT EXISTS trigger_type text NOT NULL DEFAULT 'manual'
+  `);
+  await client.query(`
+    ALTER TABLE ${workflowRunsQname(config)}
+      ALTER COLUMN tenant_id DROP NOT NULL
   `);
 
   await client.query(`
@@ -708,6 +866,10 @@ async function ensureWorkflowAutomationTables(client, config) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS ao_workflow_runs_process_lookup_idx
     ON ${workflowRunsQname(config)} (desk_id, desk_version_id, start_node_id, started_at DESC)
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_workflow_runs_scope_lookup_idx
+    ON ${workflowRunsQname(config)} (scope_type, scope_ref, started_at DESC)
   `);
   await client.query(`
     CREATE INDEX IF NOT EXISTS ao_workflow_runs_trigger_dedupe_lookup_idx
@@ -748,8 +910,12 @@ async function ensureWorkflowAutomationTables(client, config) {
 
   await client.query(`
     ALTER TABLE ${workflowProcessOverridesQname(config)}
-      ADD COLUMN IF NOT EXISTS tenant_id text NOT NULL DEFAULT 'default',
+      ADD COLUMN IF NOT EXISTS tenant_id text DEFAULT 'default',
       ADD COLUMN IF NOT EXISTS client_id text NOT NULL DEFAULT ''
+  `);
+  await client.query(`
+    ALTER TABLE ${workflowProcessOverridesQname(config)}
+      ALTER COLUMN tenant_id DROP NOT NULL
   `);
   await client.query(`
     CREATE INDEX IF NOT EXISTS ao_workflow_process_overrides_tenant_idx
@@ -758,7 +924,7 @@ async function ensureWorkflowAutomationTables(client, config) {
 
   await client.query(`
     ALTER TABLE ${workflowRunsQname(config)}
-      ADD COLUMN IF NOT EXISTS tenant_id text NOT NULL DEFAULT 'default',
+      ADD COLUMN IF NOT EXISTS tenant_id text DEFAULT 'default',
       ADD COLUMN IF NOT EXISTS client_id text NOT NULL DEFAULT '',
       ADD COLUMN IF NOT EXISTS orchestration_mode text NOT NULL DEFAULT 'queue_chunks'
   `);
@@ -776,6 +942,9 @@ async function ensureWorkflowAutomationTables(client, config) {
       desk_version_id bigint NOT NULL DEFAULT 0,
       start_node_id text NOT NULL DEFAULT '',
       process_code text NOT NULL DEFAULT '',
+      scope_type text NOT NULL DEFAULT 'global',
+      scope_ref text NOT NULL DEFAULT 'global',
+      context_json jsonb NOT NULL DEFAULT '{}'::jsonb,
       parent_run_uid text NOT NULL DEFAULT '',
       parent_job_id bigint NOT NULL DEFAULT 0,
       job_type text NOT NULL DEFAULT '',
@@ -795,6 +964,16 @@ async function ensureWorkflowAutomationTables(client, config) {
     )
   `);
   await client.query(`
+    ALTER TABLE ${workflowJobQueueQname(config)}
+      ADD COLUMN IF NOT EXISTS scope_type text NOT NULL DEFAULT 'global',
+      ADD COLUMN IF NOT EXISTS scope_ref text NOT NULL DEFAULT 'global',
+      ADD COLUMN IF NOT EXISTS context_json jsonb NOT NULL DEFAULT '{}'::jsonb
+  `);
+  await client.query(`
+    ALTER TABLE ${workflowJobQueueQname(config)}
+      ALTER COLUMN tenant_id DROP NOT NULL
+  `);
+  await client.query(`
     CREATE INDEX IF NOT EXISTS ao_workflow_job_queue_pick_idx
     ON ${workflowJobQueueQname(config)} (status, available_at, priority, job_id)
   `);
@@ -805,6 +984,10 @@ async function ensureWorkflowAutomationTables(client, config) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS ao_workflow_job_queue_run_idx
     ON ${workflowJobQueueQname(config)} (parent_run_uid, status, job_id)
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_workflow_job_queue_scope_idx
+    ON ${workflowJobQueueQname(config)} (scope_type, scope_ref, status, available_at)
   `);
   await client.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS ao_workflow_job_queue_dedupe_idx
@@ -900,6 +1083,8 @@ async function ensureWorkflowAutomationTables(client, config) {
       desk_version_id bigint NOT NULL DEFAULT 0,
       start_node_id text NOT NULL DEFAULT '',
       process_code text NOT NULL DEFAULT '',
+      scope_type text NOT NULL DEFAULT 'global',
+      scope_ref text NOT NULL DEFAULT 'global',
       total_jobs integer NOT NULL DEFAULT 0,
       queued_jobs integer NOT NULL DEFAULT 0,
       running_jobs integer NOT NULL DEFAULT 0,
@@ -914,8 +1099,21 @@ async function ensureWorkflowAutomationTables(client, config) {
     )
   `);
   await client.query(`
+    ALTER TABLE ${workflowRunAggregationQname(config)}
+      ADD COLUMN IF NOT EXISTS scope_type text NOT NULL DEFAULT 'global',
+      ADD COLUMN IF NOT EXISTS scope_ref text NOT NULL DEFAULT 'global'
+  `);
+  await client.query(`
+    ALTER TABLE ${workflowRunAggregationQname(config)}
+      ALTER COLUMN tenant_id DROP NOT NULL
+  `);
+  await client.query(`
     CREATE INDEX IF NOT EXISTS ao_workflow_run_aggregation_lookup_idx
     ON ${workflowRunAggregationQname(config)} (tenant_id, desk_id, final_status, updated_at DESC)
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_workflow_run_aggregation_scope_idx
+    ON ${workflowRunAggregationQname(config)} (scope_type, scope_ref, updated_at DESC)
   `);
 
   await client.query(`
@@ -928,6 +1126,9 @@ async function ensureWorkflowAutomationTables(client, config) {
       desk_version_id bigint NOT NULL DEFAULT 0,
       start_node_id text NOT NULL DEFAULT '',
       process_code text NOT NULL DEFAULT '',
+      scope_type text NOT NULL DEFAULT 'global',
+      scope_ref text NOT NULL DEFAULT 'global',
+      context_json jsonb NOT NULL DEFAULT '{}'::jsonb,
       job_type text NOT NULL DEFAULT '',
       dedupe_key text NOT NULL DEFAULT '',
       payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -936,6 +1137,16 @@ async function ensureWorkflowAutomationTables(client, config) {
       error_text text NOT NULL DEFAULT '',
       failed_at timestamptz NOT NULL DEFAULT now()
     )
+  `);
+  await client.query(`
+    ALTER TABLE ${workflowDeadJobsQname(config)}
+      ADD COLUMN IF NOT EXISTS scope_type text NOT NULL DEFAULT 'global',
+      ADD COLUMN IF NOT EXISTS scope_ref text NOT NULL DEFAULT 'global',
+      ADD COLUMN IF NOT EXISTS context_json jsonb NOT NULL DEFAULT '{}'::jsonb
+  `);
+  await client.query(`
+    ALTER TABLE ${workflowDeadJobsQname(config)}
+      ALTER COLUMN tenant_id DROP NOT NULL
   `);
   await client.query(`
     CREATE INDEX IF NOT EXISTS ao_workflow_dead_jobs_lookup_idx
@@ -995,6 +1206,9 @@ async function ensureWorkflowAutomationTables(client, config) {
       desk_version_id bigint NOT NULL DEFAULT 0,
       start_node_id text NOT NULL DEFAULT '',
       process_code text NOT NULL DEFAULT '',
+      scope_type text NOT NULL DEFAULT 'global',
+      scope_ref text NOT NULL DEFAULT 'global',
+      context_json jsonb NOT NULL DEFAULT '{}'::jsonb,
       provider_code text NOT NULL DEFAULT '',
       endpoint_code text NOT NULL DEFAULT '',
       chunk_key text NOT NULL DEFAULT '',
@@ -1008,6 +1222,16 @@ async function ensureWorkflowAutomationTables(client, config) {
       metrics_json jsonb NOT NULL DEFAULT '{}'::jsonb,
       error_text text NOT NULL DEFAULT ''
     )
+  `);
+  await client.query(`
+    ALTER TABLE ${workflowChunkLogsQname(config)}
+      ADD COLUMN IF NOT EXISTS scope_type text NOT NULL DEFAULT 'global',
+      ADD COLUMN IF NOT EXISTS scope_ref text NOT NULL DEFAULT 'global',
+      ADD COLUMN IF NOT EXISTS context_json jsonb NOT NULL DEFAULT '{}'::jsonb
+  `);
+  await client.query(`
+    ALTER TABLE ${workflowChunkLogsQname(config)}
+      ALTER COLUMN tenant_id DROP NOT NULL
   `);
   await client.query(`
     CREATE INDEX IF NOT EXISTS ao_workflow_chunk_logs_lookup_idx
@@ -1087,24 +1311,28 @@ async function upsertRunAggregationRow(client, config, payload = {}) {
   await client.query(
     `
     INSERT INTO ${qn}
-      (run_uid, tenant_id, desk_id, desk_version_id, start_node_id, process_code, final_status, updated_at)
+      (run_uid, tenant_id, desk_id, desk_version_id, start_node_id, process_code, scope_type, scope_ref, final_status, updated_at)
     VALUES
-      ($1, $2, $3, $4, $5, $6, 'running', now())
+      ($1, $2, $3, $4, $5, $6, $7, $8, 'running', now())
     ON CONFLICT (run_uid) DO UPDATE
     SET tenant_id = EXCLUDED.tenant_id,
         desk_id = EXCLUDED.desk_id,
         desk_version_id = EXCLUDED.desk_version_id,
         start_node_id = EXCLUDED.start_node_id,
         process_code = EXCLUDED.process_code,
+        scope_type = EXCLUDED.scope_type,
+        scope_ref = EXCLUDED.scope_ref,
         updated_at = now()
     `,
     [
       String(payload?.run_uid || '').trim(),
-      String(payload?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+      normalizeOptionalScopeTenant(payload?.tenant_id),
       Math.trunc(Number(payload?.desk_id || 0)),
       Math.trunc(Number(payload?.desk_version_id || 0)),
       String(payload?.start_node_id || '').trim(),
-      String(payload?.process_code || '').trim()
+      String(payload?.process_code || '').trim(),
+      normalizeScopeType(payload?.scope_type, 'global'),
+      normalizeScopeRef(payload?.scope_ref, 'global')
     ]
   );
 }
@@ -1215,6 +1443,15 @@ async function recomputeRunAggregation(client, config, runUid) {
 async function enqueueWorkflowJob(client, config, job = {}) {
   const qn = workflowJobQueueQname(config);
   const dedupeKey = String(job?.dedupe_key || '').trim();
+  const scope = buildExecutionScope(
+    {
+      scope_type: job?.scope_type,
+      scope_ref: job?.scope_ref,
+      tenant_id: job?.tenant_id,
+      context_json: job?.context_json
+    },
+    { scope_type: 'global', scope_ref: 'global', tenant_id: null, context_json: {} }
+  );
   const r = await client.query(
     `
     INSERT INTO ${qn}
@@ -1225,6 +1462,9 @@ async function enqueueWorkflowJob(client, config, job = {}) {
         desk_version_id,
         start_node_id,
         process_code,
+        scope_type,
+        scope_ref,
+        context_json,
         parent_run_uid,
         parent_job_id,
         job_type,
@@ -1243,18 +1483,21 @@ async function enqueueWorkflowJob(client, config, job = {}) {
         updated_at
       )
     VALUES
-      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, 'queued', COALESCE($13::timestamptz, now()), 0, $14, '', null, '', '{}'::jsonb, now(), now())
+      ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13::jsonb, $14, $15, 'queued', COALESCE($16::timestamptz, now()), 0, $17, '', null, '', '{}'::jsonb, now(), now())
     ON CONFLICT (dedupe_key) WHERE dedupe_key <> '' AND status IN ('queued', 'locked', 'running')
     DO NOTHING
     RETURNING job_id
     `,
     [
-      String(job?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+      scope.tenant_id,
       String(job?.client_id || '').trim(),
       Math.trunc(Number(job?.desk_id || 0)),
       Math.trunc(Number(job?.desk_version_id || 0)),
       String(job?.start_node_id || '').trim(),
       String(job?.process_code || '').trim(),
+      scope.scope_type,
+      scope.scope_ref,
+      stableJsonString(scope.context_json || {}),
       String(job?.parent_run_uid || '').trim(),
       Math.trunc(Number(job?.parent_job_id || 0)),
       String(job?.job_type || '').trim(),
@@ -1365,18 +1608,21 @@ async function failWorkflowJob(client, config, job, errorText = '') {
   await client.query(
     `
     INSERT INTO ${deadQn}
-      (job_id, run_uid, tenant_id, desk_id, desk_version_id, start_node_id, process_code, job_type, dedupe_key, payload_json, attempt_no, max_attempts, error_text, failed_at)
+      (job_id, run_uid, tenant_id, desk_id, desk_version_id, start_node_id, process_code, scope_type, scope_ref, context_json, job_type, dedupe_key, payload_json, attempt_no, max_attempts, error_text, failed_at)
     VALUES
-      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, now())
+      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13::jsonb, $14, $15, $16, now())
     `,
     [
       jobId,
       String(job?.parent_run_uid || '').trim(),
-      String(job?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+      normalizeOptionalScopeTenant(job?.tenant_id),
       Math.trunc(Number(job?.desk_id || 0)),
       Math.trunc(Number(job?.desk_version_id || 0)),
       String(job?.start_node_id || '').trim(),
       String(job?.process_code || '').trim(),
+      normalizeScopeType(job?.scope_type, 'global'),
+      normalizeScopeRef(job?.scope_ref, 'global'),
+      stableJsonString(normalizeScopeContext(job?.context_json, {})),
       String(job?.job_type || '').trim(),
       String(job?.dedupe_key || '').trim(),
       stableJsonString(job?.payload_json || {}),
@@ -1390,6 +1636,15 @@ async function failWorkflowJob(client, config, job, errorText = '') {
 async function emitWorkflowEvent(client, config, payload = {}) {
   const eventType = String(payload?.event_type || '').trim().toLowerCase();
   if (!eventType) return 0;
+  const scope = buildExecutionScope(
+    {
+      scope_type: payload?.scope_type,
+      scope_ref: payload?.scope_ref,
+      tenant_id: payload?.tenant_id,
+      context_json: payload?.context_json
+    },
+    { scope_type: 'global', scope_ref: 'global', tenant_id: null, context_json: {} }
+  );
   const busId = await writeBusMessage(client, config, {
     desk_id: Math.trunc(Number(payload?.desk_id || 0)),
     run_uid: String(payload?.run_uid || '').trim(),
@@ -1398,12 +1653,15 @@ async function emitWorkflowEvent(client, config, payload = {}) {
     payload_json: {
       event_type: eventType,
       source_run_uid: String(payload?.source_run_uid || payload?.run_uid || '').trim(),
-      tenant_id: String(payload?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+      tenant_id: scope.tenant_id,
       client_id: String(payload?.client_id || '').trim(),
       desk_id: Math.trunc(Number(payload?.desk_id || 0)),
       desk_version_id: Math.trunc(Number(payload?.desk_version_id || 0)),
       start_node_id: String(payload?.start_node_id || '').trim(),
       process_code: String(payload?.process_code || '').trim(),
+      scope_type: scope.scope_type,
+      scope_ref: scope.scope_ref,
+      context_json: scope.context_json || {},
       status: String(payload?.status || '').trim(),
       trigger_type: String(payload?.trigger_type || '').trim(),
       chunk_key: String(payload?.chunk_key || '').trim(),
@@ -1461,6 +1719,7 @@ async function listDependencyRulesForEvent(client, config, eventPayload = {}) {
   const qn = workflowDependenciesQname(config);
   const sourceStartNodeId = String(eventPayload?.start_node_id || '').trim();
   const eventType = String(eventPayload?.event_type || '').trim().toLowerCase();
+  const eventTenant = normalizeOptionalScopeTenant(eventPayload?.tenant_id);
   if (!sourceStartNodeId || !eventType) return [];
   const r = await client.query(
     `
@@ -1480,33 +1739,42 @@ async function listDependencyRulesForEvent(client, config, eventPayload = {}) {
     WHERE is_enabled = true
       AND source_start_node_id = $1
       AND trigger_event_type = $2
-      AND (tenant_id = $3 OR tenant_id = '*' OR tenant_id = '')
+      AND (
+        ($3::text IS NOT NULL AND (tenant_id = $3 OR tenant_id = '*' OR tenant_id = '' OR tenant_id IS NULL))
+        OR
+        ($3::text IS NULL AND (tenant_id = '*' OR tenant_id = '' OR tenant_id IS NULL))
+      )
       AND (desk_id = 0 OR desk_id = $4)
     ORDER BY id ASC
     `,
     [
       sourceStartNodeId,
       eventType,
-      String(eventPayload?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+      eventTenant,
       Math.trunc(Number(eventPayload?.desk_id || 0))
     ]
   );
   return Array.isArray(r.rows) ? r.rows : [];
 }
 
-async function isTargetProcessBusy(client, config, tenantId, deskId, targetStartNodeId) {
+async function isTargetProcessBusy(client, config, scope, deskId, targetStartNodeId) {
   const qn = workflowRunsQname(config);
+  const f = buildScopeSqlFilter(scope, 4);
   const r = await client.query(
     `
     SELECT 1
     FROM ${qn}
-    WHERE tenant_id = $1
-      AND desk_id = $2
-      AND start_node_id = $3
+    WHERE desk_id = $1
+      AND start_node_id = $2
       AND status IN ('queued', 'running')
+      AND ${f.sql}
     LIMIT 1
     `,
-    [String(tenantId || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID, Math.trunc(Number(deskId || 0)), String(targetStartNodeId || '').trim()]
+    [
+      Math.trunc(Number(deskId || 0)),
+      String(targetStartNodeId || '').trim(),
+      ...f.params
+    ]
   );
   return Boolean(r.rows?.length);
 }
@@ -1535,7 +1803,16 @@ function buildDependencyDispatchDedupeKey(rule, eventPayload = {}) {
   const ruleId = Math.trunc(Number(rule?.id || 0));
   const targetStartNodeId = String(rule?.target_start_node_id || '').trim();
   const chunkKey = String(eventPayload?.chunk_key || '').trim();
-  let key = `dep:${ruleId}:${sourceRunUid}:${targetStartNodeId}:${mode}`;
+  const eventScope = buildExecutionScope(
+    {
+      scope_type: eventPayload?.scope_type,
+      scope_ref: eventPayload?.scope_ref,
+      tenant_id: eventPayload?.tenant_id,
+      context_json: eventPayload?.context_json
+    },
+    { scope_type: 'global', scope_ref: 'global', tenant_id: null, context_json: {} }
+  );
+  let key = `dep:${ruleId}:${sourceRunUid}:${targetStartNodeId}:${mode}:${scopeSignature(eventScope)}`;
   if (mode === 'for_each_chunk') {
     key += `:${chunkKey || Math.trunc(Number(eventPayload?.chunk_no || 1))}`;
   }
@@ -1551,29 +1828,64 @@ async function enqueueDependencyDispatchJobs(client, config, eventPayload = {}) 
   for (const rule of rules) {
     if (!dependencyShouldDispatch(rule, eventPayload)) continue;
 
-    const tenantId = String(rule?.tenant_id || eventPayload?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID;
+    const eventScope = buildExecutionScope(
+      {
+        scope_type: eventPayload?.scope_type,
+        scope_ref: eventPayload?.scope_ref,
+        tenant_id: eventPayload?.tenant_id,
+        context_json: eventPayload?.context_json || {}
+      },
+      { scope_type: 'global', scope_ref: 'global', tenant_id: null, context_json: {} }
+    );
+    const tenantId = normalizeOptionalScopeTenant(rule?.tenant_id) || eventScope.tenant_id;
+    const scope = buildExecutionScope(
+      {
+        scope_type: eventScope.scope_type,
+        scope_ref: eventScope.scope_ref,
+        tenant_id: tenantId,
+        context_json: eventScope.context_json
+      },
+      eventScope
+    );
     const deskId = Math.trunc(Number(rule?.desk_id || eventPayload?.desk_id || 0));
     const targetStartNodeId = String(rule?.target_start_node_id || '').trim();
     if (!deskId || !targetStartNodeId) continue;
-    const tenantPolicy = await loadTenantExecutionPolicy(client, config, tenantId);
+    const tenantPolicy = await loadTenantExecutionPolicy(client, config, tenantId || DEFAULT_TENANT_ID);
     if (!tenantPolicy.is_enabled) continue;
-    const queueDepth = await countTenantQueueDepth(client, config, tenantId);
+    const queueDepth = await countScopeQueueDepth(client, config, {
+      tenant_id: scope.tenant_id,
+      scope_type: scope.scope_type,
+      scope_ref: scope.scope_ref
+    });
     if (queueDepth >= tenantPolicy.max_queue_depth) continue;
 
     const dedupeMode = dependencyDedupeMode(rule?.dedupe_policy);
     if (dedupeMode === 'skip_if_target_running') {
-      const busy = await isTargetProcessBusy(client, config, tenantId, deskId, targetStartNodeId);
+      const busy = await isTargetProcessBusy(
+        client,
+        config,
+        {
+          tenant_id: scope.tenant_id,
+          scope_type: scope.scope_type,
+          scope_ref: scope.scope_ref
+        },
+        deskId,
+        targetStartNodeId
+      );
       if (busy) continue;
     }
 
     const dedupeKey = buildDependencyDispatchDedupeKey(rule, eventPayload);
     const jobId = await enqueueWorkflowJob(client, config, {
-      tenant_id: tenantId,
+      tenant_id: scope.tenant_id,
       client_id: String(eventPayload?.client_id || '').trim(),
       desk_id: deskId,
       desk_version_id: Math.trunc(Number(eventPayload?.desk_version_id || 0)),
       start_node_id: targetStartNodeId,
       process_code: String(eventPayload?.process_code || '').trim(),
+      scope_type: scope.scope_type,
+      scope_ref: scope.scope_ref,
+      context_json: scope.context_json || {},
       parent_run_uid: String(eventPayload?.source_run_uid || eventPayload?.run_uid || '').trim(),
       parent_job_id: 0,
       job_type: 'dependency_dispatch',
@@ -1592,10 +1904,13 @@ async function enqueueDependencyDispatchJobs(client, config, eventPayload = {}) 
       enqueued += 1;
       await emitWorkflowEvent(client, config, {
         event_type: 'chunk_enqueued',
-        tenant_id: tenantId,
+        tenant_id: scope.tenant_id,
         desk_id: deskId,
         start_node_id: targetStartNodeId,
         process_code: `dependency:${Math.trunc(Number(rule?.id || 0))}`,
+        scope_type: scope.scope_type,
+        scope_ref: scope.scope_ref,
+        context_json: scope.context_json || {},
         run_uid: String(eventPayload?.source_run_uid || eventPayload?.run_uid || '').trim(),
         source_run_uid: String(eventPayload?.source_run_uid || eventPayload?.run_uid || '').trim(),
         payload: {
@@ -1631,20 +1946,21 @@ async function processDependencyEvents(client, config) {
 
 async function loadTenantExecutionPolicy(client, config, tenantId) {
   const qn = workflowTenantPoliciesQname(config);
-  const tenant = String(tenantId || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID;
+  const tenant = normalizeOptionalScopeTenant(tenantId);
   const r = await client.query(
     `
     SELECT tenant_id, max_parallel_runs, max_parallel_jobs, max_queue_depth, default_priority, weight, is_enabled
     FROM ${qn}
-    WHERE tenant_id = $1
+    WHERE tenant_id IN ($1, '*')
+    ORDER BY CASE WHEN tenant_id = $1 THEN 0 ELSE 1 END
     LIMIT 1
     `,
-    [tenant]
+    [tenant || DEFAULT_TENANT_ID]
   );
   const row = r.rows?.[0];
   if (!row) {
     return {
-      tenant_id: tenant,
+      tenant_id: tenant || DEFAULT_TENANT_ID,
       max_parallel_runs: MAX_PARALLEL_RUNS,
       max_parallel_jobs: MAX_PARALLEL_RUNS * 4,
       max_queue_depth: 50_000,
@@ -1654,7 +1970,7 @@ async function loadTenantExecutionPolicy(client, config, tenantId) {
     };
   }
   return {
-    tenant_id: String(row.tenant_id || tenant).trim() || tenant,
+    tenant_id: String(row.tenant_id || tenant || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
     max_parallel_runs: Math.max(1, Math.trunc(Number(row.max_parallel_runs || MAX_PARALLEL_RUNS))),
     max_parallel_jobs: Math.max(1, Math.trunc(Number(row.max_parallel_jobs || MAX_PARALLEL_RUNS * 4))),
     max_queue_depth: Math.max(1, Math.trunc(Number(row.max_queue_depth || 50_000))),
@@ -1664,30 +1980,54 @@ async function loadTenantExecutionPolicy(client, config, tenantId) {
   };
 }
 
-async function countTenantRunningJobs(client, config, tenantId) {
+function buildScopeSqlFilter(scope = {}, startParam = 1) {
+  const scopeType = normalizeScopeType(scope?.scope_type, 'global');
+  const scopeRef = normalizeScopeRef(scope?.scope_ref, scopeType === 'global' ? 'global' : 'default');
+  const tenantId = normalizeOptionalScopeTenant(scope?.tenant_id);
+  if (tenantId) {
+    return {
+      sql: `(tenant_id = $${startParam} AND scope_type = $${startParam + 1} AND scope_ref = $${startParam + 2})`,
+      params: [tenantId, scopeType, scopeRef],
+      scope_type: scopeType,
+      scope_ref: scopeRef,
+      tenant_id: tenantId
+    };
+  }
+  return {
+    sql: `(tenant_id IS NULL AND scope_type = $${startParam} AND scope_ref = $${startParam + 1})`,
+    params: [scopeType, scopeRef],
+    scope_type: scopeType,
+    scope_ref: scopeRef,
+    tenant_id: null
+  };
+}
+
+async function countScopeRunningJobs(client, config, scope = {}) {
   const qn = workflowJobQueueQname(config);
+  const f = buildScopeSqlFilter(scope, 1);
   const r = await client.query(
     `
     SELECT COUNT(*)::int AS c
     FROM ${qn}
-    WHERE tenant_id = $1
+    WHERE ${f.sql}
       AND status IN ('locked', 'running')
     `,
-    [String(tenantId || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID]
+    f.params
   );
   return Math.max(0, Number(r.rows?.[0]?.c || 0));
 }
 
-async function countTenantQueueDepth(client, config, tenantId) {
+async function countScopeQueueDepth(client, config, scope = {}) {
   const qn = workflowJobQueueQname(config);
+  const f = buildScopeSqlFilter(scope, 1);
   const r = await client.query(
     `
     SELECT COUNT(*)::int AS c
     FROM ${qn}
-    WHERE tenant_id = $1
+    WHERE ${f.sql}
       AND status IN ('queued', 'locked', 'running')
     `,
-    [String(tenantId || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID]
+    f.params
   );
   return Math.max(0, Number(r.rows?.[0]?.c || 0));
 }
@@ -1852,6 +2192,15 @@ async function shouldDelayByRatePolicy(client, config, tenantId, providerCode, e
 
 async function writeChunkLog(client, config, payload = {}) {
   const qn = workflowChunkLogsQname(config);
+  const scope = buildExecutionScope(
+    {
+      scope_type: payload?.scope_type,
+      scope_ref: payload?.scope_ref,
+      tenant_id: payload?.tenant_id,
+      context_json: payload?.context_json
+    },
+    { scope_type: 'global', scope_ref: 'global', tenant_id: null, context_json: {} }
+  );
   await client.query(
     `
     INSERT INTO ${qn}
@@ -1863,6 +2212,9 @@ async function writeChunkLog(client, config, payload = {}) {
         desk_version_id,
         start_node_id,
         process_code,
+        scope_type,
+        scope_ref,
+        context_json,
         provider_code,
         endpoint_code,
         chunk_key,
@@ -1877,16 +2229,19 @@ async function writeChunkLog(client, config, payload = {}) {
         error_text
       )
     VALUES
-      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::timestamptz, $14::timestamptz, $15, $16::jsonb, $17::jsonb, $18::jsonb, $19)
+      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16::timestamptz, $17::timestamptz, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22)
     `,
     [
       Math.trunc(Number(payload?.job_id || 0)),
       String(payload?.run_uid || '').trim(),
-      String(payload?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+      scope.tenant_id,
       Math.trunc(Number(payload?.desk_id || 0)),
       Math.trunc(Number(payload?.desk_version_id || 0)),
       String(payload?.start_node_id || '').trim(),
       String(payload?.process_code || '').trim(),
+      scope.scope_type,
+      scope.scope_ref,
+      stableJsonString(scope.context_json || {}),
       String(payload?.provider_code || '').trim(),
       String(payload?.endpoint_code || '').trim(),
       String(payload?.chunk_key || '').trim(),
@@ -1907,7 +2262,25 @@ async function loadRunRow(client, config, runUid) {
   const qn = workflowRunsQname(config);
   const r = await client.query(
     `
-    SELECT run_uid, tenant_id, client_id, desk_id, desk_name, desk_version_id, start_node_id, process_code, run_policy, orchestration_mode, trigger_source, trigger_type, trigger_key, trigger_meta, status
+    SELECT
+      run_uid,
+      tenant_id,
+      client_id,
+      desk_id,
+      desk_name,
+      desk_version_id,
+      start_node_id,
+      process_code,
+      scope_type,
+      scope_ref,
+      context_json,
+      run_policy,
+      orchestration_mode,
+      trigger_source,
+      trigger_type,
+      trigger_key,
+      trigger_meta,
+      status
     FROM ${qn}
     WHERE run_uid = $1
     LIMIT 1
@@ -1931,23 +2304,24 @@ async function dependencyRunAlreadyExistsByTriggerKey(client, config, payload = 
   const triggerKey = String(payload?.trigger_key || '').trim();
   if (!triggerKey) return false;
   const qn = workflowRunsQname(config);
+  const f = buildScopeSqlFilter(payload, 4);
   const r = await client.query(
     `
     SELECT 1
     FROM ${qn}
-    WHERE tenant_id = $1
-      AND desk_id = $2
-      AND start_node_id = $3
+    WHERE desk_id = $1
+      AND start_node_id = $2
       AND trigger_type = 'dependency'
-      AND trigger_key = $4
+      AND trigger_key = $3
       AND status IN ('queued', 'running', 'completed', 'failed')
+      AND ${f.sql}
     LIMIT 1
     `,
     [
-      String(payload?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
       Math.trunc(Number(payload?.desk_id || 0)),
       String(payload?.start_node_id || '').trim(),
-      triggerKey
+      triggerKey,
+      ...f.params
     ]
   );
   return Boolean(r.rows?.length);
@@ -1957,15 +2331,16 @@ async function countDependencyRunsByRoot(client, config, payload = {}) {
   const rootSourceRunUid = String(payload?.root_source_run_uid || '').trim();
   if (!rootSourceRunUid) return 0;
   const qn = workflowRunsQname(config);
+  const f = buildScopeSqlFilter(payload, 2);
   const r = await client.query(
     `
     SELECT count(*)::bigint AS c
     FROM ${qn}
-    WHERE tenant_id = $1
-      AND trigger_type = 'dependency'
-      AND trigger_meta->>'root_source_run_uid' = $2
+    WHERE trigger_type = 'dependency'
+      AND trigger_meta->>'root_source_run_uid' = $1
+      AND ${f.sql}
     `,
-    [String(payload?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID, rootSourceRunUid]
+    [rootSourceRunUid, ...f.params]
   );
   return Math.max(0, Number(r.rows?.[0]?.c || 0));
 }
@@ -1979,28 +2354,49 @@ async function enqueueProcessRunQueued(client, config, runInput = {}) {
   const deskRow = runInput?.desk_row || {};
   const process = runInput?.process || {};
   const runUid = String(runInput?.run_uid || buildRunUid('wf_run')).trim() || buildRunUid('wf_run');
-  const tenantId = String(process?.tenant_id || runInput?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID;
+  const defaultScope = buildDefaultExecutionScopeForProcess(process);
+  const executionScope = buildExecutionScope(
+    {
+      scope_type: runInput?.scope_type,
+      scope_ref: runInput?.scope_ref,
+      tenant_id: runInput?.tenant_id,
+      context_json: runInput?.context_json
+    },
+    defaultScope
+  );
+  const tenantId = normalizeOptionalScopeTenant(executionScope.tenant_id);
   const clientId = String(process?.client_id || runInput?.client_id || '').trim();
   const runPolicy = normalizeRunPolicy(process?.run_policy);
   const triggerType = String(runInput?.trigger_type || 'manual').trim() || 'manual';
   const triggerMeta = runInput?.trigger_meta && typeof runInput.trigger_meta === 'object' ? runInput.trigger_meta : {};
+  const triggerMetaWithScope = {
+    ...triggerMeta,
+    scope_type: executionScope.scope_type,
+    scope_ref: executionScope.scope_ref,
+    tenant_id: executionScope.tenant_id,
+    context_json: executionScope.context_json || {}
+  };
   let lockAcquired = false;
 
   if (triggerType === 'dependency') {
     const exists = await dependencyRunAlreadyExistsByTriggerKey(client, config, {
-      tenant_id: tenantId,
       desk_id: Number(deskRow?.desk_id || 0),
       start_node_id: String(process?.start_node_id || ''),
-      trigger_key: String(runInput?.trigger_key || '')
+      trigger_key: String(runInput?.trigger_key || ''),
+      scope_type: executionScope.scope_type,
+      scope_ref: executionScope.scope_ref,
+      tenant_id: executionScope.tenant_id
     });
     if (exists) {
       return { accepted: false, run_uid: '', reason: 'dependency_trigger_deduplicated' };
     }
-    const rootSourceRunUid = extractRootSourceRunUidFromMeta(triggerMeta);
+    const rootSourceRunUid = extractRootSourceRunUidFromMeta(triggerMetaWithScope);
     if (rootSourceRunUid) {
       const totalByRoot = await countDependencyRunsByRoot(client, config, {
-        tenant_id: tenantId,
-        root_source_run_uid: rootSourceRunUid
+        root_source_run_uid: rootSourceRunUid,
+        scope_type: executionScope.scope_type,
+        scope_ref: executionScope.scope_ref,
+        tenant_id: executionScope.tenant_id
       });
       if (totalByRoot >= DEPENDENCY_MAX_RUNS_PER_ROOT) {
         return { accepted: false, run_uid: '', reason: 'dependency_root_fanout_limit' };
@@ -2009,14 +2405,26 @@ async function enqueueProcessRunQueued(client, config, runInput = {}) {
   }
 
   if (runPolicy === 'single_instance') {
-    const busy = await isTargetProcessBusy(client, config, tenantId, Number(deskRow?.desk_id || 0), String(process?.start_node_id || ''));
+    const busy = await isTargetProcessBusy(
+      client,
+      config,
+      {
+        tenant_id: executionScope.tenant_id,
+        scope_type: executionScope.scope_type,
+        scope_ref: executionScope.scope_ref
+      },
+      Number(deskRow?.desk_id || 0),
+      String(process?.start_node_id || '')
+    );
     if (busy) {
       return { accepted: false, run_uid: '', reason: 'single_instance_busy' };
     }
     lockAcquired = await acquireProcessLock(client, config, {
       desk_id: Number(deskRow?.desk_id || 0),
       start_node_id: String(process?.start_node_id || ''),
-      lock_key: String(process?.process_key || `${deskRow?.desk_id}:${process?.start_node_id}`).trim(),
+      scope_type: executionScope.scope_type,
+      scope_ref: executionScope.scope_ref,
+      lock_key: `${String(process?.process_key || `${deskRow?.desk_id}:${process?.start_node_id}`).trim()}:${scopeSignature(executionScope)}`,
       owner_id: runUid,
       ttl_ms: PROCESS_LOCK_TTL_MS
     });
@@ -2025,51 +2433,63 @@ async function enqueueProcessRunQueued(client, config, runInput = {}) {
     }
   }
 
-  const tenantPolicy = await loadTenantExecutionPolicy(client, config, tenantId);
+  const tenantPolicy = await loadTenantExecutionPolicy(client, config, tenantId || DEFAULT_TENANT_ID);
   if (!tenantPolicy.is_enabled) {
     return { accepted: false, run_uid: '', reason: 'tenant_disabled' };
   }
-  const queueDepth = await countTenantQueueDepth(client, config, tenantId);
+  const queueDepth = await countScopeQueueDepth(client, config, {
+    tenant_id: executionScope.tenant_id,
+    scope_type: executionScope.scope_type,
+    scope_ref: executionScope.scope_ref
+  });
   if (queueDepth >= tenantPolicy.max_queue_depth) {
-    return { accepted: false, run_uid: '', reason: 'tenant_queue_depth_limit' };
+    return { accepted: false, run_uid: '', reason: 'scope_queue_depth_limit' };
   }
 
   await insertProcessRunRow(client, config, {
     run_uid: runUid,
-    tenant_id: tenantId,
+    tenant_id: executionScope.tenant_id,
     client_id: clientId,
     desk_id: Number(deskRow?.desk_id || 0),
     desk_name: String(deskRow?.desk_name || ''),
     desk_version_id: Number(deskRow?.desk_version_id || 0),
     start_node_id: String(process?.start_node_id || ''),
     process_code: String(process?.process_code || ''),
+    scope_type: executionScope.scope_type,
+    scope_ref: executionScope.scope_ref,
+    context_json: executionScope.context_json || {},
     run_policy: runPolicy,
     orchestration_mode: 'queue_chunks',
     trigger_source: String(runInput?.trigger_source || 'manual'),
     trigger_type: triggerType,
     trigger_key: String(runInput?.trigger_key || ''),
-    trigger_meta: triggerMeta,
+    trigger_meta: triggerMetaWithScope,
     status: 'queued',
     created_by: String(runInput?.created_by || 'scheduler')
   });
 
   await upsertRunAggregationRow(client, config, {
     run_uid: runUid,
-    tenant_id: tenantId,
+    tenant_id: executionScope.tenant_id,
     desk_id: Number(deskRow?.desk_id || 0),
     desk_version_id: Number(deskRow?.desk_version_id || 0),
     start_node_id: String(process?.start_node_id || ''),
-    process_code: String(process?.process_code || '')
+    process_code: String(process?.process_code || ''),
+    scope_type: executionScope.scope_type,
+    scope_ref: executionScope.scope_ref
   });
 
   const dedupeKey = `run_plan:${runUid}`;
   const planJobId = await enqueueWorkflowJob(client, config, {
-    tenant_id: tenantId,
+    tenant_id: executionScope.tenant_id,
     client_id: clientId,
     desk_id: Number(deskRow?.desk_id || 0),
     desk_version_id: Number(deskRow?.desk_version_id || 0),
     start_node_id: String(process?.start_node_id || ''),
     process_code: String(process?.process_code || ''),
+    scope_type: executionScope.scope_type,
+    scope_ref: executionScope.scope_ref,
+    context_json: executionScope.context_json || {},
     parent_run_uid: runUid,
     parent_job_id: 0,
     job_type: 'process_plan',
@@ -2096,6 +2516,8 @@ async function enqueueProcessRunQueued(client, config, runInput = {}) {
       await releaseProcessLock(client, config, {
         desk_id: Number(deskRow?.desk_id || 0),
         start_node_id: String(process?.start_node_id || ''),
+        scope_type: executionScope.scope_type,
+        scope_ref: executionScope.scope_ref,
         owner_id: runUid
       });
     }
@@ -2104,12 +2526,15 @@ async function enqueueProcessRunQueued(client, config, runInput = {}) {
 
   await emitWorkflowEvent(client, config, {
     event_type: 'process_started',
-    tenant_id: tenantId,
+    tenant_id: executionScope.tenant_id,
     client_id: clientId,
     desk_id: Number(deskRow?.desk_id || 0),
     desk_version_id: Number(deskRow?.desk_version_id || 0),
     start_node_id: String(process?.start_node_id || ''),
     process_code: String(process?.process_code || ''),
+    scope_type: executionScope.scope_type,
+    scope_ref: executionScope.scope_ref,
+    context_json: executionScope.context_json || {},
     run_uid: runUid,
     trigger_type: triggerType,
     payload: {
@@ -2137,17 +2562,22 @@ async function finalizeRunAfterQueue(client, config, runUid, status, errorText =
     await releaseProcessLock(client, config, {
       desk_id: Number(run.desk_id || 0),
       start_node_id: String(run.start_node_id || ''),
+      scope_type: String(run.scope_type || 'global'),
+      scope_ref: String(run.scope_ref || 'global'),
       owner_id: runUid
     });
   }
   await emitWorkflowEvent(client, config, {
     event_type: status === 'completed' ? 'process_completed' : 'process_failed',
-    tenant_id: String(run.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+    tenant_id: normalizeOptionalScopeTenant(run.tenant_id),
     client_id: String(run.client_id || '').trim(),
     desk_id: Number(run.desk_id || 0),
     desk_version_id: Number(run.desk_version_id || 0),
     start_node_id: String(run.start_node_id || ''),
     process_code: String(run.process_code || ''),
+    scope_type: String(run.scope_type || 'global'),
+    scope_ref: String(run.scope_ref || 'global'),
+    context_json: parseJsonb(run.context_json, {}),
     run_uid: String(run.run_uid || ''),
     source_run_uid: String(run.run_uid || ''),
     status: status,
@@ -2186,39 +2616,79 @@ async function handleDependencyDispatchJob(client, config, job, payload = {}) {
   if (sourceChainDepth >= DEPENDENCY_MAX_CHAIN_DEPTH) {
     return { skipped: true, reason: 'dependency_chain_depth_limit' };
   }
-  let triggerKey = `dependency:${ruleId}:${sourceRunUid}:${targetStartNodeId}:${dispatchMode}`;
-  if (dispatchMode === 'for_each_chunk') {
-    triggerKey += `:${sourceChunkKey}`;
+  const processMode = normalizeExecutionScopeMode(process?.execution_scope_mode);
+  const defaultTargetScope = buildDefaultExecutionScopeForProcess(process);
+  const sourceScope = buildExecutionScope(
+    {
+      scope_type: sourceEvent?.scope_type,
+      scope_ref: sourceEvent?.scope_ref,
+      tenant_id: sourceEvent?.tenant_id,
+      context_json: sourceEvent?.context_json || {}
+    },
+    defaultTargetScope
+  );
+  const expectedScopeType = defaultScopeTypeByMode(processMode);
+  let targetScopes = [];
+  if (processMode === 'single_global') {
+    targetScopes = [defaultTargetScope];
+  } else if (sourceScope.scope_type === expectedScopeType) {
+    targetScopes = [buildExecutionScope(sourceScope, defaultTargetScope)];
+  } else {
+    targetScopes = await resolveExecutionScopesForProcess(client, config, desk, process);
+    if (processMode === 'for_each_tenant' && sourceScope.tenant_id) {
+      targetScopes = targetScopes.filter((s) => String(s?.tenant_id || '') === String(sourceScope.tenant_id || ''));
+    }
   }
-  if (dedupePolicy === 'deduplicate_by_payload') {
-    triggerKey += `:${sha1(stableJsonString(sourceEvent?.payload || {}))}`;
+  const scopes = dedupeScopes(targetScopes);
+  if (!scopes.length) return { skipped: true, reason: 'target_scope_not_resolved' };
+
+  const runUids = [];
+  const skipped = [];
+  for (const targetScope of scopes) {
+    let triggerKey = `dependency:${ruleId}:${sourceRunUid}:${targetStartNodeId}:${dispatchMode}:${scopeSignature(targetScope)}`;
+    if (dispatchMode === 'for_each_chunk') {
+      triggerKey += `:${sourceChunkKey}`;
+    }
+    if (dedupePolicy === 'deduplicate_by_payload') {
+      triggerKey += `:${sha1(stableJsonString(sourceEvent?.payload || {}))}`;
+    }
+    const triggerMeta = {
+      source_run_uid: sourceRunUid,
+      root_source_run_uid: rootSourceRunUid,
+      chain_depth: sourceChainDepth + 1,
+      source_start_node_id: String(sourceEvent?.start_node_id || '').trim(),
+      source_event_type: String(sourceEvent?.event_type || '').trim(),
+      source_event_payload: sourceEvent?.payload || {},
+      source_chunk_key: sourceChunkKey,
+      source_scope_type: sourceScope.scope_type,
+      source_scope_ref: sourceScope.scope_ref,
+      dependency_rule_id: ruleId,
+      dispatch_mode: dispatchMode,
+      dedupe_policy: dedupePolicy,
+      scope_type: targetScope.scope_type,
+      scope_ref: targetScope.scope_ref,
+      tenant_id: targetScope.tenant_id,
+      context_json: targetScope.context_json || {}
+    };
+    const queued = await enqueueProcessRunQueued(client, config, {
+      desk_row: desk,
+      process,
+      trigger_source: 'dependency_event',
+      trigger_type: 'dependency',
+      trigger_key: triggerKey,
+      trigger_meta: triggerMeta,
+      created_by: 'dependency_engine',
+      scope_type: targetScope.scope_type,
+      scope_ref: targetScope.scope_ref,
+      context_json: targetScope.context_json || {},
+      tenant_id: targetScope.tenant_id,
+      client_id: String(job?.client_id || sourceEvent?.client_id || '').trim()
+    });
+    if (queued.accepted) runUids.push(queued.run_uid);
+    else skipped.push(String(queued.reason || 'not_enqueued'));
   }
-  const triggerMeta = {
-    source_run_uid: sourceRunUid,
-    root_source_run_uid: rootSourceRunUid,
-    chain_depth: sourceChainDepth + 1,
-    source_start_node_id: String(sourceEvent?.start_node_id || '').trim(),
-    source_event_type: String(sourceEvent?.event_type || '').trim(),
-    source_event_payload: sourceEvent?.payload || {},
-    source_chunk_key: sourceChunkKey,
-    dependency_rule_id: ruleId,
-    dispatch_mode: dispatchMode,
-    dedupe_policy: dedupePolicy
-  };
-  const queued = await enqueueProcessRunQueued(client, config, {
-    desk_row: desk,
-    process,
-    trigger_source: 'dependency_event',
-    trigger_type: 'dependency',
-    trigger_key: triggerKey,
-    trigger_meta: triggerMeta,
-    created_by: 'dependency_engine',
-    tenant_id: String(job?.tenant_id || sourceEvent?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
-    client_id: String(job?.client_id || sourceEvent?.client_id || '').trim()
-  });
-  return queued.accepted
-    ? { queued: true, run_uid: queued.run_uid, source_run_uid: triggerMeta.source_run_uid }
-    : { skipped: true, reason: queued.reason || 'not_enqueued' };
+  if (!runUids.length) return { skipped: true, reason: skipped[0] || 'not_enqueued' };
+  return { queued: true, run_uid: runUids[0], run_uids: runUids, source_run_uid: sourceRunUid };
 }
 
 async function handleProcessPlanJob(client, config, job, payload = {}) {
@@ -2231,12 +2701,15 @@ async function handleProcessPlanJob(client, config, job, payload = {}) {
   }
   const firstNode = order[0];
   const nodeJobId = await enqueueWorkflowJob(client, config, {
-    tenant_id: String(job?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+    tenant_id: normalizeOptionalScopeTenant(job?.tenant_id),
     client_id: String(job?.client_id || '').trim(),
     desk_id: Number(job?.desk_id || 0),
     desk_version_id: Number(job?.desk_version_id || 0),
     start_node_id: String(job?.start_node_id || process?.start_node_id || '').trim(),
     process_code: String(job?.process_code || process?.process_code || '').trim(),
+    scope_type: String(job?.scope_type || 'global'),
+    scope_ref: String(job?.scope_ref || 'global'),
+    context_json: parseJsonb(job?.context_json, {}),
     parent_run_uid: runUid,
     parent_job_id: Math.trunc(Number(job?.job_id || 0)),
     job_type: 'process_node',
@@ -2257,12 +2730,15 @@ async function handleProcessPlanJob(client, config, job, payload = {}) {
   await client.query(`UPDATE ${runQn} SET status = 'running', updated_at = now() WHERE run_uid = $1`, [runUid]);
   await emitWorkflowEvent(client, config, {
     event_type: 'chunk_enqueued',
-    tenant_id: String(job?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+    tenant_id: normalizeOptionalScopeTenant(job?.tenant_id),
     client_id: String(job?.client_id || '').trim(),
     desk_id: Number(job?.desk_id || 0),
     desk_version_id: Number(job?.desk_version_id || 0),
     start_node_id: String(job?.start_node_id || process?.start_node_id || ''),
     process_code: String(job?.process_code || process?.process_code || ''),
+    scope_type: String(job?.scope_type || 'global'),
+    scope_ref: String(job?.scope_ref || 'global'),
+    context_json: parseJsonb(job?.context_json, {}),
     run_uid: runUid,
     source_run_uid: runUid,
     chunk_key: `node_0`,
@@ -2287,8 +2763,11 @@ async function handleProcessNodeJob(client, config, job, payload = {}) {
     desk_version_id: Math.trunc(Number(job?.desk_version_id || payload?.desk_row?.desk_version_id || 0)),
     start_node_id: String(job?.start_node_id || process?.start_node_id || '').trim(),
     process_code: String(job?.process_code || process?.process_code || '').trim(),
-    tenant_id: String(job?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
-    client_id: String(job?.client_id || '').trim()
+    scope_type: normalizeScopeType(job?.scope_type || process?.scope_type || 'global', 'global'),
+    scope_ref: normalizeScopeRef(job?.scope_ref || process?.scope_ref || 'global', 'global'),
+    tenant_id: normalizeOptionalScopeTenant(job?.tenant_id),
+    client_id: String(job?.client_id || '').trim(),
+    context_json: normalizeScopeContext(job?.context_json, {})
   };
   const templates = await loadActiveApiConfigs(client, config);
   const stepStarted = Date.now();
@@ -2309,7 +2788,13 @@ async function handleProcessNodeJob(client, config, job, payload = {}) {
         providerCode = pe.provider_code;
         endpointCode = pe.endpoint_code;
         await upsertProviderRegistry(client, config, template, providerCode, endpointCode);
-        const delay = await shouldDelayByRatePolicy(client, config, processCtx.tenant_id, providerCode, endpointCode);
+        const delay = await shouldDelayByRatePolicy(
+          client,
+          config,
+          processCtx.tenant_id || DEFAULT_TENANT_ID,
+          providerCode,
+          endpointCode
+        );
         if (delay > 0) {
           const retryAt = new Date(Date.now() + delay).toISOString();
           await requeueWorkflowJob(client, config, Number(job?.job_id || 0), {
@@ -2362,6 +2847,9 @@ async function handleProcessNodeJob(client, config, job, payload = {}) {
     desk_version_id: processCtx.desk_version_id,
     start_node_id: processCtx.start_node_id,
     process_code: processCtx.process_code,
+    scope_type: processCtx.scope_type,
+    scope_ref: processCtx.scope_ref,
+    context_json: processCtx.context_json || {},
     provider_code: providerCode,
     endpoint_code: endpointCode,
     chunk_key: `node_${nodeIndex}`,
@@ -2384,6 +2872,9 @@ async function handleProcessNodeJob(client, config, job, payload = {}) {
     desk_version_id: processCtx.desk_version_id,
     start_node_id: processCtx.start_node_id,
     process_code: processCtx.process_code,
+    scope_type: processCtx.scope_type,
+    scope_ref: processCtx.scope_ref,
+    context_json: processCtx.context_json || {},
     run_uid: runUid,
     source_run_uid: runUid,
     status: status,
@@ -2417,6 +2908,9 @@ async function handleProcessNodeJob(client, config, job, payload = {}) {
     desk_version_id: processCtx.desk_version_id,
     start_node_id: processCtx.start_node_id,
     process_code: processCtx.process_code,
+    scope_type: processCtx.scope_type,
+    scope_ref: processCtx.scope_ref,
+    context_json: processCtx.context_json || {},
     parent_run_uid: runUid,
     parent_job_id: Math.trunc(Number(job?.job_id || 0)),
     job_type: 'process_node',
@@ -2443,6 +2937,9 @@ async function handleProcessNodeJob(client, config, job, payload = {}) {
     desk_version_id: processCtx.desk_version_id,
     start_node_id: processCtx.start_node_id,
     process_code: processCtx.process_code,
+    scope_type: processCtx.scope_type,
+    scope_ref: processCtx.scope_ref,
+    context_json: processCtx.context_json || {},
     run_uid: runUid,
     source_run_uid: runUid,
     chunk_key: `node_${nextIndex}`,
@@ -2453,19 +2950,28 @@ async function handleProcessNodeJob(client, config, job, payload = {}) {
   const cursorCandidate = getByPath({ response: output }, 'response.cursor');
   if (cursorCandidate !== undefined) {
     const incQn = workflowIncrementalStateQname(config);
+    const scopeStateKey = `default:${scopeSignature(processCtx)}`;
     await client.query(
       `
       INSERT INTO ${incQn}
         (tenant_id, desk_id, desk_version_id, start_node_id, process_code, state_key, cursor_json, last_successful_sync_at, last_attempt_at, updated_at)
       VALUES
-        ($1, $2, $3, $4, $5, 'default', $6::jsonb, now(), now(), now())
+        ($1, $2, $3, $4, $5, $6, $7::jsonb, now(), now(), now())
       ON CONFLICT (tenant_id, desk_id, start_node_id, process_code, state_key) DO UPDATE
       SET cursor_json = EXCLUDED.cursor_json,
           last_successful_sync_at = EXCLUDED.last_successful_sync_at,
           last_attempt_at = EXCLUDED.last_attempt_at,
           updated_at = now()
       `,
-      [processCtx.tenant_id, processCtx.desk_id, processCtx.desk_version_id, processCtx.start_node_id, processCtx.process_code, stableJsonString(cursorCandidate)]
+      [
+        processCtx.tenant_id,
+        processCtx.desk_id,
+        processCtx.desk_version_id,
+        processCtx.start_node_id,
+        processCtx.process_code,
+        scopeStateKey,
+        stableJsonString(cursorCandidate)
+      ]
     );
   }
   return { next_job_id: nextJobId };
@@ -2485,13 +2991,17 @@ async function processQueuedJobsTick(client, config) {
   schedulerState.workerClaimedJobs = claimed.length;
   let processed = 0;
   for (const job of claimed) {
-    const tenantId = String(job?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID;
-    const tenantPolicy = await loadTenantExecutionPolicy(client, config, tenantId);
-    const runningTenantJobs = await countTenantRunningJobs(client, config, tenantId);
+    const tenantId = normalizeOptionalScopeTenant(job?.tenant_id);
+    const tenantPolicy = await loadTenantExecutionPolicy(client, config, tenantId || DEFAULT_TENANT_ID);
+    const runningTenantJobs = await countScopeRunningJobs(client, config, {
+      tenant_id: tenantId,
+      scope_type: String(job?.scope_type || 'global'),
+      scope_ref: String(job?.scope_ref || 'global')
+    });
     if (runningTenantJobs > tenantPolicy.max_parallel_jobs) {
       await requeueWorkflowJob(client, config, Number(job?.job_id || 0), {
         available_at: new Date(Date.now() + 1500).toISOString(),
-        error_text: 'tenant_parallel_limit',
+        error_text: 'scope_parallel_limit',
         preserve_attempt: true
       });
       continue;
@@ -2528,6 +3038,9 @@ async function waitRunsToFinish(client, config, runUids, timeoutMs = 120_000) {
         error_text,
         started_at,
         finished_at,
+        scope_type,
+        scope_ref,
+        context_json,
         trigger_type,
         trigger_meta,
         COALESCE(NULLIF(trigger_meta->>'source_run_uid', ''), '') AS source_run_uid
@@ -2549,6 +3062,9 @@ async function waitRunsToFinish(client, config, runUids, timeoutMs = 120_000) {
       error_text,
       started_at,
       finished_at,
+      scope_type,
+      scope_ref,
+      context_json,
       trigger_type,
       trigger_meta,
       COALESCE(NULLIF(trigger_meta->>'source_run_uid', ''), '') AS source_run_uid
@@ -4342,11 +4858,47 @@ function processConfigFromStartNode(startNode, deskId, override = null) {
   const processCode = String(
     override?.process_code || settings?.processCode || settings?.process_code || `desk_${deskId}_start_${startNode.id}`
   ).trim();
+  const executionScopeMode = normalizeExecutionScopeMode(
+    override?.execution_scope_mode || settings?.executionScopeMode || settings?.execution_scope_mode || 'single_global'
+  );
+  const sourceScopeTypeByMode =
+    executionScopeMode === 'for_each_tenant'
+      ? 'tenant'
+      : executionScopeMode === 'for_each_source_account'
+        ? 'source_account'
+        : executionScopeMode === 'for_each_segment'
+          ? 'segment'
+          : executionScopeMode === 'for_each_partition'
+            ? 'partition'
+            : 'global';
+  const fallbackScopeType = normalizeScopeType(
+    override?.scope_type || settings?.scopeType || settings?.scope_type || sourceScopeTypeByMode,
+    sourceScopeTypeByMode
+  );
+  const fallbackScopeRef = normalizeScopeRef(
+    override?.scope_ref || settings?.scopeRef || settings?.scope_ref || (fallbackScopeType === 'global' ? 'global' : 'default'),
+    fallbackScopeType === 'global' ? 'global' : 'default'
+  );
+  const scopeSource = normalizeScopeSource(
+    override?.scope_source || settings?.scopeSource || settings?.scope_source || {}
+  );
+  const contextJson = normalizeScopeContext(
+    override?.context_json || settings?.contextJson || settings?.context_json || {},
+    {}
+  );
+  const tenantId = normalizeOptionalScopeTenant(
+    override?.tenant_id || settings?.tenantId || settings?.tenant_id || ''
+  );
   return {
     start_node_id: String(startNode.id || '').trim(),
     name: String(startNode?.config?.name || 'Start').trim() || 'Start',
-    tenant_id: String(override?.tenant_id || settings?.tenantId || settings?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+    tenant_id: tenantId,
     client_id: String(override?.client_id || settings?.clientId || settings?.client_id || '').trim(),
+    scope_type: fallbackScopeType,
+    scope_ref: fallbackScopeRef,
+    context_json: contextJson,
+    execution_scope_mode: executionScopeMode,
+    scope_source: scopeSource,
     is_enabled: boolFromAny(override?.is_enabled, boolFromAny(settings?.isEnabled ?? settings?.enabled ?? settings?.is_enabled, true)),
     trigger_type: triggerType,
     schedule_value: scheduleValue,
@@ -4368,8 +4920,13 @@ function buildOverridesMap(rows) {
     if (!nodeId) return;
     map.set(nodeId, {
       start_node_id: nodeId,
-      tenant_id: String(r?.tenant_id || '').trim(),
+      tenant_id: normalizeOptionalScopeTenant(r?.tenant_id),
       client_id: String(r?.client_id || '').trim(),
+      scope_type: String(r?.scope_type || '').trim(),
+      scope_ref: String(r?.scope_ref || '').trim(),
+      context_json: parseJsonb(r?.context_json, {}),
+      execution_scope_mode: String(r?.execution_scope_mode || '').trim(),
+      scope_source: parseJsonb(r?.scope_source, {}),
       is_enabled: r?.is_enabled,
       trigger_type: String(r?.trigger_type || '').trim(),
       schedule_value: String(r?.schedule_value || '').trim(),
@@ -4405,11 +4962,180 @@ function discoverProcessesFromGraph({ deskId, deskVersionId, versionNo, graphJso
   return processes;
 }
 
+function defaultScopeTypeByMode(modeRaw) {
+  const mode = normalizeExecutionScopeMode(modeRaw);
+  if (mode === 'for_each_tenant') return 'tenant';
+  if (mode === 'for_each_source_account') return 'source_account';
+  if (mode === 'for_each_segment') return 'segment';
+  if (mode === 'for_each_partition') return 'partition';
+  return 'global';
+}
+
+function defaultScopeRefByType(scopeType) {
+  const t = normalizeScopeType(scopeType, 'global');
+  if (t === 'global') return 'global';
+  return 'default';
+}
+
+function buildDefaultExecutionScopeForProcess(process = {}) {
+  const mode = normalizeExecutionScopeMode(process?.execution_scope_mode);
+  const scopeType = normalizeScopeType(process?.scope_type, defaultScopeTypeByMode(mode));
+  const scopeRef = normalizeScopeRef(process?.scope_ref, defaultScopeRefByType(scopeType));
+  return buildExecutionScope(
+    {
+      scope_type: scopeType,
+      scope_ref: scopeRef,
+      tenant_id: process?.tenant_id,
+      context_json: process?.context_json || {}
+    },
+    { scope_type: scopeType, scope_ref: scopeRef, tenant_id: null, context_json: {} }
+  );
+}
+
+function mapScopeRowToExecutionScope(row = {}, source = {}, process = {}) {
+  const mode = normalizeExecutionScopeMode(process?.execution_scope_mode);
+  const fallbackScopeType = defaultScopeTypeByMode(mode);
+  const scopeTypeColumn = String(source?.scope_type_column || source?.scopeTypeColumn || '').trim();
+  const scopeRefColumn = String(source?.scope_ref_column || source?.scopeRefColumn || '').trim();
+  const tenantColumn = String(source?.tenant_id_column || source?.tenantIdColumn || 'tenant_id').trim();
+  const contextColumn = String(source?.context_json_column || source?.contextJsonColumn || 'context_json').trim();
+  const scopeType = normalizeScopeType(
+    scopeTypeColumn && row && Object.prototype.hasOwnProperty.call(row, scopeTypeColumn) ? row[scopeTypeColumn] : fallbackScopeType,
+    fallbackScopeType
+  );
+  const fallbackRefColumn =
+    mode === 'for_each_tenant'
+      ? tenantColumn
+      : mode === 'for_each_source_account'
+        ? 'source_account_id'
+        : mode === 'for_each_segment'
+          ? 'segment_id'
+          : mode === 'for_each_partition'
+            ? 'partition_key'
+            : '';
+  const refRaw =
+    (scopeRefColumn && row && Object.prototype.hasOwnProperty.call(row, scopeRefColumn) ? row[scopeRefColumn] : undefined) ??
+    (fallbackRefColumn && row && Object.prototype.hasOwnProperty.call(row, fallbackRefColumn) ? row[fallbackRefColumn] : undefined) ??
+    row?.id;
+  const tenantRaw =
+    tenantColumn && row && Object.prototype.hasOwnProperty.call(row, tenantColumn) ? row[tenantColumn] : process?.tenant_id;
+  const contextRaw =
+    contextColumn && row && Object.prototype.hasOwnProperty.call(row, contextColumn) ? row[contextColumn] : row;
+  return buildExecutionScope(
+    {
+      scope_type: scopeType,
+      scope_ref: normalizeScopeRef(refRaw, defaultScopeRefByType(scopeType)),
+      tenant_id: normalizeOptionalScopeTenant(tenantRaw),
+      context_json: normalizeScopeContext(contextRaw, {})
+    },
+    buildDefaultExecutionScopeForProcess(process)
+  );
+}
+
+async function resolveExecutionScopesFromTable(client, source, process) {
+  const schema = String(source?.schema || source?.table_schema || source?.source_schema || '').trim();
+  const table = String(source?.table || source?.table_name || source?.source_table || '').trim();
+  if (!isIdent(schema) || !isIdent(table)) return [];
+  const exists = await tableExists(client, schema, table);
+  if (!exists) return [];
+  const qn = `${qi(schema)}.${qi(table)}`;
+  const limit = Math.max(1, Math.min(50_000, Math.trunc(Number(source?.limit || 5_000))));
+  const r = await client.query(`SELECT * FROM ${qn} LIMIT ${limit}`);
+  const rows = Array.isArray(r.rows) ? r.rows : [];
+  return rows.map((row) => mapScopeRowToExecutionScope(row, source, process));
+}
+
+function resolveExecutionScopesFromValues(source, process) {
+  const values = Array.isArray(source?.values) ? source.values : [];
+  const mode = normalizeExecutionScopeMode(process?.execution_scope_mode);
+  const fallbackScopeType = defaultScopeTypeByMode(mode);
+  return values.map((value) => {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return buildExecutionScope(
+        {
+          scope_type: value.scope_type || fallbackScopeType,
+          scope_ref: value.scope_ref || value.scope || value.ref || value.id || defaultScopeRefByType(fallbackScopeType),
+          tenant_id: value.tenant_id,
+          context_json: value.context_json || value.context || value
+        },
+        buildDefaultExecutionScopeForProcess(process)
+      );
+    }
+    return buildExecutionScope(
+      {
+        scope_type: fallbackScopeType,
+        scope_ref: normalizeScopeRef(value, defaultScopeRefByType(fallbackScopeType)),
+        tenant_id: process?.tenant_id,
+        context_json: {}
+      },
+      buildDefaultExecutionScopeForProcess(process)
+    );
+  });
+}
+
+async function resolveExecutionScopesForProcess(client, config, _deskRow, process, opts = {}) {
+  const forced = opts?.forced_scope ? buildExecutionScope(opts.forced_scope, buildDefaultExecutionScopeForProcess(process)) : null;
+  if (forced) return [forced];
+  const mode = normalizeExecutionScopeMode(process?.execution_scope_mode);
+  const fallbackScope = buildDefaultExecutionScopeForProcess(process);
+  if (mode === 'single_global') return [fallbackScope];
+
+  const source = normalizeScopeSource(process?.scope_source || {});
+  const sourceKind = String(source?.kind || source?.type || '').trim().toLowerCase();
+  let scopes = [];
+  if (sourceKind === 'table') {
+    scopes = await resolveExecutionScopesFromTable(client, source, process);
+  } else if (sourceKind === 'values' || sourceKind === 'static') {
+    scopes = resolveExecutionScopesFromValues(source, process);
+  } else if (mode === 'for_each_tenant') {
+    const policiesQn = workflowTenantPoliciesQname(config);
+    const tenants = await client.query(
+      `
+      SELECT tenant_id
+      FROM ${policiesQn}
+      WHERE is_enabled = true
+      ORDER BY tenant_id ASC
+      `
+    );
+    scopes = (tenants.rows || []).map((row) =>
+      buildExecutionScope(
+        {
+          scope_type: 'tenant',
+          scope_ref: String(row?.tenant_id || '').trim() || 'default',
+          tenant_id: normalizeOptionalScopeTenant(row?.tenant_id),
+          context_json: {}
+        },
+        fallbackScope
+      )
+    );
+  }
+  const deduped = dedupeScopes(scopes);
+  if (!deduped.length) return [fallbackScope];
+  return deduped;
+}
+
 async function loadProcessOverrides(client, config, deskId) {
   const qn = workflowProcessOverridesQname(config);
   const r = await client.query(
     `
-    SELECT desk_id, start_node_id, tenant_id, client_id, is_enabled, trigger_type, schedule_value, timezone, run_policy, process_code, input_scope, output_scope
+    SELECT
+      desk_id,
+      start_node_id,
+      tenant_id,
+      client_id,
+      scope_type,
+      scope_ref,
+      context_json,
+      execution_scope_mode,
+      scope_source,
+      is_enabled,
+      trigger_type,
+      schedule_value,
+      timezone,
+      run_policy,
+      process_code,
+      input_scope,
+      output_scope
     FROM ${qn}
     WHERE desk_id = $1
     `,
@@ -4473,8 +5199,9 @@ async function listPublishedDesks(client, config, limit = 500) {
   return Array.isArray(r.rows) ? r.rows : [];
 }
 
-async function lastProcessRunStartedAt(client, config, deskId, startNodeId, triggerType) {
+async function lastProcessRunStartedAt(client, config, deskId, startNodeId, triggerType, scope = {}) {
   const qn = workflowRunsQname(config);
+  const f = buildScopeSqlFilter(scope, 4);
   const r = await client.query(
     `
     SELECT started_at
@@ -4482,16 +5209,26 @@ async function lastProcessRunStartedAt(client, config, deskId, startNodeId, trig
     WHERE desk_id = $1
       AND start_node_id = $2
       AND trigger_type = $3
+      AND ${f.sql}
     ORDER BY started_at DESC
     LIMIT 1
     `,
-    [Math.trunc(Number(deskId || 0)), String(startNodeId || '').trim(), String(triggerType || '').trim()]
+    [Math.trunc(Number(deskId || 0)), String(startNodeId || '').trim(), String(triggerType || '').trim(), ...f.params]
   );
   return r.rows?.[0]?.started_at || null;
 }
 
 async function insertProcessRunRow(client, config, payload) {
   const qn = workflowRunsQname(config);
+  const scope = buildExecutionScope(
+    {
+      scope_type: payload?.scope_type,
+      scope_ref: payload?.scope_ref,
+      tenant_id: payload?.tenant_id,
+      context_json: payload?.context_json
+    },
+    { scope_type: 'global', scope_ref: 'global', tenant_id: null, context_json: {} }
+  );
   await client.query(
     `
     INSERT INTO ${qn}
@@ -4504,6 +5241,9 @@ async function insertProcessRunRow(client, config, payload) {
         desk_version_id,
         start_node_id,
         process_code,
+        scope_type,
+        scope_ref,
+        context_json,
         run_policy,
         orchestration_mode,
         trigger_source,
@@ -4516,17 +5256,20 @@ async function insertProcessRunRow(client, config, payload) {
         updated_at
       )
     VALUES
-      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15, now(), $16, now())
+      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15, $16, $17::jsonb, $18, now(), $19, now())
     `,
     [
       String(payload.run_uid || '').trim(),
-      String(payload.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
+      scope.tenant_id,
       String(payload.client_id || '').trim(),
       Math.trunc(Number(payload.desk_id || 0)),
       String(payload.desk_name || '').trim(),
       Math.trunc(Number(payload.desk_version_id || 0)),
       String(payload.start_node_id || '').trim(),
       String(payload.process_code || '').trim(),
+      scope.scope_type,
+      scope.scope_ref,
+      stableJsonString(scope.context_json || {}),
       String(payload.run_policy || 'single_instance').trim(),
       String(payload.orchestration_mode || 'queue_chunks').trim(),
       String(payload.trigger_source || 'manual').trim(),
@@ -4590,15 +5333,17 @@ async function acquireProcessLock(client, config, lockData) {
   const qn = workflowProcessLocksQname(config);
   const deskId = Math.trunc(Number(lockData?.desk_id || 0));
   const startNodeId = String(lockData?.start_node_id || '').trim();
+  const scopeType = normalizeScopeType(lockData?.scope_type, 'global');
+  const scopeRef = normalizeScopeRef(lockData?.scope_ref, scopeType === 'global' ? 'global' : 'default');
   const lockKey = String(lockData?.lock_key || `${deskId}:${startNodeId}`).trim();
   const ownerId = String(lockData?.owner_id || '').trim();
   if (!deskId || !startNodeId || !ownerId) return false;
   const lockUntil = new Date(Date.now() + Math.max(30_000, Number(lockData?.ttl_ms || PROCESS_LOCK_TTL_MS))).toISOString();
   const r = await client.query(
     `
-    INSERT INTO ${qn} (desk_id, start_node_id, lock_key, locked_at, locked_until, owner_id)
-    VALUES ($1, $2, $3, now(), $4::timestamptz, $5)
-    ON CONFLICT (desk_id, start_node_id) DO UPDATE
+    INSERT INTO ${qn} (desk_id, start_node_id, scope_type, scope_ref, lock_key, locked_at, locked_until, owner_id)
+    VALUES ($1, $2, $3, $4, $5, now(), $6::timestamptz, $7)
+    ON CONFLICT (desk_id, start_node_id, scope_type, scope_ref) DO UPDATE
     SET lock_key = EXCLUDED.lock_key,
         locked_at = EXCLUDED.locked_at,
         locked_until = EXCLUDED.locked_until,
@@ -4606,13 +5351,15 @@ async function acquireProcessLock(client, config, lockData) {
     WHERE ${qn}.locked_until <= now() OR ${qn}.owner_id = EXCLUDED.owner_id
     RETURNING desk_id
     `,
-    [deskId, startNodeId, lockKey, lockUntil, ownerId]
+    [deskId, startNodeId, scopeType, scopeRef, lockKey, lockUntil, ownerId]
   );
   return Boolean(r.rows?.length);
 }
 
 async function releaseProcessLock(client, config, lockData) {
   const qn = workflowProcessLocksQname(config);
+  const scopeType = normalizeScopeType(lockData?.scope_type, 'global');
+  const scopeRef = normalizeScopeRef(lockData?.scope_ref, scopeType === 'global' ? 'global' : 'default');
   await client.query(
     `
     UPDATE ${qn}
@@ -4622,11 +5369,15 @@ async function releaseProcessLock(client, config, lockData) {
         owner_id = ''
     WHERE desk_id = $1
       AND start_node_id = $2
-      AND owner_id = $3
+      AND scope_type = $3
+      AND scope_ref = $4
+      AND owner_id = $5
     `,
     [
       Math.trunc(Number(lockData?.desk_id || 0)),
       String(lockData?.start_node_id || '').trim(),
+      scopeType,
+      scopeRef,
       String(lockData?.owner_id || '').trim()
     ]
   );
@@ -4938,18 +5689,30 @@ async function runProcessByDefinitionV2(runInput) {
   const client = await pool.connect();
   let config = { ...DEFAULT_CONFIG };
   let lockAcquired = false;
+  let executionScope = buildExecutionScope({}, { scope_type: 'global', scope_ref: 'global', tenant_id: null, context_json: {} });
   let runInserted = false;
   try {
     config = await loadRuntimeStorageConfig(client);
     await ensureWorkflowAutomationTables(client, config);
     const deskRow = runInput?.desk_row || {};
     const process = runInput?.process || {};
+    executionScope = buildExecutionScope(
+      {
+        scope_type: runInput?.scope_type,
+        scope_ref: runInput?.scope_ref,
+        tenant_id: runInput?.tenant_id,
+        context_json: runInput?.context_json
+      },
+      buildDefaultExecutionScopeForProcess(process)
+    );
     const runPolicy = normalizeRunPolicy(process?.run_policy);
     if (runPolicy === 'single_instance') {
       lockAcquired = await acquireProcessLock(client, config, {
         desk_id: Number(deskRow?.desk_id || 0),
         start_node_id: String(process?.start_node_id || ''),
-        lock_key: String(process?.process_key || `${deskRow?.desk_id}:${process?.start_node_id}`),
+        scope_type: executionScope.scope_type,
+        scope_ref: executionScope.scope_ref,
+        lock_key: `${String(process?.process_key || `${deskRow?.desk_id}:${process?.start_node_id}`)}:${scopeSignature(executionScope)}`,
         owner_id: runUid,
         ttl_ms: PROCESS_LOCK_TTL_MS
       });
@@ -4966,11 +5729,15 @@ async function runProcessByDefinitionV2(runInput) {
 
     await insertProcessRunRow(client, config, {
       run_uid: runUid,
+      tenant_id: executionScope.tenant_id,
       desk_id: Number(deskRow?.desk_id || 0),
       desk_name: String(deskRow?.desk_name || ''),
       desk_version_id: Number(deskRow?.desk_version_id || 0),
       start_node_id: String(process?.start_node_id || ''),
       process_code: String(process?.process_code || ''),
+      scope_type: executionScope.scope_type,
+      scope_ref: executionScope.scope_ref,
+      context_json: executionScope.context_json || {},
       run_policy: runPolicy,
       trigger_source: String(runInput?.trigger_source || 'manual'),
       trigger_type: String(runInput?.trigger_type || 'manual'),
@@ -5017,6 +5784,8 @@ async function runProcessByDefinitionV2(runInput) {
         await releaseProcessLock(client, config, {
           desk_id: Number(runInput?.desk_row?.desk_id || 0),
           start_node_id: String(runInput?.process?.start_node_id || ''),
+          scope_type: executionScope.scope_type,
+          scope_ref: executionScope.scope_ref,
           owner_id: runUid
         });
       }
@@ -5031,7 +5800,16 @@ function launchProcessRunV2(runInput) {
   const runUid = String(runInput?.run_uid || buildRunUid('wf_run')).trim() || buildRunUid('wf_run');
   const process = runInput?.process || {};
   const deskRow = runInput?.desk_row || {};
-  const processKey = String(process?.process_key || `${deskRow?.desk_id}:${process?.start_node_id}`);
+  const executionScope = buildExecutionScope(
+    {
+      scope_type: runInput?.scope_type,
+      scope_ref: runInput?.scope_ref,
+      tenant_id: runInput?.tenant_id,
+      context_json: runInput?.context_json
+    },
+    buildDefaultExecutionScopeForProcess(process)
+  );
+  const processKey = `${String(process?.process_key || `${deskRow?.desk_id}:${process?.start_node_id}`)}:${scopeSignature(executionScope)}`;
   if (
     !reserveRunSlotForProcess(processKey, runUid, {
       run_policy: process?.run_policy,
@@ -5095,43 +5873,53 @@ async function schedulerTickPublishedProcesses() {
       minuteSlot.setSeconds(0, 0);
       for (const desk of desks) {
         const processes = await discoverDeskProcesses(client, config, desk);
-        discovered += processes.length;
         for (const process of processes) {
           if (!process?.is_enabled) continue;
           const triggerType = normalizeTriggerType(process?.trigger_type);
           if (triggerType === 'manual') continue;
-          let due = false;
-          if (triggerType === 'interval') {
-            const last = await lastProcessRunStartedAt(client, config, desk.desk_id, process.start_node_id, 'interval');
-            const lastTs = last ? new Date(last).getTime() : 0;
-            const intervalMs = parseIntervalToMs(process.interval_value, process.interval_unit);
-            due = !lastTs || Date.now() - lastTs >= intervalMs;
-          } else if (triggerType === 'cron') {
-            if (cronMatchesNow(process.cron_expr || process.schedule_value || '', now)) {
-              const last = await lastProcessRunStartedAt(client, config, desk.desk_id, process.start_node_id, 'cron');
-              const lastSlot = last ? new Date(last) : null;
-              due = !lastSlot || lastSlot.getTime() < minuteSlot.getTime();
+          const scopes = await resolveExecutionScopesForProcess(client, config, desk, process);
+          discovered += scopes.length;
+          for (const scope of scopes) {
+            let due = false;
+            if (triggerType === 'interval') {
+              const last = await lastProcessRunStartedAt(client, config, desk.desk_id, process.start_node_id, 'interval', scope);
+              const lastTs = last ? new Date(last).getTime() : 0;
+              const intervalMs = parseIntervalToMs(process.interval_value, process.interval_unit);
+              due = !lastTs || Date.now() - lastTs >= intervalMs;
+            } else if (triggerType === 'cron') {
+              if (cronMatchesNow(process.cron_expr || process.schedule_value || '', now)) {
+                const last = await lastProcessRunStartedAt(client, config, desk.desk_id, process.start_node_id, 'cron', scope);
+                const lastSlot = last ? new Date(last) : null;
+                due = !lastSlot || lastSlot.getTime() < minuteSlot.getTime();
+              }
             }
+            if (!due) continue;
+            const queued = await enqueueProcessRunQueued(client, config, {
+              desk_row: desk,
+              process,
+              trigger_source: triggerType === 'interval' ? 'schedule_interval' : 'schedule_cron',
+              trigger_type: triggerType,
+              trigger_key: `${triggerType}:${desk.desk_id}:${process.start_node_id}:${scopeSignature(scope)}`,
+              trigger_meta: {
+                desk_id: Number(desk?.desk_id || 0),
+                desk_version_id: Number(desk?.desk_version_id || 0),
+                start_node_id: String(process?.start_node_id || ''),
+                process_code: String(process?.process_code || ''),
+                schedule_value: String(process?.schedule_value || ''),
+                scope_type: scope.scope_type,
+                scope_ref: scope.scope_ref,
+                tenant_id: scope.tenant_id,
+                context_json: scope.context_json || {}
+              },
+              created_by: 'scheduler',
+              scope_type: scope.scope_type,
+              scope_ref: scope.scope_ref,
+              context_json: scope.context_json || {},
+              tenant_id: scope.tenant_id,
+              client_id: String(process?.client_id || '').trim()
+            });
+            if (queued.accepted) scheduled += 1;
           }
-          if (!due) continue;
-          const queued = await enqueueProcessRunQueued(client, config, {
-            desk_row: desk,
-            process,
-            trigger_source: triggerType === 'interval' ? 'schedule_interval' : 'schedule_cron',
-            trigger_type: triggerType,
-            trigger_key: `${triggerType}:${desk.desk_id}:${process.start_node_id}`,
-            trigger_meta: {
-              desk_id: Number(desk?.desk_id || 0),
-              desk_version_id: Number(desk?.desk_version_id || 0),
-              start_node_id: String(process?.start_node_id || ''),
-              process_code: String(process?.process_code || ''),
-              schedule_value: String(process?.schedule_value || '')
-            },
-            created_by: 'scheduler',
-            tenant_id: String(process?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
-            client_id: String(process?.client_id || '').trim()
-          });
-          if (queued.accepted) scheduled += 1;
         }
       }
       const dependencyEventsProcessed = await processDependencyEvents(client, config);
@@ -5279,6 +6067,9 @@ async function listProcessRunsHandler(req, res) {
         desk_version_id,
         start_node_id,
         process_code,
+        scope_type,
+        scope_ref,
+        context_json,
         run_policy,
         orchestration_mode,
         trigger_source,
@@ -5328,6 +6119,9 @@ async function getProcessRunHandler(req, res) {
         desk_version_id,
         start_node_id,
         process_code,
+        scope_type,
+        scope_ref,
+        context_json,
         run_policy,
         orchestration_mode,
         trigger_source,
@@ -5404,23 +6198,33 @@ async function triggerProcessRunsHandler(req, res) {
     }
     const accepted = [];
     for (const process of selected.filter((p) => p?.is_enabled)) {
-      const queued = await enqueueProcessRunQueued(client, config, {
-        desk_row: desk,
-        process,
-        trigger_source: 'manual',
-        trigger_type: 'manual',
-        trigger_key: `manual:${deskId}:${process.start_node_id}`,
-        trigger_meta: {
-          note: String(req.body?.note || '').trim(),
-          requested_start_node_id: startNodeId || '',
-          desk_id: Math.trunc(Number(deskId || 0)),
-          desk_version_id: Number(desk?.desk_version_id || 0)
-        },
-        created_by: String(req.body?.created_by || 'manual').trim() || 'manual',
-        tenant_id: String(process?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID,
-        client_id: String(process?.client_id || '').trim()
-      });
-      if (queued.accepted) accepted.push(queued);
+      const scopes = await resolveExecutionScopesForProcess(client, config, desk, process);
+      for (const scope of scopes) {
+        const queued = await enqueueProcessRunQueued(client, config, {
+          desk_row: desk,
+          process,
+          trigger_source: 'manual',
+          trigger_type: 'manual',
+          trigger_key: `manual:${deskId}:${process.start_node_id}:${scopeSignature(scope)}`,
+          trigger_meta: {
+            note: String(req.body?.note || '').trim(),
+            requested_start_node_id: startNodeId || '',
+            desk_id: Math.trunc(Number(deskId || 0)),
+            desk_version_id: Number(desk?.desk_version_id || 0),
+            scope_type: scope.scope_type,
+            scope_ref: scope.scope_ref,
+            tenant_id: scope.tenant_id,
+            context_json: scope.context_json || {}
+          },
+          created_by: String(req.body?.created_by || 'manual').trim() || 'manual',
+          scope_type: scope.scope_type,
+          scope_ref: scope.scope_ref,
+          context_json: scope.context_json || {},
+          tenant_id: scope.tenant_id,
+          client_id: String(process?.client_id || '').trim()
+        });
+        if (queued.accepted) accepted.push(queued);
+      }
     }
     if (!accepted.length) {
       return res.status(429).json({ error: 'busy', details: 'parallel_limit_or_process_busy' });
@@ -5477,7 +6281,8 @@ async function publishDeskHandler(req, res) {
         start_node_id: p.start_node_id,
         process_code: p.process_code,
         is_enabled: p.is_enabled,
-        trigger_type: p.trigger_type
+        trigger_type: p.trigger_type,
+        execution_scope_mode: p.execution_scope_mode
       }))
     });
   } catch (e) {
@@ -5563,6 +6368,9 @@ async function listWorkflowJobsHandler(req, res) {
         desk_version_id,
         start_node_id,
         process_code,
+        scope_type,
+        scope_ref,
+        context_json,
         parent_run_uid,
         parent_job_id,
         job_type,
@@ -5692,7 +6500,7 @@ async function listDependenciesHandler(req, res) {
 async function upsertDependencyHandler(req, res) {
   const body = req.body && typeof req.body === 'object' ? req.body : {};
   const depId = Math.trunc(Number(body?.id || 0));
-  const tenantId = String(body?.tenant_id || DEFAULT_TENANT_ID).trim() || DEFAULT_TENANT_ID;
+  const tenantId = String(body?.tenant_id ?? '').trim() || '*';
   const deskId = Math.trunc(Number(body?.desk_id || 0));
   const sourceStart = String(body?.source_start_node_id || '').trim();
   const targetStart = String(body?.target_start_node_id || '').trim();
