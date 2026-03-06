@@ -1759,7 +1759,7 @@ async function listDependencyRulesForEvent(client, config, eventPayload = {}) {
 
 async function isTargetProcessBusy(client, config, scope, deskId, targetStartNodeId) {
   const qn = workflowRunsQname(config);
-  const f = buildScopeSqlFilter(scope, 4);
+  const f = buildScopeSqlFilter(scope, 3);
   const r = await client.query(
     `
     SELECT 1
@@ -2354,6 +2354,8 @@ async function enqueueProcessRunQueued(client, config, runInput = {}) {
   const deskRow = runInput?.desk_row || {};
   const process = runInput?.process || {};
   const runUid = String(runInput?.run_uid || buildRunUid('wf_run')).trim() || buildRunUid('wf_run');
+  const deskId = Number(deskRow?.desk_id || 0);
+  const startNodeId = String(process?.start_node_id || '');
   const defaultScope = buildDefaultExecutionScopeForProcess(process);
   const executionScope = buildExecutionScope(
     {
@@ -2377,173 +2379,199 @@ async function enqueueProcessRunQueued(client, config, runInput = {}) {
     context_json: executionScope.context_json || {}
   };
   let lockAcquired = false;
+  let runInserted = false;
+  let queuedAccepted = false;
 
-  if (triggerType === 'dependency') {
-    const exists = await dependencyRunAlreadyExistsByTriggerKey(client, config, {
-      desk_id: Number(deskRow?.desk_id || 0),
-      start_node_id: String(process?.start_node_id || ''),
-      trigger_key: String(runInput?.trigger_key || ''),
-      scope_type: executionScope.scope_type,
-      scope_ref: executionScope.scope_ref,
-      tenant_id: executionScope.tenant_id
-    });
-    if (exists) {
-      return { accepted: false, run_uid: '', reason: 'dependency_trigger_deduplicated' };
-    }
-    const rootSourceRunUid = extractRootSourceRunUidFromMeta(triggerMetaWithScope);
-    if (rootSourceRunUid) {
-      const totalByRoot = await countDependencyRunsByRoot(client, config, {
-        root_source_run_uid: rootSourceRunUid,
+  try {
+    if (triggerType === 'dependency') {
+      const exists = await dependencyRunAlreadyExistsByTriggerKey(client, config, {
+        desk_id: deskId,
+        start_node_id: startNodeId,
+        trigger_key: String(runInput?.trigger_key || ''),
         scope_type: executionScope.scope_type,
         scope_ref: executionScope.scope_ref,
         tenant_id: executionScope.tenant_id
       });
-      if (totalByRoot >= DEPENDENCY_MAX_RUNS_PER_ROOT) {
-        return { accepted: false, run_uid: '', reason: 'dependency_root_fanout_limit' };
+      if (exists) {
+        return { accepted: false, run_uid: '', reason: 'dependency_trigger_deduplicated' };
+      }
+      const rootSourceRunUid = extractRootSourceRunUidFromMeta(triggerMetaWithScope);
+      if (rootSourceRunUid) {
+        const totalByRoot = await countDependencyRunsByRoot(client, config, {
+          root_source_run_uid: rootSourceRunUid,
+          scope_type: executionScope.scope_type,
+          scope_ref: executionScope.scope_ref,
+          tenant_id: executionScope.tenant_id
+        });
+        if (totalByRoot >= DEPENDENCY_MAX_RUNS_PER_ROOT) {
+          return { accepted: false, run_uid: '', reason: 'dependency_root_fanout_limit' };
+        }
+      }
+    }
+
+    if (runPolicy === 'single_instance') {
+      const busy = await isTargetProcessBusy(
+        client,
+        config,
+        {
+          tenant_id: executionScope.tenant_id,
+          scope_type: executionScope.scope_type,
+          scope_ref: executionScope.scope_ref
+        },
+        deskId,
+        startNodeId
+      );
+      if (busy) {
+        return { accepted: false, run_uid: '', reason: 'single_instance_busy' };
+      }
+      lockAcquired = await acquireProcessLock(client, config, {
+        desk_id: deskId,
+        start_node_id: startNodeId,
+        scope_type: executionScope.scope_type,
+        scope_ref: executionScope.scope_ref,
+        lock_key: `${String(process?.process_key || `${deskRow?.desk_id}:${process?.start_node_id}`).trim()}:${scopeSignature(executionScope)}`,
+        owner_id: runUid,
+        ttl_ms: PROCESS_LOCK_TTL_MS
+      });
+      if (!lockAcquired) {
+        return { accepted: false, run_uid: '', reason: 'single_instance_lock_conflict' };
+      }
+    }
+
+    const tenantPolicy = await loadTenantExecutionPolicy(client, config, tenantId || DEFAULT_TENANT_ID);
+    if (!tenantPolicy.is_enabled) {
+      return { accepted: false, run_uid: '', reason: 'tenant_disabled' };
+    }
+    const queueDepth = await countScopeQueueDepth(client, config, {
+      tenant_id: executionScope.tenant_id,
+      scope_type: executionScope.scope_type,
+      scope_ref: executionScope.scope_ref
+    });
+    if (queueDepth >= tenantPolicy.max_queue_depth) {
+      return { accepted: false, run_uid: '', reason: 'scope_queue_depth_limit' };
+    }
+
+    await insertProcessRunRow(client, config, {
+      run_uid: runUid,
+      tenant_id: executionScope.tenant_id,
+      client_id: clientId,
+      desk_id: deskId,
+      desk_name: String(deskRow?.desk_name || ''),
+      desk_version_id: Number(deskRow?.desk_version_id || 0),
+      start_node_id: startNodeId,
+      process_code: String(process?.process_code || ''),
+      scope_type: executionScope.scope_type,
+      scope_ref: executionScope.scope_ref,
+      context_json: executionScope.context_json || {},
+      run_policy: runPolicy,
+      orchestration_mode: 'queue_chunks',
+      trigger_source: String(runInput?.trigger_source || 'manual'),
+      trigger_type: triggerType,
+      trigger_key: String(runInput?.trigger_key || ''),
+      trigger_meta: triggerMetaWithScope,
+      status: 'queued',
+      created_by: String(runInput?.created_by || 'scheduler')
+    });
+    runInserted = true;
+
+    await upsertRunAggregationRow(client, config, {
+      run_uid: runUid,
+      tenant_id: executionScope.tenant_id,
+      desk_id: deskId,
+      desk_version_id: Number(deskRow?.desk_version_id || 0),
+      start_node_id: startNodeId,
+      process_code: String(process?.process_code || ''),
+      scope_type: executionScope.scope_type,
+      scope_ref: executionScope.scope_ref
+    });
+
+    const dedupeKey = `run_plan:${runUid}`;
+    const planJobId = await enqueueWorkflowJob(client, config, {
+      tenant_id: executionScope.tenant_id,
+      client_id: clientId,
+      desk_id: deskId,
+      desk_version_id: Number(deskRow?.desk_version_id || 0),
+      start_node_id: startNodeId,
+      process_code: String(process?.process_code || ''),
+      scope_type: executionScope.scope_type,
+      scope_ref: executionScope.scope_ref,
+      context_json: executionScope.context_json || {},
+      parent_run_uid: runUid,
+      parent_job_id: 0,
+      job_type: 'process_plan',
+      payload_json: {
+        desk_row: deskRow,
+        process,
+        run_uid: runUid,
+        trigger_type: triggerType
+      },
+      dedupe_key: dedupeKey,
+      priority: Math.max(1, Math.trunc(Number(tenantPolicy.default_priority || JOB_DEFAULT_PRIORITY))),
+      max_attempts: JOB_DEFAULT_MAX_ATTEMPTS
+    });
+
+    if (!planJobId) {
+      await updateRunRow(client, config, runUid, {
+        status: 'failed',
+        finished_at: new Date().toISOString(),
+        duration_ms: 0,
+        summary_json: { error: 'plan_job_deduped_or_not_created' },
+        error_text: 'plan_job_not_created'
+      });
+      return { accepted: false, run_uid: runUid, reason: 'plan_job_not_created' };
+    }
+
+    await emitWorkflowEvent(client, config, {
+      event_type: 'process_started',
+      tenant_id: executionScope.tenant_id,
+      client_id: clientId,
+      desk_id: deskId,
+      desk_version_id: Number(deskRow?.desk_version_id || 0),
+      start_node_id: startNodeId,
+      process_code: String(process?.process_code || ''),
+      scope_type: executionScope.scope_type,
+      scope_ref: executionScope.scope_ref,
+      context_json: executionScope.context_json || {},
+      run_uid: runUid,
+      trigger_type: triggerType,
+      payload: {
+        mode: 'queued',
+        plan_job_id: planJobId
+      }
+    });
+    await recomputeRunAggregation(client, config, runUid);
+    queuedAccepted = true;
+    return { accepted: true, run_uid: runUid, plan_job_id: planJobId };
+  } catch (e) {
+    if (runInserted) {
+      try {
+        await updateRunRow(client, config, runUid, {
+          status: 'failed',
+          finished_at: new Date().toISOString(),
+          duration_ms: 0,
+          summary_json: {},
+          error_text: String(e?.message || e || 'enqueue_process_run_failed')
+        });
+      } catch {
+        // ignore run update failure
+      }
+    }
+    throw e;
+  } finally {
+    if (lockAcquired && !queuedAccepted) {
+      try {
+        await releaseProcessLock(client, config, {
+          desk_id: deskId,
+          start_node_id: startNodeId,
+          scope_type: executionScope.scope_type,
+          scope_ref: executionScope.scope_ref,
+          owner_id: runUid
+        });
+      } catch {
+        // ignore lock release failure
       }
     }
   }
-
-  if (runPolicy === 'single_instance') {
-    const busy = await isTargetProcessBusy(
-      client,
-      config,
-      {
-        tenant_id: executionScope.tenant_id,
-        scope_type: executionScope.scope_type,
-        scope_ref: executionScope.scope_ref
-      },
-      Number(deskRow?.desk_id || 0),
-      String(process?.start_node_id || '')
-    );
-    if (busy) {
-      return { accepted: false, run_uid: '', reason: 'single_instance_busy' };
-    }
-    lockAcquired = await acquireProcessLock(client, config, {
-      desk_id: Number(deskRow?.desk_id || 0),
-      start_node_id: String(process?.start_node_id || ''),
-      scope_type: executionScope.scope_type,
-      scope_ref: executionScope.scope_ref,
-      lock_key: `${String(process?.process_key || `${deskRow?.desk_id}:${process?.start_node_id}`).trim()}:${scopeSignature(executionScope)}`,
-      owner_id: runUid,
-      ttl_ms: PROCESS_LOCK_TTL_MS
-    });
-    if (!lockAcquired) {
-      return { accepted: false, run_uid: '', reason: 'single_instance_lock_conflict' };
-    }
-  }
-
-  const tenantPolicy = await loadTenantExecutionPolicy(client, config, tenantId || DEFAULT_TENANT_ID);
-  if (!tenantPolicy.is_enabled) {
-    return { accepted: false, run_uid: '', reason: 'tenant_disabled' };
-  }
-  const queueDepth = await countScopeQueueDepth(client, config, {
-    tenant_id: executionScope.tenant_id,
-    scope_type: executionScope.scope_type,
-    scope_ref: executionScope.scope_ref
-  });
-  if (queueDepth >= tenantPolicy.max_queue_depth) {
-    return { accepted: false, run_uid: '', reason: 'scope_queue_depth_limit' };
-  }
-
-  await insertProcessRunRow(client, config, {
-    run_uid: runUid,
-    tenant_id: executionScope.tenant_id,
-    client_id: clientId,
-    desk_id: Number(deskRow?.desk_id || 0),
-    desk_name: String(deskRow?.desk_name || ''),
-    desk_version_id: Number(deskRow?.desk_version_id || 0),
-    start_node_id: String(process?.start_node_id || ''),
-    process_code: String(process?.process_code || ''),
-    scope_type: executionScope.scope_type,
-    scope_ref: executionScope.scope_ref,
-    context_json: executionScope.context_json || {},
-    run_policy: runPolicy,
-    orchestration_mode: 'queue_chunks',
-    trigger_source: String(runInput?.trigger_source || 'manual'),
-    trigger_type: triggerType,
-    trigger_key: String(runInput?.trigger_key || ''),
-    trigger_meta: triggerMetaWithScope,
-    status: 'queued',
-    created_by: String(runInput?.created_by || 'scheduler')
-  });
-
-  await upsertRunAggregationRow(client, config, {
-    run_uid: runUid,
-    tenant_id: executionScope.tenant_id,
-    desk_id: Number(deskRow?.desk_id || 0),
-    desk_version_id: Number(deskRow?.desk_version_id || 0),
-    start_node_id: String(process?.start_node_id || ''),
-    process_code: String(process?.process_code || ''),
-    scope_type: executionScope.scope_type,
-    scope_ref: executionScope.scope_ref
-  });
-
-  const dedupeKey = `run_plan:${runUid}`;
-  const planJobId = await enqueueWorkflowJob(client, config, {
-    tenant_id: executionScope.tenant_id,
-    client_id: clientId,
-    desk_id: Number(deskRow?.desk_id || 0),
-    desk_version_id: Number(deskRow?.desk_version_id || 0),
-    start_node_id: String(process?.start_node_id || ''),
-    process_code: String(process?.process_code || ''),
-    scope_type: executionScope.scope_type,
-    scope_ref: executionScope.scope_ref,
-    context_json: executionScope.context_json || {},
-    parent_run_uid: runUid,
-    parent_job_id: 0,
-    job_type: 'process_plan',
-    payload_json: {
-      desk_row: deskRow,
-      process,
-      run_uid: runUid,
-      trigger_type: triggerType
-    },
-    dedupe_key: dedupeKey,
-    priority: Math.max(1, Math.trunc(Number(tenantPolicy.default_priority || JOB_DEFAULT_PRIORITY))),
-    max_attempts: JOB_DEFAULT_MAX_ATTEMPTS
-  });
-
-  if (!planJobId) {
-    await updateRunRow(client, config, runUid, {
-      status: 'failed',
-      finished_at: new Date().toISOString(),
-      duration_ms: 0,
-      summary_json: { error: 'plan_job_deduped_or_not_created' },
-      error_text: 'plan_job_not_created'
-    });
-    if (lockAcquired) {
-      await releaseProcessLock(client, config, {
-        desk_id: Number(deskRow?.desk_id || 0),
-        start_node_id: String(process?.start_node_id || ''),
-        scope_type: executionScope.scope_type,
-        scope_ref: executionScope.scope_ref,
-        owner_id: runUid
-      });
-    }
-    return { accepted: false, run_uid: runUid, reason: 'plan_job_not_created' };
-  }
-
-  await emitWorkflowEvent(client, config, {
-    event_type: 'process_started',
-    tenant_id: executionScope.tenant_id,
-    client_id: clientId,
-    desk_id: Number(deskRow?.desk_id || 0),
-    desk_version_id: Number(deskRow?.desk_version_id || 0),
-    start_node_id: String(process?.start_node_id || ''),
-    process_code: String(process?.process_code || ''),
-    scope_type: executionScope.scope_type,
-    scope_ref: executionScope.scope_ref,
-    context_json: executionScope.context_json || {},
-    run_uid: runUid,
-    trigger_type: triggerType,
-    payload: {
-      mode: 'queued',
-      plan_job_id: planJobId
-    }
-  });
-  await recomputeRunAggregation(client, config, runUid);
-  return { accepted: true, run_uid: runUid, plan_job_id: planJobId };
 }
 
 async function finalizeRunAfterQueue(client, config, runUid, status, errorText = '') {
