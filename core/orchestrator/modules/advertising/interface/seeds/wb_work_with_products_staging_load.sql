@@ -33,7 +33,7 @@ TRUNCATE TABLE "system"."api_configs_store_stg_wb_work_products";
 -- Auto-generated seed for Wildberries "work-with-products"
 -- Source: https://dev.wildberries.ru/en/docs/openapi/work-with-products
 -- Generated at: 2026-03-06T22:52:36.696Z
--- Target: system.api_configs_store
+-- Target: system.api_configs_store_stg_wb_work_products
 -- Endpoints: 49
 
 DO $$
@@ -80,4 +80,5 @@ BEGIN
     END IF;
   END LOOP;
 END $$;
+
 
