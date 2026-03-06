@@ -1,10 +1,7 @@
 ﻿<script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import JsonTreeView from './JsonTreeView.svelte';
   import ApiBuilderTab from '../tabs/ApiBuilderTab.svelte';
   import {
-    sourceGroups,
-    sourceItemsByGroup,
     tools,
     toolPorts,
     type ApiRequestTemplate,
@@ -190,7 +187,6 @@
     updated_at?: string;
   };
 
-  let activeTab: SourceGroup = 'data_tables';
   let nodes: WorkflowNode[] = [];
   let edges: WorkflowEdge[] = [];
   let selectedNodeId = '';
@@ -282,14 +278,6 @@
     const raw = Number(nodeTemplateStoreId(settingsNode) || 0);
     return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : null;
   })();
-  $: visibleSourceGroups = sourceGroups.filter((g) => g.key !== 'api_requests');
-  $: if (activeTab === 'api_requests') activeTab = 'data_tables';
-  $: sourceList =
-    activeTab === 'data_tables'
-      ? dynamicTableSources.length
-        ? dynamicTableSources
-        : sourceItemsByGroup.data_tables || []
-      : sourceItemsByGroup.math_calculations || [];
   $: deskCurrentSignature = deskSignatureFromState({
     nodes,
     edges,
@@ -303,6 +291,85 @@
   const uid = (p: string) => `${p}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
   const toolCfg = (n: WorkflowNode) => n.config as { name: string; toolType: ToolType; settings: Record<string, string> };
   const apiCfg = (n: WorkflowNode) => n.config as SourceItem & { apiRequest?: ApiNodeRequest };
+  const supportedToolTypeSet = new Set<ToolType>(['start_process', 'api_request', 'table_parser', 'db_write', 'end_process']);
+  const toolCategoryOrder = ['Старт', 'Работа с данными', 'Запросы', 'Запись', 'Завершение'];
+  const toolUiDictionary: Record<
+    string,
+    { name: string; description: string; category: string; helper?: string }
+  > = {
+    start_process: {
+      name: 'Старт процесса',
+      description: 'Точка начала процесса. Здесь настраивается запуск по расписанию или вручную.',
+      category: 'Старт'
+    },
+    api_request: {
+      name: 'API-запрос',
+      description: 'Отправляет запрос во внешний API и передает ответ дальше по цепочке.',
+      category: 'Запросы'
+    },
+    table_parser: {
+      name: 'Обработка данных',
+      description: 'Читает, фильтрует и преобразует строки из входа или таблицы.',
+      category: 'Работа с данными'
+    },
+    db_write: {
+      name: 'Запись в БД',
+      description: 'Сохраняет результат в таблицу базы данных (insert/upsert/update).',
+      category: 'Запись'
+    },
+    end_process: {
+      name: 'Конец процесса',
+      description: 'Фиксирует завершение цепочки.',
+      category: 'Завершение'
+    }
+  };
+  const runPolicyLabelMap: Record<string, string> = {
+    single_instance: 'Не запускать повторно, пока текущий запуск не завершен',
+    allow_parallel: 'Разрешить параллельные запуски'
+  };
+  const executionScopeModeLabelMap: Record<string, string> = {
+    single_global: 'Один общий запуск',
+    for_each_tenant: 'Отдельно для каждого клиента',
+    for_each_source_account: 'Отдельно для каждого источника',
+    for_each_segment: 'Отдельно для каждой группы',
+    for_each_partition: 'Отдельно по частям данных'
+  };
+  const executionScopeModeHelpMap: Record<string, string> = {
+    single_global: 'Создается один общий запуск процесса.',
+    for_each_tenant: 'Создается отдельный запуск для каждого клиента.',
+    for_each_source_account: 'Создается отдельный запуск для каждого источника/кабинета.',
+    for_each_segment: 'Создается отдельный запуск для каждой выбранной группы.',
+    for_each_partition: 'Данные делятся на части, и для каждой части идет отдельный запуск.'
+  };
+  const triggerLabelMap: Record<string, string> = {
+    interval: 'По интервалу',
+    cron: 'По расписанию Cron',
+    manual: 'Только вручную'
+  };
+  const triggerHintMap: Record<string, string> = {
+    interval: 'Процесс будет запускаться каждые N секунд/минут/часов.',
+    cron: 'Процесс будет запускаться по cron-выражению.',
+    manual: 'Процесс запускается только кнопкой "Запустить".'
+  };
+  const scopeTypeLabelMap: Record<string, string> = {
+    global: 'Общий',
+    tenant: 'Клиент',
+    source_account: 'Источник',
+    segment: 'Группа',
+    partition: 'Часть данных',
+    system: 'Системный'
+  };
+
+  let supportedTools: ToolItem[] = [];
+  let groupedTools: Array<{ title: string; items: ToolItem[] }> = [];
+  $: supportedTools = tools.filter((tool) => supportedToolTypeSet.has(tool.toolType));
+  $: groupedTools = toolCategoryOrder
+    .map((title) => ({
+      title,
+      items: supportedTools.filter((tool) => toolCategoryByType(tool.toolType) === title)
+    }))
+    .filter((group) => group.items.length > 0);
+  $: ensureStartProcessCodes();
 
   function prettyJson(value: any) {
     try {
@@ -327,6 +394,122 @@
     const ms = Math.max(0, Number(value));
     if (ms < 1000) return `${ms} мс`;
     return `${Math.round((ms / 1000) * 100) / 100} с`;
+  }
+
+  function toolMetaByType(toolType: string) {
+    return toolUiDictionary[String(toolType || '').trim()] || null;
+  }
+
+  function toolLabelByType(toolType: string) {
+    return toolMetaByType(toolType)?.name || String(toolType || '').trim() || 'Нода';
+  }
+
+  function toolDescriptionByType(toolType: string) {
+    return toolMetaByType(toolType)?.description || '';
+  }
+
+  function toolCategoryByType(toolType: string) {
+    return toolMetaByType(toolType)?.category || 'Прочее';
+  }
+
+  function triggerLabel(value: string) {
+    return triggerLabelMap[String(value || '').trim()] || String(value || '').trim() || '-';
+  }
+
+  function triggerHint(value: string) {
+    return triggerHintMap[String(value || '').trim()] || '';
+  }
+
+  function runPolicyLabel(value: string) {
+    return runPolicyLabelMap[String(value || '').trim()] || String(value || '').trim() || '-';
+  }
+
+  function executionScopeModeLabel(value: string) {
+    return executionScopeModeLabelMap[String(value || '').trim()] || String(value || '').trim() || '-';
+  }
+
+  function executionScopeModeHelp(value: string) {
+    return executionScopeModeHelpMap[String(value || '').trim()] || '';
+  }
+
+  function scopeTypeLabel(value: string) {
+    return scopeTypeLabelMap[String(value || '').trim()] || String(value || '').trim() || '-';
+  }
+
+  function normalizeProcessCodePart(input: string) {
+    const translitMap: Record<string, string> = {
+      а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z',
+      и: 'i', й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r',
+      с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'sch',
+      ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya'
+    };
+    const normalized = String(input || '')
+      .trim()
+      .toLowerCase()
+      .split('')
+      .map((char) => translitMap[char] ?? char)
+      .join('')
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .replace(/__+/g, '_');
+    if (!normalized) return '';
+    return /^\d/.test(normalized) ? `p_${normalized}` : normalized;
+  }
+
+  function generateProcessCodeFromNodeName(nodeName: string, nodeId: string) {
+    const byName = normalizeProcessCodePart(nodeName);
+    if (byName) return byName;
+    const fallback = normalizeProcessCodePart(nodeId).slice(-12);
+    return fallback ? `process_${fallback}` : `process_${Date.now()}`;
+  }
+
+  function ensureStartProcessCodes() {
+    const usedCodes = new Set(
+      nodes
+        .filter((node) => node.type === 'tool' && toolCfg(node).toolType === 'start_process')
+        .map((node) => String(toolCfg(node).settings.processCode || '').trim())
+        .filter(Boolean)
+        .map((code) => code.toLowerCase())
+    );
+    let changed = false;
+    const nextNodes = nodes.map((node) => {
+      if (node.type !== 'tool' || toolCfg(node).toolType !== 'start_process') return node;
+      const cfg = toolCfg(node);
+      const currentCode = String(cfg.settings.processCode || '').trim();
+      if (currentCode) return node;
+      let candidate = generateProcessCodeFromNodeName(String(cfg.name || ''), node.id);
+      let idx = 2;
+      while (usedCodes.has(candidate.toLowerCase())) {
+        candidate = `${candidate}_${idx}`;
+        idx += 1;
+      }
+      usedCodes.add(candidate.toLowerCase());
+      changed = true;
+      return {
+        ...node,
+        config: {
+          ...cfg,
+          settings: {
+            ...cfg.settings,
+            processCode: candidate
+          }
+        }
+      };
+    });
+    if (changed) nodes = nextNodes;
+  }
+
+  function shouldShowTenantId(settings: Record<string, string>) {
+    const mode = String(settings?.executionScopeMode || '').trim();
+    const scopeType = String(settings?.scopeType || '').trim();
+    return mode === 'for_each_tenant' || scopeType === 'tenant';
+  }
+
+  function processScopeBadge(process: DeskProcessSummary) {
+    const mode = executionScopeModeLabel(String(process.execution_scope_mode || ''));
+    const type = scopeTypeLabel(String(process.scope_type || ''));
+    const ref = String(process.scope_ref || '').trim() || 'default';
+    return `${mode} • ${type}: ${ref}`;
   }
 
   function hashQueryParams() {
@@ -768,7 +951,7 @@
       publishedDeskVersionId = Math.max(0, Number(payload?.desk_version_id || 0));
       publishedDeskReady = true;
       await refreshAutomationContour();
-      banner = `Опубликована версия desk #${publishedDeskVersionId}`;
+      banner = `Опубликована версия рабочего стола #${publishedDeskVersionId}`;
     } catch (e: any) {
       banner = String(e?.message || e || 'Ошибка публикации');
     } finally {
@@ -802,10 +985,10 @@
       publishedProcesses = publishedProcesses.map((p) =>
         String(p.start_node_id || '') === startNodeId ? { ...p, is_enabled: Boolean(enabled) } : p
       );
-      banner = enabled ? `Start ${startNodeId} включен` : `Start ${startNodeId} выключен`;
+      banner = enabled ? `Процесс ${startNodeId} включен` : `Процесс ${startNodeId} выключен`;
       await refreshRunsAndJobs();
     } catch (e: any) {
-      banner = String(e?.message || e || 'Ошибка переключения Start-процесса');
+      banner = String(e?.message || e || 'Ошибка переключения процесса');
     } finally {
       processBusyByNode = { ...processBusyByNode, [startNodeId]: false };
     }
@@ -840,10 +1023,10 @@
         throw new Error(String(payload?.details || payload?.error || `${resp.status} ${resp.statusText}`));
       }
       const runs = Array.isArray(payload?.runs) ? payload.runs.length : 0;
-      banner = runs > 0 ? `Триггер запущен, queued runs: ${runs}` : 'Триггер отправлен';
+      banner = runs > 0 ? `Ручной запуск поставлен в очередь: ${runs}` : 'Команда запуска отправлена';
       await refreshAutomationContour();
     } catch (e: any) {
-      banner = String(e?.message || e || 'Ошибка ручного trigger');
+      banner = String(e?.message || e || 'Ошибка ручного запуска');
     } finally {
       triggerBusy = false;
     }
@@ -2733,7 +2916,9 @@
 
   function validate() {
     const out: WorkflowIssue[] = [];
-    if (!nodes.some((n) => n.type === 'data')) out.push({ level: 'warn', text: 'Нет источников данных: поток может начинаться от Старт процесса' });
+    if (!nodes.some((n) => n.type === 'data')) {
+      out.push({ level: 'info', text: 'Нет отдельных узлов-источников. Это нормально, если данные читает сама нода процесса.' });
+    }
     if (!nodes.some((n) => n.type === 'tool' && toolCfg(n).toolType === 'start_process')) out.push({ level: 'error', text: 'Нет узла Старт процесса' });
     if (!nodes.some((n) => n.type === 'tool' && toolCfg(n).toolType === 'end_process')) out.push({ level: 'error', text: 'Нет узла Конец процесса' });
     nodes.filter((n) => n.type === 'tool' && toolCfg(n).toolType === 'db_write').forEach((n) => {
@@ -3320,7 +3505,7 @@
 </script>
 
 <section class="panel workflow-v2">
-  <h3>Workflow-конструктор данных</h3>
+  <h3>Конструктор процессов данных</h3>
 
   <div class="desk-bar">
     <div class="desk-storage">
@@ -3361,17 +3546,32 @@
 
   <div class="ops-bar">
     <div class="ops-actions">
-      <button class="mini primary" on:click={publishDeskVersion} disabled={!deskId || publishBusy || deskLoading || deskSaving}>
-        {publishBusy ? 'Публикация...' : 'Publish desk'}
+      <button
+        class="mini primary"
+        title="Фиксирует текущую схему как опубликованную версию, по которой работает сервер."
+        on:click={publishDeskVersion}
+        disabled={!deskId || publishBusy || deskLoading || deskSaving}
+      >
+        {publishBusy ? 'Публикация...' : 'Опубликовать рабочий стол'}
       </button>
-      <button class="mini" on:click={() => triggerPublishedProcess('')} disabled={!deskId || triggerBusy || !publishedDeskReady}>
-        {triggerBusy ? 'Запуск...' : 'Trigger manual'}
+      <button
+        class="mini"
+        title="Запускает все включенные старт-процессы вручную."
+        on:click={() => triggerPublishedProcess('')}
+        disabled={!deskId || triggerBusy || !publishedDeskReady}
+      >
+        {triggerBusy ? 'Запуск...' : 'Ручной запуск'}
       </button>
-      <button class="mini" on:click={refreshAutomationContour} disabled={monitorBusy || !deskId}>
+      <button
+        class="mini"
+        title="Обновляет статусы планировщика, процессов, запусков и очереди."
+        on:click={refreshAutomationContour}
+        disabled={monitorBusy || !deskId}
+      >
         {monitorBusy ? 'Обновление...' : 'Обновить мониторинг'}
       </button>
       <span class="ops-ref">
-        Published version: <strong>{publishedDeskVersionId || '-'}</strong>
+        Опубликованная версия: <strong>{publishedDeskVersionId || '-'}</strong>
       </span>
       <span class={publishedDeskReady ? 'clean-flag' : 'dirty-flag'}>
         {publishedDeskReady ? 'Опубликовано' : 'Публикации нет'}
@@ -3379,60 +3579,66 @@
     </div>
     <div class="ops-grid">
       <div class="ops-card">
-        <h5>Scheduler</h5>
-        <div class="kv"><span>enabled</span><strong>{schedulerView.enabled ? 'yes' : 'no'}</strong></div>
-        <div class="kv"><span>last tick</span><strong>{schedulerView.last_tick_at || '-'}</strong></div>
-        <div class="kv"><span>worker tick</span><strong>{schedulerView.worker_last_tick_at || '-'}</strong></div>
-        <div class="kv"><span>queue</span><strong>{schedulerView.queue_depth} / running {schedulerView.queue_running}</strong></div>
-        <div class="kv"><span>dead letter</span><strong>{schedulerView.queue_dead_letter}</strong></div>
-        <div class="kv"><span>events backlog</span><strong>{schedulerView.dependency_event_backlog}</strong></div>
+        <h5>Планировщик</h5>
+        <div class="kv"><span>Состояние</span><strong>{schedulerView.enabled ? 'Включен' : 'Выключен'}</strong></div>
+        <div class="kv"><span>Последний тик</span><strong>{schedulerView.last_tick_at || '-'}</strong></div>
+        <div class="kv"><span>Тик воркера</span><strong>{schedulerView.worker_last_tick_at || '-'}</strong></div>
+        <div class="kv"><span>Очередь</span><strong>{schedulerView.queue_depth} / в работе {schedulerView.queue_running}</strong></div>
+        <div class="kv"><span>Ошибочные задания</span><strong>{schedulerView.queue_dead_letter}</strong></div>
+        <div class="kv"><span>Событий в ожидании</span><strong>{schedulerView.dependency_event_backlog}</strong></div>
         {#if schedulerView.last_error}
-          <div class="ops-error">scheduler error: {schedulerView.last_error}</div>
+          <div class="ops-error">Ошибка планировщика: {schedulerView.last_error}</div>
         {/if}
         {#if schedulerView.worker_last_error}
-          <div class="ops-error">worker error: {schedulerView.worker_last_error}</div>
+          <div class="ops-error">Ошибка воркера: {schedulerView.worker_last_error}</div>
         {/if}
       </div>
       <div class="ops-card">
-        <h5>Start-процессы ({publishedProcesses.length})</h5>
+        <h5>Старт-процессы ({publishedProcesses.length})</h5>
         {#if publishedProcesses.length}
           {#each publishedProcesses as p (p.start_node_id)}
             <div class="process-row">
               <div class="process-main">
                 <strong>{p.name || p.start_node_id}</strong>
-                <span>{p.process_code}</span>
-                <span>{p.trigger_type} / {p.execution_scope_mode}</span>
-                <span>{p.scope_type}:{p.scope_ref}</span>
+                <span title="Внутренний код процесса">Код: {p.process_code}</span>
+                <span>Тип запуска: {triggerLabel(p.trigger_type)}</span>
+                <span>{processScopeBadge(p)}</span>
               </div>
               <div class="process-actions">
                 <button
                   class="mini toggle-btn"
+                  title={Boolean(p.is_enabled) ? 'Отключить процесс в автозапуске' : 'Включить процесс в автозапуске'}
                   class:active={Boolean(p.is_enabled)}
                   on:click={() => togglePublishedProcess(p.start_node_id, !p.is_enabled)}
                   disabled={Boolean(processBusyByNode[p.start_node_id])}
                 >
-                  {Boolean(p.is_enabled) ? 'Вкл' : 'Выкл'}
+                  {Boolean(p.is_enabled) ? 'Включен' : 'Выключен'}
                 </button>
-                <button class="mini" on:click={() => triggerPublishedProcess(p.start_node_id)} disabled={triggerBusy || !Boolean(p.is_enabled)}>
-                  Trigger
+                <button
+                  class="mini"
+                  title="Запустить только этот процесс вручную."
+                  on:click={() => triggerPublishedProcess(p.start_node_id)}
+                  disabled={triggerBusy || !Boolean(p.is_enabled)}
+                >
+                  Запустить
                 </button>
               </div>
               {#if p.last_run}
                 <div class="process-last">
-                  last: {p.last_run.status} / {p.last_run.trigger_type} / {p.last_run.started_at || '-'}
+                  Последний запуск: {p.last_run.status || '-'} / {triggerLabel(p.last_run.trigger_type || p.trigger_type)} / {p.last_run.started_at || '-'}
                 </div>
               {/if}
             </div>
           {/each}
         {:else}
-          <div class="empty">Start-процессы появятся после публикации</div>
+          <div class="empty">Старт-процессы появятся после публикации</div>
         {/if}
       </div>
       <div class="ops-card">
-        <h5>Runs / Jobs</h5>
+        <h5>Запуски и очередь</h5>
         <div class="ops-columns">
           <div>
-            <div class="ops-subhead">Runs ({processRuns.length})</div>
+            <div class="ops-subhead">Запуски ({processRuns.length})</div>
             {#if processRuns.length}
               {#each processRuns.slice(0, 8) as run (run.run_uid)}
                 <div class="compact-row">
@@ -3446,7 +3652,7 @@
             {/if}
           </div>
           <div>
-            <div class="ops-subhead">Jobs ({workflowJobs.length})</div>
+            <div class="ops-subhead">Задания очереди ({workflowJobs.length})</div>
             {#if workflowJobs.length}
               {#each workflowJobs.slice(0, 8) as job (`${job.job_id}`)}
                 <div class="compact-row">
@@ -3465,44 +3671,17 @@
   </div>
 
   <div class="topbar">
-    <button on:click={() => (issues = validate())}>Проверить схему</button>
-    <button class="primary" on:click={runWorkflow}>Смоделировать запуск</button>
-    <button on:click={resetCanvas}>Очистить</button>
+    <button title="Удаляет ноды и связи на текущем рабочем поле." on:click={resetCanvas}>Очистить рабочее поле</button>
+    <button title="Обновляет список API-шаблонов и таблиц для настроек нод." on:click={loadDynamicSourceCatalog} disabled={sourceCatalogLoading}>
+      {sourceCatalogLoading ? 'Обновление каталога...' : 'Обновить каталог шаблонов'}
+    </button>
     <div class="summary">
-      <span>Источник: {summary.sourceRows}</span>
-      <span>Выход: {summary.finalRows}</span>
-      <span>Потери: {summary.lossRows} ({summary.lossPct}%)</span>
-      <span>Успех: {summary.successPct}%</span>
+      <span>Двойной клик по ноде открывает её настройку</span>
+      <span>Кнопки на ноде: запуск, пауза, остановка</span>
     </div>
   </div>
 
   <div class="workspace">
-    <aside class="sources">
-      <div class="source-head">
-        <h4>Источники данных</h4>
-        <button class="mini" on:click={loadDynamicSourceCatalog} disabled={sourceCatalogLoading}>
-          {sourceCatalogLoading ? '...' : 'Обновить'}
-        </button>
-      </div>
-      <div class="tabs">
-        {#each visibleSourceGroups as g (g.key)}
-          <button class:active={activeTab === g.key} on:click={() => (activeTab = g.key)}>{g.label}</button>
-        {/each}
-      </div>
-      {#if sourceCatalogError}
-        <div class="source-error">{sourceCatalogError}</div>
-      {/if}
-      <div class="items">
-        {#each sourceList as item (item.id)}
-          <button draggable="true" class="item source" on:dragstart={(e) => e.dataTransfer?.setData('application/x-workflow-source', JSON.stringify(item))}>
-            <strong>{item.name}</strong>
-            <span>{item.datasetId}</span>
-            <span>Строк: {item.size}</span>
-          </button>
-        {/each}
-      </div>
-    </aside>
-
     <div class="canvas-wrap" bind:this={canvasEl} on:drop={onDrop} on:dragover={onDragOver} on:wheel={onWheel} on:mousedown={startPan} on:mousemove={onMouseMove} on:mouseup={stopAll} on:mouseleave={stopAll}>
       <div class="canvas" style={`transform: translate(${panX}px, ${panY}px) scale(${zoom});`}>
         <svg class="edges" width="3000" height="2000">
@@ -3551,7 +3730,7 @@
                 <button class="ctrl-btn delete-btn" title="Удалить ноду" on:click|stopPropagation={() => deleteNode(node.id)}>x</button>
               </div>
             </div>
-            <div class="node-meta">{node.type === 'data' ? node.config.datasetId : node.config.toolType}</div>
+            <div class="node-meta">{node.type === 'data' ? node.config.datasetId : toolLabelByType(toolCfg(node).toolType)}</div>
             {#if chainRunActive && chainCurrentNodeId === node.id}
               <div class="runtime running">Выполняется...</div>
             {/if}
@@ -3584,21 +3763,43 @@
     </div>
 
     <aside class="tools">
-      <h4>Инструменты работы с данными</h4>
-      <div class="items">
-        {#each tools as t (t.id)}
-          <button draggable="true" class="item tool" on:dragstart={(e) => e.dataTransfer?.setData('application/x-workflow-tool', JSON.stringify(t))}>
-            <strong>{t.name}</strong>
-            <span>{t.description}</span>
-          </button>
-        {/each}
-      </div>
+      <h4>Ноды процесса</h4>
+      <div class="help">Перетащи нужную ноду на рабочее поле. В списке показаны только поддерживаемые ноды.</div>
+      {#if sourceCatalogError}
+        <div class="source-error">{sourceCatalogError}</div>
+      {/if}
+      {#each groupedTools as group (group.title)}
+        <section class="tool-group">
+          <h5>{group.title}</h5>
+          <div class="items">
+            {#each group.items as t (t.id)}
+              <button
+                draggable="true"
+                class="item tool"
+                title={toolDescriptionByType(t.toolType)}
+                on:dragstart={(e) =>
+                  e.dataTransfer?.setData(
+                    'application/x-workflow-tool',
+                    JSON.stringify({
+                      ...t,
+                      name: toolLabelByType(t.toolType),
+                      description: toolDescriptionByType(t.toolType)
+                    })
+                  )}
+              >
+                <strong>{toolLabelByType(t.toolType)}</strong>
+                <span>{toolDescriptionByType(t.toolType)}</span>
+              </button>
+            {/each}
+          </div>
+        </section>
+      {/each}
 
       <section class="props">
-        <h5>Свойства</h5>
+        <h5>Настройка выбранной ноды</h5>
         {#if selectedNode && selectedNode.type === 'tool'}
           {#if toolCfg(selectedNode).toolType === 'schedule_process'}
-            <label>Cron<input value={toolCfg(selectedNode).settings.cron || ''} on:input={(e) => onSettingInput(selectedNode.id, 'cron', e)} /></label>
+            <div class="issue warn">Эта нода относится к старой версии конструктора и больше не используется в новых схемах.</div>
           {/if}
           {#if toolCfg(selectedNode).toolType === 'table_parser'}
             <label>
@@ -3607,18 +3808,18 @@
                 value={toolCfg(selectedNode).settings.sourceMode || 'input'}
                 on:change={(e) => updateSetting(selectedNode.id, 'sourceMode', selectValue(e))}
               >
-                <option value="input">Вход предыдущей ноды</option>
+                <option value="input">Вход от предыдущей ноды</option>
                 <option value="table">Таблица</option>
-                <option value="process_bus">Process bus</option>
+                <option value="process_bus">Шина событий процесса</option>
               </select>
             </label>
             <label>Схема<input value={toolCfg(selectedNode).settings.sourceSchema || ''} on:input={(e) => onSettingInput(selectedNode.id, 'sourceSchema', e)} /></label>
             <label>Таблица<input value={toolCfg(selectedNode).settings.sourceTable || ''} on:input={(e) => onSettingInput(selectedNode.id, 'sourceTable', e)} /></label>
-            <label>Канал bus<input value={toolCfg(selectedNode).settings.channel || ''} on:input={(e) => onSettingInput(selectedNode.id, 'channel', e)} /></label>
+            <label>Канал шины<input value={toolCfg(selectedNode).settings.channel || ''} on:input={(e) => onSettingInput(selectedNode.id, 'channel', e)} /></label>
             <label>Лимит<input value={toolCfg(selectedNode).settings.limit || ''} on:input={(e) => onSettingInput(selectedNode.id, 'limit', e)} /></label>
             <label>Путь во входе<input value={toolCfg(selectedNode).settings.inputPath || ''} on:input={(e) => onSettingInput(selectedNode.id, 'inputPath', e)} /></label>
             <label>Путь записи<input value={toolCfg(selectedNode).settings.recordPath || ''} on:input={(e) => onSettingInput(selectedNode.id, 'recordPath', e)} /></label>
-            <label>Поля (csv)<input value={toolCfg(selectedNode).settings.selectFields || ''} on:input={(e) => onSettingInput(selectedNode.id, 'selectFields', e)} /></label>
+            <label>Поля (через запятую)<input value={toolCfg(selectedNode).settings.selectFields || ''} on:input={(e) => onSettingInput(selectedNode.id, 'selectFields', e)} /></label>
             <label>Переименовать JSON<input value={toolCfg(selectedNode).settings.renameMap || ''} on:input={(e) => onSettingInput(selectedNode.id, 'renameMap', e)} /></label>
             <label>Фильтр: поле<input value={toolCfg(selectedNode).settings.filterField || ''} on:input={(e) => onSettingInput(selectedNode.id, 'filterField', e)} /></label>
             <label>Фильтр: оператор<input value={toolCfg(selectedNode).settings.filterOperator || ''} on:input={(e) => onSettingInput(selectedNode.id, 'filterOperator', e)} /></label>
@@ -3634,18 +3835,18 @@
                 value={toolCfg(selectedNode).settings.writeMode || 'insert'}
                 on:change={(e) => updateSetting(selectedNode.id, 'writeMode', selectValue(e))}
               >
-                <option value="insert">insert</option>
-                <option value="upsert">upsert</option>
-                <option value="update_by_key">update_by_key</option>
+                <option value="insert">Только вставка (insert)</option>
+                <option value="upsert">Обновить или вставить (upsert)</option>
+                <option value="update_by_key">Обновить по ключу (update)</option>
               </select>
             </label>
-            <label>Ключевые колонки (csv)<input value={toolCfg(selectedNode).settings.keyColumns || ''} on:input={(e) => onSettingInput(selectedNode.id, 'keyColumns', e)} /></label>
-            <label>Batch size<input value={toolCfg(selectedNode).settings.batchSize || ''} on:input={(e) => onSettingInput(selectedNode.id, 'batchSize', e)} /></label>
-            <label>Канал fallback<input value={toolCfg(selectedNode).settings.channel || ''} on:input={(e) => onSettingInput(selectedNode.id, 'channel', e)} /></label>
+            <label>Ключевые колонки (через запятую)<input value={toolCfg(selectedNode).settings.keyColumns || ''} on:input={(e) => onSettingInput(selectedNode.id, 'keyColumns', e)} /></label>
+            <label>Размер пакета<input value={toolCfg(selectedNode).settings.batchSize || ''} on:input={(e) => onSettingInput(selectedNode.id, 'batchSize', e)} /></label>
+            <label>Резервный канал<input value={toolCfg(selectedNode).settings.channel || ''} on:input={(e) => onSettingInput(selectedNode.id, 'channel', e)} /></label>
             <label>Успешная запись, %<input value={toolCfg(selectedNode).settings.writeSuccessRate || ''} on:input={(e) => onSettingInput(selectedNode.id, 'writeSuccessRate', e)} /></label>
           {/if}
         {:else}
-          <div class="empty">Выбери узел-инструмент на canvas</div>
+          <div class="empty">Выберите ноду на рабочем поле, чтобы увидеть настройки.</div>
         {/if}
       </section>
 
@@ -3683,24 +3884,38 @@
 
       {#if settingsNode.type === 'tool' && toolCfg(settingsNode).toolType === 'start_process'}
         <div class="node-modal-body">
-          <div class="help">Настройка серверного процесса: расписание, scope и политика запуска.</div>
+          <div class="help">
+            Настройка точки старта процесса. Здесь задается, когда запускать процесс и в каком режиме он будет работать на сервере.
+          </div>
           <label>
-            Активен
+            Название процесса
+            <input
+              value={toolCfg(settingsNode).name || ''}
+              on:input={(e) => updateToolName(settingsNode.id, inputValue(e))}
+              placeholder="Например: Синхронизация карточек"
+            />
+            <span class="hint">Это имя отображается в списке процессов и в логах запуска.</span>
+          </label>
+          <label>
+            Активность процесса
             <select
               value={toolCfg(settingsNode).settings.isEnabled || 'true'}
               on:change={(e) => updateSetting(settingsNode.id, 'isEnabled', selectValue(e))}
+              title="Если выключено, процесс не будет запускаться автоматически."
             >
-              <option value="true">Да</option>
-              <option value="false">Нет</option>
+              <option value="true">Включен</option>
+              <option value="false">Выключен</option>
             </select>
+            <span class="hint">Выключенный процесс игнорируется планировщиком.</span>
           </label>
           <label>
-            Process code
+            Внутренний код процесса
             <input
               value={toolCfg(settingsNode).settings.processCode || ''}
               on:input={(e) => onSettingInput(settingsNode.id, 'processCode', e)}
-              placeholder="например client_cards_sync"
+              placeholder="Например: client_cards_sync"
             />
+            <span class="hint">Это внутренний код процесса. Нужен серверу, чтобы отличать процессы друг от друга. Обычно менять не нужно.</span>
           </label>
           <label>
             Тип запуска
@@ -3708,10 +3923,11 @@
               value={toolCfg(settingsNode).settings.triggerType || 'interval'}
               on:change={(e) => updateSetting(settingsNode.id, 'triggerType', selectValue(e))}
             >
-              <option value="interval">Интервал</option>
-              <option value="cron">Cron</option>
-              <option value="manual">Ручной</option>
+              <option value="interval">По интервалу</option>
+              <option value="cron">По расписанию Cron</option>
+              <option value="manual">Только вручную</option>
             </select>
+            <span class="hint">{triggerHint(toolCfg(settingsNode).settings.triggerType || 'interval')}</span>
           </label>
           {#if (toolCfg(settingsNode).settings.triggerType || 'interval') === 'interval'}
             <div class="interval-grid">
@@ -3738,32 +3954,35 @@
             </div>
           {:else if (toolCfg(settingsNode).settings.triggerType || 'interval') === 'cron'}
             <label>
-              Cron выражение
+              Cron-выражение
               <input
                 value={toolCfg(settingsNode).settings.cron || '0 * * * *'}
                 on:input={(e) => onSettingInput(settingsNode.id, 'cron', e)}
                 placeholder="0 * * * *"
               />
+              <span class="hint">Формат расписания Cron, например запуск каждый час: <code>0 * * * *</code>.</span>
             </label>
           {/if}
           <div class="interval-grid">
             <label>
-              Timezone
+              Часовой пояс
               <input value={toolCfg(settingsNode).settings.timezone || 'UTC'} on:input={(e) => onSettingInput(settingsNode.id, 'timezone', e)} />
+              <span class="hint">Например: UTC или Europe/Moscow.</span>
             </label>
             <label>
-              Run policy
+              Правило повторного запуска
               <select
                 value={toolCfg(settingsNode).settings.runPolicy || 'single_instance'}
                 on:change={(e) => updateSetting(settingsNode.id, 'runPolicy', selectValue(e))}
               >
-                <option value="single_instance">single_instance</option>
-                <option value="allow_parallel">allow_parallel</option>
+                <option value="single_instance">Не запускать второй раз, пока первый не завершен</option>
+                <option value="allow_parallel">Разрешить параллельные запуски</option>
               </select>
+              <span class="hint">{runPolicyLabel(toolCfg(settingsNode).settings.runPolicy || 'single_instance')}</span>
             </label>
           </div>
           <label>
-            Execution scope mode
+            Для кого запускать процесс
             <select
               value={toolCfg(settingsNode).settings.executionScopeMode || 'single_global'}
               on:change={(e) => {
@@ -3772,63 +3991,71 @@
                 applyScopeTypeByMode(settingsNode.id, mode);
               }}
             >
-              <option value="single_global">single_global</option>
-              <option value="for_each_tenant">for_each_tenant</option>
-              <option value="for_each_source_account">for_each_source_account</option>
-              <option value="for_each_segment">for_each_segment</option>
-              <option value="for_each_partition">for_each_partition</option>
+              <option value="single_global">Один общий запуск</option>
+              <option value="for_each_tenant">Отдельно для каждого клиента</option>
+              <option value="for_each_source_account">Отдельно для каждого источника</option>
+              <option value="for_each_segment">Отдельно для каждой группы</option>
+              <option value="for_each_partition">Отдельно по частям данных</option>
             </select>
+            <span class="hint">{executionScopeModeHelp(toolCfg(settingsNode).settings.executionScopeMode || 'single_global')}</span>
           </label>
-          <div class="interval-grid">
+          {#if shouldShowTenantId(toolCfg(settingsNode).settings || {})}
             <label>
-              Scope type
-              <select
-                value={toolCfg(settingsNode).settings.scopeType || 'global'}
-                on:change={(e) => updateSetting(settingsNode.id, 'scopeType', selectValue(e))}
-              >
-                <option value="global">global</option>
-                <option value="tenant">tenant</option>
-                <option value="source_account">source_account</option>
-                <option value="segment">segment</option>
-                <option value="partition">partition</option>
-                <option value="system">system</option>
-              </select>
-            </label>
-            <label>
-              Scope ref
-              <input value={toolCfg(settingsNode).settings.scopeRef || ''} on:input={(e) => onSettingInput(settingsNode.id, 'scopeRef', e)} />
-            </label>
-          </div>
-          <div class="interval-grid">
-            <label>
-              Tenant id (nullable)
+              Идентификатор клиента
               <input value={toolCfg(settingsNode).settings.tenantId || ''} on:input={(e) => onSettingInput(settingsNode.id, 'tenantId', e)} />
+              <span class="hint">Заполняется только если процесс должен работать для конкретного клиента.</span>
+            </label>
+          {/if}
+
+          <details class="advanced-box">
+            <summary>Расширенные настройки (для технической настройки)</summary>
+            <div class="advanced-grid">
+              <label>
+                Тип контекста запуска
+                <select
+                  value={toolCfg(settingsNode).settings.scopeType || 'global'}
+                  on:change={(e) => updateSetting(settingsNode.id, 'scopeType', selectValue(e))}
+                >
+                  <option value="global">Общий</option>
+                  <option value="tenant">Клиент</option>
+                  <option value="source_account">Источник</option>
+                  <option value="segment">Группа</option>
+                  <option value="partition">Часть данных</option>
+                  <option value="system">Системный</option>
+                </select>
+              </label>
+              <label>
+                Ключ контекста
+                <input value={toolCfg(settingsNode).settings.scopeRef || ''} on:input={(e) => onSettingInput(settingsNode.id, 'scopeRef', e)} />
+              </label>
+            </div>
+            <div class="advanced-grid">
+              <label>
+                Входной контекст
+                <input value={toolCfg(settingsNode).settings.inputScope || ''} on:input={(e) => onSettingInput(settingsNode.id, 'inputScope', e)} />
+              </label>
+              <label>
+                Выходной контекст
+                <input value={toolCfg(settingsNode).settings.outputScope || ''} on:input={(e) => onSettingInput(settingsNode.id, 'outputScope', e)} />
+              </label>
+            </div>
+            <label>
+              Дополнительный контекст (JSON)
+              <textarea
+                rows="4"
+                value={toolCfg(settingsNode).settings.contextJson || '{}'}
+                on:input={(e) => onSettingInput(settingsNode.id, 'contextJson', e)}
+              ></textarea>
             </label>
             <label>
-              Input scope
-              <input value={toolCfg(settingsNode).settings.inputScope || ''} on:input={(e) => onSettingInput(settingsNode.id, 'inputScope', e)} />
+              Источник контекста (JSON)
+              <textarea
+                rows="4"
+                value={toolCfg(settingsNode).settings.scopeSource || '{}'}
+                on:input={(e) => onSettingInput(settingsNode.id, 'scopeSource', e)}
+              ></textarea>
             </label>
-          </div>
-          <label>
-            Output scope
-            <input value={toolCfg(settingsNode).settings.outputScope || ''} on:input={(e) => onSettingInput(settingsNode.id, 'outputScope', e)} />
-          </label>
-          <label>
-            context_json
-            <textarea
-              rows="5"
-              value={toolCfg(settingsNode).settings.contextJson || '{}'}
-              on:input={(e) => onSettingInput(settingsNode.id, 'contextJson', e)}
-            ></textarea>
-          </label>
-          <label>
-            scope_source
-            <textarea
-              rows="5"
-              value={toolCfg(settingsNode).settings.scopeSource || '{}'}
-              on:input={(e) => onSettingInput(settingsNode.id, 'scopeSource', e)}
-            ></textarea>
-          </label>
+          </details>
         </div>
       {/if}
 
@@ -4027,16 +4254,14 @@
   .topbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .topbar button { border: 1px solid #dbe4f0; background: #fff; border-radius: 9px; padding: 6px 10px; cursor: pointer; }
   .topbar .primary { background: #0f172a; color: #fff; border-color: #0f172a; }
-  .summary { display: flex; gap: 8px; font-size: 12px; color: #334155; }
-  .workspace { display: grid; grid-template-columns: 280px minmax(0, 1fr) 360px; gap: 10px; min-height: 720px; }
-  .sources,.tools { border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px; background: #f8fbff; display: flex; flex-direction: column; gap: 8px; overflow: auto; }
-  .source-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .summary { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; color: #334155; }
+  .workspace { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 10px; min-height: 720px; }
+  .tools { border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px; background: #f8fbff; display: flex; flex-direction: column; gap: 8px; overflow: auto; }
   .mini { border: 1px solid #dbe4f0; background: #fff; border-radius: 8px; padding: 4px 8px; font-size: 11px; cursor: pointer; }
   .mini.primary { background: #0f172a; color: #fff; border-color: #0f172a; }
   .source-error { border: 1px solid #fecaca; background: #fef2f2; color: #991b1b; border-radius: 8px; padding: 6px 8px; font-size: 11px; }
-  .tabs { display: grid; gap: 6px; }
-  .tabs button { border: 1px solid #dbe4f0; background: #fff; border-radius: 8px; padding: 6px; text-align: left; cursor: pointer; }
-  .tabs button.active { background: #0f172a; color: #fff; }
+  .tool-group { border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .tool-group h5 { margin: 0; font-size: 12px; color: #0f172a; }
   .items { display: flex; flex-direction: column; gap: 6px; }
   .item { text-align: left; border: 1px solid #dbe4f0; background: #fff; border-radius: 8px; padding: 7px; cursor: grab; display: flex; flex-direction: column; gap: 2px; }
   .item span { font-size: 11px; color: #64748b; }
@@ -4109,6 +4334,28 @@
   .node-modal-body-api :global(.panel) { border: 0; border-radius: 0; padding: 0; background: transparent; }
   .interval-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .help { font-size: 12px; color: #475569; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; }
+  .hint { font-size: 11px; color: #64748b; line-height: 1.35; }
+  .advanced-box {
+    border: 1px solid #dbe4f0;
+    border-radius: 10px;
+    background: #f8fafc;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .advanced-box summary {
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    color: #1e293b;
+    outline: none;
+  }
+  .advanced-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
   .actions-row { display: flex; gap: 8px; flex-wrap: wrap; }
   .actions-row button { border: 1px solid #dbe4f0; background: #fff; border-radius: 8px; padding: 7px 10px; cursor: pointer; }
   .actions-row button.active { background: #0f172a; color: #fff; border-color: #0f172a; }
