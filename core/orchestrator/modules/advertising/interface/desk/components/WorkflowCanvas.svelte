@@ -150,6 +150,15 @@
     output_scope?: string;
     last_run?: any;
   };
+  type DraftProcessSummary = {
+    start_node_id: string;
+    process_code: string;
+    name: string;
+    trigger_type: string;
+    execution_scope_mode: string;
+    scope_type: string;
+    scope_ref: string;
+  };
   type SchedulerStateView = {
     enabled: boolean;
     last_tick_at: string;
@@ -251,6 +260,8 @@
   let publishedDeskVersionId = 0;
   let publishedDeskReady = false;
   let publishedProcesses: DeskProcessSummary[] = [];
+  let draftProcesses: DraftProcessSummary[] = [];
+  let outdatedPublishedProcesses: DeskProcessSummary[] = [];
   let processRuns: ProcessRunRow[] = [];
   let workflowJobs: WorkflowJobRow[] = [];
 
@@ -369,6 +380,10 @@
       items: supportedTools.filter((tool) => toolCategoryByType(tool.toolType) === title)
     }))
     .filter((group) => group.items.length > 0);
+  $: draftProcesses = buildDraftProcessList(nodes);
+  $: outdatedPublishedProcesses = publishedProcesses.filter(
+    (pp) => !draftProcesses.some((dp) => String(dp.start_node_id || '').trim() === String(pp.start_node_id || '').trim())
+  );
   $: ensureStartProcessCodes();
 
   function prettyJson(value: any) {
@@ -510,6 +525,35 @@
     const type = scopeTypeLabel(String(process.scope_type || ''));
     const ref = String(process.scope_ref || '').trim() || 'default';
     return `${mode} • ${type}: ${ref}`;
+  }
+
+  function draftProcessScopeBadge(process: DraftProcessSummary) {
+    const mode = executionScopeModeLabel(String(process.execution_scope_mode || ''));
+    const type = scopeTypeLabel(String(process.scope_type || ''));
+    const ref = String(process.scope_ref || '').trim() || 'default';
+    return `${mode} • ${type}: ${ref}`;
+  }
+
+  function buildDraftProcessList(nodesList: WorkflowNode[]) {
+    return (Array.isArray(nodesList) ? nodesList : [])
+      .filter((node) => node.type === 'tool' && toolCfg(node).toolType === 'start_process')
+      .map((node) => {
+        const cfg = toolCfg(node);
+        const settings = cfg.settings || {};
+        return {
+          start_node_id: String(node.id || '').trim(),
+          process_code: String(settings.processCode || '').trim(),
+          name: String(cfg.name || '').trim() || String(node.id || '').trim(),
+          trigger_type: String(settings.triggerType || 'interval').trim(),
+          execution_scope_mode: String(settings.executionScopeMode || 'single_global').trim(),
+          scope_type: String(settings.scopeType || 'global').trim(),
+          scope_ref: String(settings.scopeRef || 'global').trim() || 'global'
+        } as DraftProcessSummary;
+      });
+  }
+
+  function publishedProcessByNodeId(startNodeId: string) {
+    return publishedProcesses.find((p) => String(p?.start_node_id || '').trim() === String(startNodeId || '').trim()) || null;
   }
 
   function hashQueryParams() {
@@ -3607,44 +3651,56 @@
             {/if}
           </div>
           <div class="ops-card">
-            <h5>Старт-процессы ({publishedProcesses.length})</h5>
-            {#if publishedProcesses.length}
-              {#each publishedProcesses as p (p.start_node_id)}
+            <h5>Процессы рабочего стола ({draftProcesses.length})</h5>
+            {#if draftProcesses.length}
+              {#each draftProcesses as p (p.start_node_id)}
+                {@const publishedProcess = publishedProcessByNodeId(p.start_node_id)}
                 <div class="process-row">
                   <div class="process-main">
                     <strong>{p.name || p.start_node_id}</strong>
                     <span title="Внутренний код процесса">Код: {p.process_code}</span>
                     <span>Тип запуска: {triggerLabel(p.trigger_type)}</span>
-                    <span>{processScopeBadge(p)}</span>
+                    <span>{draftProcessScopeBadge(p)}</span>
+                    <span class={publishedProcess ? 'clean-flag' : 'dirty-flag'}>
+                      {publishedProcess ? 'Опубликован' : 'Не опубликован'}
+                    </span>
                   </div>
                   <div class="process-actions">
                     <button
                       class="mini toggle-btn"
-                      title={Boolean(p.is_enabled) ? 'Отключить процесс в автозапуске' : 'Включить процесс в автозапуске'}
-                      class:active={Boolean(p.is_enabled)}
-                      on:click={() => togglePublishedProcess(p.start_node_id, !p.is_enabled)}
-                      disabled={Boolean(processBusyByNode[p.start_node_id])}
+                      title={publishedProcess ? (Boolean(publishedProcess.is_enabled) ? 'Отключить процесс в автозапуске' : 'Включить процесс в автозапуске') : 'Сначала опубликуйте рабочий стол'}
+                      class:active={Boolean(publishedProcess?.is_enabled)}
+                      on:click={() => togglePublishedProcess(p.start_node_id, !Boolean(publishedProcess?.is_enabled))}
+                      disabled={!publishedProcess || Boolean(processBusyByNode[p.start_node_id])}
                     >
-                      {Boolean(p.is_enabled) ? 'Включен' : 'Выключен'}
+                      {publishedProcess ? (Boolean(publishedProcess.is_enabled) ? 'Включен' : 'Выключен') : 'Не опубликован'}
                     </button>
                     <button
                       class="mini"
-                      title="Запустить только этот процесс вручную."
+                      title={publishedProcess ? 'Запустить только этот процесс вручную.' : 'Сначала опубликуйте рабочий стол'}
                       on:click={() => triggerPublishedProcess(p.start_node_id)}
-                      disabled={triggerBusy || !Boolean(p.is_enabled)}
+                      disabled={!publishedProcess || triggerBusy || !Boolean(publishedProcess.is_enabled)}
                     >
                       Запустить
                     </button>
                   </div>
-                  {#if p.last_run}
+                  {#if publishedProcess?.last_run}
                     <div class="process-last">
-                      Последний запуск: {p.last_run.status || '-'} / {triggerLabel(p.last_run.trigger_type || p.trigger_type)} / {p.last_run.started_at || '-'}
+                      Последний запуск: {publishedProcess.last_run.status || '-'} / {triggerLabel(publishedProcess.last_run.trigger_type || p.trigger_type)} / {publishedProcess.last_run.started_at || '-'}
                     </div>
+                  {:else}
+                    <div class="process-last">Этот процесс еще не опубликован на сервере.</div>
                   {/if}
                 </div>
               {/each}
             {:else}
-              <div class="empty">Старт-процессы появятся после публикации</div>
+              <div class="empty">На рабочем столе нет старт-процессов.</div>
+            {/if}
+            {#if outdatedPublishedProcesses.length}
+              <div class="issue warn">
+                В опубликованной версии еще есть {outdatedPublishedProcesses.length} процесс(а), которых нет на рабочем столе.
+                Нажмите «Опубликовать рабочий стол», чтобы удалить их с сервера.
+              </div>
             {/if}
           </div>
           <div class="ops-card">
