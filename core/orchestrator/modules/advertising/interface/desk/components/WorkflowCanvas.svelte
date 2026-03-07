@@ -225,7 +225,6 @@
   let nodeModalResizeState:
     | {
         edge: 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
-        pointerId: number;
         startX: number;
         startY: number;
         startRect: { left: number; top: number; width: number; height: number };
@@ -2883,9 +2882,8 @@
     return 'nesw-resize';
   }
 
-  function onNodeModalResizeMove(e: PointerEvent) {
+  function onNodeModalResizeMove(e: MouseEvent) {
     if (!nodeModalResizeState) return;
-    if (e.pointerId !== nodeModalResizeState.pointerId) return;
     e.preventDefault();
     const { edge, startX, startY, startRect } = nodeModalResizeState;
     const dx = e.clientX - startX;
@@ -2944,21 +2942,14 @@
 
   function stopNodeModalResize() {
     if (!nodeModalResizeState) return;
-    window.removeEventListener('pointermove', onNodeModalResizeMove);
-    window.removeEventListener('pointerup', stopNodeModalResize);
-    if (nodeModalEl?.releasePointerCapture) {
-      try {
-        nodeModalEl.releasePointerCapture(nodeModalResizeState.pointerId);
-      } catch {
-        // ignore
-      }
-    }
+    window.removeEventListener('mousemove', onNodeModalResizeMove);
+    window.removeEventListener('mouseup', stopNodeModalResize);
     nodeModalResizeState = null;
     document.body.style.removeProperty('cursor');
     document.body.style.removeProperty('user-select');
   }
 
-  function startNodeModalResize(e: PointerEvent, edge: 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw') {
+  function startNodeModalResize(e: MouseEvent, edge: 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw') {
     if (nodeModalFullscreen) return;
     if (e.button !== 0) return;
     ensureNodeModalRect();
@@ -2967,25 +2958,17 @@
     e.stopPropagation();
     nodeModalResizeState = {
       edge,
-      pointerId: e.pointerId,
       startX: e.clientX,
       startY: e.clientY,
       startRect: { ...nodeModalRect }
     };
-    if (nodeModalEl?.setPointerCapture) {
-      try {
-        nodeModalEl.setPointerCapture(e.pointerId);
-      } catch {
-        // ignore
-      }
-    }
-    window.addEventListener('pointermove', onNodeModalResizeMove, { passive: false });
-    window.addEventListener('pointerup', stopNodeModalResize);
+    window.addEventListener('mousemove', onNodeModalResizeMove);
+    window.addEventListener('mouseup', stopNodeModalResize);
     document.body.style.cursor = resizeCursorByEdge(edge);
     document.body.style.userSelect = 'none';
   }
 
-  function detectNodeModalResizeEdge(e: PointerEvent): 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw' | null {
+  function detectNodeModalResizeEdge(e: MouseEvent): 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw' | null {
     if (!nodeModalEl || nodeModalFullscreen || !settingsNode) return null;
     if (!isApiNode(settingsNode) && !isApiToolNode(settingsNode)) return null;
     const rect = nodeModalEl.getBoundingClientRect();
@@ -3006,7 +2989,7 @@
     return null;
   }
 
-  function onNodeModalMouseMoveForResize(e: PointerEvent) {
+  function onNodeModalMouseMoveForResize(e: MouseEvent) {
     if (nodeModalResizeState || !nodeModalEl) return;
     const edge = detectNodeModalResizeEdge(e);
     if (edge) {
@@ -3016,7 +2999,7 @@
     }
   }
 
-  function onNodeModalMouseDownForResize(e: PointerEvent) {
+  function onNodeModalMouseDownForResize(e: MouseEvent) {
     const edge = detectNodeModalResizeEdge(e);
     if (!edge) return;
     startNodeModalResize(e, edge);
@@ -4225,9 +4208,9 @@
       class:node-modal-manual={Boolean(nodeModalRect) && !nodeModalFullscreen}
       class:node-modal-resizable={(isApiNode(settingsNode) || isApiToolNode(settingsNode)) && !nodeModalFullscreen}
       style={nodeModalInlineStyle()}
-      on:pointerdown={onNodeModalMouseDownForResize}
-      on:pointermove={onNodeModalMouseMoveForResize}
-      on:pointerleave={onNodeModalMouseLeaveForResize}
+      on:mousedown={onNodeModalMouseDownForResize}
+      on:mousemove={onNodeModalMouseMoveForResize}
+      on:mouseleave={onNodeModalMouseLeaveForResize}
     >
       <div class="node-modal-head">
         <h4>Настройка узла: {settingsNode.config.name}</h4>
@@ -4463,14 +4446,14 @@
         </div>
       {/if}
       {#if (isApiNode(settingsNode) || isApiToolNode(settingsNode)) && !nodeModalFullscreen}
-        <button type="button" class="modal-resize-handle modal-resize-n" aria-label="Изменить высоту сверху" on:pointerdown={(e) => startNodeModalResize(e, 'n')}></button>
-        <button type="button" class="modal-resize-handle modal-resize-s" aria-label="Изменить высоту снизу" on:pointerdown={(e) => startNodeModalResize(e, 's')}></button>
-        <button type="button" class="modal-resize-handle modal-resize-e" aria-label="Изменить ширину справа" on:pointerdown={(e) => startNodeModalResize(e, 'e')}></button>
-        <button type="button" class="modal-resize-handle modal-resize-w" aria-label="Изменить ширину слева" on:pointerdown={(e) => startNodeModalResize(e, 'w')}></button>
-        <button type="button" class="modal-resize-handle modal-resize-ne" aria-label="Изменить размер справа сверху" on:pointerdown={(e) => startNodeModalResize(e, 'ne')}></button>
-        <button type="button" class="modal-resize-handle modal-resize-nw" aria-label="Изменить размер слева сверху" on:pointerdown={(e) => startNodeModalResize(e, 'nw')}></button>
-        <button type="button" class="modal-resize-handle modal-resize-se" aria-label="Изменить размер справа снизу" on:pointerdown={(e) => startNodeModalResize(e, 'se')}></button>
-        <button type="button" class="modal-resize-handle modal-resize-sw" aria-label="Изменить размер слева снизу" on:pointerdown={(e) => startNodeModalResize(e, 'sw')}></button>
+        <button type="button" class="modal-resize-handle modal-resize-n" aria-label="Изменить высоту сверху" on:mousedown={(e) => startNodeModalResize(e, 'n')}></button>
+        <button type="button" class="modal-resize-handle modal-resize-s" aria-label="Изменить высоту снизу" on:mousedown={(e) => startNodeModalResize(e, 's')}></button>
+        <button type="button" class="modal-resize-handle modal-resize-e" aria-label="Изменить ширину справа" on:mousedown={(e) => startNodeModalResize(e, 'e')}></button>
+        <button type="button" class="modal-resize-handle modal-resize-w" aria-label="Изменить ширину слева" on:mousedown={(e) => startNodeModalResize(e, 'w')}></button>
+        <button type="button" class="modal-resize-handle modal-resize-ne" aria-label="Изменить размер справа сверху" on:mousedown={(e) => startNodeModalResize(e, 'ne')}></button>
+        <button type="button" class="modal-resize-handle modal-resize-nw" aria-label="Изменить размер слева сверху" on:mousedown={(e) => startNodeModalResize(e, 'nw')}></button>
+        <button type="button" class="modal-resize-handle modal-resize-se" aria-label="Изменить размер справа снизу" on:mousedown={(e) => startNodeModalResize(e, 'se')}></button>
+        <button type="button" class="modal-resize-handle modal-resize-sw" aria-label="Изменить размер слева снизу" on:mousedown={(e) => startNodeModalResize(e, 'sw')}></button>
       {/if}
     </div>
   {/if}
