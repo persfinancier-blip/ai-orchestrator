@@ -4,7 +4,6 @@
 
   import CreateTableTab from './tabs/CreateTableTab.svelte';
   import TablesAndDataTab from './tabs/TablesAndDataTab.svelte';
-  import ApiBuilderTab from './tabs/ApiBuilderTab.svelte';
 
   export type Role = 'viewer' | 'operator' | 'data_admin';
   export type ExistingTable = { schema_name: string; table_name: string };
@@ -13,14 +12,12 @@
 
   let role: Role = 'data_admin';
 
-  type Tab = 'constructor' | 'tables' | 'api_builder';
+  type Tab = 'constructor' | 'tables';
   let tab: Tab = 'constructor';
   let constructorRenderKey = 0;
 
   let loading = false;
   let error = '';
-  let handoffInfo = '';
-  let initialApiStoreId: number | null = null;
   let existingTables: ExistingTable[] = [];
   let dbStatus: 'checking' | 'ok' | 'error' = 'checking';
   let dbStatusMessage = 'Проверка подключения к базе...';
@@ -139,12 +136,14 @@
     const params = hashQueryParams();
     const apiStoreId = Number(params.get('api_store_id') || 0);
     if (Number.isFinite(apiStoreId) && apiStoreId > 0) {
-      tab = 'api_builder';
-      initialApiStoreId = Math.trunc(apiStoreId);
-      const n = String(params.get('from_node') || '').trim();
-      handoffInfo = n
-        ? `Открыт из workflow-узла: ${n}. Шаблон API ID: ${initialApiStoreId}`
-        : `Открыт из workflow-узла API. Шаблон ID: ${initialApiStoreId}`;
+      // legacy deep-link support: API editor moved to "Данные"
+      const next = new URLSearchParams();
+      next.set('pane', 'api');
+      next.set('api_store_id', String(Math.trunc(apiStoreId)));
+      const fromNode = String(params.get('from_node') || '').trim();
+      if (fromNode) next.set('from_node', fromNode);
+      window.location.hash = `#desk/data?${next.toString()}`;
+      return;
     }
     await refreshTables();
   });
@@ -172,7 +171,6 @@
   <nav class="tabs">
     <button class:active={tab === 'constructor'} on:click={() => (tab = 'constructor')}>Создание</button>
     <button class:active={tab === 'tables'} on:click={() => (tab = 'tables')}>Таблицы и данные</button>
-    <button class:active={tab === 'api_builder'} on:click={() => (tab = 'api_builder')}>API</button>
   </nav>
 
   {#if error}
@@ -206,18 +204,6 @@
       {refreshTables}
       {existingTables}
     />
-  {:else if tab === 'api_builder'}
-    <ApiBuilderTab
-      apiBase={API_BASE}
-      {apiJson}
-      {headers}
-      {existingTables}
-      {refreshTables}
-      {initialApiStoreId}
-    />
-  {/if}
-  {#if handoffInfo}
-    <div class="okbox">{handoffInfo}</div>
   {/if}
 </div>
 
@@ -240,14 +226,5 @@
 
   .alert { margin: 12px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid #f3c0c0; background: #fff5f5; }
   .alert-title { font-weight: 700; margin-bottom: 6px; }
-  .okbox {
-    margin: 10px 0;
-    border: 1px solid #b8e7c8;
-    border-radius: 12px;
-    padding: 9px 12px;
-    background: #effcf3;
-    color: #14532d;
-    font-size: 13px;
-  }
   pre { margin:0; white-space: pre-wrap; word-break: break-word; }
 </style>
