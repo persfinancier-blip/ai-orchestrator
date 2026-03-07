@@ -14,6 +14,9 @@
   export let refreshTables: () => Promise<void>;
   export let initialApiStoreId: number | null = null;
   export let embeddedMode = false;
+  const EMBEDDED_LAYOUT_BREAKPOINT = 1420;
+  let compactLayoutByContainer = false;
+  $: effectiveEmbeddedMode = embeddedMode || compactLayoutByContainer;
 
   type BindingRule = {
     id: string;
@@ -8485,10 +8488,29 @@ function syncParameterEditorsHeight() {
     if (datasetPreviewTimer) clearTimeout(datasetPreviewTimer);
   });
 
+  function updateEmbeddedLayoutByWidth(width: number) {
+    compactLayoutByContainer = Number.isFinite(width) && width > 0 ? width < EMBEDDED_LAYOUT_BREAKPOINT : false;
+  }
+
+  function observePanelWidth(node: HTMLElement) {
+    if (typeof ResizeObserver === 'undefined') return {};
+    const ro = new ResizeObserver((entries) => {
+      const width = entries?.[0]?.contentRect?.width || node.clientWidth || 0;
+      updateEmbeddedLayoutByWidth(width);
+    });
+    ro.observe(node);
+    updateEmbeddedLayoutByWidth(node.clientWidth || 0);
+    return {
+      destroy() {
+        ro.disconnect();
+      }
+    };
+  }
+
   void loadAll();
 </script>
 
-<section class="panel" class:panel-embedded={embeddedMode}>
+<section class="panel" use:observePanelWidth class:panel-embedded={effectiveEmbeddedMode}>
   <div class="panel-head">
     <h2>API (конструктор)</h2>
   </div>
@@ -10170,7 +10192,7 @@ function syncParameterEditorsHeight() {
 </section>
 
 <style>
-  .panel { background:#fff; border:1px solid #e6eaf2; border-radius:18px; padding:14px; box-shadow:0 6px 20px rgba(15,23,42,.05); margin-top:12px; }
+  .panel { background:#fff; border:1px solid #e6eaf2; border-radius:18px; padding:14px; box-shadow:0 6px 20px rgba(15,23,42,.05); margin-top:12px; min-width:0; }
   .panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
   .panel-head h2 { margin:0; font-size:18px; }
 
@@ -10182,14 +10204,55 @@ function syncParameterEditorsHeight() {
     align-items:start;
   }
   .layout > * { min-width:0; }
-  .panel-embedded .layout { grid-template-columns: minmax(0, 1fr); }
-  .panel-embedded .main { order:1; }
-  .panel-embedded .compare-aside { order:2; }
-  .panel-embedded .saved-aside { order:3; }
+  .panel-embedded .layout { grid-template-columns: minmax(0, 1fr); gap:10px; }
   .panel-embedded .api-list {
     max-height:min(42vh, 420px);
   }
   .panel-embedded .raw-grid { grid-template-columns: 1fr; }
+  .panel-embedded .connect-row,
+  .panel-embedded .oauth-subreq-grid,
+  .panel-embedded .oauth2-map-row,
+  .panel-embedded .template-filters-row,
+  .panel-embedded .data-row,
+  .panel-embedded .table-rule-row,
+  .panel-embedded .join-rule-row,
+  .panel-embedded .filter-rule-row,
+  .panel-embedded .param-row,
+  .panel-embedded .date-param-inline-row,
+  .panel-embedded .field-date-row,
+  .panel-embedded .pagination-param-inline-row,
+  .panel-embedded .pagination-stop-rule-row,
+  .panel-embedded .saved-inline-actions {
+    grid-template-columns: 1fr;
+  }
+  .panel-embedded .connect-actions { justify-content:flex-start; flex-wrap:wrap; }
+  .panel-embedded .response-head,
+  .panel-embedded .inline-actions,
+  .panel-embedded .param-source-head .inline-actions {
+    flex-wrap:wrap;
+  }
+  .panel-embedded .response-head > span:first-child,
+  .panel-embedded .param-source-head small,
+  .panel-embedded .group-toggle {
+    white-space:normal;
+  }
+  .panel-embedded .storage-picker {
+    flex-wrap:wrap;
+  }
+  .panel-embedded .row-item {
+    grid-template-columns: 1fr;
+  }
+  .panel-embedded .row-actions {
+    min-width:0;
+    justify-content:flex-end;
+  }
+  .panel-embedded .pagination-numeric-grid,
+  .panel-embedded .pagination-boolean-list {
+    grid-template-columns: 1fr;
+  }
+  .panel-embedded .dataset-preview-table {
+    min-width:520px;
+  }
   @media (max-width: 1500px) { .layout { grid-template-columns: 1fr; } }
 
   .aside { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#f8fafc; min-width:0; }
@@ -10202,14 +10265,14 @@ function syncParameterEditorsHeight() {
 
   .subsec { margin-top:10px; }
   .subttl { font-size:12px; color:#475569; margin-bottom:6px; }
-  .response-head { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:nowrap; }
+  .response-head { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; }
   .response-head > span:first-child { white-space:nowrap; }
   .field-head { justify-content:flex-start; }
   .inline-actions {
     display:inline-flex;
     align-items:center;
     gap:6px;
-    flex-wrap:nowrap;
+    flex-wrap:wrap;
     margin-left:auto;
   }
   .view-toggle { border-radius:10px; border:1px solid #e2e8f0; background:#fff; color:#0f172a; padding:4px 8px; font-size:11px; line-height:1.2; }
@@ -10549,7 +10612,7 @@ function syncParameterEditorsHeight() {
     font-size:12px;
     color:#334155;
     min-height:34px;
-    white-space:nowrap;
+    white-space:normal;
   }
   .group-toggle-sm {
     padding:6px 9px;
