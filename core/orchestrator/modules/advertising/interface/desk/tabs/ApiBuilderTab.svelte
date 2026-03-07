@@ -8741,87 +8741,89 @@ function syncParameterEditorsHeight() {
                 <small>Лимиты и безопасность</small>
               </div>
               <div class="pagination-safety-layout">
-                <div class="pagination-setting-item">
-                  <div class="pagination-setting-head">
-                    <small class="pagination-setting-title">Лимит страниц</small>
-                    <button
-                      type="button"
-                      class="pagination-inline-toggle"
-                      class:active-inline-toggle={Boolean(selected?.paginationUseMaxPages)}
-                      on:click={togglePaginationUseMaxPages}
-                      aria-pressed={Boolean(selected?.paginationUseMaxPages)}
-                    >
-                      <span>{selected?.paginationUseMaxPages ? 'Вкл' : 'Выкл'}</span>
-                      {#if Boolean(selected?.paginationUseMaxPages)}
-                        <span class="pagination-inline-indicator"></span>
-                      {/if}
-                    </button>
+                <div class="pagination-numeric-grid">
+                  <div class="pagination-setting-item">
+                    <div class="pagination-setting-head">
+                      <small class="pagination-setting-title">Лимит страниц</small>
+                      <button
+                        type="button"
+                        class="pagination-inline-toggle"
+                        class:active-inline-toggle={Boolean(selected?.paginationUseMaxPages)}
+                        on:click={togglePaginationUseMaxPages}
+                        aria-pressed={Boolean(selected?.paginationUseMaxPages)}
+                      >
+                        <span>{selected?.paginationUseMaxPages ? 'Вкл' : 'Выкл'}</span>
+                        {#if Boolean(selected?.paginationUseMaxPages)}
+                          <span class="pagination-inline-indicator"></span>
+                        {/if}
+                      </button>
+                    </div>
+                    <input
+                      type="number"
+                      min="1"
+                      class="pagination-value-input"
+                      value={selected?.paginationMaxPages || 1}
+                      on:input={(e) => mutateSelected((d) => (d.paginationMaxPages = Number(e.currentTarget.value) || 1))}
+                      disabled={!selected?.paginationUseMaxPages}
+                    />
                   </div>
-                  <input
-                    type="number"
-                    min="1"
-                    class="pagination-value-input"
-                    value={selected?.paginationMaxPages || 1}
-                    on:input={(e) => mutateSelected((d) => (d.paginationMaxPages = Number(e.currentTarget.value) || 1))}
-                    disabled={!selected?.paginationUseMaxPages}
-                  />
+
+                  <div class="pagination-setting-item">
+                    <div class="pagination-setting-head">
+                      <small class="pagination-setting-title">Пауза между страницами (мс)</small>
+                      <button
+                        type="button"
+                        class="pagination-inline-toggle"
+                        class:active-inline-toggle={Boolean(selected?.paginationUseDelay)}
+                        on:click={togglePaginationUseDelay}
+                        aria-pressed={Boolean(selected?.paginationUseDelay)}
+                      >
+                        <span>{selected?.paginationUseDelay ? 'Вкл' : 'Выкл'}</span>
+                        {#if Boolean(selected?.paginationUseDelay)}
+                          <span class="pagination-inline-indicator"></span>
+                        {/if}
+                      </button>
+                    </div>
+                    <input
+                      type="number"
+                      min="0"
+                      class="pagination-value-input"
+                      value={selected?.paginationDelayMs || 0}
+                      on:input={(e) => mutateSelected((d) => (d.paginationDelayMs = Number(e.currentTarget.value) || 0))}
+                      disabled={!selected?.paginationUseDelay}
+                    />
+                  </div>
+
+                  <div class="pagination-setting-item">
+                    <div class="pagination-setting-head">
+                      <small class="pagination-setting-title">Одинаковые ответы подряд</small>
+                      <button
+                        type="button"
+                        class="pagination-inline-toggle"
+                        class:active-inline-toggle={Boolean(selected?.paginationStopOnSameResponse)}
+                        on:click={togglePaginationStopOnSameResponse}
+                        aria-pressed={Boolean(selected?.paginationStopOnSameResponse)}
+                      >
+                        <span>{selected?.paginationStopOnSameResponse ? 'Вкл' : 'Выкл'}</span>
+                        {#if Boolean(selected?.paginationStopOnSameResponse)}
+                          <span class="pagination-inline-indicator"></span>
+                        {/if}
+                      </button>
+                    </div>
+                    <input
+                      type="number"
+                      min="2"
+                      max="50"
+                      class="pagination-value-input"
+                      value={selected?.paginationSameResponseLimit || 5}
+                      on:input={(e) => mutateSelected((d) => (d.paginationSameResponseLimit = Math.max(2, Math.min(50, Number(e.currentTarget.value) || 5))))}
+                      disabled={!selected?.paginationStopOnSameResponse}
+                    />
+                  </div>
                 </div>
 
-                <div class="pagination-setting-item">
-                  <div class="pagination-setting-head">
-                    <small class="pagination-setting-title">Пауза между страницами (мс)</small>
-                    <button
-                      type="button"
-                      class="pagination-inline-toggle"
-                      class:active-inline-toggle={Boolean(selected?.paginationUseDelay)}
-                      on:click={togglePaginationUseDelay}
-                      aria-pressed={Boolean(selected?.paginationUseDelay)}
-                    >
-                      <span>{selected?.paginationUseDelay ? 'Вкл' : 'Выкл'}</span>
-                      {#if Boolean(selected?.paginationUseDelay)}
-                        <span class="pagination-inline-indicator"></span>
-                      {/if}
-                    </button>
-                  </div>
-                  <input
-                    type="number"
-                    min="0"
-                    class="pagination-value-input"
-                    value={selected?.paginationDelayMs || 0}
-                    on:input={(e) => mutateSelected((d) => (d.paginationDelayMs = Number(e.currentTarget.value) || 0))}
-                    disabled={!selected?.paginationUseDelay}
-                  />
-                </div>
-
-                <div class="pagination-setting-item">
-                  <div class="pagination-setting-head">
-                    <small class="pagination-setting-title">Одинаковые ответы подряд</small>
-                    <button
-                      type="button"
-                      class="pagination-inline-toggle"
-                      class:active-inline-toggle={Boolean(selected?.paginationStopOnSameResponse)}
-                      on:click={togglePaginationStopOnSameResponse}
-                      aria-pressed={Boolean(selected?.paginationStopOnSameResponse)}
-                    >
-                      <span>{selected?.paginationStopOnSameResponse ? 'Вкл' : 'Выкл'}</span>
-                      {#if Boolean(selected?.paginationStopOnSameResponse)}
-                        <span class="pagination-inline-indicator"></span>
-                      {/if}
-                    </button>
-                  </div>
-                  <input
-                    type="number"
-                    min="2"
-                    max="50"
-                    class="pagination-value-input"
-                    value={selected?.paginationSameResponseLimit || 5}
-                    on:input={(e) => mutateSelected((d) => (d.paginationSameResponseLimit = Math.max(2, Math.min(50, Number(e.currentTarget.value) || 5))))}
-                    disabled={!selected?.paginationStopOnSameResponse}
-                  />
-                </div>
-
-                <div class="pagination-setting-item pagination-setting-item-wide">
-                  <div class="pagination-setting-head">
+                <div class="pagination-boolean-list">
+                  <div class="pagination-bool-row">
                     <small class="pagination-setting-title">Остановка при отсутствии нового значения пагинации</small>
                     <button
                       type="button"
@@ -8836,10 +8838,8 @@ function syncParameterEditorsHeight() {
                       {/if}
                     </button>
                   </div>
-                </div>
 
-                <div class="pagination-setting-item pagination-setting-item-wide">
-                  <div class="pagination-setting-head">
+                  <div class="pagination-bool-row">
                     <small class="pagination-setting-title">Остановка при HTTP ошибке</small>
                     <button
                       type="button"
@@ -9567,6 +9567,11 @@ function syncParameterEditorsHeight() {
   .pagination-field small { display:block; margin-bottom:4px; font-size:11px; color:#64748b; }
   .pagination-safety-layout {
     margin-top:8px;
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+  }
+  .pagination-numeric-grid {
     display:grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap:10px;
@@ -9582,8 +9587,20 @@ function syncParameterEditorsHeight() {
     flex-direction:column;
     gap:8px;
   }
-  .pagination-setting-item-wide {
-    grid-column:1 / -1;
+  .pagination-boolean-list {
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+  }
+  .pagination-bool-row {
+    border:1px solid #e2e8f0;
+    border-radius:10px;
+    background:#fff;
+    padding:8px 10px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:10px;
   }
   .pagination-setting-head {
     display:flex;
@@ -9683,7 +9700,7 @@ function syncParameterEditorsHeight() {
     .api-list { min-height:220px; max-height:min(50vh, 460px); }
     .parameter-sources-grid { grid-template-columns: 1fr; }
     .data-row, .table-rule-row, .join-rule-row, .filter-rule-row, .param-row, .date-param-inline-row, .field-date-row { grid-template-columns: 1fr; }
-    .pagination-safety-layout {
+    .pagination-numeric-grid {
       grid-template-columns: 1fr;
     }
     .pagination-param-inline-row,
