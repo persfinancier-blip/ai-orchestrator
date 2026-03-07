@@ -80,6 +80,8 @@ const TEMPLATES_REQUIRED_COLUMNS = [
   { name: 'template_name', types: ['text', 'character varying', 'varchar'] },
   { name: 'schema_name', types: ['text', 'character varying', 'varchar'] },
   { name: 'table_name', types: ['text', 'character varying', 'varchar'] },
+  { name: 'data_level', types: ['text', 'character varying', 'varchar'] },
+  { name: 'template_kind', types: ['text', 'character varying', 'varchar'] },
   { name: 'table_class', types: ['text', 'character varying', 'varchar'] },
   { name: 'description', types: ['text', 'character varying', 'varchar'] },
   { name: 'columns', types: ['jsonb', 'json'] },
@@ -622,6 +624,8 @@ async function ensureTemplatesStorageTable(client, config) {
       template_name text NOT NULL,
       schema_name text NOT NULL,
       table_name text NOT NULL,
+      data_level text NOT NULL DEFAULT 'bronze',
+      template_kind text NOT NULL DEFAULT 'data',
       table_class text NOT NULL DEFAULT 'custom',
       description text NOT NULL DEFAULT '',
       columns jsonb NOT NULL DEFAULT '[]'::jsonb,
@@ -629,6 +633,18 @@ async function ensureTemplatesStorageTable(client, config) {
       partition_column text NOT NULL DEFAULT '',
       partition_interval text NOT NULL DEFAULT 'day'
     )
+  `);
+  await client.query(`
+    ALTER TABLE ${templatesQn}
+      ADD COLUMN IF NOT EXISTS data_level text NOT NULL DEFAULT 'bronze',
+      ADD COLUMN IF NOT EXISTS template_kind text NOT NULL DEFAULT 'data'
+  `);
+  await client.query(`
+    UPDATE ${templatesQn}
+    SET data_level = COALESCE(NULLIF(TRIM(data_level), ''), 'bronze'),
+        template_kind = COALESCE(NULLIF(TRIM(template_kind), ''), 'data')
+    WHERE COALESCE(NULLIF(TRIM(data_level), ''), '') = ''
+       OR COALESCE(NULLIF(TRIM(template_kind), ''), '') = ''
   `);
   await client.query(`
     CREATE INDEX IF NOT EXISTS ao_table_templates_store_name_idx

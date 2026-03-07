@@ -18,12 +18,16 @@
   export let existingTables: ExistingTable[] = [];
 
   type ColumnDef = { field_name: string; field_type: string; description?: string };
+  type DataLevel = 'bronze' | 'silver' | 'gold';
+  type TemplateKind = 'data' | 'system_log' | 'system_storage';
   type DataContract = {
     id: string;
     name: string;
     schema_name: string;
     table_name: string;
     table_class: string;
+    data_level: DataLevel;
+    template_kind: TemplateKind;
     description: string;
     columns: ColumnDef[];
     partition_enabled: boolean;
@@ -178,36 +182,65 @@
     return [...requiredFirst, ...nonSystem];
   }
 
-  function bronzeTemplate(): DataContract {
+  function bronzeDataTemplate(): DataContract {
     return {
-      id: 'builtin_bronze',
-      name: 'Bronze',
+      id: 'builtin_bronze_data',
+      name: 'Bronze данные',
       schema_name: 'bronze',
-      table_name: 'wb_ads_raw',
+      table_name: 'wb_entities_raw',
       table_class: 'bronze_raw',
-      description: 'Лог шагов API: что отправили, что получили, почему продолжили или остановили',
+      data_level: 'bronze',
+      template_kind: 'data',
+      description: 'Сырые сущности Bronze-слоя. Используется как обычная таблица данных.',
       columns: withRequiredTableFields([
-        { field_name: 'run_id', field_type: 'text', description: 'ID одного запуска API. По нему удобно собрать весь прогон целиком.' },
+        { field_name: 'entity_key', field_type: 'text', description: 'Технический ключ сущности.' },
+        { field_name: 'entity_label', field_type: 'text', description: 'Понятная подпись сущности.' },
+        { field_name: 'source_name', field_type: 'text', description: 'Источник, из которого получены данные.' },
+        { field_name: 'payload', field_type: 'jsonb', description: 'Сырой JSON сущности.' },
+        { field_name: 'received_at', field_type: 'timestamptz', description: 'Когда сущность получена.' },
+        { field_name: 'created_at', field_type: 'timestamptz', description: 'Когда строка создана.' },
+        { field_name: 'updated_at', field_type: 'timestamptz', description: 'Когда строка обновлена.' }
+      ]),
+      partition_enabled: true,
+      partition_column: 'received_at',
+      partition_interval: 'day',
+      contract_version: 1,
+      contract_mode: 'safe_add_only'
+    };
+  }
+
+  function bronzeApiLogSystemTemplate(): DataContract {
+    return {
+      id: 'builtin_bronze_system_api_log',
+      name: 'Bronze системный лог API',
+      schema_name: 'bronze',
+      table_name: 'api_step_log',
+      table_class: 'bronze_system_log',
+      data_level: 'bronze',
+      template_kind: 'system_log',
+      description: 'Системный журнал шагов API: что отправили, что получили и почему продолжили или остановили запуск.',
+      columns: withRequiredTableFields([
+        { field_name: 'run_id', field_type: 'text', description: 'ID одного запуска API. По нему собирается прогон целиком.' },
         { field_name: 'api_name', field_type: 'text', description: 'Название API-конфига из конструктора.' },
-        { field_name: 'execution_mode', field_type: 'text', description: 'Режим запуска: sync (последовательно) или async (параллельно).' },
-        { field_name: 'sync_planner', field_type: 'text', description: 'Планировщик sync-режима: до остановки сущности или по шагу (волнами).' },
-        { field_name: 'dispatch_mode', field_type: 'text', description: 'Тип отправки: одиночно или с группировкой.' },
-        { field_name: 'entity_key', field_type: 'text', description: 'Технический ключ сущности (нейтрально: не магазин/кабинет).' },
-        { field_name: 'entity_label', field_type: 'text', description: 'Читаемая подпись сущности для пользователя.' },
-        { field_name: 'row_index', field_type: 'int', description: 'Номер строки источника (если запуск по строкам).' },
-        { field_name: 'wave_no', field_type: 'int', description: 'Номер волны выполнения (для режима по шагам).' },
-        { field_name: 'page_no', field_type: 'int', description: 'Порядковый номер запроса внутри сущности.' },
-        { field_name: 'iteration_reason', field_type: 'text', description: 'Причина отправки этого шага (например initial_request, pagination_values_updated).' },
+        { field_name: 'execution_mode', field_type: 'text', description: 'Режим запуска: sync или async.' },
+        { field_name: 'sync_planner', field_type: 'text', description: 'Планировщик sync-режима.' },
+        { field_name: 'dispatch_mode', field_type: 'text', description: 'Одиночная отправка или группировка.' },
+        { field_name: 'entity_key', field_type: 'text', description: 'Технический ключ сущности (нейтральный идентификатор).' },
+        { field_name: 'entity_label', field_type: 'text', description: 'Читаемая подпись сущности.' },
+        { field_name: 'row_index', field_type: 'int', description: 'Номер строки источника данных.' },
+        { field_name: 'wave_no', field_type: 'int', description: 'Номер волны выполнения.' },
+        { field_name: 'page_no', field_type: 'int', description: 'Номер шага/страницы в рамках сущности.' },
+        { field_name: 'iteration_reason', field_type: 'text', description: 'Причина запуска итерации (initial_request, pagination_updated и т.д.).' },
         { field_name: 'decision', field_type: 'text', description: 'Решение после шага: continue / stop / fail.' },
-        { field_name: 'stop_reason', field_type: 'text', description: 'Причина остановки, если шаг завершил пагинацию/сущность.' },
-        { field_name: 'error_message', field_type: 'text', description: 'Текст ошибки, если запрос завершился ошибкой.' },
-        { field_name: 'status_code', field_type: 'int', description: 'HTTP-статус ответа API.' },
-        { field_name: 'request_payload', field_type: 'jsonb', description: 'Фактически отправленный запрос: URL, headers, query, body.' },
-        { field_name: 'response_payload', field_type: 'jsonb', description: 'Фактически полученный ответ API (сырой JSON/текст).' },
-        { field_name: 'pagination_values', field_type: 'jsonb', description: 'Значения параметров пагинации, извлеченные из ответа.' },
-        { field_name: 'duration_ms', field_type: 'int', description: 'Время выполнения запроса в миллисекундах.' },
-        { field_name: 'created_at', field_type: 'timestamptz', description: 'Когда шаг был записан в лог.' },
-        { field_name: 'updated_at', field_type: 'timestamptz', description: 'Когда строка лога обновлялась последний раз.' }
+        { field_name: 'stop_reason', field_type: 'text', description: 'Причина остановки, если шаг завершил цепочку.' },
+        { field_name: 'error_message', field_type: 'text', description: 'Текст ошибки шага, если она была.' },
+        { field_name: 'status_code', field_type: 'int', description: 'HTTP-статус ответа.' },
+        { field_name: 'request_payload', field_type: 'jsonb', description: 'Фактически отправленный запрос.' },
+        { field_name: 'response_payload', field_type: 'jsonb', description: 'Фактически полученный ответ.' },
+        { field_name: 'pagination_values', field_type: 'jsonb', description: 'Извлеченные значения параметров пагинации.' },
+        { field_name: 'duration_ms', field_type: 'int', description: 'Время выполнения шага в миллисекундах.' },
+        { field_name: 'created_at', field_type: 'timestamptz', description: 'Когда шаг записан в лог.' },
+        { field_name: 'updated_at', field_type: 'timestamptz', description: 'Когда строка лога обновлена.' }
       ]),
       partition_enabled: true,
       partition_column: 'created_at',
@@ -224,6 +257,8 @@
       schema_name: 'silver_adv',
       table_name: 'wb_ads_daily',
       table_class: 'silver_table',
+      data_level: 'silver',
+      template_kind: 'data',
       description: 'Дневная агрегированная таблица рекламы',
       columns: withRequiredTableFields([
         { field_name: 'event_date', field_type: 'date', description: 'дата метрики' },
@@ -247,11 +282,15 @@
       schema_name: STORAGE_DEFAULT_SCHEMA,
       table_name: STORAGE_DEFAULT_TABLE,
       table_class: 'custom',
+      data_level: 'bronze',
+      template_kind: 'system_storage',
       description: 'Служебная таблица для хранения шаблонов блока «Создание таблиц»',
       columns: withRequiredTableFields([
         { field_name: 'template_name', field_type: 'text', description: 'имя шаблона' },
         { field_name: 'schema_name', field_type: 'text', description: 'схема таблицы' },
         { field_name: 'table_name', field_type: 'text', description: 'имя таблицы' },
+        { field_name: 'data_level', field_type: 'text', description: 'уровень данных шаблона: bronze / silver / gold' },
+        { field_name: 'template_kind', field_type: 'text', description: 'тип шаблона: data / system_log / system_storage' },
         { field_name: 'table_class', field_type: 'text', description: 'класс таблицы' },
         { field_name: 'description', field_type: 'text', description: 'описание' },
         { field_name: 'columns', field_type: 'jsonb', description: 'json список полей' },
@@ -274,6 +313,8 @@
       schema_name: 'ao_system',
       table_name: 'table_data_contract_versions',
       table_class: 'custom',
+      data_level: 'bronze',
+      template_kind: 'system_storage',
       description: 'Системная таблица версий контрактов данных',
       columns: withRequiredTableFields([
         { field_name: 'id', field_type: 'bigint', description: 'идентификатор версии' },
@@ -304,6 +345,8 @@
       schema_name: 'ao_system',
       table_name: 'table_settings_store',
       table_class: 'custom',
+      data_level: 'bronze',
+      template_kind: 'system_storage',
       description: 'Системная таблица настроек сервера, API и подключений к БД',
       columns: withRequiredTableFields([
         { field_name: 'setting_key', field_type: 'text', description: 'уникальный ключ настройки' },
@@ -329,6 +372,8 @@
       schema_name: 'ao_system',
       table_name: 'table_server_writes_store',
       table_class: 'custom',
+      data_level: 'bronze',
+      template_kind: 'system_storage',
       description: 'Системная таблица правил серверных записей в БД',
       columns: withRequiredTableFields([
         { field_name: 'rule_key', field_type: 'text', description: 'уникальный ключ правила' },
@@ -357,6 +402,8 @@
       schema_name: 'ao_system',
       table_name: 'api_configs_store',
       table_class: 'custom',
+      data_level: 'bronze',
+      template_kind: 'system_storage',
       description: 'Системная таблица API-шаблонов (единый JSON-конфиг + служебные поля)',
       columns: withRequiredTableFields([
         { field_name: 'id', field_type: 'bigint', description: 'идентификатор API-шаблона (автонумерация через sequence на сервере)' },
@@ -384,6 +431,8 @@
       schema_name: 'ao_system',
       table_name: 'workflow_desks_store',
       table_class: 'custom',
+      data_level: 'bronze',
+      template_kind: 'system_storage',
       description: 'Системная таблица рабочих столов: процессы и данные (единый JSON-конфиг)',
       columns: withRequiredTableFields([
         { field_name: 'id', field_type: 'bigint', description: 'идентификатор рабочего стола (автонумерация через sequence на сервере)' },
@@ -430,6 +479,52 @@
 
   function storageInstruction(prefix: string) {
     return `${prefix} Выберите системный шаблон «${STORAGE_CONTRACT_NAME}», создайте таблицу и подключите ее здесь.`;
+  }
+
+  function normalizeDataLevel(value: any): DataLevel {
+    const raw = String(value || '').trim().toLowerCase();
+    if (raw === 'silver') return 'silver';
+    if (raw === 'gold') return 'gold';
+    return 'bronze';
+  }
+
+  function normalizeTemplateKind(value: any): TemplateKind {
+    const raw = String(value || '').trim().toLowerCase();
+    if (raw === 'system_log') return 'system_log';
+    if (raw === 'system_storage') return 'system_storage';
+    return 'data';
+  }
+
+  function inferDataLevel(schema: string, tableClass: string): DataLevel {
+    const cls = String(tableClass || '').trim().toLowerCase();
+    const sch = String(schema || '').trim().toLowerCase();
+    if (cls.includes('silver') || sch.startsWith('silver')) return 'silver';
+    if (cls.includes('gold') || cls.includes('showcase') || sch.startsWith('gold') || sch.startsWith('showcase')) {
+      return 'gold';
+    }
+    return 'bronze';
+  }
+
+  function inferTemplateKindFromRow(row: any): TemplateKind {
+    const explicit = normalizeTemplateKind(row?.template_kind);
+    if (explicit !== 'data') return explicit;
+    const tableClass = String(row?.table_class || '').trim().toLowerCase();
+    if (tableClass.includes('system_log')) return 'system_log';
+    return 'data';
+  }
+
+  function isBuiltinTemplate(t: DataContract) {
+    return String(t?.id || '').startsWith('builtin_');
+  }
+
+  function isSystemTemplate(t: DataContract) {
+    return normalizeTemplateKind(t?.template_kind) !== 'data';
+  }
+
+  function templateBadgeText(t: DataContract) {
+    if (isSystemTemplate(t)) return 'System';
+    if (isBuiltinTemplate(t)) return 'Base';
+    return '';
   }
 
   async function parseStorageTableConfig() {
@@ -518,6 +613,8 @@
           schema_name: String(r?.schema_name || ''),
           table_name: String(r?.table_name || ''),
           table_class: String(r?.table_class || 'custom'),
+          data_level: normalizeDataLevel(r?.data_level),
+          template_kind: inferTemplateKindFromRow(r),
           description: String(r?.description || ''),
           columns: parsedColumns.map((c: any) => ({
             field_name: String(c?.field_name || ''),
@@ -533,7 +630,8 @@
         });
       }
       tableTemplates = [
-        bronzeTemplate(),
+        bronzeDataTemplate(),
+        bronzeApiLogSystemTemplate(),
         silverTemplate(),
         storageSystemTemplate(),
         contractsSystemTemplate(),
@@ -554,7 +652,8 @@
 
   function loadTableTemplatesFallback() {
     tableTemplates = [
-      bronzeTemplate(),
+      bronzeDataTemplate(),
+      bronzeApiLogSystemTemplate(),
       silverTemplate(),
       storageSystemTemplate(),
       contractsSystemTemplate(),
@@ -579,7 +678,7 @@
   }
 
   function pickTemplateBronze() {
-    applyTemplate(bronzeTemplate());
+    applyTemplate(bronzeDataTemplate());
   }
 
   function pickTemplateSilver() {
@@ -616,6 +715,8 @@
     const row: Record<string, any> = {
       schema_name: t.schema_name,
       table_name: t.table_name,
+      data_level: t.data_level || inferDataLevel(t.schema_name, t.table_class),
+      template_kind: t.template_kind || 'data',
       table_class: t.table_class,
       description: t.description,
       columns: JSON.stringify(t.columns || []),
@@ -691,6 +792,8 @@
       schema_name: nextSchema,
       table_name: nextTable,
       table_class: nextClass,
+      data_level: inferDataLevel(nextSchema, nextClass),
+      template_kind: 'data' as TemplateKind,
       description: nextDescription,
       columns: cols,
       partition_enabled,
@@ -704,7 +807,7 @@
     if (storage_status !== 'ok') throw new Error(storage_status_message || 'Сначала подключи таблицу хранения шаблонов');
     if (
       tableTemplates.some(
-        (t) => !t.id.startsWith('builtin_') && t.name.trim().toLowerCase() === draft.name.toLowerCase()
+        (t) => !isBuiltinTemplate(t) && t.name.trim().toLowerCase() === draft.name.toLowerCase()
       )
     ) {
       throw new Error('Шаблон с таким названием уже существует');
@@ -727,7 +830,8 @@
 
   async function saveCurrentTemplate() {
     if (!selectedTemplateId) throw new Error('Сначала добавь или выбери шаблон');
-    if (selectedTemplateId.startsWith('builtin_')) {
+    const selected = tableTemplates.find((x) => x.id === selectedTemplateId);
+    if (selected && isBuiltinTemplate(selected)) {
       throw new Error('Встроенный шаблон нельзя сохранить. Нажми «Добавить»');
     }
 
@@ -740,6 +844,8 @@
     const updated = {
       ...tableTemplates[idx],
       ...draft,
+      data_level: tableTemplates[idx].data_level || draft.data_level || 'bronze',
+      template_kind: tableTemplates[idx].template_kind || draft.template_kind || 'data',
       contract_version: Number(tableTemplates[idx].contract_version || 1),
       contract_mode: tableTemplates[idx].contract_mode || 'safe_add_only'
     } as DataContract;
@@ -758,7 +864,8 @@
 
   async function deleteTemplateById(id: string) {
     if (!id) throw new Error('Сначала выбери шаблон');
-    if (id.startsWith('builtin_')) throw new Error('Встроенный шаблон удалить нельзя');
+    const target = tableTemplates.find((x) => x.id === id);
+    if (target && isBuiltinTemplate(target)) throw new Error('Встроенный шаблон удалить нельзя');
     if (storage_status !== 'ok') throw new Error(storage_status_message || 'Сначала подключи таблицу хранения шаблонов');
 
     const t = tableTemplates.find((x) => x.id === id);
@@ -1011,6 +1118,7 @@
             <select bind:value={table_class}>
               <option value="custom">custom</option>
               <option value="bronze_raw">bronze_raw</option>
+              <option value="bronze_system_log">bronze_system_log</option>
               <option value="silver_table">silver_table</option>
               <option value="showcase_table">showcase_table</option>
             </select>
@@ -1151,8 +1259,8 @@
           <div class="row-item" class:activeitem={selectedTemplateId === t.id}>
             <button class="item-button" on:click={() => applySelectedTemplate(t.id)}>{t.name}</button>
             <div class="row-actions">
-              {#if t.id.startsWith('builtin_')}
-                <span class="system-badge">System</span>
+              {#if isBuiltinTemplate(t)}
+                <span class="system-badge">{templateBadgeText(t)}</span>
               {:else}
                 <button class="danger icon-btn" on:click={() => onDeleteTemplateClick(t.id)} title="Удалить шаблон">x</button>
               {/if}
