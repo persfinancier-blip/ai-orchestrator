@@ -235,7 +235,7 @@
   .tabs {
     display: flex;
     gap: 8px;
-    margin-top: 12px;
+    margin: 12px 0 14px;
     flex-wrap: wrap;
   }
 
