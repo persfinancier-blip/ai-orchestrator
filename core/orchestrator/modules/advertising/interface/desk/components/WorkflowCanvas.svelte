@@ -220,8 +220,6 @@
   let settingsNodeId = '';
   let settingsModalOpen = false;
   let nodeModalFullscreen = false;
-  let nodeModalCollapsed = false;
-  let nodeModalSizePreset: 'compact' | 'normal' | 'wide' = 'normal';
   let nodeExecutions: Record<string, ApiNodeExecution> = {};
   let nodeExecutionLoading: Record<string, boolean> = {};
   let nodeTemplateSaving: Record<string, boolean> = {};
@@ -2829,8 +2827,6 @@
     settingsNodeId = nodeId;
     settingsModalOpen = true;
     nodeModalFullscreen = false;
-    nodeModalCollapsed = false;
-    nodeModalSizePreset = isApiNode(node) || isApiToolNode(node) ? 'wide' : 'normal';
     settingsRequestViewMode = 'tree';
     settingsResponseViewMode = 'tree';
   }
@@ -2839,33 +2835,10 @@
     settingsModalOpen = false;
     settingsNodeId = '';
     nodeModalFullscreen = false;
-    nodeModalCollapsed = false;
-    nodeModalSizePreset = 'normal';
-  }
-
-  function expandNodeModalSize() {
-    if (nodeModalSizePreset === 'compact') {
-      nodeModalSizePreset = 'normal';
-      return;
-    }
-    nodeModalSizePreset = 'wide';
-  }
-
-  function shrinkNodeModalSize() {
-    if (nodeModalSizePreset === 'wide') {
-      nodeModalSizePreset = 'normal';
-      return;
-    }
-    nodeModalSizePreset = 'compact';
   }
 
   function toggleNodeModalFullscreen() {
     nodeModalFullscreen = !nodeModalFullscreen;
-    if (nodeModalFullscreen) nodeModalCollapsed = false;
-  }
-
-  function toggleNodeModalCollapsed() {
-    nodeModalCollapsed = !nodeModalCollapsed;
   }
 
   function center(n: WorkflowNode) {
@@ -4055,26 +4028,36 @@
     <div class="node-modal-backdrop" on:click={closeSettingsModal}></div>
     <div
       class="node-modal"
-      class:node-modal-wide={nodeModalSizePreset === 'wide'}
-      class:node-modal-compact={nodeModalSizePreset === 'compact'}
+      class:node-modal-wide={isApiNode(settingsNode) || isApiToolNode(settingsNode)}
       class:node-modal-fullscreen={nodeModalFullscreen}
-      class:node-modal-collapsed={nodeModalCollapsed}
       class:node-modal-resizable={(isApiNode(settingsNode) || isApiToolNode(settingsNode)) && !nodeModalFullscreen}
     >
       <div class="node-modal-head">
         <h4>Настройка узла: {settingsNode.config.name}</h4>
         <div class="node-modal-actions">
           {#if isApiNode(settingsNode) || isApiToolNode(settingsNode)}
-            <button class="close-btn" title="Сузить окно" on:click={shrinkNodeModalSize} disabled={nodeModalFullscreen}>−</button>
-            <button class="close-btn" title="Расширить окно" on:click={expandNodeModalSize} disabled={nodeModalFullscreen}>+</button>
-            <button class="close-btn" title={nodeModalFullscreen ? 'Вернуть размер окна' : 'Развернуть на весь экран'} on:click={toggleNodeModalFullscreen}>
-              {nodeModalFullscreen ? 'Окно' : 'На весь экран'}
+            <button
+              class="window-btn"
+              title={nodeModalFullscreen ? 'Вернуть обычный размер' : 'Развернуть на весь экран'}
+              aria-label={nodeModalFullscreen ? 'Вернуть обычный размер' : 'Развернуть на весь экран'}
+              on:click={toggleNodeModalFullscreen}
+            >
+              {#if nodeModalFullscreen}
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M3 5V3h6v2H3zm4 8v-2h6V5h2v8H7zM1 7h2v6h6v2H1V7z" />
+                </svg>
+              {:else}
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M2 2h12v12H2V2zm2 2v8h8V4H4z" />
+                </svg>
+              {/if}
             </button>
           {/if}
-          <button class="close-btn" title={nodeModalCollapsed ? 'Развернуть содержимое' : 'Свернуть содержимое'} on:click={toggleNodeModalCollapsed}>
-            {nodeModalCollapsed ? 'Развернуть' : 'Свернуть'}
+          <button class="window-btn window-btn-close" title="Закрыть окно" aria-label="Закрыть окно" on:click={closeSettingsModal}>
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M4.2 3L8 6.8 11.8 3 13 4.2 9.2 8 13 11.8 11.8 13 8 9.2 4.2 13 3 11.8 6.8 8 3 4.2 4.2 3z" />
+            </svg>
           </button>
-          <button class="close-btn" on:click={closeSettingsModal}>x</button>
         </div>
       </div>
 
@@ -4558,7 +4541,6 @@
     z-index: 41;
   }
   .node-modal.node-modal-wide { width: min(1600px, calc(100vw - 24px)); max-height: calc(100vh - 24px); }
-  .node-modal.node-modal-compact { width: min(980px, calc(100vw - 24px)); }
   .node-modal.node-modal-fullscreen {
     top: 8px;
     left: 8px;
@@ -4573,17 +4555,33 @@
     min-width: 760px;
     min-height: 420px;
   }
-  .node-modal.node-modal-collapsed {
-    height: auto;
-    max-height: none;
-  }
-  .node-modal.node-modal-collapsed .node-modal-body {
-    display: none;
-  }
   .node-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; border-bottom: 1px solid #e2e8f0; position: sticky; top: 0; background: #fff; }
   .node-modal-head h4 { margin: 0; font-size: 16px; }
-  .node-modal-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-  .close-btn { border: 1px solid #dbe4f0; border-radius: 9px; background: #fff; cursor: pointer; padding: 4px 10px; }
+  .node-modal-actions { display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
+  .window-btn {
+    width: 30px;
+    height: 30px;
+    border: 1px solid #dbe4f0;
+    border-radius: 8px;
+    background: #fff;
+    color: #334155;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+  .window-btn svg {
+    width: 14px;
+    height: 14px;
+    fill: currentColor;
+  }
+  .window-btn:hover { background: #f8fafc; }
+  .window-btn-close:hover {
+    background: #fff1f2;
+    border-color: #fecdd3;
+    color: #be123c;
+  }
   .node-modal-body {
     padding: 12px 14px;
     display: flex;
