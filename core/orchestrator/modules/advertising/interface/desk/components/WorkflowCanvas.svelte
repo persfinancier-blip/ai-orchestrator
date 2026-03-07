@@ -1,5 +1,5 @@
 ﻿<script lang="ts">
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import ApiBuilderTab from '../tabs/ApiBuilderTab.svelte';
   import {
     tools,
@@ -2518,6 +2518,16 @@
       return;
     }
     applyTemplateToNode(settingsNode.id, source.id);
+    await tick();
+    const appliedStoreId = currentSettingsTemplateStoreId();
+    if (!(appliedStoreId > 0 && appliedStoreId === selectedStoreId)) {
+      banner = 'Не удалось перепривязать ноду к выбранному шаблону. Обнови рабочий стол и попробуй снова.';
+      return;
+    }
+    const saved = await saveDesk(true);
+    if (!saved) {
+      banner = 'Шаблон в ноде изменён, но сохранить рабочий стол на сервер не удалось. Проверь сохранение.';
+    }
     apiLibrarySelection = {
       ...(apiLibrarySelection || { ref: '', name: '', storeId: 0, templateId: '' }),
       storeId: selectedStoreId,
@@ -2527,7 +2537,9 @@
     apiTemplateUsageExpanded = false;
     apiTemplateUsageRefreshTick += 1;
     const switchedName = String(source.name || apiLibrarySelection?.name || settingsApiTemplateSource?.name || '').trim();
-    banner = switchedName ? `Шаблон в ноде изменён: ${switchedName}` : 'Шаблон в ноде изменён.';
+    if (saved) {
+      banner = switchedName ? `Шаблон в ноде изменён и сохранён: ${switchedName}` : 'Шаблон в ноде изменён и сохранён.';
+    }
   }
 
   async function refreshApiTemplateUsageSummary() {
