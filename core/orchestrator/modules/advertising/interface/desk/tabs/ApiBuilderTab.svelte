@@ -8705,7 +8705,7 @@ function syncParameterEditorsHeight() {
                       </p>
                       <button
                         type="button"
-                        class="mini-refresh-btn"
+                        class="icon-btn refresh-btn"
                         title="Обновить ответ API"
                         aria-label="Обновить ответ API"
                         on:click={checkApiNow}
@@ -9064,7 +9064,7 @@ function syncParameterEditorsHeight() {
         <div class="subttl template-head">
           <span>Шаблон API</span>
           <span class="inline-actions">
-            <button type="button" class="view-toggle" on:click={onTemplateParseClick}>Сохранить</button>
+            <button type="button" class="view-toggle view-toggle-primary" on:click={onTemplateParseClick}>Разобрать</button>
             <button type="button" class="view-toggle" on:click={onTemplateClearClick}>Очистить</button>
             {#if exampleIsJson}
               <button type="button" class="view-toggle" on:click={() => (exampleViewMode = exampleViewMode === 'tree' ? 'raw' : 'tree')}>
@@ -9109,8 +9109,8 @@ function syncParameterEditorsHeight() {
           <div class="name-warn">{nameDuplicateHint}</div>
         {/if}
         <div class="saved-inline-actions">
-          <button on:click={addApi}>Добавить</button>
-          <button on:click={saveSelected} disabled={saving || !selected}>{saving ? 'Сохранение...' : 'Сохранить'}</button>
+          <button class="primary template-main-btn" on:click={addApi}>Добавить</button>
+          <button class="primary template-main-btn" on:click={saveSelected} disabled={saving || !selected}>{saving ? 'Сохранение...' : 'Сохранить'}</button>
         </div>
       </div>
 
@@ -9239,6 +9239,8 @@ function syncParameterEditorsHeight() {
     margin-left:auto;
   }
   .view-toggle { border-radius:10px; border:1px solid #e2e8f0; background:#fff; color:#0f172a; padding:4px 8px; font-size:11px; line-height:1.2; }
+  .view-toggle.view-toggle-primary { background:#0f172a; border-color:#0f172a; color:#fff; }
+  .view-toggle.view-toggle-primary:hover:not(:disabled) { background:#1e293b; border-color:#1e293b; }
   .view-toggle.active { border-color:#2563eb; color:#1d4ed8; background:#eff6ff; }
   .response-tree-wrap { border:1px solid #e6eaf2; border-radius:12px; background:#fff; padding:8px; min-height:78px; overflow:visible; }
   .template-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
@@ -9299,6 +9301,7 @@ function syncParameterEditorsHeight() {
   .template-name.warn { border-color:#f59e0b; background:#fffbeb; }
   .name-warn { font-size:12px; color:#92400e; margin-top:-2px; }
   .saved-inline-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .template-main-btn { font-weight:600; }
   .template-list-controls {
     display:flex;
     flex-direction:column;
@@ -9380,13 +9383,18 @@ function syncParameterEditorsHeight() {
   }
 
   .icon-btn { width:34px; min-width:34px; padding:6px 0; font-size:14px; text-transform:uppercase; border-color:transparent; background:transparent; color:#fff; }
+  .refresh-btn { color:#16a34a; }
   .danger.icon-btn { color:#b91c1c; }
-  .fav-icon-btn { color:#facc15; font-size:15px; }
-  .fav-icon-btn.active-favorite { color:#eab308; }
+  .fav-icon-btn { font-size:15px; }
+  .api-list .row-item:not(.activeitem) .row-actions .danger.icon-btn { color:#f8fafc; }
+  .api-list .row-item:not(.activeitem) .row-actions .fav-icon-btn { color:#e2e8f0; }
+  .api-list .row-item:not(.activeitem) .row-actions .fav-icon-btn.active-favorite { color:#fff; }
+  .api-list .activeitem .row-actions .danger.icon-btn { color:#b91c1c; }
+  .api-list .activeitem .row-actions .fav-icon-btn { color:#64748b; }
+  .api-list .activeitem .row-actions .fav-icon-btn.active-favorite { color:#d97706; }
   .plus-dark.icon-btn { color:#0f172a; font-weight:700; }
   .plus-green.icon-btn { color:#16a34a; font-weight:700; }
   .map-row .icon-btn { color:#b91c1c; }
-  .activeitem .icon-btn { color:#b91c1c; }
 
   input, select, textarea { border-radius:14px; border:1px solid #e6eaf2; padding:10px 12px; outline:none; background:#fff; box-sizing:border-box; width:100%; }
   textarea { min-height:78px; resize:none; overflow:hidden; }
@@ -9700,22 +9708,14 @@ function syncParameterEditorsHeight() {
     font-size:12px;
     line-height:1.3;
   }
-  .mini-refresh-btn {
-    width:28px;
-    min-width:28px;
-    height:28px;
+  .pagination-param-helper .icon-btn {
+    width:30px;
+    min-width:30px;
+    height:30px;
     padding:0;
-    border:1px solid #cbd5e1;
     border-radius:8px;
+    border:1px solid #e2e8f0;
     background:#fff;
-    color:#334155;
-    font-size:14px;
-    line-height:1;
-  }
-  .mini-refresh-btn:hover:not(:disabled) {
-    border-color:#94a3b8;
-    background:#f8fafc;
-    color:#0f172a;
   }
   .pagination-param-grid { margin-top:0; }
   .pagination-param-inline-row {
