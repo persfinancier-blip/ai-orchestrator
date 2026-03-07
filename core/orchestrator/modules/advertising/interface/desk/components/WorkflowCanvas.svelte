@@ -4330,15 +4330,23 @@
         {#each nodes as node (node.id)}
           {@const rt = nodeRuntime[node.id]}
           {@const exec = nodeExecutions[node.id]}
+          {@const apiNode = isApiNode(node) || isApiToolNode(node)}
           <div
             class="node {node.type} {selectedNodeId === node.id ? 'selected' : ''}"
+            class:node-api={apiNode}
             style={`left:${node.x}px;top:${node.y}px;`}
             on:mousedown={(e) => startNodeDrag(e, node)}
             on:click={() => (selectedNodeId = node.id)}
             on:dblclick={(e) => onNodeDoubleClick(e, node.id)}
           >
             <div class="node-head">
-              <strong>{node.config.name}</strong>
+              {#if apiNode}
+                {@const req = getApiRequestForNode(node)}
+                {@const templateSource = resolveTemplateSourceForNode(node, req)}
+                <strong class="node-title node-title-api">{String(templateSource?.name || node.config.name || 'API-нода').trim()}</strong>
+              {:else}
+                <strong class="node-title">{node.config.name}</strong>
+              {/if}
               <div class="node-controls">
                 <button
                   class="ctrl-btn"
@@ -4360,18 +4368,19 @@
                 <button class="ctrl-btn delete-btn" title="Удалить ноду" on:click|stopPropagation={() => deleteNode(node.id)}>x</button>
               </div>
             </div>
-            <div class="node-meta">{node.type === 'data' ? node.config.datasetId : toolLabelByType(toolCfg(node).toolType)}</div>
+            <div class="node-meta">
+              {node.type === 'data'
+                ? node.config.datasetId
+                : apiNode
+                ? 'API-нода'
+                : toolLabelByType(toolCfg(node).toolType)}
+            </div>
             {#if chainRunActive && chainCurrentNodeId === node.id}
               <div class="runtime running">Выполняется...</div>
             {/if}
-            {#if isApiNode(node) || isApiToolNode(node)}
+            {#if apiNode}
               {@const req = getApiRequestForNode(node)}
-              {@const templateStoreId = nodeTemplateStoreId(node)}
               <div class="api-meta">{req.method || 'GET'} {req.url || ''}</div>
-              <div class="api-template-meta">
-                <span>Шаблон ID: {templateStoreId || '-'}</span>
-                <span>Хранилище: {apiTemplateStorageRef}</span>
-              </div>
               <div class="api-stats">
                 <span>Страницы: {exec ? exec.totalRequests : '-'}</span>
                 <span>Записей: {exec ? exec.payloadCount : '-'}</span>
@@ -5057,10 +5066,23 @@
   .edges { position: absolute; inset: 0; pointer-events: none; }
   .edge-label { fill: #334155; font-size: 11px; }
   .node { position: absolute; width: 250px; border: 1px solid #cbd5e1; border-radius: 10px; background: #fff; padding: 8px; box-shadow: 0 4px 12px rgba(15,23,42,.07); }
+  .node.node-api { width: 320px; }
   .node.tool { background: #fff7ed; }
   .node.data { background: #f8fafc; }
   .node.selected { border-color: #2563eb; }
-  .node-head { display: flex; justify-content: space-between; gap: 8px; }
+  .node-head { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+  .node-title {
+    display: block;
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    line-height: 1.3;
+    color: #0f172a;
+  }
+  .node-title-api {
+    font-size: 12px;
+    font-weight: 700;
+  }
   .node-controls { display: inline-flex; align-items: center; gap: 4px; }
   .ctrl-btn {
     border: 1px solid #dbe4f0;
@@ -5077,11 +5099,28 @@
   .ctrl-btn:disabled { opacity: 0.45; cursor: not-allowed; }
   .delete-btn { color: #b91c1c; border-color: #fecaca; }
   .node-meta { color: #64748b; font-size: 11px; margin-top: 4px; }
-  .api-meta { color: #0f172a; font-size: 10px; margin-top: 3px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .api-template-meta { margin-top: 4px; display: grid; grid-template-columns: 1fr; gap: 1px; font-size: 9px; color: #475569; }
-  .api-template-meta span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .api-stats { margin-top: 5px; display: grid; grid-template-columns: 1fr; gap: 2px; font-size: 10px; color: #334155; }
-  .api-stats span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .api-meta {
+    color: #0f172a;
+    font-size: 10px;
+    margin-top: 4px;
+    line-height: 1.35;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .api-stats {
+    margin-top: 6px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    font-size: 10px;
+    color: #334155;
+    align-items: center;
+  }
+  .api-stats span {
+    white-space: nowrap;
+    line-height: 1.25;
+  }
   .runtime { margin-top: 6px; font-size: 11px; border-radius: 7px; padding: 4px 6px; border: 1px solid #e2e8f0; }
   .runtime.running { background: #eff6ff; border-color: #93c5fd; }
   .runtime.paused { background: #fff7ed; border-color: #fdba74; }
