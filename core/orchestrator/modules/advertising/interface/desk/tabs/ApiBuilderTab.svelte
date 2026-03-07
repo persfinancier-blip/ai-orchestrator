@@ -10615,6 +10615,13 @@ function syncParameterEditorsHeight() {
     min-height:34px;
     white-space:normal;
   }
+  .param-row .group-toggle,
+  .date-param-inline-row .group-toggle {
+    min-width:0;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+  }
   .group-toggle-sm {
     padding:6px 9px;
     min-height:30px;
