@@ -9550,65 +9550,6 @@ function syncParameterEditorsHeight() {
         </div>
       {/if}
 
-      <div class="subsec">
-        <div class="subttl template-head">
-          <span>Шаблон API</span>
-          <span class="inline-actions">
-            <button type="button" class="view-toggle template-action-btn view-toggle-primary" on:click={onTemplateParseClick}>Разобрать</button>
-            <button type="button" class="view-toggle template-action-btn view-toggle-primary" on:click={onTemplateClearClick}>Очистить</button>
-            {#if exampleIsJson}
-              <button type="button" class="view-toggle template-action-btn" on:click={() => (exampleViewMode = exampleViewMode === 'tree' ? 'raw' : 'tree')}>
-                {exampleViewMode === 'tree' ? 'RAW' : 'Дерево'}
-              </button>
-            {/if}
-          </span>
-        </div>
-        {#if exampleIsJson && exampleViewMode === 'tree'}
-          <div class="response-tree-wrap">
-            <JsonTreeView node={exampleJson} name="template" level={0} />
-          </div>
-        {:else}
-          <textarea
-            bind:this={exampleApiEl}
-            value={selected?.exampleRequest || ''}
-            on:input={(e) => {
-              mutateSelected((d) => (d.exampleRequest = e.currentTarget.value));
-              syncLeftTextareasHeight();
-            }}
-            placeholder="Вставьте пример API"
-          ></textarea>
-        {/if}
-        <div class="template-parse-actions">
-          {#if templateParseMessage}
-            <span class="template-parse-note">{templateParseMessage}</span>
-          {/if}
-        </div>
-      </div>
-
-      <div class="current-template-box">
-        <small class="current-template-label">Текущий шаблон</small>
-        <div class="current-template-name">{selected?.name || 'Шаблон не выбран'}</div>
-      </div>
-
-      <div class="template-controls">
-        <input
-          class="template-name {nameDuplicateHint ? 'warn' : ''}"
-          value={nameDraft}
-          on:input={(e) => {
-            nameDraft = e.currentTarget.value;
-            if (selected) mutateSelected((d) => (d.name = e.currentTarget.value));
-          }}
-          placeholder="Название API"
-        />
-        {#if nameDuplicateHint}
-          <div class="name-warn">{nameDuplicateHint}</div>
-        {/if}
-        <div class="saved-inline-actions">
-          <button class="primary template-main-btn" on:click={addApi} disabled={!canAddTemplate}>Добавить</button>
-          <button class="primary template-main-btn" on:click={saveSelected} disabled={!canSaveSelected}>{saving ? 'Сохранение...' : 'Сохранить'}</button>
-        </div>
-      </div>
-
       <div class="template-list-controls">
         <input
           class="template-search"
@@ -9685,6 +9626,65 @@ function syncParameterEditorsHeight() {
         {:else}
           <p class="hint">{templateListEmptyHint}</p>
         {/if}
+      </div>
+
+      <div class="subsec">
+        <div class="subttl template-head">
+          <span>Шаблон API</span>
+          <span class="inline-actions">
+            <button type="button" class="view-toggle template-action-btn view-toggle-primary" on:click={onTemplateParseClick}>Разобрать</button>
+            <button type="button" class="view-toggle template-action-btn view-toggle-primary" on:click={onTemplateClearClick}>Очистить</button>
+            {#if exampleIsJson}
+              <button type="button" class="view-toggle template-action-btn" on:click={() => (exampleViewMode = exampleViewMode === 'tree' ? 'raw' : 'tree')}>
+                {exampleViewMode === 'tree' ? 'RAW' : 'Дерево'}
+              </button>
+            {/if}
+          </span>
+        </div>
+        {#if exampleIsJson && exampleViewMode === 'tree'}
+          <div class="response-tree-wrap">
+            <JsonTreeView node={exampleJson} name="template" level={0} />
+          </div>
+        {:else}
+          <textarea
+            bind:this={exampleApiEl}
+            value={selected?.exampleRequest || ''}
+            on:input={(e) => {
+              mutateSelected((d) => (d.exampleRequest = e.currentTarget.value));
+              syncLeftTextareasHeight();
+            }}
+            placeholder="Вставьте пример API"
+          ></textarea>
+        {/if}
+        <div class="template-parse-actions">
+          {#if templateParseMessage}
+            <span class="template-parse-note">{templateParseMessage}</span>
+          {/if}
+        </div>
+      </div>
+
+      <div class="current-template-box">
+        <small class="current-template-label">Текущий шаблон</small>
+        <div class="current-template-name">{selected?.name || 'Шаблон не выбран'}</div>
+      </div>
+
+      <div class="template-controls">
+        <input
+          class="template-name {nameDuplicateHint ? 'warn' : ''}"
+          value={nameDraft}
+          on:input={(e) => {
+            nameDraft = e.currentTarget.value;
+            if (selected) mutateSelected((d) => (d.name = e.currentTarget.value));
+          }}
+          placeholder="Название API"
+        />
+        {#if nameDuplicateHint}
+          <div class="name-warn">{nameDuplicateHint}</div>
+        {/if}
+        <div class="saved-inline-actions">
+          <button class="primary template-main-btn" on:click={addApi} disabled={!canAddTemplate}>Добавить</button>
+          <button class="primary template-main-btn" on:click={saveSelected} disabled={!canSaveSelected}>{saving ? 'Сохранение...' : 'Сохранить'}</button>
+        </div>
       </div>
     </aside>
   </div>
