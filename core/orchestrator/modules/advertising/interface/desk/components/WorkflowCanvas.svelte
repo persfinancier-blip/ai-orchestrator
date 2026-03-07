@@ -2969,6 +2969,47 @@
     document.body.style.userSelect = 'none';
   }
 
+  function detectNodeModalResizeEdge(e: MouseEvent): 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw' | null {
+    if (!nodeModalEl || nodeModalFullscreen || !settingsNode) return null;
+    if (!isApiNode(settingsNode) && !isApiToolNode(settingsNode)) return null;
+    const rect = nodeModalEl.getBoundingClientRect();
+    const zone = 12;
+    const nearLeft = e.clientX >= rect.left && e.clientX <= rect.left + zone;
+    const nearRight = e.clientX <= rect.right && e.clientX >= rect.right - zone;
+    const nearTop = e.clientY >= rect.top && e.clientY <= rect.top + zone;
+    const nearBottom = e.clientY <= rect.bottom && e.clientY >= rect.bottom - zone;
+
+    if (nearTop && nearLeft) return 'nw';
+    if (nearTop && nearRight) return 'ne';
+    if (nearBottom && nearLeft) return 'sw';
+    if (nearBottom && nearRight) return 'se';
+    if (nearTop) return 'n';
+    if (nearBottom) return 's';
+    if (nearRight) return 'e';
+    if (nearLeft) return 'w';
+    return null;
+  }
+
+  function onNodeModalMouseMoveForResize(e: MouseEvent) {
+    if (nodeModalResizeState || !nodeModalEl) return;
+    const edge = detectNodeModalResizeEdge(e);
+    if (edge) {
+      nodeModalEl.style.cursor = resizeCursorByEdge(edge);
+    } else {
+      nodeModalEl.style.removeProperty('cursor');
+    }
+  }
+
+  function onNodeModalMouseDownForResize(e: MouseEvent) {
+    const edge = detectNodeModalResizeEdge(e);
+    if (!edge) return;
+    startNodeModalResize(e, edge);
+  }
+
+  function onNodeModalMouseLeaveForResize() {
+    if (!nodeModalResizeState && nodeModalEl) nodeModalEl.style.removeProperty('cursor');
+  }
+
   function nodeModalInlineStyle() {
     if (!nodeModalRect || nodeModalFullscreen) return '';
     return `left:${nodeModalRect.left}px;top:${nodeModalRect.top}px;width:${nodeModalRect.width}px;height:${nodeModalRect.height}px;max-height:none;transform:none;`;
@@ -4168,6 +4209,9 @@
       class:node-modal-manual={Boolean(nodeModalRect) && !nodeModalFullscreen}
       class:node-modal-resizable={(isApiNode(settingsNode) || isApiToolNode(settingsNode)) && !nodeModalFullscreen}
       style={nodeModalInlineStyle()}
+      on:mousedown={onNodeModalMouseDownForResize}
+      on:mousemove={onNodeModalMouseMoveForResize}
+      on:mouseleave={onNodeModalMouseLeaveForResize}
     >
       <div class="node-modal-head">
         <h4>Настройка узла: {settingsNode.config.name}</h4>
@@ -4737,17 +4781,18 @@
     background: transparent;
     padding: 0;
     margin: 0;
-    z-index: 6;
+    z-index: 20;
     touch-action: none;
+    pointer-events: auto;
   }
-  .modal-resize-n { top: 0; left: 12px; right: 12px; height: 8px; cursor: ns-resize; }
-  .modal-resize-s { bottom: 0; left: 12px; right: 12px; height: 8px; cursor: ns-resize; }
-  .modal-resize-e { right: 0; top: 12px; bottom: 12px; width: 8px; cursor: ew-resize; }
-  .modal-resize-w { left: 0; top: 12px; bottom: 12px; width: 8px; cursor: ew-resize; }
-  .modal-resize-ne { top: 0; right: 0; width: 12px; height: 12px; cursor: nesw-resize; }
-  .modal-resize-nw { top: 0; left: 0; width: 12px; height: 12px; cursor: nwse-resize; }
-  .modal-resize-se { bottom: 0; right: 0; width: 12px; height: 12px; cursor: nwse-resize; }
-  .modal-resize-sw { bottom: 0; left: 0; width: 12px; height: 12px; cursor: nesw-resize; }
+  .modal-resize-n { top: 0; left: 10px; right: 10px; height: 12px; cursor: ns-resize; }
+  .modal-resize-s { bottom: 0; left: 10px; right: 10px; height: 12px; cursor: ns-resize; }
+  .modal-resize-e { right: 0; top: 10px; bottom: 10px; width: 12px; cursor: ew-resize; }
+  .modal-resize-w { left: 0; top: 10px; bottom: 10px; width: 12px; cursor: ew-resize; }
+  .modal-resize-ne { top: 0; right: 0; width: 16px; height: 16px; cursor: nesw-resize; }
+  .modal-resize-nw { top: 0; left: 0; width: 16px; height: 16px; cursor: nwse-resize; }
+  .modal-resize-se { bottom: 0; right: 0; width: 16px; height: 16px; cursor: nwse-resize; }
+  .modal-resize-sw { bottom: 0; left: 0; width: 16px; height: 16px; cursor: nesw-resize; }
   .node-modal-body {
     padding: 12px 14px;
     display: flex;
