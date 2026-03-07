@@ -3587,11 +3587,12 @@
     if (!node || (!isApiNode(node) && !isApiToolNode(node))) return;
     const templateStoreId = nodeTemplateStoreId(node);
     const q = new URLSearchParams();
+    q.set('pane', 'api');
     if (templateStoreId) q.set('api_store_id', templateStoreId);
     if (deskId > 0) q.set('desk_id', String(deskId));
     const nodeName = String(node.config?.name || '').trim();
     if (nodeName) q.set('from_node', nodeName);
-    window.location.hash = q.toString() ? `#desk/workflow?${q.toString()}` : '#desk/workflow';
+    window.location.hash = q.toString() ? `#desk/data?${q.toString()}` : '#desk/data?pane=api';
   }
 
   function resetCanvas() {
