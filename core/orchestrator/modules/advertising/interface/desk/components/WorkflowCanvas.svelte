@@ -220,6 +220,16 @@
   let settingsNodeId = '';
   let settingsModalOpen = false;
   let nodeModalFullscreen = false;
+  let nodeModalEl: HTMLDivElement | null = null;
+  let nodeModalRect: { left: number; top: number; width: number; height: number } | null = null;
+  let nodeModalResizeState:
+    | {
+        edge: 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
+        startX: number;
+        startY: number;
+        startRect: { left: number; top: number; width: number; height: number };
+      }
+    | null = null;
   let nodeExecutions: Record<string, ApiNodeExecution> = {};
   let nodeExecutionLoading: Record<string, boolean> = {};
   let nodeTemplateSaving: Record<string, boolean> = {};
@@ -285,6 +295,9 @@
   const API_ROLE = 'data_admin';
   const PARAMETER_TOKEN_RE = /\{\{\s*([^{}]+?)\s*\}\}/g;
   const PARAMETER_TOKEN_EXACT_RE = /^\{\{\s*([^{}]+?)\s*\}\}$/;
+  const NODE_MODAL_MIN_WIDTH = 760;
+  const NODE_MODAL_MIN_HEIGHT = 420;
+  const NODE_MODAL_SCREEN_GAP = 8;
 
   $: selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null;
   $: settingsNode = nodes.find((n) => n.id === settingsNodeId) ?? null;
@@ -2827,6 +2840,7 @@
     settingsNodeId = nodeId;
     settingsModalOpen = true;
     nodeModalFullscreen = false;
+    nodeModalRect = null;
     settingsRequestViewMode = 'tree';
     settingsResponseViewMode = 'tree';
   }
@@ -2835,10 +2849,114 @@
     settingsModalOpen = false;
     settingsNodeId = '';
     nodeModalFullscreen = false;
+    nodeModalRect = null;
+    stopNodeModalResize();
   }
 
   function toggleNodeModalFullscreen() {
+    stopNodeModalResize();
     nodeModalFullscreen = !nodeModalFullscreen;
+  }
+
+  function clamp(value: number, min: number, max: number) {
+    if (!Number.isFinite(value)) return min;
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function ensureNodeModalRect() {
+    if (nodeModalRect || !nodeModalEl) return;
+    const rect = nodeModalEl.getBoundingClientRect();
+    nodeModalRect = {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height
+    };
+  }
+
+  function onNodeModalResizeMove(e: MouseEvent) {
+    if (!nodeModalResizeState) return;
+    const { edge, startX, startY, startRect } = nodeModalResizeState;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    const viewW = window.innerWidth;
+    const viewH = window.innerHeight;
+    const minW = NODE_MODAL_MIN_WIDTH;
+    const minH = NODE_MODAL_MIN_HEIGHT;
+    const gap = NODE_MODAL_SCREEN_GAP;
+
+    let left = startRect.left;
+    let top = startRect.top;
+    let width = startRect.width;
+    let height = startRect.height;
+
+    const rightFixed = startRect.left + startRect.width;
+    const bottomFixed = startRect.top + startRect.height;
+
+    if (edge.includes('e')) {
+      const maxWFromLeft = Math.max(minW, viewW - gap - startRect.left);
+      width = clamp(startRect.width + dx, minW, maxWFromLeft);
+    }
+
+    if (edge.includes('w')) {
+      const maxWFromRight = Math.max(minW, rightFixed - gap);
+      width = clamp(startRect.width - dx, minW, maxWFromRight);
+      left = rightFixed - width;
+      if (left < gap) {
+        left = gap;
+        width = rightFixed - left;
+      }
+    }
+
+    if (edge.includes('s')) {
+      const maxHFromTop = Math.max(minH, viewH - gap - startRect.top);
+      height = clamp(startRect.height + dy, minH, maxHFromTop);
+    }
+
+    if (edge.includes('n')) {
+      const maxHFromBottom = Math.max(minH, bottomFixed - gap);
+      height = clamp(startRect.height - dy, minH, maxHFromBottom);
+      top = bottomFixed - height;
+      if (top < gap) {
+        top = gap;
+        height = bottomFixed - top;
+      }
+    }
+
+    const maxLeft = Math.max(gap, viewW - gap - width);
+    const maxTop = Math.max(gap, viewH - gap - height);
+    left = clamp(left, gap, maxLeft);
+    top = clamp(top, gap, maxTop);
+
+    nodeModalRect = { left, top, width, height };
+  }
+
+  function stopNodeModalResize() {
+    if (!nodeModalResizeState) return;
+    window.removeEventListener('mousemove', onNodeModalResizeMove);
+    window.removeEventListener('mouseup', stopNodeModalResize);
+    nodeModalResizeState = null;
+  }
+
+  function startNodeModalResize(e: MouseEvent, edge: 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw') {
+    if (nodeModalFullscreen) return;
+    ensureNodeModalRect();
+    if (!nodeModalRect) return;
+    e.preventDefault();
+    e.stopPropagation();
+    nodeModalResizeState = {
+      edge,
+      startX: e.clientX,
+      startY: e.clientY,
+      startRect: { ...nodeModalRect }
+    };
+    window.addEventListener('mousemove', onNodeModalResizeMove);
+    window.addEventListener('mouseup', stopNodeModalResize);
+  }
+
+  function nodeModalInlineStyle() {
+    if (!nodeModalRect || nodeModalFullscreen) return '';
+    return `left:${nodeModalRect.left}px;top:${nodeModalRect.top}px;width:${nodeModalRect.width}px;height:${nodeModalRect.height}px;max-height:none;transform:none;`;
   }
 
   function center(n: WorkflowNode) {
@@ -3630,6 +3748,7 @@
   });
 
   onDestroy(() => {
+    stopNodeModalResize();
     clearDeskAutosaveTimer();
   });
 </script>
@@ -4027,10 +4146,13 @@
   {#if settingsModalOpen && settingsNode}
     <div class="node-modal-backdrop" on:click={closeSettingsModal}></div>
     <div
+      bind:this={nodeModalEl}
       class="node-modal"
       class:node-modal-wide={isApiNode(settingsNode) || isApiToolNode(settingsNode)}
       class:node-modal-fullscreen={nodeModalFullscreen}
+      class:node-modal-manual={Boolean(nodeModalRect) && !nodeModalFullscreen}
       class:node-modal-resizable={(isApiNode(settingsNode) || isApiToolNode(settingsNode)) && !nodeModalFullscreen}
+      style={nodeModalInlineStyle()}
     >
       <div class="node-modal-head">
         <h4>Настройка узла: {settingsNode.config.name}</h4>
@@ -4264,6 +4386,16 @@
             {/key}
           {/if}
         </div>
+      {/if}
+      {#if (isApiNode(settingsNode) || isApiToolNode(settingsNode)) && !nodeModalFullscreen}
+        <button type="button" class="modal-resize-handle modal-resize-n" aria-label="Изменить высоту сверху" on:mousedown={(e) => startNodeModalResize(e, 'n')}></button>
+        <button type="button" class="modal-resize-handle modal-resize-s" aria-label="Изменить высоту снизу" on:mousedown={(e) => startNodeModalResize(e, 's')}></button>
+        <button type="button" class="modal-resize-handle modal-resize-e" aria-label="Изменить ширину справа" on:mousedown={(e) => startNodeModalResize(e, 'e')}></button>
+        <button type="button" class="modal-resize-handle modal-resize-w" aria-label="Изменить ширину слева" on:mousedown={(e) => startNodeModalResize(e, 'w')}></button>
+        <button type="button" class="modal-resize-handle modal-resize-ne" aria-label="Изменить размер справа сверху" on:mousedown={(e) => startNodeModalResize(e, 'ne')}></button>
+        <button type="button" class="modal-resize-handle modal-resize-nw" aria-label="Изменить размер слева сверху" on:mousedown={(e) => startNodeModalResize(e, 'nw')}></button>
+        <button type="button" class="modal-resize-handle modal-resize-se" aria-label="Изменить размер справа снизу" on:mousedown={(e) => startNodeModalResize(e, 'se')}></button>
+        <button type="button" class="modal-resize-handle modal-resize-sw" aria-label="Изменить размер слева снизу" on:mousedown={(e) => startNodeModalResize(e, 'sw')}></button>
       {/if}
     </div>
   {/if}
@@ -4555,6 +4687,9 @@
     min-width: 760px;
     min-height: 420px;
   }
+  .node-modal.node-modal-manual {
+    margin: 0;
+  }
   .node-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; border-bottom: 1px solid #e2e8f0; position: sticky; top: 0; background: #fff; }
   .node-modal-head h4 { margin: 0; font-size: 16px; }
   .node-modal-actions { display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
@@ -4582,6 +4717,22 @@
     border-color: #fecdd3;
     color: #be123c;
   }
+  .modal-resize-handle {
+    position: absolute;
+    border: 0;
+    background: transparent;
+    padding: 0;
+    margin: 0;
+    z-index: 2;
+  }
+  .modal-resize-n { top: -3px; left: 10px; right: 10px; height: 8px; cursor: ns-resize; }
+  .modal-resize-s { bottom: -3px; left: 10px; right: 10px; height: 8px; cursor: ns-resize; }
+  .modal-resize-e { right: -3px; top: 10px; bottom: 10px; width: 8px; cursor: ew-resize; }
+  .modal-resize-w { left: -3px; top: 10px; bottom: 10px; width: 8px; cursor: ew-resize; }
+  .modal-resize-ne { top: -3px; right: -3px; width: 12px; height: 12px; cursor: nesw-resize; }
+  .modal-resize-nw { top: -3px; left: -3px; width: 12px; height: 12px; cursor: nwse-resize; }
+  .modal-resize-se { bottom: -3px; right: -3px; width: 12px; height: 12px; cursor: nwse-resize; }
+  .modal-resize-sw { bottom: -3px; left: -3px; width: 12px; height: 12px; cursor: nesw-resize; }
   .node-modal-body {
     padding: 12px 14px;
     display: flex;
