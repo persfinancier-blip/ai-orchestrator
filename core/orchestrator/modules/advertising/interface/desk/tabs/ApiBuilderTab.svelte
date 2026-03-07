@@ -14,7 +14,7 @@
   export let refreshTables: () => Promise<void>;
   export let initialApiStoreId: number | null = null;
   export let embeddedMode = false;
-  const EMBEDDED_LAYOUT_BREAKPOINT = 1420;
+  const EMBEDDED_LAYOUT_BREAKPOINT = 1080;
   let compactLayoutByContainer = false;
   $: effectiveEmbeddedMode = embeddedMode || compactLayoutByContainer;
 
