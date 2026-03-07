@@ -337,6 +337,9 @@
   let err = '';
   let ok = '';
   let warn = '';
+  let selectedBaselineSignature = '';
+  let canSaveSelected = false;
+  let canAddTemplate = false;
   let initialApiStoreIdApplied = 0;
   let nameDuplicateHint = '';
 
@@ -2536,6 +2539,14 @@ function formatBytes(bytes: number) {
       }
     }
     return null;
+  }
+
+  function selectedDraftSignature(draft: ApiDraft | null, nameOverride = '') {
+    if (!draft) return '';
+    return JSON.stringify({
+      ...draft,
+      name: String(nameOverride || draft.name || '').trim()
+    });
   }
 
   function templatesStorageScopeKey() {
@@ -5976,6 +5987,8 @@ function handleDefinitionInput(value: string) {
         selectedRef = refOf(drafts[0]);
       }
       applyInitialApiStoreSelection();
+      const baselineDraft = byRef(selectedRef);
+      selectedBaselineSignature = selectedDraftSignature(baselineDraft, String(baselineDraft?.name || ''));
     } catch (e: any) {
       err = e?.message ?? String(e);
     } finally {
@@ -6049,6 +6062,7 @@ function handleDefinitionInput(value: string) {
         if (m) {
           selectedRef = refOf(m);
           nameDraft = m.name;
+          selectedBaselineSignature = selectedDraftSignature(m, m.name);
         }
       }
       ok = 'API сохранен в БД';
@@ -7444,6 +7458,7 @@ function handleDefinitionInput(value: string) {
     if (selected) {
       markTemplateRecent(selectedRef);
       nameDraft = selected.name;
+      selectedBaselineSignature = selectedDraftSignature(selected, selected.name);
       requestInput = `${selected.baseUrl.replace(/\/$/, '')}${selected.path.startsWith('/') ? selected.path : `/${selected.path}`}`;
       myPreviewDirty = false;
       myPreviewApplyMessage = '';
@@ -7456,7 +7471,15 @@ function handleDefinitionInput(value: string) {
       datasetPreviewColumns = [];
       datasetPreviewHasMore = false;
       datasetPreviewError = '';
+    } else {
+      selectedBaselineSignature = '';
     }
+  }
+  $: {
+    const effectiveName = String(nameDraft || selected?.name || '').trim();
+    const currentSignature = selectedDraftSignature(selected, effectiveName);
+    canAddTemplate = Boolean(effectiveName) && !saving;
+    canSaveSelected = Boolean(selected) && Boolean(currentSignature) && currentSignature !== selectedBaselineSignature && !saving;
   }
   $: if (!myPreviewDirty) {
     myApiPreviewDraft = myApiPreview;
@@ -9064,10 +9087,10 @@ function syncParameterEditorsHeight() {
         <div class="subttl template-head">
           <span>Шаблон API</span>
           <span class="inline-actions">
-            <button type="button" class="view-toggle view-toggle-primary" on:click={onTemplateParseClick}>Разобрать</button>
-            <button type="button" class="view-toggle" on:click={onTemplateClearClick}>Очистить</button>
+            <button type="button" class="view-toggle template-action-btn view-toggle-primary" on:click={onTemplateParseClick}>Разобрать</button>
+            <button type="button" class="view-toggle template-action-btn view-toggle-secondary" on:click={onTemplateClearClick}>Очистить</button>
             {#if exampleIsJson}
-              <button type="button" class="view-toggle" on:click={() => (exampleViewMode = exampleViewMode === 'tree' ? 'raw' : 'tree')}>
+              <button type="button" class="view-toggle template-action-btn" on:click={() => (exampleViewMode = exampleViewMode === 'tree' ? 'raw' : 'tree')}>
                 {exampleViewMode === 'tree' ? 'RAW' : 'Дерево'}
               </button>
             {/if}
@@ -9095,6 +9118,11 @@ function syncParameterEditorsHeight() {
         </div>
       </div>
 
+      <div class="current-template-box">
+        <small class="current-template-label">Текущий шаблон</small>
+        <div class="current-template-name">{selected?.name || 'Шаблон не выбран'}</div>
+      </div>
+
       <div class="template-controls">
         <input
           class="template-name {nameDuplicateHint ? 'warn' : ''}"
@@ -9109,8 +9137,8 @@ function syncParameterEditorsHeight() {
           <div class="name-warn">{nameDuplicateHint}</div>
         {/if}
         <div class="saved-inline-actions">
-          <button class="primary template-main-btn" on:click={addApi}>Добавить</button>
-          <button class="primary template-main-btn" on:click={saveSelected} disabled={saving || !selected}>{saving ? 'Сохранение...' : 'Сохранить'}</button>
+          <button class="primary template-main-btn" on:click={addApi} disabled={!canAddTemplate}>Добавить</button>
+          <button class="primary template-main-btn" on:click={saveSelected} disabled={!canSaveSelected}>{saving ? 'Сохранение...' : 'Сохранить'}</button>
         </div>
       </div>
 
@@ -9239,8 +9267,11 @@ function syncParameterEditorsHeight() {
     margin-left:auto;
   }
   .view-toggle { border-radius:10px; border:1px solid #e2e8f0; background:#fff; color:#0f172a; padding:4px 8px; font-size:11px; line-height:1.2; }
+  .template-action-btn { min-height:28px; min-width:72px; padding:5px 10px; font-size:11px; font-weight:500; }
   .view-toggle.view-toggle-primary { background:#0f172a; border-color:#0f172a; color:#fff; }
   .view-toggle.view-toggle-primary:hover:not(:disabled) { background:#1e293b; border-color:#1e293b; }
+  .view-toggle.view-toggle-secondary { background:#fff; border-color:#cbd5e1; color:#334155; }
+  .view-toggle.view-toggle-secondary:hover:not(:disabled) { background:#f8fafc; border-color:#94a3b8; color:#0f172a; }
   .view-toggle.active { border-color:#2563eb; color:#1d4ed8; background:#eff6ff; }
   .response-tree-wrap { border:1px solid #e6eaf2; border-radius:12px; background:#fff; padding:8px; min-height:78px; overflow:visible; }
   .template-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
@@ -9300,6 +9331,26 @@ function syncParameterEditorsHeight() {
   .template-name { width:100%; box-sizing:border-box; }
   .template-name.warn { border-color:#f59e0b; background:#fffbeb; }
   .name-warn { font-size:12px; color:#92400e; margin-top:-2px; }
+  .current-template-box {
+    margin-bottom:8px;
+    padding:8px 10px;
+    border:1px solid #e2e8f0;
+    border-radius:10px;
+    background:#f8fafc;
+  }
+  .current-template-label {
+    display:block;
+    margin:0 0 4px;
+    font-size:11px;
+    color:#64748b;
+  }
+  .current-template-name {
+    font-size:13px;
+    line-height:1.3;
+    font-weight:600;
+    color:#0f172a;
+    word-break:break-word;
+  }
   .saved-inline-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
   .template-main-btn { font-weight:600; }
   .template-list-controls {
