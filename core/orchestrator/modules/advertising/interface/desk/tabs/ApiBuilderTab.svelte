@@ -8807,11 +8807,22 @@ function syncParameterEditorsHeight() {
   .panel-embedded .layout { grid-template-columns: minmax(0, 1fr); }
   .panel-embedded .main { order:1; }
   .panel-embedded .compare-aside { order:2; }
-  .panel-embedded .api-list { order:3; }
+  .panel-embedded .saved-aside {
+    min-height:clamp(360px, 58vh, 640px);
+    max-height:min(72vh, 760px);
+  }
+  .panel-embedded .api-list { order:3; min-height:clamp(180px, 30vh, 300px); }
   .panel-embedded .raw-grid { grid-template-columns: 1fr; }
   @media (max-width: 1500px) { .layout { grid-template-columns: 1fr; } }
 
-  .aside { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#f8fafc; }
+  .aside { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#f8fafc; min-width:0; }
+  .saved-aside {
+    display:flex;
+    flex-direction:column;
+    min-height:clamp(460px, 62vh, 760px);
+    max-height:min(78vh, 980px);
+    overflow:hidden;
+  }
   .aside-title { font-weight:700; font-size:14px; line-height:1.3; margin-bottom:8px; }
 
   .subsec { margin-top:10px; }
@@ -8888,7 +8899,14 @@ function syncParameterEditorsHeight() {
   .name-warn { font-size:12px; color:#92400e; margin-top:-2px; }
   .saved-inline-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
 
-  .list { display:flex; flex-direction:column; gap:8px; }
+  .list { display:flex; flex-direction:column; gap:8px; min-width:0; }
+  .api-list {
+    flex:1 1 auto;
+    min-height:clamp(180px, 28vh, 320px);
+    max-height:100%;
+    overflow:auto;
+    padding-right:4px;
+  }
   .row-item { display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; border:1px solid #e6eaf2; border-radius:14px; background:#0f172a; padding:8px 10px; }
   .row-actions { display:flex; align-items:center; justify-content:flex-end; min-width:54px; }
   .item-button { text-align:left; border:0; background:transparent; padding:0; color:inherit; width:100%; }
@@ -9176,6 +9194,11 @@ function syncParameterEditorsHeight() {
     .connect-actions { justify-content:flex-start; flex-wrap:wrap; }
     .raw-grid { grid-template-columns: 1fr; }
     .saved-inline-actions { grid-template-columns: 1fr; }
+    .saved-aside {
+      min-height:clamp(360px, 64vh, 580px);
+      max-height:min(78vh, 680px);
+    }
+    .api-list { min-height:200px; }
     .parameter-sources-grid { grid-template-columns: 1fr; }
     .data-row, .table-rule-row, .join-rule-row, .filter-rule-row, .param-row, .date-param-inline-row, .field-date-row { grid-template-columns: 1fr; }
     .pagination-safety-layout {
