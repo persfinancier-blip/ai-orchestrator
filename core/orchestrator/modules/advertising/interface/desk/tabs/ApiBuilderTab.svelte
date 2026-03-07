@@ -1,5 +1,5 @@
 ﻿<script lang="ts">
-  import { onDestroy, tick } from 'svelte';
+  import { createEventDispatcher, onDestroy, tick } from 'svelte';
   import JsonTreeView from '../components/JsonTreeView.svelte';
   import { shouldRetryStatus, retryDelayMs, groupRowsByAliases } from './apiBuilderRuntimeCore.js';
   export type ExistingTable = { schema_name: string; table_name: string };
@@ -17,6 +17,15 @@
   const EMBEDDED_LAYOUT_BREAKPOINT = 900;
   let compactLayoutByContainer = false;
   $: effectiveEmbeddedMode = embeddedMode || compactLayoutByContainer;
+  const dispatch = createEventDispatcher<{
+    templateSelectionChange: {
+      ref: string;
+      name: string;
+      storeId: number;
+      templateId: string;
+    };
+  }>();
+  let lastTemplateSelectionPayloadKey = '';
 
   type BindingRule = {
     id: string;
@@ -3070,6 +3079,21 @@ function formatBytes(bytes: number) {
     if (!key) return;
     selectedRef = key;
     markTemplateRecent(key);
+  }
+
+  function emitTemplateSelectionChange() {
+    const ref = String(selectedRef || '').trim();
+    const storeId = resolveDraftStoreId(selected || null, ref);
+    const payload = {
+      ref,
+      name: String(selected?.name || '').trim(),
+      storeId,
+      templateId: storeId > 0 ? `api_tpl_${storeId}` : ''
+    };
+    const payloadKey = `${payload.ref}|${payload.name}|${payload.storeId}|${payload.templateId}`;
+    if (payloadKey === lastTemplateSelectionPayloadKey) return;
+    lastTemplateSelectionPayloadKey = payloadKey;
+    dispatch('templateSelectionChange', payload);
   }
 
   function cleanupTemplateUiRefs() {
@@ -8038,6 +8062,11 @@ function handleDefinitionInput(value: string) {
   $: {
     drafts;
     selected = byRef(selectedRef);
+  }
+  $: {
+    selectedRef;
+    selected;
+    emitTemplateSelectionChange();
   }
   $: {
     const items: TemplateListItem[] = drafts.map((draft) => {

@@ -201,6 +201,30 @@
     updated_at?: string;
   };
 
+  type ApiTemplateSelectionChangePayload = {
+    ref: string;
+    name: string;
+    storeId: number;
+    templateId: string;
+  };
+
+  type ApiTemplateUsageNodeEntry = {
+    node_id: string;
+    node_name: string;
+  };
+
+  type ApiTemplateUsageProcessEntry = {
+    start_node_id: string;
+    process_code: string;
+    process_name: string;
+  };
+
+  type ApiTemplateUsageSummary = {
+    inCurrentNode: boolean;
+    otherNodes: ApiTemplateUsageNodeEntry[];
+    processes: ApiTemplateUsageProcessEntry[];
+  };
+
   let nodes: WorkflowNode[] = [];
   let edges: WorkflowEdge[] = [];
   let selectedNodeId = '';
@@ -281,6 +305,16 @@
   let processCodeConflicts: ProcessCodeConflict[] = [];
   let processRuns: ProcessRunRow[] = [];
   let workflowJobs: WorkflowJobRow[] = [];
+  let apiLibrarySelection: ApiTemplateSelectionChangePayload | null = null;
+  let apiTemplateUsageExpanded = false;
+  let apiTemplateUsageRefreshTick = 0;
+  let apiTemplateUsageSummary: ApiTemplateUsageSummary = {
+    inCurrentNode: false,
+    otherNodes: [],
+    processes: []
+  };
+  let settingsApiTemplateSource: DynamicApiSource | null = null;
+  let apiTemplateUsageNodeKey = '';
 
   let canvasEl: HTMLDivElement;
   let panX = 0;
@@ -309,6 +343,25 @@
     const raw = Number(nodeTemplateStoreId(settingsNode) || 0);
     return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : null;
   })();
+  $: settingsApiTemplateSource = (() => {
+    if (!settingsNode || (!isApiNode(settingsNode) && !isApiToolNode(settingsNode))) return null;
+    return resolveTemplateSourceForNode(settingsNode, getApiRequestForNode(settingsNode));
+  })();
+  $: apiTemplateUsageSummary = buildApiTemplateUsageSummary(
+    settingsApiTemplateSource,
+    settingsNode,
+    apiTemplateUsageRefreshTick
+  );
+  $: if (!settingsModalOpen || !settingsNodeId) {
+    apiLibrarySelection = null;
+    apiTemplateUsageExpanded = false;
+  }
+  $: if (settingsNodeId !== apiTemplateUsageNodeKey) {
+    apiTemplateUsageNodeKey = settingsNodeId;
+    apiLibrarySelection = null;
+    apiTemplateUsageExpanded = false;
+    apiTemplateUsageRefreshTick += 1;
+  }
   $: deskCurrentSignature = deskSignatureFromState({
     nodes,
     edges,
@@ -2345,6 +2398,119 @@
       if (m2?.[1]) return m2[1];
     }
     return '';
+  }
+
+  function pluralRu(count: number, one: string, two: string, five: string) {
+    const n = Math.abs(Number(count || 0)) % 100;
+    const n1 = n % 10;
+    if (n > 10 && n < 20) return five;
+    if (n1 > 1 && n1 < 5) return two;
+    if (n1 === 1) return one;
+    return five;
+  }
+
+  function nodeDisplayName(node: WorkflowNode) {
+    if (!node) return '';
+    if (node.type === 'tool') {
+      const cfg = toolCfg(node);
+      const fallback = toolUiDictionary[cfg.toolType]?.name || String(cfg.toolType || '').trim() || 'Нода';
+      return String(cfg.name || '').trim() || fallback;
+    }
+    return String(node?.config?.name || '').trim() || String(node.id || '').trim() || 'Нода';
+  }
+
+  function buildApiTemplateUsageSummary(
+    source: DynamicApiSource | null,
+    currentNode: WorkflowNode | null,
+    refreshTick: number
+  ): ApiTemplateUsageSummary {
+    void refreshTick;
+    if (!source || !currentNode) {
+      return { inCurrentNode: false, otherNodes: [], processes: [] };
+    }
+
+    const templateNodes = nodes.filter(
+      (node) =>
+        (isApiNode(node) || isApiToolNode(node)) &&
+        nodeTemplateRefs(node).some((ref) => sourceMatchesTemplateRef(source, ref))
+    );
+    const currentNodeId = String(currentNode.id || '').trim();
+    const nodeIds = new Set(templateNodes.map((node) => String(node.id || '').trim()));
+    const inCurrentNode = nodeIds.has(currentNodeId);
+
+    const otherNodes = templateNodes
+      .filter((node) => String(node.id || '').trim() !== currentNodeId)
+      .map((node) => ({
+        node_id: String(node.id || '').trim(),
+        node_name: nodeDisplayName(node)
+      }))
+      .sort((a, b) => a.node_name.localeCompare(b.node_name, 'ru', { sensitivity: 'base' }));
+
+    const processes = nodes
+      .filter((node) => node.type === 'tool' && toolCfg(node).toolType === 'start_process')
+      .filter((startNode) => {
+        const reachableIds = reachableFrom(startNode.id);
+        for (const nodeId of reachableIds) {
+          if (nodeIds.has(nodeId)) return true;
+        }
+        return false;
+      })
+      .map((startNode) => {
+        const cfg = toolCfg(startNode);
+        const settings = cfg.settings || {};
+        const processCode = String(settings.processCode || '').trim() || String(startNode.id || '').trim();
+        return {
+          start_node_id: String(startNode.id || '').trim(),
+          process_code: processCode,
+          process_name: String(cfg.name || '').trim() || processCode
+        } as ApiTemplateUsageProcessEntry;
+      })
+      .sort((a, b) => a.process_name.localeCompare(b.process_name, 'ru', { sensitivity: 'base' }));
+
+    return { inCurrentNode, otherNodes, processes };
+  }
+
+  function onApiBuilderTemplateSelectionChange(event: CustomEvent<ApiTemplateSelectionChangePayload>) {
+    const detail = event?.detail && typeof event.detail === 'object' ? event.detail : ({} as ApiTemplateSelectionChangePayload);
+    const selectedStoreId = Number(String(detail?.storeId ?? '').trim());
+    const storeId = Number.isFinite(selectedStoreId) && selectedStoreId > 0 ? Math.trunc(selectedStoreId) : 0;
+    let templateId = String(detail?.templateId || '').trim();
+    if (storeId > 0) {
+      const found = dynamicApiSources.find((src) => Number(src?.storeId || 0) === storeId);
+      if (found?.id) templateId = found.id;
+      else if (!templateId) templateId = `api_tpl_${storeId}`;
+    }
+    apiLibrarySelection = {
+      ref: String(detail?.ref || '').trim(),
+      name: String(detail?.name || '').trim(),
+      storeId,
+      templateId
+    };
+  }
+
+  function canSwitchSettingsNodeTemplate() {
+    if (!settingsNode || (!isApiNode(settingsNode) && !isApiToolNode(settingsNode))) return false;
+    const nextTemplateId = String(apiLibrarySelection?.templateId || '').trim();
+    if (!nextTemplateId) return false;
+    const currentTemplateId = String(nodeTemplateId(settingsNode) || '').trim();
+    return nextTemplateId !== currentTemplateId;
+  }
+
+  function switchSettingsNodeTemplate() {
+    if (!settingsNode || (!isApiNode(settingsNode) && !isApiToolNode(settingsNode))) return;
+    if (!canSwitchSettingsNodeTemplate()) return;
+    const templateId = String(apiLibrarySelection?.templateId || '').trim();
+    if (!templateId) return;
+    applyTemplateToNode(settingsNode.id, templateId);
+    apiTemplateUsageExpanded = false;
+    apiTemplateUsageRefreshTick += 1;
+    const switchedName = String(apiLibrarySelection?.name || settingsApiTemplateSource?.name || '').trim();
+    banner = switchedName ? `Шаблон в ноде изменён: ${switchedName}` : 'Шаблон в ноде изменён.';
+  }
+
+  async function refreshApiTemplateUsageSummary() {
+    await loadDynamicSourceCatalog();
+    apiTemplateUsageRefreshTick += 1;
   }
 
   function resolveTemplateSourceForNode(node: WorkflowNode, request: ApiNodeRequest): DynamicApiSource | null {
@@ -4431,6 +4597,82 @@
       {#if isApiNode(settingsNode) || isApiToolNode(settingsNode)}
         <div class="node-modal-body node-modal-body-api">
           {#if settingsNode}
+            {@const currentTemplateName = String(settingsApiTemplateSource?.name || '').trim() || 'Шаблон не привязан'}
+            {@const otherNodesCount = apiTemplateUsageSummary.otherNodes.length}
+            {@const processCount = apiTemplateUsageSummary.processes.length}
+            {@const switchDisabled = !canSwitchSettingsNodeTemplate()}
+            {@const hasLibrarySelection = Boolean(apiLibrarySelection?.templateId)}
+            <section class="api-template-current-block">
+              <div class="api-template-line api-template-line-main">
+                <span class="api-template-key">Текущий шаблон:</span>
+                <span class="api-template-value">{currentTemplateName}</span>
+              </div>
+              <div class="api-template-line api-template-line-usage">
+                <span class="api-template-usage-text">
+                  Используется: {apiTemplateUsageSummary.inCurrentNode ? 'в этой ноде' : 'эта нода не подключена'}, ещё в {otherNodesCount} {pluralRu(
+                    otherNodesCount,
+                    'ноде',
+                    'нодах',
+                    'нодах'
+                  )}, в {processCount} {pluralRu(processCount, 'процессе', 'процессах', 'процессах')}
+                </span>
+                <span class="api-template-usage-actions">
+                  <button type="button" class="mini" on:click={() => (apiTemplateUsageExpanded = !apiTemplateUsageExpanded)}>
+                    {apiTemplateUsageExpanded ? 'Свернуть' : 'Развернуть'}
+                  </button>
+                  <button type="button" class="mini" on:click={refreshApiTemplateUsageSummary} disabled={sourceCatalogLoading}>
+                    Обновить
+                  </button>
+                </span>
+              </div>
+              {#if apiTemplateUsageExpanded}
+                <div class="api-template-usage-expanded">
+                  <div class="api-template-usage-col">
+                    <div class="api-template-usage-title">Ноды</div>
+                    {#if apiTemplateUsageSummary.otherNodes.length}
+                      <ul>
+                        {#each apiTemplateUsageSummary.otherNodes as usageNode (usageNode.node_id)}
+                          <li>{usageNode.node_name}</li>
+                        {/each}
+                      </ul>
+                    {:else}
+                      <div class="api-template-empty">Только текущая нода.</div>
+                    {/if}
+                  </div>
+                  <div class="api-template-usage-col">
+                    <div class="api-template-usage-title">Процессы</div>
+                    {#if apiTemplateUsageSummary.processes.length}
+                      <ul>
+                        {#each apiTemplateUsageSummary.processes as usageProcess (usageProcess.start_node_id)}
+                          <li>{usageProcess.process_name} <span class="api-template-process-code">({usageProcess.process_code})</span></li>
+                        {/each}
+                      </ul>
+                    {:else}
+                      <div class="api-template-empty">Не используется в опубликованных цепочках.</div>
+                    {/if}
+                  </div>
+                </div>
+              {/if}
+              <div class="api-template-line api-template-line-switch">
+                <button
+                  type="button"
+                  class="mini primary"
+                  on:click={switchSettingsNodeTemplate}
+                  disabled={switchDisabled}
+                  title={switchDisabled ? 'Выбери другой сохранённый шаблон в библиотеке ниже' : 'Перепривязать ноду к выбранному шаблону'}
+                >
+                  {switchDisabled && hasLibrarySelection ? 'Этот шаблон уже подключён' : 'Сменить шаблон'}
+                </button>
+                {#if hasLibrarySelection}
+                  <span class="api-template-switch-hint">
+                    Выбран в библиотеке: {String(apiLibrarySelection?.name || '').trim() || 'без названия'}
+                    {switchDisabled ? ' (уже подключён)' : ''}
+                  </span>
+                {:else}
+                  <span class="api-template-switch-hint">Выбери шаблон в секции “Список API”, затем нажми “Сменить шаблон”.</span>
+                {/if}
+              </div>
+            </section>
             {#key `${settingsNode.id}:${settingsApiBuilderStoreId || 0}`}
               <ApiBuilderTab
                 apiBase={API_BASE}
@@ -4440,6 +4682,7 @@
                 refreshTables={refreshApiBuilderTables}
                 initialApiStoreId={settingsApiBuilderStoreId}
                 embeddedMode={false}
+                on:templateSelectionChange={onApiBuilderTemplateSelectionChange}
               />
             {/key}
           {/if}
@@ -4806,6 +5049,87 @@
   .node-modal-body textarea { border: 1px solid #dbe4f0; border-radius: 8px; padding: 7px 8px; font-family: inherit; font-size: 13px; }
   .node-modal-body textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   .node-modal-body-api { padding: 8px; background: #fff; min-height: 0; overflow: auto; }
+  .api-template-current-block {
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background: #f8fafc;
+    padding: 10px;
+    margin: 0 0 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .api-template-line {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .api-template-line-main {
+    align-items: baseline;
+  }
+  .api-template-key {
+    font-size: 12px;
+    color: #475569;
+  }
+  .api-template-value {
+    font-size: 14px;
+    font-weight: 600;
+    color: #0f172a;
+  }
+  .api-template-usage-text {
+    font-size: 12px;
+    color: #334155;
+  }
+  .api-template-usage-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .api-template-usage-expanded {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .api-template-usage-col {
+    border: 1px solid #e6eaf2;
+    border-radius: 8px;
+    background: #fff;
+    padding: 8px;
+    min-width: 0;
+  }
+  .api-template-usage-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #1e293b;
+    margin-bottom: 4px;
+  }
+  .api-template-usage-col ul {
+    margin: 0;
+    padding-left: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 12px;
+    color: #334155;
+  }
+  .api-template-empty {
+    font-size: 12px;
+    color: #64748b;
+  }
+  .api-template-process-code {
+    color: #64748b;
+    font-size: 11px;
+  }
+  .api-template-line-switch .primary {
+    min-width: 132px;
+  }
+  .api-template-switch-hint {
+    font-size: 12px;
+    color: #475569;
+    min-width: 0;
+  }
   .interval-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .help { font-size: 12px; color: #475569; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; }
   .hint { font-size: 11px; color: #64748b; line-height: 1.35; }
@@ -4844,6 +5168,11 @@
   .exec-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .view-toggle { border-radius: 10px; border: 1px solid #e2e8f0; background: #fff; color: #0f172a; padding: 4px 8px; font-size: 11px; line-height: 1.2; cursor: pointer; }
   .response-tree-wrap { border: 1px solid #e6eaf2; border-radius: 12px; background: #fff; padding: 8px; min-height: 78px; overflow: visible; }
+  @media (max-width: 1100px) {
+    .api-template-usage-expanded {
+      grid-template-columns: 1fr;
+    }
+  }
   @media (max-width: 1440px) {
     .desk-actions {
       grid-template-columns: repeat(3, minmax(0, 1fr));
