@@ -14,7 +14,7 @@
   export let refreshTables: () => Promise<void>;
   export let initialApiStoreId: number | null = null;
   export let embeddedMode = false;
-  const EMBEDDED_LAYOUT_BREAKPOINT = 1080;
+  const EMBEDDED_LAYOUT_BREAKPOINT = 900;
   let compactLayoutByContainer = false;
   $: effectiveEmbeddedMode = embeddedMode || compactLayoutByContainer;
 
@@ -10253,7 +10253,7 @@ function syncParameterEditorsHeight() {
   .panel-embedded .dataset-preview-table {
     min-width:520px;
   }
-  @media (max-width: 1500px) { .layout { grid-template-columns: 1fr; } }
+  @media (max-width: 1200px) { .layout { grid-template-columns: 1fr; } }
 
   .aside { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#f8fafc; min-width:0; }
   .saved-aside {
@@ -10266,7 +10266,7 @@ function syncParameterEditorsHeight() {
   .subsec { margin-top:10px; }
   .subttl { font-size:12px; color:#475569; margin-bottom:6px; }
   .response-head { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; }
-  .response-head > span:first-child { white-space:nowrap; }
+  .response-head > span:first-child { white-space:normal; }
   .field-head { justify-content:flex-start; }
   .inline-actions {
     display:inline-flex;
@@ -10290,7 +10290,7 @@ function syncParameterEditorsHeight() {
   .main { min-width:0; }
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; }
 
-  .connect-row { margin-top:10px; display:grid; grid-template-columns: minmax(180px, 260px) minmax(0, 1fr) auto; gap:8px; align-items:center; }
+  .connect-row { margin-top:10px; display:grid; grid-template-columns: minmax(120px, 0.8fr) minmax(0, 1fr) auto; gap:8px; align-items:center; }
   .connect-row > * { min-width:0; }
   .connect-actions { display:flex; gap:8px; align-items:center; justify-content:flex-end; }
   .connect-actions .primary { min-width:130px; }
@@ -10331,7 +10331,7 @@ function syncParameterEditorsHeight() {
   .storage-meta { margin:0 0 8px; display:flex; align-items:center; gap:6px; font-size:12px; color:#64748b; }
   .storage-hint { margin:-2px 0 8px; font-size:11px; color:#64748b; }
   .link-btn { border:0; background:transparent; color:#0f172a; padding:0; text-decoration:underline; font-size:12px; font-weight:500; }
-  .storage-picker { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+  .storage-picker { display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap; }
   .storage-picker select { flex:1; min-width:0; }
   .template-controls { margin-bottom:8px; display:grid; gap:8px; }
   .template-name { width:100%; box-sizing:border-box; }
@@ -10490,12 +10490,12 @@ function syncParameterEditorsHeight() {
   }
   .oauth-subreq-grid {
     display:grid;
-    grid-template-columns: minmax(120px, 0.6fr) minmax(320px, 1.8fr);
+    grid-template-columns: minmax(120px, 0.6fr) minmax(0, 1.8fr);
     gap:8px;
     align-items:center;
   }
   .oauth2-map-row {
-    grid-template-columns: minmax(240px, 1.3fr) minmax(220px, 1fr) auto;
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) auto;
     align-items:center;
   }
   .pagination-box { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#f8fafc; }
@@ -10526,6 +10526,7 @@ function syncParameterEditorsHeight() {
   }
   .data-list { display:flex; flex-direction:column; gap:8px; }
   .data-row { display:grid; gap:8px; align-items:center; }
+  .data-row > * { min-width:0; }
   .crumb-strip { display:flex; flex-wrap:wrap; gap:6px; }
   .entity-crumb-wrap {
     display:inline-flex;
@@ -10575,31 +10576,31 @@ function syncParameterEditorsHeight() {
   }
   .rule-card { border:1px solid #e2e8f0; border-radius:10px; background:#fff; padding:8px; display:flex; flex-direction:column; gap:8px; min-width:0; }
   .rule-card-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-  .table-rule-row { grid-template-columns: 1.2fr 1fr 1fr; }
-  .join-rule-row { grid-template-columns: 1fr 1fr 80px 1fr 1fr 1fr; }
-  .filter-rule-row { grid-template-columns: 1.2fr 1fr 1fr 1fr; }
+  .table-rule-row { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); }
+  .join-rule-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 0.7fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); }
+  .filter-rule-row { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); }
   .param-source-head { justify-content:space-between; align-items:center; gap:8px; }
-  .param-source-head small { white-space:nowrap; }
+  .param-source-head small { white-space:normal; }
   .param-source-head .inline-actions { margin-left:0; flex-wrap:wrap; justify-content:flex-end; }
   .param-row {
     grid-template-columns:
-      minmax(140px, 2fr)
-      minmax(140px, 2fr)
-      minmax(280px, 4.5fr)
-      minmax(110px, 1fr)
-      minmax(64px, 0.65fr)
-      minmax(28px, 0.3fr);
+      minmax(0, 2fr)
+      minmax(0, 2fr)
+      minmax(0, 4.5fr)
+      minmax(0, 1fr)
+      minmax(0, 0.65fr)
+      minmax(0, 0.3fr);
   }
   .param-row > * { min-width:0; }
   .date-param-inline-row {
     grid-template-columns:
-      minmax(150px, 1.7fr)
-      minmax(150px, 1.5fr)
-      minmax(260px, 4fr)
-      minmax(110px, 1fr)
-      minmax(28px, 0.3fr);
+      minmax(0, 1.7fr)
+      minmax(0, 1.5fr)
+      minmax(0, 4fr)
+      minmax(0, 1fr)
+      minmax(0, 0.3fr);
   }
-  .field-date-row { grid-template-columns: 1fr 140px 140px 1fr; align-items:end; }
+  .field-date-row { grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr) minmax(0, 0.8fr) minmax(0, 1fr); align-items:end; }
   .group-toggle {
     display:flex;
     align-items:center;
@@ -10829,7 +10830,7 @@ function syncParameterEditorsHeight() {
   }
   .pagination-param-grid { margin-top:0; }
   .pagination-param-inline-row {
-    grid-template-columns: minmax(160px, 220px) minmax(220px, 1fr) minmax(220px, 1fr) minmax(220px, 1fr);
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
     align-items:end;
   }
   .pagination-stop-rules {
@@ -10844,7 +10845,7 @@ function syncParameterEditorsHeight() {
     gap:8px;
   }
   .pagination-stop-rule-row {
-    grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) 180px 160px auto;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 0.9fr) minmax(0, 0.8fr) auto;
     align-items:end;
     padding:8px;
     border:1px solid #e2e8f0;
