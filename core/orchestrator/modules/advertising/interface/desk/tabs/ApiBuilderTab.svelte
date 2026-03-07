@@ -3048,6 +3048,57 @@ function formatBytes(bytes: number) {
     return out;
   }
 
+  function findHeaderValue(headers: Record<string, any>, headerName: string) {
+    const target = String(headerName || '').trim().toLowerCase();
+    if (!target || !headers || typeof headers !== 'object') return '';
+    for (const [k, v] of Object.entries(headers)) {
+      if (String(k || '').trim().toLowerCase() === target) return String(v ?? '').trim();
+    }
+    return '';
+  }
+
+  function ensureHeaderValue(headers: Record<string, any>, headerName: string, headerValue: string) {
+    const existing = findHeaderValue(headers, headerName);
+    if (existing) return;
+    headers[headerName] = headerValue;
+  }
+
+  function toFormUrlEncoded(body: any) {
+    if (body === undefined || body === null) return '';
+    if (typeof body === 'string') return body;
+    if (typeof body !== 'object') return String(body);
+    const query = new URLSearchParams();
+    Object.entries(body).forEach(([k, v]) => {
+      if (v === undefined || v === null) return;
+      if (Array.isArray(v)) {
+        v.forEach((item) => query.append(k, item === undefined || item === null ? '' : String(item)));
+        return;
+      }
+      if (typeof v === 'object') {
+        query.append(k, JSON.stringify(v));
+        return;
+      }
+      query.append(k, String(v));
+    });
+    return query.toString();
+  }
+
+  function buildHttpRequestBodyByContentType(method: string, headers: Record<string, any>, body: any) {
+    const upperMethod = String(method || 'GET').toUpperCase();
+    if (upperMethod === 'GET' || upperMethod === 'HEAD' || upperMethod === 'DELETE') return undefined;
+    if (body === undefined || body === null) return undefined;
+    if (typeof body === 'string') return body;
+    const contentType = findHeaderValue(headers, 'Content-Type').toLowerCase();
+    if (contentType.includes('application/x-www-form-urlencoded')) {
+      return toFormUrlEncoded(body);
+    }
+    if (typeof body === 'object') {
+      if (!contentType) ensureHeaderValue(headers, 'Content-Type', 'application/json');
+      return JSON.stringify(body);
+    }
+    return String(body);
+  }
+
   async function runHttpRequestViaServer(url: string, init: RequestInit, timeoutMs = 30_000) {
     let requestBody: any = null;
     if (typeof init.body === 'string') requestBody = init.body;
@@ -3140,7 +3191,8 @@ function formatBytes(bytes: number) {
       body:
         (() => {
           const parsed = parseJsonAnyField('Подзапрос токена: body', d.oauth2RequestBodyJson || '{}');
-          return parsed && typeof parsed === 'object' ? deepClone(parsed) : {};
+          if (parsed && typeof parsed === 'object') return deepClone(parsed);
+          return parsed;
         })()
     };
   }
@@ -3165,7 +3217,10 @@ function formatBytes(bytes: number) {
 
     const reqHeaders = deepClone(reqBase.headers || {});
     const reqQuery = deepClone(reqBase.query || {});
-    const reqBody = deepClone(reqBase.body || {});
+    const reqBody =
+      reqBase.body && typeof reqBase.body === 'object'
+        ? deepClone(reqBase.body)
+        : reqBase.body;
 
     applyParametersToValue(reqHeaders, contextValues || {});
     applyParametersToValue(reqQuery, contextValues || {});
@@ -3185,7 +3240,9 @@ function formatBytes(bytes: number) {
       throw new Error(`Token request: не удалось подставить параметры: ${Array.from(unresolved).join(', ')}`);
     }
 
-    const cacheKey = `${refOf(d)}|${reqBase.method}|${reqUrl}|${JSON.stringify(reqHeaders)}|${JSON.stringify(reqBody)}`;
+    const outgoingBody = buildHttpRequestBodyByContentType(reqBase.method, reqHeaders, reqBody);
+
+    const cacheKey = `${refOf(d)}|${reqBase.method}|${reqUrl}|${JSON.stringify(reqHeaders)}|${JSON.stringify(outgoingBody)}`;
     const cached = oauthTokenCache[cacheKey];
     if (cached && Date.now() < cached.expiresAt - 60_000) {
       const mappedFromCache = {
@@ -3201,7 +3258,7 @@ function formatBytes(bytes: number) {
           method: reqBase.method,
           url: reqUrl,
           headers: reqHeaders,
-          body: reqBody,
+          body: outgoingBody,
           source: 'cache'
         },
         responsePreview: {
@@ -3217,7 +3274,7 @@ function formatBytes(bytes: number) {
       {
         method: reqBase.method,
         headers: reqHeaders,
-        body: reqBase.method === 'GET' || reqBase.method === 'DELETE' ? undefined : JSON.stringify(reqBody)
+        body: outgoingBody
       },
       30_000
     );
@@ -3295,7 +3352,7 @@ function formatBytes(bytes: number) {
         method: reqBase.method,
         url: reqUrl,
         headers: reqHeaders,
-        body: reqBody
+        body: outgoingBody
       },
       responsePreview: {
         status: resStatus,
