@@ -117,6 +117,13 @@
     edges: WorkflowEdge[];
     viewport?: { panX?: number; panY?: number; zoom?: number };
     selectedNodeId?: string;
+    settings?: {
+      workflow_log?: {
+        enabled?: boolean;
+        template_id?: string;
+        source_key?: string;
+      };
+    };
   };
   type WorkflowDeskRow = {
     id?: number;
@@ -131,6 +138,22 @@
     updated_by?: string;
   };
   type ExistingTable = { schema_name: string; table_name: string };
+  type WorkflowLogSourceBinding = {
+    key: string;
+    label: string;
+    schema: string;
+    table: string;
+    qname: string;
+  };
+  type WorkflowLogSource = {
+    key: string;
+    name: string;
+    description: string;
+    template_id: string;
+    source_kind: string;
+    primary?: WorkflowLogSourceBinding | null;
+    details?: WorkflowLogSourceBinding[];
+  };
   type DeskProcessSummary = {
     start_node_id: string;
     process_code: string;
@@ -241,6 +264,17 @@
   let apiBuilderExistingTables: ExistingTable[] = [];
   let apiTemplateStorageRef = 'ao_system.api_configs_store';
   let workflowDeskStorageRef = 'ao_system.workflow_desks_store';
+  const WORKFLOW_LOG_TEMPLATE_ID = 'builtin_bronze_system_workflow_log';
+  let workflowLogEnabled = false;
+  let workflowLogTemplateId = WORKFLOW_LOG_TEMPLATE_ID;
+  let workflowLogSourceKey = '';
+  let workflowLogSources: WorkflowLogSource[] = [];
+  let workflowLogPickerOpen = false;
+  let workflowLogPickValue = '';
+  let workflowLogSourceError = '';
+  let workflowLogCompatibleSources: WorkflowLogSource[] = [];
+  let workflowLogCurrentSource: WorkflowLogSource | null = null;
+  let workflowLogHasValidSource = true;
   let settingsNodeId = '';
   let settingsModalOpen = false;
   let nodeModalFullscreen = false;
@@ -382,6 +416,16 @@
     settingsNode,
     apiTemplateUsageRefreshTick
   );
+  $: workflowLogCompatibleSources = workflowLogSources.filter(
+    (source) => String(source?.template_id || '').trim() === WORKFLOW_LOG_TEMPLATE_ID
+  );
+  $: workflowLogCurrentSource =
+    workflowLogCompatibleSources.find((source) => String(source?.key || '').trim() === String(workflowLogSourceKey || '').trim()) || null;
+  $: workflowLogHasValidSource = !workflowLogEnabled || Boolean(workflowLogCurrentSource);
+  $: workflowLogSourceError =
+    workflowLogEnabled && !workflowLogCurrentSource
+      ? 'Подключённый источник workflow log недоступен или не соответствует системному шаблону.'
+      : '';
   $: if (!settingsModalOpen || !settingsNodeId) {
     apiLibrarySelection = null;
     apiTemplateUsageExpanded = false;
@@ -396,7 +440,8 @@
     nodes,
     edges,
     viewport: { panX, panY, zoom },
-    selectedNodeId
+    selectedNodeId,
+    settings: captureDeskSettings()
   });
   $: if (deskInitialized && !deskSignatureMute) {
     deskDirty = deskCurrentSignature !== deskLastSavedSignature;
@@ -742,8 +787,104 @@
     return dt.toISOString();
   }
 
+  function normalizeWorkflowLogSourceBinding(raw: any, fallbackLabel = ''): WorkflowLogSourceBinding | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const key = String(raw?.key || '').trim();
+    const schema = String(raw?.schema || '').trim();
+    const table = String(raw?.table || '').trim();
+    const qname = String(raw?.qname || (schema && table ? `${schema}.${table}` : '')).trim();
+    if (!key || !schema || !table || !qname) return null;
+    return {
+      key,
+      label: String(raw?.label || fallbackLabel || qname).trim() || qname,
+      schema,
+      table,
+      qname
+    };
+  }
+
+  function normalizeWorkflowLogSource(raw: any): WorkflowLogSource | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const key = String(raw?.key || '').trim();
+    const name = String(raw?.name || '').trim();
+    if (!key || !name) return null;
+    const primary = normalizeWorkflowLogSourceBinding(raw?.primary, 'Основной источник');
+    const details = Array.isArray(raw?.details)
+      ? raw.details
+          .map((item: any) => normalizeWorkflowLogSourceBinding(item))
+          .filter((item: WorkflowLogSourceBinding | null): item is WorkflowLogSourceBinding => Boolean(item))
+      : [];
+    return {
+      key,
+      name,
+      description: String(raw?.description || '').trim(),
+      template_id: String(raw?.template_id || WORKFLOW_LOG_TEMPLATE_ID).trim() || WORKFLOW_LOG_TEMPLATE_ID,
+      source_kind: String(raw?.source_kind || 'system_bundle').trim() || 'system_bundle',
+      primary,
+      details
+    };
+  }
+
+  function normalizeWorkflowLogState(raw: any) {
+    const state = raw && typeof raw === 'object' ? raw : {};
+    return {
+      enabled: Boolean(state?.enabled),
+      template_id: String(state?.template_id || WORKFLOW_LOG_TEMPLATE_ID).trim() || WORKFLOW_LOG_TEMPLATE_ID,
+      source_key: String(state?.source_key || '').trim()
+    };
+  }
+
+  function captureDeskSettings() {
+    return {
+      workflow_log: {
+        enabled: Boolean(workflowLogEnabled),
+        template_id: String(workflowLogTemplateId || WORKFLOW_LOG_TEMPLATE_ID).trim() || WORKFLOW_LOG_TEMPLATE_ID,
+        source_key: String(workflowLogSourceKey || '').trim()
+      }
+    };
+  }
+
+  function workflowLogSourceByKey(key: string) {
+    const normalizedKey = String(key || '').trim();
+    if (!normalizedKey) return null;
+    return workflowLogCompatibleSources.find((source) => String(source?.key || '').trim() === normalizedKey) || null;
+  }
+
+  function firstCompatibleWorkflowLogSource() {
+    return workflowLogCompatibleSources[0] || null;
+  }
+
+  function toggleWorkflowLogEnabled() {
+    workflowLogEnabled = !workflowLogEnabled;
+    workflowLogPickerOpen = false;
+    workflowLogPickValue =
+      String(workflowLogSourceKey || '').trim() || String(firstCompatibleWorkflowLogSource()?.key || '').trim();
+  }
+
+  function toggleWorkflowLogPicker() {
+    workflowLogPickerOpen = !workflowLogPickerOpen;
+    if (workflowLogPickerOpen) {
+      workflowLogPickValue =
+        String(workflowLogSourceKey || '').trim() || String(firstCompatibleWorkflowLogSource()?.key || '').trim();
+    }
+  }
+
+  function applyWorkflowLogSourceChoice() {
+    const source = workflowLogSourceByKey(workflowLogPickValue);
+    if (!source) {
+      workflowLogSourceError = 'Нельзя подключить этот источник: он не соответствует системному шаблону workflow log.';
+      return;
+    }
+    workflowLogSourceKey = source.key;
+    workflowLogTemplateId = String(source.template_id || WORKFLOW_LOG_TEMPLATE_ID).trim() || WORKFLOW_LOG_TEMPLATE_ID;
+    workflowLogPickValue = source.key;
+    workflowLogPickerOpen = false;
+    workflowLogSourceError = '';
+  }
+
   function deskSignatureFromState(state: WorkflowDeskConfig) {
     try {
+      const workflowLog = normalizeWorkflowLogState(state?.settings?.workflow_log || {});
       const normalized = {
         nodes: Array.isArray(state?.nodes) ? state.nodes : [],
         edges: Array.isArray(state?.edges) ? state.edges : [],
@@ -752,7 +893,14 @@
           panY: Number(state?.viewport?.panY || 0),
           zoom: Number(state?.viewport?.zoom || 1)
         },
-        selectedNodeId: String(state?.selectedNodeId || '').trim()
+        selectedNodeId: String(state?.selectedNodeId || '').trim(),
+        settings: {
+          workflow_log: {
+            enabled: Boolean(workflowLog.enabled),
+            template_id: String(workflowLog.template_id || WORKFLOW_LOG_TEMPLATE_ID).trim() || WORKFLOW_LOG_TEMPLATE_ID,
+            source_key: String(workflowLog.source_key || '').trim()
+          }
+        }
       };
       return JSON.stringify(normalized);
     } catch {
@@ -765,7 +913,8 @@
       nodes: deepClone(nodes || []),
       edges: deepClone(edges || []),
       viewport: { panX, panY, zoom },
-      selectedNodeId
+      selectedNodeId,
+      settings: captureDeskSettings()
     };
   }
 
@@ -819,6 +968,7 @@
 
   function applyDeskConfig(rawConfig: any) {
     const cfg = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
+    const workflowLog = normalizeWorkflowLogState(cfg?.settings?.workflow_log || {});
     const nextNodes = (Array.isArray(cfg?.nodes) ? cfg.nodes : [])
       .map((n: any) => normalizeWorkflowNode(n))
       .filter((n: WorkflowNode | null): n is WorkflowNode => Boolean(n));
@@ -848,6 +998,12 @@
     chainRunPaused = false;
     chainRunStopRequested = false;
     chainCurrentNodeId = '';
+    workflowLogEnabled = Boolean(workflowLog.enabled);
+    workflowLogTemplateId = String(workflowLog.template_id || WORKFLOW_LOG_TEMPLATE_ID).trim() || WORKFLOW_LOG_TEMPLATE_ID;
+    workflowLogSourceKey = String(workflowLog.source_key || '').trim();
+    workflowLogPickerOpen = false;
+    workflowLogPickValue = workflowLogSourceKey || String(firstCompatibleWorkflowLogSource()?.key || '').trim();
+    workflowLogSourceError = '';
     deskSignatureMute = false;
   }
 
@@ -881,6 +1037,9 @@
     deskSaving = true;
     deskSaveError = '';
     try {
+      if (workflowLogEnabled && !workflowLogCurrentSource) {
+        throw new Error('Выбери совместимый системный источник журнала выполнения.');
+      }
       const response = await fetch(`${API_BASE}/workflow-desks/upsert`, {
         method: 'POST',
         headers: {
@@ -2909,7 +3068,7 @@
     sourceCatalogLoading = true;
     sourceCatalogError = '';
     try {
-      const [apiConfigsRaw, tablesRaw, settingsRaw] = await Promise.all([
+      const [apiConfigsRaw, tablesRaw, settingsRaw, workflowLogRaw] = await Promise.all([
         fetch(`${API_BASE}/api-configs`, {
           method: 'GET',
           headers: { Accept: 'application/json', 'X-AO-ROLE': API_ROLE }
@@ -2921,12 +3080,17 @@
         fetch(`${API_BASE}/settings/effective`, {
           method: 'GET',
           headers: { Accept: 'application/json', 'X-AO-ROLE': API_ROLE }
+        }),
+        fetch(`${API_BASE}/workflow-log-sources`, {
+          method: 'GET',
+          headers: { Accept: 'application/json', 'X-AO-ROLE': API_ROLE }
         })
       ]);
 
       let apiJson: any = {};
       let tableJson: any = {};
       let settingsJson: any = {};
+      let workflowLogJson: any = {};
       try {
         apiJson = await apiConfigsRaw.json();
       } catch {
@@ -2941,6 +3105,11 @@
         settingsJson = await settingsRaw.json();
       } catch {
         settingsJson = {};
+      }
+      try {
+        workflowLogJson = await workflowLogRaw.json();
+      } catch {
+        workflowLogJson = {};
       }
 
       const effective = settingsJson?.effective && typeof settingsJson.effective === 'object' ? settingsJson.effective : {};
@@ -3008,6 +3177,18 @@
           description: `Таблица витрины данных уровня ${layer}`
         };
       });
+
+      if (workflowLogRaw.ok) {
+        workflowLogSources = (Array.isArray(workflowLogJson?.sources) ? workflowLogJson.sources : [])
+          .map((source: any) => normalizeWorkflowLogSource(source))
+          .filter((source: WorkflowLogSource | null): source is WorkflowLogSource => Boolean(source));
+      } else {
+        workflowLogSources = [];
+        const details = String(
+          workflowLogJson?.details || workflowLogJson?.error || `${workflowLogRaw.status} ${workflowLogRaw.statusText}`
+        );
+        sourceCatalogError = details ? `Не удалось загрузить системные источники workflow log: ${details}` : sourceCatalogError;
+      }
     } catch (e: any) {
       sourceCatalogError = String(e?.message || e || 'Не удалось загрузить каталоги источников');
     } finally {
@@ -4223,6 +4404,78 @@
             {/if}
           </div>
           <div class="ops-card">
+            <h5>Журнал выполнения</h5>
+            <div class="ops-note">
+              Это системный журнал выполнения рабочего стола. Он подключается по системному шаблону и не создает вторую таблицу.
+            </div>
+            <div class="kv"><span>Состояние</span><strong>{workflowLogEnabled ? 'Подключен' : 'Выключен'}</strong></div>
+            <div class="kv"><span>Системный шаблон</span><strong>Bronze системный лог workflow</strong></div>
+            <div class="process-actions">
+              <button
+                class="mini toggle-btn"
+                class:active={workflowLogEnabled}
+                on:click={toggleWorkflowLogEnabled}
+                type="button"
+              >
+                {workflowLogEnabled ? 'Вести журнал: вкл' : 'Вести журнал: выкл'}
+              </button>
+            </div>
+            <div class="ops-subhead">Источник журнала выполнения</div>
+            <button
+              type="button"
+              class="source-pill"
+              on:click={toggleWorkflowLogPicker}
+              disabled={!workflowLogCompatibleSources.length}
+              title={workflowLogCurrentSource?.description || 'Выбери системный источник журнала выполнения'}
+            >
+              {workflowLogCurrentSource?.name || 'Выбери системный источник'}
+            </button>
+            {#if workflowLogPickerOpen}
+              <div class="storage-picker">
+                <select bind:value={workflowLogPickValue}>
+                  {#if !workflowLogPickValue}
+                    <option value="">Выбери источник</option>
+                  {/if}
+                  {#each workflowLogCompatibleSources as source (source.key)}
+                    <option value={source.key}>{source.name}</option>
+                  {/each}
+                </select>
+                <button type="button" class="mini" on:click={applyWorkflowLogSourceChoice} disabled={!workflowLogPickValue}>
+                  Подключить
+                </button>
+              </div>
+            {/if}
+            {#if workflowLogCurrentSource}
+              <div class="ops-note">
+                {workflowLogCurrentSource.description || 'Подключенный источник использует системный run log и связанные шаги, очередь и агрегаты.'}
+              </div>
+              <div class="system-source-list">
+                {#if workflowLogCurrentSource.primary}
+                  <div class="system-source-row">
+                    <span>{workflowLogCurrentSource.primary.label}</span>
+                    <code>{workflowLogCurrentSource.primary.qname}</code>
+                  </div>
+                {/if}
+                {#each workflowLogCurrentSource.details || [] as detail (detail.key)}
+                  <div class="system-source-row">
+                    <span>{detail.label}</span>
+                    <code>{detail.qname}</code>
+                  </div>
+                {/each}
+              </div>
+            {:else if workflowLogEnabled}
+              <div class="ops-error">Выбери совместимый системный источник журнала выполнения.</div>
+            {:else}
+              <div class="ops-note">Журнал выполнения не подключен к настройкам этого рабочего стола.</div>
+            {/if}
+            {#if !workflowLogCompatibleSources.length}
+              <div class="ops-error">Нет доступных системных источников workflow log. Проверь server runtime и bootstrap workflow automation.</div>
+            {/if}
+            {#if workflowLogSourceError}
+              <div class="ops-error">{workflowLogSourceError}</div>
+            {/if}
+          </div>
+          <div class="ops-card">
             <h5>Процессы рабочего стола ({draftProcesses.length})</h5>
             {#if draftProcesses.length}
               {#each draftProcesses as p (p.start_node_id)}
@@ -4974,6 +5227,11 @@
     font-size: 13px;
     color: #0f172a;
   }
+  .ops-note {
+    font-size: 11px;
+    color: #475569;
+    line-height: 1.4;
+  }
   .kv {
     display: flex;
     justify-content: space-between;
@@ -5010,6 +5268,7 @@
     display: flex;
     gap: 6px;
     align-items: center;
+    flex-wrap: wrap;
   }
   .process-last {
     font-size: 11px;
@@ -5045,6 +5304,53 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .source-pill {
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #fff;
+    color: #0f172a;
+    padding: 6px 8px;
+    font-size: 11px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .source-pill:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  .storage-picker {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .storage-picker select {
+    flex: 1;
+    min-width: 0;
+  }
+  .system-source-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .system-source-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #fff;
+    padding: 6px 8px;
+  }
+  .system-source-row span {
+    font-size: 11px;
+    color: #475569;
+  }
+  .system-source-row code {
+    font-size: 11px;
+    color: #0f172a;
+    word-break: break-all;
   }
   .topbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .topbar button { border: 1px solid #dbe4f0; background: #fff; border-radius: 9px; padding: 6px 10px; cursor: pointer; }

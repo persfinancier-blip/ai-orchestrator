@@ -60,6 +60,7 @@ const DEFAULT_TENANT_ID = String(process.env.AO_WORKFLOW_DEFAULT_TENANT_ID || 'd
 const DEFAULT_TENANT_SQL = DEFAULT_TENANT_ID.replace(/'/g, "''");
 const DEPENDENCY_MAX_CHAIN_DEPTH = Math.max(1, Number(process.env.AO_WORKFLOW_DEPENDENCY_MAX_CHAIN_DEPTH || 12));
 const DEPENDENCY_MAX_RUNS_PER_ROOT = Math.max(1, Number(process.env.AO_WORKFLOW_DEPENDENCY_MAX_RUNS_PER_ROOT || 2000));
+const WORKFLOW_LOG_TEMPLATE_ID = 'builtin_bronze_system_workflow_log';
 
 const schedulerState = {
   enabled: SCHEDULER_ENABLED,
@@ -665,6 +666,59 @@ function workflowProviderRegistryQname(config) {
 
 function workflowChunkLogsQname(config) {
   return qname(config.workflow_runs_schema, config.workflow_chunk_logs_table);
+}
+
+function workflowLogSourceBinding(key, label, schema, table) {
+  const schemaName = normalizeSettingIdent(schema, DEFAULT_CONFIG.workflow_runs_schema);
+  const tableName = normalizeSettingIdent(table, DEFAULT_CONFIG.workflow_runs_table);
+  return {
+    key: String(key || '').trim(),
+    label: String(label || '').trim(),
+    schema: schemaName,
+    table: tableName,
+    qname: `${schemaName}.${tableName}`
+  };
+}
+
+function buildWorkflowLogSources(config) {
+  const primary = workflowLogSourceBinding(
+    'workflow_runs_storage',
+    'Журнал запусков workflow',
+    config.workflow_runs_schema,
+    config.workflow_runs_table
+  );
+  const details = [
+    workflowLogSourceBinding(
+      'workflow_run_steps_storage',
+      'Шаги выполнения',
+      config.workflow_runs_schema,
+      config.workflow_run_steps_table
+    ),
+    workflowLogSourceBinding(
+      'workflow_job_queue_storage',
+      'Очередь заданий',
+      config.workflow_runs_schema,
+      config.workflow_job_queue_table
+    ),
+    workflowLogSourceBinding(
+      'workflow_run_aggregation_storage',
+      'Агрегация запуска',
+      config.workflow_runs_schema,
+      config.workflow_run_aggregation_table
+    )
+  ];
+  return [
+    {
+      key: 'workflow_execution_log',
+      name: 'Системный журнал выполнения workflow',
+      description:
+        'Основной журнал запуска рабочего стола. Первичная запись хранится в run log, а детали остаются в шагах, очереди и агрегатах.',
+      template_id: WORKFLOW_LOG_TEMPLATE_ID,
+      source_kind: 'system_bundle',
+      primary,
+      details
+    }
+  ];
 }
 
 async function ensureWorkflowAutomationTables(client, config) {
@@ -4983,6 +5037,25 @@ workflowAutomationRouter.get('/workflow-scheduler/state', requireDataAdmin, asyn
       active_workers: activeWorkers
     }
   });
+});
+
+workflowAutomationRouter.get('/workflow-log-sources', requireDataAdmin, async (_req, res) => {
+  let client = null;
+  try {
+    client = await pool.connect();
+    const config = await loadRuntimeStorageConfig(client);
+    await ensureWorkflowAutomationTables(client, config);
+    return res.json({
+      sources: buildWorkflowLogSources(config)
+    });
+  } catch (e) {
+    return res.status(500).json({
+      error: 'workflow_log_sources_failed',
+      details: String(e?.message || e)
+    });
+  } finally {
+    if (client) client.release();
+  }
 });
 
 workflowAutomationRouter.post('/workflow-runs/trigger', requireDataAdmin, async (req, res) => {

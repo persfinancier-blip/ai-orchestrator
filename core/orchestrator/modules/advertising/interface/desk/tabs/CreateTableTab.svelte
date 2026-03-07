@@ -19,7 +19,7 @@
 
   type ColumnDef = { field_name: string; field_type: string; description?: string };
   type DataLevel = 'bronze' | 'silver' | 'gold';
-  type TemplateKind = 'data' | 'system_log' | 'system_storage';
+  type TemplateKind = 'data' | 'system_log' | 'workflow_log' | 'system_storage';
   type DataContract = {
     id: string;
     name: string;
@@ -250,6 +250,43 @@
     };
   }
 
+  function bronzeWorkflowLogSystemTemplate(): DataContract {
+    return {
+      id: 'builtin_bronze_system_workflow_log',
+      name: 'Bronze системный лог workflow',
+      schema_name: 'ao_system',
+      table_name: 'workflow_execution_log',
+      table_class: 'bronze_system_log',
+      data_level: 'bronze',
+      template_kind: 'workflow_log',
+      description:
+        'Системный источник журнала выполнения рабочего стола. Это логическая привязка к существующему workflow log, а не шаблон для создания второй таблицы.',
+      columns: withRequiredTableFields([
+        { field_name: 'run_uid', field_type: 'text', description: 'Уникальный идентификатор запуска процесса.' },
+        { field_name: 'desk_id', field_type: 'bigint', description: 'Идентификатор рабочего стола.' },
+        { field_name: 'desk_name', field_type: 'text', description: 'Название рабочего стола.' },
+        { field_name: 'desk_version_id', field_type: 'bigint', description: 'Опубликованная версия рабочего стола.' },
+        { field_name: 'start_node_id', field_type: 'text', description: 'Старт-нода процесса.' },
+        { field_name: 'process_code', field_type: 'text', description: 'Внутренний код процесса.' },
+        { field_name: 'scope_type', field_type: 'text', description: 'Тип области выполнения.' },
+        { field_name: 'scope_ref', field_type: 'text', description: 'Ссылка на область выполнения.' },
+        { field_name: 'trigger_source', field_type: 'text', description: 'Кто инициировал запуск.' },
+        { field_name: 'trigger_type', field_type: 'text', description: 'Тип запуска: manual / interval / cron / dependency.' },
+        { field_name: 'status', field_type: 'text', description: 'Текущий или финальный статус запуска.' },
+        { field_name: 'started_at', field_type: 'timestamptz', description: 'Время старта процесса.' },
+        { field_name: 'finished_at', field_type: 'timestamptz', description: 'Время завершения процесса.' },
+        { field_name: 'duration_ms', field_type: 'int', description: 'Длительность запуска.' },
+        { field_name: 'summary_json', field_type: 'jsonb', description: 'Сводка запуска и агрегаты выполнения.' },
+        { field_name: 'error_text', field_type: 'text', description: 'Ошибка запуска, если она была.' }
+      ]),
+      partition_enabled: false,
+      partition_column: '',
+      partition_interval: 'day',
+      contract_version: 1,
+      contract_mode: 'safe_add_only'
+    };
+  }
+
   function silverTemplate(): DataContract {
     return {
       id: 'builtin_silver',
@@ -290,7 +327,7 @@
         { field_name: 'schema_name', field_type: 'text', description: 'схема таблицы' },
         { field_name: 'table_name', field_type: 'text', description: 'имя таблицы' },
         { field_name: 'data_level', field_type: 'text', description: 'уровень данных шаблона: bronze / silver / gold' },
-        { field_name: 'template_kind', field_type: 'text', description: 'тип шаблона: data / system_log / system_storage' },
+        { field_name: 'template_kind', field_type: 'text', description: 'тип шаблона: data / system_log / workflow_log / system_storage' },
         { field_name: 'table_class', field_type: 'text', description: 'класс таблицы' },
         { field_name: 'description', field_type: 'text', description: 'описание' },
         { field_name: 'columns', field_type: 'jsonb', description: 'json список полей' },
@@ -491,6 +528,7 @@
   function normalizeTemplateKind(value: any): TemplateKind {
     const raw = String(value || '').trim().toLowerCase();
     if (raw === 'system_log') return 'system_log';
+    if (raw === 'workflow_log') return 'workflow_log';
     if (raw === 'system_storage') return 'system_storage';
     return 'data';
   }
@@ -519,6 +557,14 @@
 
   function isSystemTemplate(t: DataContract) {
     return normalizeTemplateKind(t?.template_kind) !== 'data';
+  }
+
+  function selectedTemplate(): DataContract | null {
+    return tableTemplates.find((x) => x.id === selectedTemplateId) || null;
+  }
+
+  function selectedTemplateIsWorkflowLog() {
+    return normalizeTemplateKind(selectedTemplate()?.template_kind) === 'workflow_log';
   }
 
   function templateBadgeText(t: DataContract) {
@@ -632,6 +678,7 @@
       tableTemplates = [
         bronzeDataTemplate(),
         bronzeApiLogSystemTemplate(),
+        bronzeWorkflowLogSystemTemplate(),
         silverTemplate(),
         storageSystemTemplate(),
         contractsSystemTemplate(),
@@ -654,6 +701,7 @@
     tableTemplates = [
       bronzeDataTemplate(),
       bronzeApiLogSystemTemplate(),
+      bronzeWorkflowLogSystemTemplate(),
       silverTemplate(),
       storageSystemTemplate(),
       contractsSystemTemplate(),
@@ -982,6 +1030,9 @@
 
     try {
       if (!canWrite()) throw new Error('Недостаточно прав (нужна роль data_admin)');
+      if (selectedTemplateIsWorkflowLog()) {
+        throw new Error('Системный workflow log template нельзя создавать как отдельную таблицу. Он подключает уже существующий системный журнал.');
+      }
 
       validate();
       const cols = withRequiredTableFields(normalizeColumns(columns));
@@ -1204,7 +1255,7 @@
         </div>
 
         <div class="actions">
-          <button class="primary" on:click={createTableNow} disabled={loading || creating || !canWrite()}>
+          <button class="primary" on:click={createTableNow} disabled={loading || creating || !canWrite() || selectedTemplateIsWorkflowLog()}>
             {CREATE_BUTTON_LABEL}
           </button>
           {#if creating}
@@ -1214,6 +1265,8 @@
 
         {#if !canWrite()}
           <p class="hint">Кнопка активна только при роли <b>data_admin</b>.</p>
+        {:else if selectedTemplateIsWorkflowLog()}
+          <p class="hint">Этот шаблон подключает уже существующий системный workflow log и не создаёт новую таблицу.</p>
         {/if}
       </div>
     </div>
