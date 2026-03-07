@@ -166,7 +166,7 @@
   });
 </script>
 
-<main class="workflow-desk-root">
+<main class="page">
   <header class="top">
     <div>
       <h1>Рабочий стол данных</h1>
@@ -208,54 +208,42 @@
 </main>
 
 <style>
-  :global(body) {
-    margin: 0;
-    font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    background: #f4f6fa;
-    color: #0f172a;
+  .page {
+    padding: 14px;
+    min-height: 100%;
+    box-sizing: border-box;
   }
-
-  .workflow-desk-root {
-    padding: 18px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
   .top {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 10px;
+    gap: 12px;
   }
 
   h1 {
     margin: 0;
-    font-size: 24px;
-    font-weight: 650;
-    letter-spacing: 0.01em;
+    font-size: 22px;
   }
 
   .sub {
-    margin: 2px 0 0;
-    color: #3b4a63;
-    font-size: 12px;
+    margin: 6px 0 0;
+    color: #64748b;
+    font-size: 13px;
+    max-width: 820px;
   }
 
   .tabs {
     display: flex;
     gap: 8px;
+    margin-top: 12px;
     flex-wrap: wrap;
   }
 
   .tabs button {
-    border: 1px solid #dbe4f0;
-    border-radius: 10px;
-    background: #fff;
     padding: 8px 12px;
-    font-size: 13px;
-    font-weight: 600;
-    color: #334155;
+    border-radius: 12px;
+    border: 1px solid #e6eaf2;
+    background: #fff;
     cursor: pointer;
   }
 
@@ -272,7 +260,7 @@
   }
 
   .alert {
-    margin: 0;
+    margin: 12px 0;
     padding: 10px 12px;
     border-radius: 14px;
     border: 1px solid #f3c0c0;
@@ -285,7 +273,7 @@
   }
 
   .okbox {
-    margin: 0;
+    margin: 10px 0;
     border: 1px solid #b8e7c8;
     border-radius: 12px;
     padding: 9px 12px;
@@ -298,14 +286,5 @@
     margin: 0;
     white-space: pre-wrap;
     word-break: break-word;
-  }
-
-  :global(.panel) {
-    background: #fff;
-    border: 1px solid #e8edf5;
-    border-radius: 18px;
-    padding: 12px;
-    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
-    transition: all 0.2s ease;
   }
 </style>
