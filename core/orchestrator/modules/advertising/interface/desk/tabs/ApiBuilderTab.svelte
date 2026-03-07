@@ -9570,6 +9570,10 @@ function syncParameterEditorsHeight() {
     display:flex;
     flex-direction:column;
     gap:6px;
+    padding:8px;
+    border:1px solid #e2e8f0;
+    border-radius:10px;
+    background:#f8fafc;
   }
   .pagination-numeric-grid {
     display:grid;
@@ -9579,13 +9583,13 @@ function syncParameterEditorsHeight() {
   }
   .pagination-setting-item {
     min-width:0;
-    border:0;
-    border-radius:0;
-    background:transparent;
-    padding:0;
+    border:1px solid #e2e8f0;
+    border-radius:10px;
+    background:#fff;
+    padding:8px;
     display:flex;
     flex-direction:column;
-    gap:4px;
+    gap:6px;
   }
   .pagination-boolean-list {
     display:grid;
@@ -9593,10 +9597,10 @@ function syncParameterEditorsHeight() {
     gap:6px;
   }
   .pagination-bool-row {
-    border:0;
-    border-radius:0;
-    background:transparent;
-    padding:0;
+    border:1px solid #e2e8f0;
+    border-radius:10px;
+    background:#fff;
+    padding:8px;
     display:flex;
     align-items:center;
     justify-content:space-between;
@@ -9604,15 +9608,15 @@ function syncParameterEditorsHeight() {
   }
   .pagination-setting-head {
     display:flex;
-    align-items:center;
+    align-items:flex-start;
     justify-content:space-between;
     gap:8px;
   }
   .pagination-setting-title {
     margin:0;
-    font-size:11px;
+    font-size:12px;
     font-weight:600;
-    line-height:1.25;
+    line-height:1.3;
     color:#334155;
     flex:1;
     min-width:0;
@@ -9649,7 +9653,7 @@ function syncParameterEditorsHeight() {
   }
   .pagination-value-input {
     width:100%;
-    padding:6px 8px;
+    padding:7px 8px;
     border-radius:10px;
   }
   .pagination-value-input:disabled {
