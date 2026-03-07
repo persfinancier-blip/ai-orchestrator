@@ -8778,29 +8778,31 @@ function syncParameterEditorsHeight() {
           {/if}
           <p class="hint small-hint">Основной API-запрос: настрой вручную, как в документации сервиса. Пример: <code>Authorization: Bearer {"{{access_token}}"}</code></p>
         </label>
-        <div class="auth-mode-buttons">
-          <button
-            type="button"
-            class="group-toggle group-toggle-sm auth-mode-btn"
-            class:active-group-toggle={selected?.authMode === AUTH_MODE_OAUTH2}
-            on:click={() =>
-              mutateSelected((d) =>
-                (d.authMode = d.authMode === AUTH_MODE_OAUTH2 ? 'manual' : AUTH_MODE_OAUTH2)
-              )
-            }
-            aria-pressed={selected?.authMode === AUTH_MODE_OAUTH2}
-          >
-            <span>{selected?.authMode === AUTH_MODE_OAUTH2 ? 'Подзапрос токена включен' : 'Подзапрос токена выключен'}</span>
-            {#if selected?.authMode === AUTH_MODE_OAUTH2}
-              <span class="group-toggle-indicator"></span>
-            {/if}
-          </button>
-        </div>
-        {#if selected?.authMode === 'oauth2_client_credentials'}
-          <div class="auth-subrequest-box">
-            <p class="hint small-hint">
-              Подзапрос токена: метод, адрес, headers/query/body и разбор ответа в алиасы. Без скрытой магии.
-            </p>
+        <div class="auth-subrequest-box">
+          <div class="response-head field-head">
+            <span>Подзапрос токена</span>
+            <button
+              type="button"
+              class="group-toggle group-toggle-sm auth-mode-btn"
+              class:active-group-toggle={selected?.authMode === AUTH_MODE_OAUTH2}
+              on:click={() =>
+                mutateSelected((d) =>
+                  (d.authMode = d.authMode === AUTH_MODE_OAUTH2 ? 'manual' : AUTH_MODE_OAUTH2)
+                )
+              }
+              aria-pressed={selected?.authMode === AUTH_MODE_OAUTH2}
+            >
+              <span>{selected?.authMode === AUTH_MODE_OAUTH2 ? 'Включен' : 'Выключен'}</span>
+              {#if selected?.authMode === AUTH_MODE_OAUTH2}
+                <span class="group-toggle-indicator"></span>
+              {/if}
+            </button>
+          </div>
+          <p class="hint small-hint">
+            Метод, адрес, headers/query/body и разбор ответа в алиасы.
+          </p>
+          {#if selected?.authMode === 'oauth2_client_credentials'}
+            <div class="auth-subrequest-content">
             <div class="oauth-subreq-grid">
               <select
                 value={selected?.oauth2RequestMethod || 'POST'}
@@ -8879,8 +8881,9 @@ function syncParameterEditorsHeight() {
             <p class="hint small-hint">
               После подзапроса алиасы доступны в основном запросе через <code>{"{{alias}}"}</code>.
             </p>
-          </div>
-        {/if}
+            </div>
+          {/if}
+        </div>
 
         <div class="raw-grid">
           <label>
@@ -10246,14 +10249,18 @@ function syncParameterEditorsHeight() {
   pre { margin:0; white-space: pre-wrap; word-break: break-word; }
 
   .auth-section { display:block; margin-top:14px; }
-  .auth-mode-buttons { margin:10px 0 10px; display:flex; gap:8px; }
-  .auth-mode-btn { width:fit-content; min-width:280px; }
+  .auth-mode-btn { width:auto; min-width:112px; }
   .auth-subrequest-box {
-    margin:8px 0 12px;
-    border:1px solid #e2e8f0;
+    margin:10px 0 12px;
+    border:1px solid #e6eaf2;
     border-radius:12px;
-    background:#fff;
+    background:#f8fafc;
     padding:10px;
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+  }
+  .auth-subrequest-content {
     display:flex;
     flex-direction:column;
     gap:8px;
