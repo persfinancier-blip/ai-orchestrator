@@ -4222,6 +4222,7 @@
                 existingTables={apiBuilderExistingTables}
                 refreshTables={refreshApiBuilderTables}
                 initialApiStoreId={settingsApiBuilderStoreId}
+                embeddedMode={true}
               />
             {/key}
           {/if}

@@ -13,6 +13,7 @@
   export let existingTables: ExistingTable[] = [];
   export let refreshTables: () => Promise<void>;
   export let initialApiStoreId: number | null = null;
+  export let embeddedMode = false;
 
   type BindingRule = {
     id: string;
@@ -7431,7 +7432,7 @@ function syncParameterEditorsHeight() {
   void loadAll();
 </script>
 
-<section class="panel">
+<section class="panel" class:panel-embedded={embeddedMode}>
   <div class="panel-head">
     <h2>API (конструктор)</h2>
   </div>
@@ -8104,7 +8105,7 @@ function syncParameterEditorsHeight() {
 
             <div class="parameter-sources-grid">
               <div class="source-card">
-                <div class="response-head field-head parameter-subhead">
+                <div class="response-head field-head parameter-subhead param-source-head">
                   <small>Показатели для работы</small>
                   <span class="inline-actions">
                     <button type="button" class="view-toggle" on:click={addDataField}>Таблица +</button>
@@ -8795,8 +8796,20 @@ function syncParameterEditorsHeight() {
   .panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
   .panel-head h2 { margin:0; font-size:18px; }
 
-  .layout { display:grid; grid-template-columns: 320px 1fr 340px; gap:12px; margin-top:12px; align-items:start; }
-  @media (max-width: 1300px) { .layout { grid-template-columns: 1fr; } }
+  .layout {
+    display:grid;
+    grid-template-columns: minmax(260px, 0.9fr) minmax(0, 1.8fr) minmax(280px, 1fr);
+    gap:12px;
+    margin-top:12px;
+    align-items:start;
+  }
+  .layout > * { min-width:0; }
+  .panel-embedded .layout { grid-template-columns: minmax(0, 1fr); }
+  .panel-embedded .main { order:1; }
+  .panel-embedded .compare-aside { order:2; }
+  .panel-embedded .api-list { order:3; }
+  .panel-embedded .raw-grid { grid-template-columns: 1fr; }
+  @media (max-width: 1500px) { .layout { grid-template-columns: 1fr; } }
 
   .aside { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#f8fafc; }
   .aside-title { font-weight:700; font-size:14px; line-height:1.3; margin-bottom:8px; }
@@ -8826,7 +8839,8 @@ function syncParameterEditorsHeight() {
   .main { min-width:0; }
   .card { border:1px solid #e6eaf2; border-radius:16px; padding:12px; background:#fff; }
 
-  .connect-row { margin-top:10px; display:grid; grid-template-columns: 180px 1fr auto; gap:8px; align-items:center; }
+  .connect-row { margin-top:10px; display:grid; grid-template-columns: minmax(180px, 260px) minmax(0, 1fr) auto; gap:8px; align-items:center; }
+  .connect-row > * { min-width:0; }
   .connect-actions { display:flex; gap:8px; align-items:center; justify-content:flex-end; }
   .connect-actions .primary { min-width:130px; }
   .targets-wrap { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:transparent; }
@@ -8848,7 +8862,7 @@ function syncParameterEditorsHeight() {
   .map-row.active-map { border-color:#cbd5e1; background:#f8fafc; }
   .mapping-actions { margin-top:8px; display:flex; justify-content:flex-end; }
   .desc { width:100%; box-sizing:border-box; margin-top:8px; min-height:56px; resize:vertical; }
-  .raw-grid { display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:8px; }
+  .raw-grid { display:grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap:10px; margin-top:8px; }
   .field-param-showcase { margin:8px 0; display:flex; flex-wrap:wrap; gap:6px; }
   .param-token-chip {
     width:auto;
@@ -8919,7 +8933,7 @@ function syncParameterEditorsHeight() {
   .data-section { display:flex; flex-direction:column; gap:6px; }
   .parameter-sources-grid {
     display:grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     gap:10px;
     align-items:start;
   }
@@ -8929,6 +8943,7 @@ function syncParameterEditorsHeight() {
     background:#fff;
     padding:8px;
     min-height:100%;
+    min-width:0;
   }
   .data-list { display:flex; flex-direction:column; gap:8px; }
   .data-row { display:grid; gap:8px; align-items:center; }
@@ -8979,13 +8994,32 @@ function syncParameterEditorsHeight() {
     background:rgba(255,255,255,.12);
     color:#f8fafc;
   }
-  .rule-card { border:1px solid #e2e8f0; border-radius:10px; background:#fff; padding:8px; display:flex; flex-direction:column; gap:8px; }
+  .rule-card { border:1px solid #e2e8f0; border-radius:10px; background:#fff; padding:8px; display:flex; flex-direction:column; gap:8px; min-width:0; }
   .rule-card-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
   .table-rule-row { grid-template-columns: 1.2fr 1fr 1fr; }
   .join-rule-row { grid-template-columns: 1fr 1fr 80px 1fr 1fr 1fr; }
   .filter-rule-row { grid-template-columns: 1.2fr 1fr 1fr 1fr; }
-  .param-row { grid-template-columns: 1.2fr 1fr 1fr 140px 220px 72px auto; }
-  .date-param-inline-row { grid-template-columns: 200px 180px minmax(220px, 1fr) 170px auto; }
+  .param-source-head { justify-content:space-between; align-items:center; gap:8px; }
+  .param-source-head small { white-space:nowrap; }
+  .param-source-head .inline-actions { margin-left:0; flex-wrap:wrap; justify-content:flex-end; }
+  .param-row {
+    grid-template-columns:
+      minmax(140px, 2fr)
+      minmax(140px, 2fr)
+      minmax(280px, 4.5fr)
+      minmax(110px, 1fr)
+      minmax(64px, 0.65fr)
+      minmax(28px, 0.3fr);
+  }
+  .param-row > * { min-width:0; }
+  .date-param-inline-row {
+    grid-template-columns:
+      minmax(150px, 1.7fr)
+      minmax(150px, 1.5fr)
+      minmax(260px, 4fr)
+      minmax(110px, 1fr)
+      minmax(28px, 0.3fr);
+  }
   .field-date-row { grid-template-columns: 1fr 140px 140px 1fr; align-items:end; }
   .group-toggle {
     display:flex;
@@ -8999,6 +9033,7 @@ function syncParameterEditorsHeight() {
     font-size:12px;
     color:#334155;
     min-height:34px;
+    white-space:nowrap;
   }
   .group-toggle-sm {
     padding:6px 9px;
@@ -9018,12 +9053,21 @@ function syncParameterEditorsHeight() {
     background:#22c55e;
     box-shadow:0 0 0 2px rgba(34,197,94,.25);
   }
-  .row-order-actions { display:grid; grid-template-columns: 1fr 1fr; gap:6px; }
+  .row-order-actions {
+    display:flex;
+    align-items:center;
+    justify-content:flex-end;
+    gap:4px;
+    min-width:0;
+  }
   .row-icon-btn {
     border:0;
     background:transparent;
     color:#334155;
-    padding:4px 0;
+    width:24px;
+    min-width:24px;
+    height:24px;
+    padding:0;
     border-radius:6px;
     font-size:12px;
     line-height:1;
