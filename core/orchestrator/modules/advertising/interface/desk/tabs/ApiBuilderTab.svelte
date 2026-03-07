@@ -176,6 +176,8 @@
       fields: Array<{ id: string; responsePath: string; targetField: string }>;
     }>;
     description: string;
+    sectionName: string;
+    templateCode: string;
     exampleRequest: string;
     parameterDefinitions: ParameterDefinition[];
     dispatchMode: DispatchMode;
@@ -422,6 +424,33 @@
   let activeDataJoinId = '';
   let activeDataFilterId = '';
   let groupByAliasCandidates: string[] = [];
+  type TemplateScopeFilter = 'all' | 'recent' | 'favorites';
+  type TemplateMethodFilter = 'all' | HttpMethod;
+  type TemplateListItem = {
+    ref: string;
+    draft: ApiDraft;
+    section: string;
+    method: HttpMethod;
+    path: string;
+    templateCode: string;
+    searchText: string;
+  };
+  type TemplateSectionGroup = { section: string; items: TemplateListItem[] };
+  const TEMPLATE_RECENT_LIMIT = 20;
+  const TEMPLATE_FAVORITES_LIMIT = 200;
+  let templateSearch = '';
+  let templateScopeFilter: TemplateScopeFilter = 'all';
+  let templateMethodFilter: TemplateMethodFilter = 'all';
+  let templateSectionFilter = 'all';
+  let templateFavoriteRefs: string[] = [];
+  let templateRecentRefs: string[] = [];
+  let collapsedTemplateSections: Record<string, boolean> = {};
+  let templateListItems: TemplateListItem[] = [];
+  let templateSectionOptions: string[] = [];
+  let templateFilteredItems: TemplateListItem[] = [];
+  let templateGroupedItems: TemplateSectionGroup[] = [];
+  let templateScopeCounts = { all: 0, recent: 0, favorites: 0 };
+  let templateListEmptyHint = 'Список шаблонов пуст.';
   const PARAMETER_PREVIEW_LIMIT = 5;
   const REQUEST_PREVIEW_MAX = 20;
   const DATA_MODEL_ROW_HARD_LIMIT = 100000;
@@ -659,6 +688,8 @@ function formatBytes(bytes: number) {
       pickedPaths: [],
       responseTargets: [],
       description: '',
+      sectionName: '',
+      templateCode: '',
       exampleRequest: '',
       parameterDefinitions: [],
       dispatchMode: 'single',
@@ -685,6 +716,7 @@ function formatBytes(bytes: number) {
   function fromRow(row: any): ApiDraft {
     const d = baseDraft();
     const storeIdNum = extractStoreIdFromRow(row);
+    const config = tryObj(row?.config_json);
 
     const mapping = tryObj(row?.mapping_json);
     const legacy = tryObj(mapping?.source ?? mapping?.config ?? mapping?.payload);
@@ -1120,6 +1152,21 @@ function formatBytes(bytes: number) {
       pickedPaths: pickedPathsSource.map((x: any) => String(x || '').trim()).filter(Boolean),
       responseTargets: normalizedTargets,
       description: String(row?.description || legacy?.description || ''),
+      sectionName: String(
+        row?.section_name ||
+          config?.section ||
+          config?.section_name ||
+          config?.category ||
+          legacy?.section ||
+          ''
+      ).trim(),
+      templateCode: String(
+        row?.template_code ||
+          config?.template_code ||
+          config?.code ||
+          legacy?.template_code ||
+          ''
+      ).trim(),
       exampleRequest: exampleRequestValue,
       parameterDefinitions: normalizedDefinitions,
       dispatchMode,
@@ -2489,6 +2536,172 @@ function formatBytes(bytes: number) {
       }
     }
     return null;
+  }
+
+  function templatesStorageScopeKey() {
+    return `${String(api_storage_schema || '').trim().toLowerCase()}.${String(api_storage_table || '').trim().toLowerCase()}`;
+  }
+
+  function templateFavoritesStorageKey() {
+    return `ao_api_builder_favorites:${templatesStorageScopeKey()}`;
+  }
+
+  function templateRecentStorageKey() {
+    return `ao_api_builder_recent:${templatesStorageScopeKey()}`;
+  }
+
+  function safeReadTemplateRefList(key: string, limit: number) {
+    if (typeof window === 'undefined') return [];
+    try {
+      const raw = window.localStorage.getItem(key);
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(parsed)) return [];
+      const uniq: string[] = [];
+      for (const item of parsed) {
+        const v = String(item || '').trim();
+        if (!v || uniq.includes(v)) continue;
+        uniq.push(v);
+      }
+      return uniq.slice(0, limit);
+    } catch {
+      return [];
+    }
+  }
+
+  function persistTemplateRefList(key: string, refs: string[], limit: number) {
+    if (typeof window === 'undefined') return;
+    const uniq: string[] = [];
+    for (const item of refs) {
+      const v = String(item || '').trim();
+      if (!v || uniq.includes(v)) continue;
+      uniq.push(v);
+      if (uniq.length >= limit) break;
+    }
+    try {
+      window.localStorage.setItem(key, JSON.stringify(uniq));
+    } catch {
+      // ignore storage quota/runtime errors
+    }
+  }
+
+  function loadTemplateUiPrefs() {
+    templateFavoriteRefs = safeReadTemplateRefList(templateFavoritesStorageKey(), TEMPLATE_FAVORITES_LIMIT);
+    templateRecentRefs = safeReadTemplateRefList(templateRecentStorageKey(), TEMPLATE_RECENT_LIMIT);
+  }
+
+  function persistTemplateUiPrefs() {
+    persistTemplateRefList(templateFavoritesStorageKey(), templateFavoriteRefs, TEMPLATE_FAVORITES_LIMIT);
+    persistTemplateRefList(templateRecentStorageKey(), templateRecentRefs, TEMPLATE_RECENT_LIMIT);
+  }
+
+  function normalizeTemplateSectionText(text: any) {
+    const src = String(text || '')
+      .replace(/^\s*\d+\s*[·.\-–—]\s*/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return src;
+  }
+
+  function deriveTemplateSectionFromName(name: string) {
+    const src = normalizeTemplateSectionText(name);
+    if (!src) return 'Без раздела';
+    const partsByDash = src.split(/\s+-\s+/).map((x) => x.trim()).filter(Boolean);
+    if (partsByDash.length >= 2) return partsByDash[0];
+    const partsByDot = src.split('·').map((x) => x.trim()).filter(Boolean);
+    if (partsByDot.length >= 2) {
+      const first = partsByDot[0];
+      const second = partsByDot[1];
+      if (/^(wb|wildberries|ozon|yandex|market)/i.test(first)) {
+        return `${first} ${second}`.trim();
+      }
+      return first;
+    }
+    return src;
+  }
+
+  function sectionForDraft(draft: ApiDraft) {
+    const fromCfg = normalizeTemplateSectionText((draft as any)?.sectionName || '');
+    if (fromCfg) return fromCfg;
+    return deriveTemplateSectionFromName(String(draft?.name || ''));
+  }
+
+  function templateCodeForDraft(draft: ApiDraft) {
+    const own = String((draft as any)?.templateCode || '').trim();
+    if (own) return own;
+    const token = String(draft?.name || '').match(/\b[A-Z]{2,5}-\d{2}-\d{3}\b/i);
+    return token ? String(token[0]).toUpperCase() : '';
+  }
+
+  function shortPathForDraft(draft: ApiDraft) {
+    const base = String(draft?.baseUrl || '').trim();
+    const path = String(draft?.path || '').trim() || '/';
+    if (!base) return path;
+    try {
+      const u = new URL(base);
+      return `${u.hostname}${path}`;
+    } catch {
+      const shortBase = base.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+      return `${shortBase}${path.startsWith('/') ? path : `/${path}`}`;
+    }
+  }
+
+  function isTemplateFavorite(ref: string) {
+    return templateFavoriteRefs.includes(String(ref || '').trim());
+  }
+
+  function toggleTemplateFavorite(ref: string) {
+    const key = String(ref || '').trim();
+    if (!key) return;
+    if (templateFavoriteRefs.includes(key)) {
+      templateFavoriteRefs = templateFavoriteRefs.filter((x) => x !== key);
+    } else {
+      templateFavoriteRefs = [key, ...templateFavoriteRefs].slice(0, TEMPLATE_FAVORITES_LIMIT);
+    }
+    persistTemplateUiPrefs();
+  }
+
+  function markTemplateRecent(ref: string) {
+    const key = String(ref || '').trim();
+    if (!key) return;
+    templateRecentRefs = [key, ...templateRecentRefs.filter((x) => x !== key)].slice(0, TEMPLATE_RECENT_LIMIT);
+    persistTemplateUiPrefs();
+  }
+
+  function toggleTemplateSection(section: string) {
+    const key = String(section || '').trim();
+    if (!key) return;
+    collapsedTemplateSections = {
+      ...collapsedTemplateSections,
+      [key]: !Boolean(collapsedTemplateSections[key])
+    };
+  }
+
+  function isTemplateSectionCollapsed(section: string) {
+    return Boolean(collapsedTemplateSections[String(section || '').trim()]);
+  }
+
+  function applyTemplateSelection(ref: string) {
+    const key = String(ref || '').trim();
+    if (!key) return;
+    selectedRef = key;
+    markTemplateRecent(key);
+  }
+
+  function cleanupTemplateUiRefs() {
+    const valid = new Set(drafts.map((d) => refOf(d)));
+    templateFavoriteRefs = templateFavoriteRefs.filter((x) => valid.has(x));
+    templateRecentRefs = templateRecentRefs.filter((x) => valid.has(x));
+    persistTemplateUiPrefs();
+  }
+
+  function orderTemplateItemsByRefList(items: TemplateListItem[], refList: string[]) {
+    const orderMap = new Map(refList.map((ref, idx) => [ref, idx]));
+    return [...items].sort((a, b) => {
+      const ai = orderMap.has(a.ref) ? Number(orderMap.get(a.ref)) : Number.MAX_SAFE_INTEGER;
+      const bi = orderMap.has(b.ref) ? Number(orderMap.get(b.ref)) : Number.MAX_SAFE_INTEGER;
+      if (ai === bi) return 0;
+      return ai - bi;
+    });
   }
 
   function parsePositiveInt(value: any): number {
@@ -5735,6 +5948,7 @@ function handleDefinitionInput(value: string) {
         // ignore settings failure
       }
       api_storage_pick_value = `${api_storage_schema}.${api_storage_table}`;
+      loadTemplateUiPrefs();
 
       const j = await apiJson<{ api_configs: any[] }>(`${apiBase}/api-configs`, { headers: headers() });
       drafts = (Array.isArray(j?.api_configs) ? j.api_configs : []).map((r) => fromRow(r));
@@ -5742,6 +5956,7 @@ function handleDefinitionInput(value: string) {
       if (missingStoreId > 0) {
         warn = `Часть API-шаблонов загружена без ID (${missingStoreId}). Сохранение/удаление для них может работать ограниченно.`;
       }
+      cleanupTemplateUiRefs();
 
       if (!drafts.length) {
         const d = baseDraft();
@@ -5861,12 +6076,16 @@ function handleDefinitionInput(value: string) {
     ok = '';
     warn = '';
     try {
+      const deletedRef = refOf(d);
       let storeId = resolveDraftStoreId(d, refOf(d));
       if (!storeId) {
         storeId = await resolveServerStoreIdForDraft(d);
       }
       if (!storeId) {
         drafts = drafts.filter((x) => x.localId !== d.localId);
+        templateFavoriteRefs = templateFavoriteRefs.filter((x) => x !== deletedRef);
+        templateRecentRefs = templateRecentRefs.filter((x) => x !== deletedRef);
+        persistTemplateUiPrefs();
         if (!byRef(selectedRef) && drafts.length) selectedRef = refOf(drafts[0]);
         warn = 'Удален только локальный черновик (ID в БД не найден).';
         return;
@@ -7129,9 +7348,92 @@ function handleDefinitionInput(value: string) {
     drafts;
     selected = byRef(selectedRef);
   }
+  $: {
+    const items: TemplateListItem[] = drafts.map((draft) => {
+      const ref = refOf(draft);
+      const section = sectionForDraft(draft);
+      const method = toHttpMethod(String(draft?.method || 'GET').toUpperCase());
+      const path = shortPathForDraft(draft);
+      const templateCode = templateCodeForDraft(draft);
+      const searchText = [
+        draft?.name,
+        draft?.description,
+        path,
+        method,
+        templateCode
+      ]
+        .map((x) => String(x || '').toLowerCase())
+        .join(' ');
+      return { ref, draft, section, method, path, templateCode, searchText };
+    });
+
+    templateListItems = items;
+    templateScopeCounts = {
+      all: items.length,
+      recent: items.filter((item) => templateRecentRefs.includes(item.ref)).length,
+      favorites: items.filter((item) => templateFavoriteRefs.includes(item.ref)).length
+    };
+
+    const sections = [...new Set(items.map((item) => item.section).filter(Boolean))];
+    templateSectionOptions = sections.sort((a, b) => a.localeCompare(b, 'ru', { sensitivity: 'base' }));
+    if (templateSectionFilter !== 'all' && !templateSectionOptions.includes(templateSectionFilter)) {
+      templateSectionFilter = 'all';
+    }
+  }
+  $: {
+    let items = [...templateListItems];
+    if (templateScopeFilter === 'recent') {
+      items = orderTemplateItemsByRefList(
+        items.filter((item) => templateRecentRefs.includes(item.ref)),
+        templateRecentRefs
+      );
+    } else if (templateScopeFilter === 'favorites') {
+      items = orderTemplateItemsByRefList(
+        items.filter((item) => templateFavoriteRefs.includes(item.ref)),
+        templateFavoriteRefs
+      );
+    }
+
+    if (templateMethodFilter !== 'all') {
+      items = items.filter((item) => item.method === templateMethodFilter);
+    }
+
+    if (templateSectionFilter !== 'all') {
+      items = items.filter((item) => item.section === templateSectionFilter);
+    }
+
+    const q = String(templateSearch || '').trim().toLowerCase();
+    if (q) {
+      items = items.filter((item) => item.searchText.includes(q));
+    }
+
+    templateFilteredItems = items;
+  }
+  $: {
+    const map = new Map<string, TemplateListItem[]>();
+    for (const item of templateFilteredItems) {
+      const key = item.section || 'Без раздела';
+      const group = map.get(key);
+      if (group) group.push(item);
+      else map.set(key, [item]);
+    }
+    templateGroupedItems = [...map.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0], 'ru', { sensitivity: 'base' }))
+      .map(([section, items]) => ({ section, items }));
+  }
+  $: {
+    if (!templateListItems.length) {
+      templateListEmptyHint = 'Список шаблонов пуст.';
+    } else if (!templateFilteredItems.length) {
+      templateListEmptyHint = 'По текущему поиску и фильтрам ничего не найдено.';
+    } else {
+      templateListEmptyHint = '';
+    }
+  }
   $: if (selectedRef !== lastSelectedRef) {
     lastSelectedRef = selectedRef;
     if (selected) {
+      markTemplateRecent(selectedRef);
       nameDraft = selected.name;
       requestInput = `${selected.baseUrl.replace(/\/$/, '')}${selected.path.startsWith('/') ? selected.path : `/${selected.path}`}`;
       myPreviewDirty = false;
@@ -8774,18 +9076,82 @@ function syncParameterEditorsHeight() {
         </div>
       </div>
 
+      <div class="template-list-controls">
+        <input
+          class="template-search"
+          value={templateSearch}
+          placeholder="Поиск: название, описание, путь, метод, код"
+          on:input={(e) => (templateSearch = e.currentTarget.value)}
+        />
+        <div class="template-filters-row">
+          <select bind:value={templateScopeFilter}>
+            <option value="all">Все ({templateScopeCounts.all})</option>
+            <option value="recent">Недавние ({templateScopeCounts.recent})</option>
+            <option value="favorites">Избранные ({templateScopeCounts.favorites})</option>
+          </select>
+          <select bind:value={templateSectionFilter}>
+            <option value="all">Все разделы</option>
+            {#each templateSectionOptions as sec}
+              <option value={sec}>{sec}</option>
+            {/each}
+          </select>
+          <select bind:value={templateMethodFilter}>
+            <option value="all">Все методы</option>
+            <option value="GET">GET</option>
+            <option value="POST">POST</option>
+            <option value="PUT">PUT</option>
+            <option value="PATCH">PATCH</option>
+            <option value="DELETE">DELETE</option>
+          </select>
+        </div>
+      </div>
+
       <div class="list api-list">
-        {#each drafts as d (d.localId)}
-          <div class="row-item" class:activeitem={refOf(d) === selectedRef}>
-            <button type="button" class="item-button" on:click={() => (selectedRef = refOf(d))}>
-              <div class="row-name">{resolveDraftStoreId(d, refOf(d)) || 'new'} • {d.name}</div>
-              <div class="row-meta">{d.method} {d.baseUrl}{d.path}</div>
-            </button>
-            <div class="row-actions">
-              <button type="button" class="danger icon-btn" on:click|stopPropagation={() => deleteApi(d)} title="Удалить API">x</button>
+        {#if templateGroupedItems.length}
+          {#each templateGroupedItems as group (group.section)}
+            <div class="template-group">
+              <button
+                type="button"
+                class="template-group-head"
+                on:click={() => toggleTemplateSection(group.section)}
+                aria-expanded={!isTemplateSectionCollapsed(group.section)}
+              >
+                <span>{isTemplateSectionCollapsed(group.section) ? '▸' : '▾'} {group.section}</span>
+                <span class="template-group-count">{group.items.length}</span>
+              </button>
+              {#if !isTemplateSectionCollapsed(group.section)}
+                {#each group.items as item (item.ref)}
+                  <div class="row-item" class:activeitem={item.ref === selectedRef}>
+                    <button type="button" class="item-button" on:click={() => applyTemplateSelection(item.ref)}>
+                      <div class="row-name">{item.draft.name}</div>
+                      <div class="row-meta">
+                        <span class="method-pill">{item.method}</span>
+                        <span class="path-pill">{item.path}</span>
+                        {#if item.templateCode}
+                          <span class="code-pill">{item.templateCode}</span>
+                        {/if}
+                      </div>
+                    </button>
+                    <div class="row-actions">
+                      <button
+                        type="button"
+                        class="icon-btn fav-icon-btn"
+                        class:active-favorite={isTemplateFavorite(item.ref)}
+                        on:click|stopPropagation={() => toggleTemplateFavorite(item.ref)}
+                        title={isTemplateFavorite(item.ref) ? 'Убрать из избранного' : 'Добавить в избранное'}
+                      >
+                        {isTemplateFavorite(item.ref) ? '★' : '☆'}
+                      </button>
+                      <button type="button" class="danger icon-btn" on:click|stopPropagation={() => deleteApi(item.draft)} title="Удалить API">x</button>
+                    </div>
+                  </div>
+                {/each}
+              {/if}
             </div>
-          </div>
-        {/each}
+          {/each}
+        {:else}
+          <p class="hint">{templateListEmptyHint}</p>
+        {/if}
       </div>
     </aside>
   </div>
@@ -8895,6 +9261,44 @@ function syncParameterEditorsHeight() {
   .template-name.warn { border-color:#f59e0b; background:#fffbeb; }
   .name-warn { font-size:12px; color:#92400e; margin-top:-2px; }
   .saved-inline-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .template-list-controls {
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+    margin-bottom:8px;
+  }
+  .template-filters-row {
+    display:grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 1fr);
+    gap:8px;
+  }
+  .template-group { display:flex; flex-direction:column; gap:6px; }
+  .template-group-head {
+    width:100%;
+    border:1px solid #e2e8f0;
+    border-radius:10px;
+    background:#f8fafc;
+    padding:6px 8px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    font-size:12px;
+    color:#334155;
+    text-align:left;
+  }
+  .template-group-count {
+    min-width:20px;
+    height:20px;
+    border-radius:999px;
+    border:1px solid #cbd5e1;
+    background:#fff;
+    color:#334155;
+    font-size:11px;
+    line-height:18px;
+    text-align:center;
+    padding:0 6px;
+    box-sizing:border-box;
+  }
 
   .list { display:flex; flex-direction:column; gap:8px; min-width:0; }
   .api-list {
@@ -8905,17 +9309,42 @@ function syncParameterEditorsHeight() {
     padding-right:4px;
   }
   .row-item { display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; border:1px solid #e6eaf2; border-radius:14px; background:#0f172a; padding:8px 10px; }
-  .row-actions { display:flex; align-items:center; justify-content:flex-end; min-width:54px; }
+  .row-actions { display:flex; align-items:center; justify-content:flex-end; gap:4px; min-width:84px; }
   .item-button { text-align:left; border:0; background:transparent; padding:0; color:inherit; width:100%; }
   .row-name { font-weight:400; font-size:13px; line-height:1.25; word-break:break-word; color:#fff; }
-  .row-meta { font-size:12px; color:#cbd5e1; margin-top:4px; word-break: break-word; }
+  .row-meta { font-size:12px; color:#cbd5e1; margin-top:4px; word-break: break-word; display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  .method-pill,
+  .path-pill,
+  .code-pill {
+    border:1px solid #334155;
+    border-radius:999px;
+    background:rgba(15,23,42,.25);
+    color:#cbd5e1;
+    padding:1px 8px;
+    font-size:11px;
+    line-height:1.3;
+  }
+  .path-pill {
+    max-width:100%;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
   .api-list .activeitem { background:#fff; border-color:#e6eaf2; color:#0f172a; }
   .api-list .activeitem .row-name { font-size:15px; font-weight:600; letter-spacing:.01em; color:#0f172a; }
-  .api-list .activeitem .row-name::before { content:'●'; margin-right:8px; font-size:11px; color:#0f172a; vertical-align:middle; }
   .api-list .activeitem .row-meta { color:#64748b; }
+  .api-list .activeitem .method-pill,
+  .api-list .activeitem .path-pill,
+  .api-list .activeitem .code-pill {
+    border-color:#cbd5e1;
+    background:#f8fafc;
+    color:#475569;
+  }
 
   .icon-btn { width:34px; min-width:34px; padding:6px 0; font-size:14px; text-transform:uppercase; border-color:transparent; background:transparent; color:#fff; }
   .danger.icon-btn { color:#b91c1c; }
+  .fav-icon-btn { color:#facc15; font-size:15px; }
+  .fav-icon-btn.active-favorite { color:#eab308; }
   .plus-dark.icon-btn { color:#0f172a; font-weight:700; }
   .plus-green.icon-btn { color:#16a34a; font-weight:700; }
   .map-row .icon-btn { color:#b91c1c; }
