@@ -219,6 +219,9 @@
   let workflowDeskStorageRef = 'ao_system.workflow_desks_store';
   let settingsNodeId = '';
   let settingsModalOpen = false;
+  let nodeModalFullscreen = false;
+  let nodeModalCollapsed = false;
+  let nodeModalSizePreset: 'compact' | 'normal' | 'wide' = 'normal';
   let nodeExecutions: Record<string, ApiNodeExecution> = {};
   let nodeExecutionLoading: Record<string, boolean> = {};
   let nodeTemplateSaving: Record<string, boolean> = {};
@@ -2825,6 +2828,9 @@
     selectedNodeId = nodeId;
     settingsNodeId = nodeId;
     settingsModalOpen = true;
+    nodeModalFullscreen = false;
+    nodeModalCollapsed = false;
+    nodeModalSizePreset = isApiNode(node) || isApiToolNode(node) ? 'wide' : 'normal';
     settingsRequestViewMode = 'tree';
     settingsResponseViewMode = 'tree';
   }
@@ -2832,6 +2838,34 @@
   function closeSettingsModal() {
     settingsModalOpen = false;
     settingsNodeId = '';
+    nodeModalFullscreen = false;
+    nodeModalCollapsed = false;
+    nodeModalSizePreset = 'normal';
+  }
+
+  function expandNodeModalSize() {
+    if (nodeModalSizePreset === 'compact') {
+      nodeModalSizePreset = 'normal';
+      return;
+    }
+    nodeModalSizePreset = 'wide';
+  }
+
+  function shrinkNodeModalSize() {
+    if (nodeModalSizePreset === 'wide') {
+      nodeModalSizePreset = 'normal';
+      return;
+    }
+    nodeModalSizePreset = 'compact';
+  }
+
+  function toggleNodeModalFullscreen() {
+    nodeModalFullscreen = !nodeModalFullscreen;
+    if (nodeModalFullscreen) nodeModalCollapsed = false;
+  }
+
+  function toggleNodeModalCollapsed() {
+    nodeModalCollapsed = !nodeModalCollapsed;
   }
 
   function center(n: WorkflowNode) {
@@ -4019,10 +4053,29 @@
 
   {#if settingsModalOpen && settingsNode}
     <div class="node-modal-backdrop" on:click={closeSettingsModal}></div>
-    <div class="node-modal" class:node-modal-wide={isApiNode(settingsNode) || isApiToolNode(settingsNode)}>
+    <div
+      class="node-modal"
+      class:node-modal-wide={nodeModalSizePreset === 'wide'}
+      class:node-modal-compact={nodeModalSizePreset === 'compact'}
+      class:node-modal-fullscreen={nodeModalFullscreen}
+      class:node-modal-collapsed={nodeModalCollapsed}
+      class:node-modal-resizable={(isApiNode(settingsNode) || isApiToolNode(settingsNode)) && !nodeModalFullscreen}
+    >
       <div class="node-modal-head">
         <h4>Настройка узла: {settingsNode.config.name}</h4>
-        <button class="close-btn" on:click={closeSettingsModal}>x</button>
+        <div class="node-modal-actions">
+          {#if isApiNode(settingsNode) || isApiToolNode(settingsNode)}
+            <button class="close-btn" title="Сузить окно" on:click={shrinkNodeModalSize} disabled={nodeModalFullscreen}>−</button>
+            <button class="close-btn" title="Расширить окно" on:click={expandNodeModalSize} disabled={nodeModalFullscreen}>+</button>
+            <button class="close-btn" title={nodeModalFullscreen ? 'Вернуть размер окна' : 'Развернуть на весь экран'} on:click={toggleNodeModalFullscreen}>
+              {nodeModalFullscreen ? 'Окно' : 'На весь экран'}
+            </button>
+          {/if}
+          <button class="close-btn" title={nodeModalCollapsed ? 'Развернуть содержимое' : 'Свернуть содержимое'} on:click={toggleNodeModalCollapsed}>
+            {nodeModalCollapsed ? 'Развернуть' : 'Свернуть'}
+          </button>
+          <button class="close-btn" on:click={closeSettingsModal}>x</button>
+        </div>
       </div>
 
       {#if settingsNode.type === 'tool' && toolCfg(settingsNode).toolType === 'start_process'}
@@ -4223,7 +4276,7 @@
                 existingTables={apiBuilderExistingTables}
                 refreshTables={refreshApiBuilderTables}
                 initialApiStoreId={settingsApiBuilderStoreId}
-                embeddedMode={true}
+                embeddedMode={false}
               />
             {/key}
           {/if}
@@ -4505,8 +4558,31 @@
     z-index: 41;
   }
   .node-modal.node-modal-wide { width: min(1600px, calc(100vw - 24px)); max-height: calc(100vh - 24px); }
+  .node-modal.node-modal-compact { width: min(980px, calc(100vw - 24px)); }
+  .node-modal.node-modal-fullscreen {
+    top: 8px;
+    left: 8px;
+    transform: none;
+    width: calc(100vw - 16px);
+    height: calc(100vh - 16px);
+    max-height: none;
+    border-radius: 12px;
+  }
+  .node-modal.node-modal-resizable {
+    resize: both;
+    min-width: 760px;
+    min-height: 420px;
+  }
+  .node-modal.node-modal-collapsed {
+    height: auto;
+    max-height: none;
+  }
+  .node-modal.node-modal-collapsed .node-modal-body {
+    display: none;
+  }
   .node-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; border-bottom: 1px solid #e2e8f0; position: sticky; top: 0; background: #fff; }
   .node-modal-head h4 { margin: 0; font-size: 16px; }
+  .node-modal-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
   .close-btn { border: 1px solid #dbe4f0; border-radius: 9px; background: #fff; cursor: pointer; padding: 4px 10px; }
   .node-modal-body {
     padding: 12px 14px;
@@ -4521,8 +4597,7 @@
   .node-modal-body select,
   .node-modal-body textarea { border: 1px solid #dbe4f0; border-radius: 8px; padding: 7px 8px; font-family: inherit; font-size: 13px; }
   .node-modal-body textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  .node-modal-body-api { padding: 8px; background: #f8fafc; min-height: 0; overflow: auto; }
-  .node-modal-body-api :global(.panel) { border: 0; border-radius: 0; padding: 0; background: transparent; }
+  .node-modal-body-api { padding: 8px; background: #fff; min-height: 0; overflow: auto; }
   .interval-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .help { font-size: 12px; color: #475569; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; }
   .hint { font-size: 11px; color: #64748b; line-height: 1.35; }
