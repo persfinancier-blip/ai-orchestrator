@@ -26,15 +26,17 @@
   <a href="#legacy" class:active={route === 'legacy'}>Старый дашборд</a>
 </nav>
 
-{#if route === 'legacy'}
-  <div class="app"><AdvertisingDashboard /></div>
-{:else if route === 'desk/data'}
-  <WorkflowDesk />
-{:else if route === 'desk/workflow'}
-  <DataDesk />
-{:else}
-  <AdvertisingDesk />
-{/if}
+<div class="app">
+  {#if route === 'legacy'}
+    <AdvertisingDashboard />
+  {:else if route === 'desk/data'}
+    <WorkflowDesk />
+  {:else if route === 'desk/workflow'}
+    <DataDesk />
+  {:else}
+    <AdvertisingDesk />
+  {/if}
+</div>
 
 <style>
   .top-nav {
@@ -65,6 +67,7 @@
 
   .app {
     height: calc(100vh - 52px);
-    overflow: hidden;
+    min-height: 0;
+    overflow: auto;
   }
 </style>

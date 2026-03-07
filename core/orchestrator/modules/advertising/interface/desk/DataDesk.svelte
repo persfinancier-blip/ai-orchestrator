@@ -222,7 +222,11 @@
 </div>
 
 <style>
-  .page { padding: 14px; }
+  .page {
+    padding: 14px;
+    min-height: 100%;
+    box-sizing: border-box;
+  }
   .top { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
   h1 { margin:0; font-size:22px; }
   .sub { margin:6px 0 0; color:#64748b; font-size:13px; max-width: 820px; }
