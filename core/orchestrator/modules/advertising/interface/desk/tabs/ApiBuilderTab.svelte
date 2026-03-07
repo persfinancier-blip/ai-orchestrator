@@ -4195,6 +4195,15 @@ function formatBytes(bytes: number) {
     return columnOptionsFor(t.schema, t.table);
   }
 
+  function dataFieldColumnOptions(draft: ApiDraft | null, dataField: DataModelField) {
+    if (!draft) return [];
+    const tableId = String(dataField?.tableId || '').trim();
+    const current = String(dataField?.field || '').trim();
+    const t = draft.dataTables.find((x) => x.id === tableId);
+    if (!t) return current ? [current] : [];
+    return tableFieldOptionsFor(t.schema, t.table, current);
+  }
+
   function isDataFieldDateType(draft: ApiDraft | null, field: DataModelField) {
     if (!draft) return false;
     const table = (draft.dataTables || []).find((x) => x.id === field.tableId);
@@ -8427,7 +8436,7 @@ function syncParameterEditorsHeight() {
                           </select>
                           <select value={f.field} on:change={(e) => updateDataField(f.id, { field: e.currentTarget.value })}>
                             <option value="">Колонка</option>
-                            {#each tableColumnsById(selected, f.tableId) as col}
+                            {#each dataFieldColumnOptions(selected, f) as col}
                               <option value={col}>{col}</option>
                             {/each}
                           </select>
