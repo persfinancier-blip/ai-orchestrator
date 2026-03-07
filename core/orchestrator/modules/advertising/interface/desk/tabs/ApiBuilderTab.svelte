@@ -9088,7 +9088,7 @@ function syncParameterEditorsHeight() {
           <span>Шаблон API</span>
           <span class="inline-actions">
             <button type="button" class="view-toggle template-action-btn view-toggle-primary" on:click={onTemplateParseClick}>Разобрать</button>
-            <button type="button" class="view-toggle template-action-btn view-toggle-secondary" on:click={onTemplateClearClick}>Очистить</button>
+            <button type="button" class="view-toggle template-action-btn view-toggle-primary" on:click={onTemplateClearClick}>Очистить</button>
             {#if exampleIsJson}
               <button type="button" class="view-toggle template-action-btn" on:click={() => (exampleViewMode = exampleViewMode === 'tree' ? 'raw' : 'tree')}>
                 {exampleViewMode === 'tree' ? 'RAW' : 'Дерево'}
@@ -9270,9 +9270,6 @@ function syncParameterEditorsHeight() {
   .template-action-btn { min-height:28px; min-width:72px; padding:5px 10px; font-size:11px; font-weight:500; }
   .view-toggle.view-toggle-primary { background:#0f172a; border-color:#0f172a; color:#fff; }
   .view-toggle.view-toggle-primary:hover:not(:disabled) { background:#1e293b; border-color:#1e293b; }
-  .view-toggle.view-toggle-secondary { background:#fff; border-color:#cbd5e1; color:#334155; }
-  .view-toggle.view-toggle-secondary:hover:not(:disabled) { background:#f8fafc; border-color:#94a3b8; color:#0f172a; }
-  .view-toggle.active { border-color:#2563eb; color:#1d4ed8; background:#eff6ff; }
   .response-tree-wrap { border:1px solid #e6eaf2; border-radius:12px; background:#fff; padding:8px; min-height:78px; overflow:visible; }
   .template-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
   .statusline { font-size:12px; color:#64748b; margin-bottom:6px; }
