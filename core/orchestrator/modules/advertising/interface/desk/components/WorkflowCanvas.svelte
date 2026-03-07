@@ -2488,30 +2488,125 @@
     };
   }
 
+  function parseTemplateStoreId(value: any) {
+    const txt = String(value || '').trim();
+    if (!txt) return 0;
+    const direct = Number(txt);
+    if (Number.isFinite(direct) && direct > 0) return Math.trunc(direct);
+    const m1 = txt.match(/^api_template:(\d+)$/i);
+    if (m1?.[1]) return Math.trunc(Number(m1[1]));
+    const m2 = txt.match(/^api_tpl_(\d+)$/i);
+    if (m2?.[1]) return Math.trunc(Number(m2[1]));
+    return 0;
+  }
+
+  function normalizeTemplateId(value: any) {
+    return String(value || '').trim().toLowerCase();
+  }
+
+  function currentSettingsTemplateBinding() {
+    if (!settingsNode || (!isApiNode(settingsNode) && !isApiToolNode(settingsNode))) {
+      return { storeId: 0, templateId: '' };
+    }
+    let rawStoreId = '';
+    let rawTemplateId = '';
+    if (isApiNode(settingsNode)) {
+      rawStoreId = String(settingsNode.config?.templateStoreId || '').trim();
+      rawTemplateId = String(settingsNode.config?.templateId || '').trim();
+    } else if (isApiToolNode(settingsNode)) {
+      const settings = toolCfg(settingsNode).settings || {};
+      rawStoreId = String(settings.templateStoreId || '').trim();
+      rawTemplateId = String(settings.templateId || '').trim();
+    }
+    let storeId = parseTemplateStoreId(rawStoreId);
+    if (storeId <= 0) storeId = parseTemplateStoreId(rawTemplateId);
+    if (storeId <= 0) {
+      const refs = nodeTemplateRefs(settingsNode);
+      for (const ref of refs) {
+        const parsed = parseTemplateStoreId(ref);
+        if (parsed > 0) {
+          storeId = parsed;
+          break;
+        }
+      }
+    }
+    return {
+      storeId,
+      templateId: normalizeTemplateId(rawTemplateId)
+    };
+  }
+
+  function selectedLibraryTemplateBinding() {
+    const rawStore = Number(apiLibrarySelection?.storeId || 0);
+    const storeId = Number.isFinite(rawStore) && rawStore > 0 ? Math.trunc(rawStore) : 0;
+    const templateId = normalizeTemplateId(apiLibrarySelection?.templateId || '');
+    const ref = String(apiLibrarySelection?.ref || '').trim();
+    return { storeId, templateId, ref };
+  }
+
+  function templateBindingsMatch(
+    current: { storeId: number; templateId: string },
+    selected: { storeId: number; templateId: string }
+  ) {
+    if (selected.storeId > 0 && current.storeId > 0) {
+      return selected.storeId === current.storeId;
+    }
+    if (selected.templateId && current.templateId) {
+      return selected.templateId === current.templateId;
+    }
+    if (selected.storeId > 0 && current.templateId) {
+      const currentTemplateStoreId = parseTemplateStoreId(current.templateId);
+      return currentTemplateStoreId > 0 && currentTemplateStoreId === selected.storeId;
+    }
+    if (current.storeId > 0 && selected.templateId) {
+      const selectedTemplateStoreId = parseTemplateStoreId(selected.templateId);
+      return selectedTemplateStoreId > 0 && selectedTemplateStoreId === current.storeId;
+    }
+    return false;
+  }
+
+  function hasSelectedLibraryTemplateIdentity() {
+    const selected = selectedLibraryTemplateBinding();
+    return selected.storeId > 0 || Boolean(selected.templateId);
+  }
+
+  function selectedLibraryMatchesCurrentTemplate() {
+    const selected = selectedLibraryTemplateBinding();
+    if (!(selected.storeId > 0 || selected.templateId)) return false;
+    const current = currentSettingsTemplateBinding();
+    if (!(current.storeId > 0 || current.templateId)) return false;
+    return templateBindingsMatch(current, selected);
+  }
+
   function currentSettingsTemplateStoreId() {
-    if (settingsApiTemplateSource?.storeId) return Math.trunc(Number(settingsApiTemplateSource.storeId));
-    const raw = Number(String(nodeTemplateStoreId(settingsNode) || '').trim());
-    return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 0;
+    return currentSettingsTemplateBinding().storeId;
   }
 
   function canSwitchSettingsNodeTemplate() {
     if (!settingsNode || (!isApiNode(settingsNode) && !isApiToolNode(settingsNode))) return false;
-    const selectedStoreId = Number(apiLibrarySelection?.storeId || 0);
-    if (!Number.isFinite(selectedStoreId) || selectedStoreId <= 0) return false;
-    const currentStoreId = currentSettingsTemplateStoreId();
-    if (currentStoreId <= 0) return true;
-    return Math.trunc(selectedStoreId) !== currentStoreId;
+    const selected = selectedLibraryTemplateBinding();
+    if (!(selected.storeId > 0 || selected.templateId)) return false;
+    const current = currentSettingsTemplateBinding();
+    if (!(current.storeId > 0 || current.templateId)) return true;
+    return !templateBindingsMatch(current, selected);
   }
 
   async function switchSettingsNodeTemplate() {
     if (!settingsNode || (!isApiNode(settingsNode) && !isApiToolNode(settingsNode))) return;
     if (!canSwitchSettingsNodeTemplate()) return;
-    const selectedStoreId = Math.trunc(Number(apiLibrarySelection?.storeId || 0));
-    if (!Number.isFinite(selectedStoreId) || selectedStoreId <= 0) return;
-    let source = dynamicApiSources.find((src) => Number(src?.storeId || 0) === selectedStoreId) || null;
+    const selected = selectedLibraryTemplateBinding();
+    let source =
+      dynamicApiSources.find((src) => selected.storeId > 0 && Number(src?.storeId || 0) === selected.storeId) ||
+      dynamicApiSources.find((src) => Boolean(selected.templateId) && normalizeTemplateId(src?.id || '') === selected.templateId) ||
+      dynamicApiSources.find((src) => Boolean(selected.ref) && sourceMatchesTemplateRef(src, selected.ref)) ||
+      null;
     if (!source) {
       await loadDynamicSourceCatalog();
-      source = dynamicApiSources.find((src) => Number(src?.storeId || 0) === selectedStoreId) || null;
+      source =
+        dynamicApiSources.find((src) => selected.storeId > 0 && Number(src?.storeId || 0) === selected.storeId) ||
+        dynamicApiSources.find((src) => Boolean(selected.templateId) && normalizeTemplateId(src?.id || '') === selected.templateId) ||
+        dynamicApiSources.find((src) => Boolean(selected.ref) && sourceMatchesTemplateRef(src, selected.ref)) ||
+        null;
     }
     if (!source) {
       banner = 'Не удалось найти выбранный шаблон в библиотеке. Обнови список API и попробуй снова.';
@@ -2519,8 +2614,10 @@
     }
     applyTemplateToNode(settingsNode.id, source.id);
     await tick();
-    const appliedStoreId = currentSettingsTemplateStoreId();
-    if (!(appliedStoreId > 0 && appliedStoreId === selectedStoreId)) {
+    const applied = currentSettingsTemplateBinding();
+    const appliedByStore = Number(source.storeId || 0) > 0 && applied.storeId > 0 && Math.trunc(Number(source.storeId || 0)) === applied.storeId;
+    const appliedByTemplate = Boolean(applied.templateId) && applied.templateId === normalizeTemplateId(source.id);
+    if (!appliedByStore && !appliedByTemplate) {
       banner = 'Не удалось перепривязать ноду к выбранному шаблону. Обнови рабочий стол и попробуй снова.';
       return;
     }
@@ -2530,7 +2627,7 @@
     }
     apiLibrarySelection = {
       ...(apiLibrarySelection || { ref: '', name: '', storeId: 0, templateId: '' }),
-      storeId: selectedStoreId,
+      storeId: Number(source.storeId || selected.storeId || 0),
       templateId: source.id,
       name: String(source.name || apiLibrarySelection?.name || '').trim()
     };
@@ -4632,20 +4729,14 @@
         <div class="node-modal-body node-modal-body-api">
           {#if settingsNode}
             {@const currentTemplateName = String(settingsApiTemplateSource?.name || '').trim() || 'Шаблон не привязан'}
-            {@const currentTemplateStoreId = currentSettingsTemplateStoreId()}
             {@const otherNodesCount = apiTemplateUsageSummary.otherNodes.length}
             {@const processCount = apiTemplateUsageSummary.processes.length}
             {@const switchDisabled = !canSwitchSettingsNodeTemplate()}
             {@const selectedLibraryName = String(apiLibrarySelection?.name || '').trim()}
-            {@const selectedLibraryStoreId = Number(apiLibrarySelection?.storeId || 0)}
-            {@const hasLibrarySelection = Boolean(selectedLibraryName || selectedLibraryStoreId > 0)}
-            {@const libraryMatchesCurrent =
-              selectedLibraryStoreId > 0 &&
-              currentTemplateStoreId > 0 &&
-              Math.trunc(selectedLibraryStoreId) === currentTemplateStoreId}
-            {@const libraryReadyToSwitch =
-              selectedLibraryStoreId > 0 &&
-              (currentTemplateStoreId <= 0 || Math.trunc(selectedLibraryStoreId) !== currentTemplateStoreId)}
+            {@const hasLibraryIdentity = hasSelectedLibraryTemplateIdentity()}
+            {@const hasLibrarySelection = Boolean(selectedLibraryName || hasLibraryIdentity)}
+            {@const libraryMatchesCurrent = hasLibraryIdentity && selectedLibraryMatchesCurrentTemplate()}
+            {@const libraryReadyToSwitch = hasLibraryIdentity && !libraryMatchesCurrent}
             <section class="api-template-current-block">
               <div class="api-template-line api-template-line-main">
                 <span class="api-template-key">Текущий шаблон:</span>
@@ -4713,7 +4804,7 @@
                 </button>
                 {#if !hasLibrarySelection}
                   <span class="api-template-switch-hint">В библиотеке ничего не выбрано.</span>
-                {:else if selectedLibraryStoreId <= 0}
+                {:else if !hasLibraryIdentity}
                   <span class="api-template-switch-hint">Выбран черновик. Сначала сохрани шаблон в библиотеке.</span>
                 {:else if libraryMatchesCurrent}
                   <span class="api-template-switch-hint">Этот шаблон уже подключён.</span>

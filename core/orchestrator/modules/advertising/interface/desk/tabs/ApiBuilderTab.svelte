@@ -3083,7 +3083,10 @@ function formatBytes(bytes: number) {
 
   function emitTemplateSelectionChange() {
     const ref = String(selectedRef || '').trim();
-    const storeId = resolveDraftStoreId(selected || null, ref);
+    // `ref` is the most stable source of selected template identity (`db:<id>`).
+    // Prefer it to avoid transient mismatches between name and storeId during reactive updates.
+    const storeIdFromSelectedRef = storeIdFromRef(ref);
+    const storeId = storeIdFromSelectedRef > 0 ? storeIdFromSelectedRef : resolveDraftStoreId(selected || null, ref);
     const payload = {
       ref,
       name: String(selected?.name || '').trim(),
