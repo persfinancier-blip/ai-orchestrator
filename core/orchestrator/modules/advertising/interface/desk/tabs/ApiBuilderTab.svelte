@@ -424,6 +424,15 @@
   let authJsonTree: any = null;
   let authJsonValid = false;
   let authViewMode: 'tree' | 'raw' = 'raw';
+  let tokenHeadersJsonTree: any = null;
+  let tokenHeadersJsonValid = false;
+  let tokenHeadersViewMode: 'tree' | 'raw' = 'raw';
+  let tokenQueryJsonTree: any = null;
+  let tokenQueryJsonValid = false;
+  let tokenQueryViewMode: 'tree' | 'raw' = 'raw';
+  let tokenBodyJsonTree: any = null;
+  let tokenBodyJsonValid = false;
+  let tokenBodyViewMode: 'tree' | 'raw' = 'raw';
   let headersJsonTree: any = null;
   let headersJsonValid = false;
   let headersViewMode: 'tree' | 'raw' = 'raw';
@@ -441,6 +450,9 @@
   let myPreviewEl: HTMLTextAreaElement | null = null;
   let descriptionEl: HTMLTextAreaElement | null = null;
   let authEl: HTMLTextAreaElement | null = null;
+  let tokenHeadersEl: HTMLTextAreaElement | null = null;
+  let tokenQueryEl: HTMLTextAreaElement | null = null;
+  let tokenBodyEl: HTMLTextAreaElement | null = null;
   let headersEl: HTMLTextAreaElement | null = null;
   let queryEl: HTMLTextAreaElement | null = null;
   let bodyEl: HTMLTextAreaElement | null = null;
@@ -3937,7 +3949,14 @@ function formatBytes(bytes: number) {
 
   function dropAliasTokenToField(
     event: DragEvent,
-    field: 'authJson' | 'headersJson' | 'queryJson' | 'bodyJson',
+    field:
+      | 'authJson'
+      | 'headersJson'
+      | 'queryJson'
+      | 'bodyJson'
+      | 'oauth2RequestHeadersJson'
+      | 'oauth2RequestQueryJson'
+      | 'oauth2RequestBodyJson',
     el?: HTMLTextAreaElement | null
   ) {
     event.preventDefault();
@@ -8251,6 +8270,51 @@ function handleDefinitionInput(value: string) {
     }
   }
   $: {
+    const txt = String(selected?.oauth2RequestHeadersJson || '').trim();
+    if (!txt) {
+      tokenHeadersJsonValid = false;
+      tokenHeadersJsonTree = null;
+    } else {
+      try {
+        tokenHeadersJsonTree = parseJsonObjectField('Token Headers JSON', txt);
+        tokenHeadersJsonValid = true;
+      } catch {
+        tokenHeadersJsonTree = null;
+        tokenHeadersJsonValid = false;
+      }
+    }
+  }
+  $: {
+    const txt = String(selected?.oauth2RequestQueryJson || '').trim();
+    if (!txt) {
+      tokenQueryJsonValid = false;
+      tokenQueryJsonTree = null;
+    } else {
+      try {
+        tokenQueryJsonTree = parseJsonObjectField('Token Query JSON', txt);
+        tokenQueryJsonValid = true;
+      } catch {
+        tokenQueryJsonTree = null;
+        tokenQueryJsonValid = false;
+      }
+    }
+  }
+  $: {
+    const txt = String(selected?.oauth2RequestBodyJson || '').trim();
+    if (!txt) {
+      tokenBodyJsonValid = false;
+      tokenBodyJsonTree = null;
+    } else {
+      try {
+        tokenBodyJsonTree = parseJsonAnyField('Token Body JSON', txt);
+        tokenBodyJsonValid = true;
+      } catch {
+        tokenBodyJsonTree = null;
+        tokenBodyJsonValid = false;
+      }
+    }
+  }
+  $: {
     const txt = String(selected?.queryJson || '').trim();
     if (!txt) {
       queryJsonValid = false;
@@ -8289,6 +8353,9 @@ function handleDefinitionInput(value: string) {
   $: myPreviewViewMode, tick().then(syncLeftTextareasHeight);
   $: selected?.description, tick().then(syncMainTextareasHeight);
   $: selected?.authJson, tick().then(syncMainTextareasHeight);
+  $: selected?.oauth2RequestHeadersJson, tick().then(syncMainTextareasHeight);
+  $: selected?.oauth2RequestQueryJson, tick().then(syncMainTextareasHeight);
+  $: selected?.oauth2RequestBodyJson, tick().then(syncMainTextareasHeight);
   $: selected?.headersJson, tick().then(syncMainTextareasHeight);
   $: selected?.queryJson, tick().then(syncMainTextareasHeight);
   $: selected?.bodyJson, tick().then(syncMainTextareasHeight);
@@ -8375,6 +8442,9 @@ function handleDefinitionInput(value: string) {
   $: headersViewMode, tick().then(syncMainTextareasHeight);
   $: queryViewMode, tick().then(syncMainTextareasHeight);
   $: bodyViewMode, tick().then(syncMainTextareasHeight);
+  $: tokenHeadersViewMode, tick().then(syncMainTextareasHeight);
+  $: tokenQueryViewMode, tick().then(syncMainTextareasHeight);
+  $: tokenBodyViewMode, tick().then(syncMainTextareasHeight);
 
 function autosize(el: HTMLTextAreaElement | null, minPx = 78) {
   if (!el) return;
@@ -8396,6 +8466,9 @@ function syncParameterEditorsHeight() {
   function syncMainTextareasHeight() {
     autosize(descriptionEl);
     autosize(authEl);
+    autosize(tokenHeadersEl);
+    autosize(tokenQueryEl);
+    autosize(tokenBodyEl);
     autosize(headersEl);
     autosize(queryEl);
     autosize(bodyEl);
@@ -8826,32 +8899,119 @@ function syncParameterEditorsHeight() {
             </div>
             <div class="raw-grid">
               <label>
-                <div class="response-head field-head"><span>Token Headers JSON</span></div>
-                <textarea
-                  class="json-code-editor"
-                  spellcheck="false"
-                  value={selected?.oauth2RequestHeadersJson || '{}'}
-                  on:input={(e) => mutateSelected((d) => (d.oauth2RequestHeadersJson = e.currentTarget.value))}
-                ></textarea>
+                <div class="response-head field-head">
+                  <span>Token Headers JSON</span>
+                  {#if tokenHeadersJsonValid}
+                    <button type="button" class="view-toggle" on:click={() => (tokenHeadersViewMode = tokenHeadersViewMode === 'tree' ? 'raw' : 'tree')}>
+                      {tokenHeadersViewMode === 'tree' ? 'RAW' : 'Дерево'}
+                    </button>
+                  {/if}
+                </div>
+                {#if groupByAliasCandidates.length}
+                  <div class="field-param-showcase">
+                    {#each groupByAliasCandidates as alias}
+                      <button
+                        type="button"
+                        class="param-token-chip"
+                        title="Перетащи в Token Headers JSON"
+                        draggable="true"
+                        on:dragstart={(e) => aliasChipDragStart(alias, e)}
+                      >
+                        {alias}
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+                {#if tokenHeadersJsonValid && tokenHeadersViewMode === 'tree'}
+                  <div class="response-tree-wrap"><JsonTreeView node={tokenHeadersJsonTree} name="token_headers" level={0} /></div>
+                {:else}
+                  <textarea
+                    class="json-code-editor"
+                    spellcheck="false"
+                    bind:this={tokenHeadersEl}
+                    value={selected?.oauth2RequestHeadersJson || '{}'}
+                    on:input={(e) => mutateSelected((d) => (d.oauth2RequestHeadersJson = e.currentTarget.value))}
+                    on:dragover|preventDefault
+                    on:drop={(e) => dropAliasTokenToField(e, 'oauth2RequestHeadersJson', tokenHeadersEl)}
+                  ></textarea>
+                {/if}
               </label>
               <label>
-                <div class="response-head field-head"><span>Token Query JSON</span></div>
-                <textarea
-                  class="json-code-editor"
-                  spellcheck="false"
-                  value={selected?.oauth2RequestQueryJson || '{}'}
-                  on:input={(e) => mutateSelected((d) => (d.oauth2RequestQueryJson = e.currentTarget.value))}
-                ></textarea>
+                <div class="response-head field-head">
+                  <span>Token Query JSON</span>
+                  {#if tokenQueryJsonValid}
+                    <button type="button" class="view-toggle" on:click={() => (tokenQueryViewMode = tokenQueryViewMode === 'tree' ? 'raw' : 'tree')}>
+                      {tokenQueryViewMode === 'tree' ? 'RAW' : 'Дерево'}
+                    </button>
+                  {/if}
+                </div>
+                {#if groupByAliasCandidates.length}
+                  <div class="field-param-showcase">
+                    {#each groupByAliasCandidates as alias}
+                      <button
+                        type="button"
+                        class="param-token-chip"
+                        title="Перетащи в Token Query JSON"
+                        draggable="true"
+                        on:dragstart={(e) => aliasChipDragStart(alias, e)}
+                      >
+                        {alias}
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+                {#if tokenQueryJsonValid && tokenQueryViewMode === 'tree'}
+                  <div class="response-tree-wrap"><JsonTreeView node={tokenQueryJsonTree} name="token_query" level={0} /></div>
+                {:else}
+                  <textarea
+                    class="json-code-editor"
+                    spellcheck="false"
+                    bind:this={tokenQueryEl}
+                    value={selected?.oauth2RequestQueryJson || '{}'}
+                    on:input={(e) => mutateSelected((d) => (d.oauth2RequestQueryJson = e.currentTarget.value))}
+                    on:dragover|preventDefault
+                    on:drop={(e) => dropAliasTokenToField(e, 'oauth2RequestQueryJson', tokenQueryEl)}
+                  ></textarea>
+                {/if}
               </label>
             </div>
             <label>
-              <div class="response-head field-head"><span>Token Body JSON</span></div>
-              <textarea
-                class="json-code-editor"
-                spellcheck="false"
-                value={selected?.oauth2RequestBodyJson || '{}'}
-                on:input={(e) => mutateSelected((d) => (d.oauth2RequestBodyJson = e.currentTarget.value))}
-              ></textarea>
+              <div class="response-head field-head">
+                <span>Token Body JSON</span>
+                {#if tokenBodyJsonValid}
+                  <button type="button" class="view-toggle" on:click={() => (tokenBodyViewMode = tokenBodyViewMode === 'tree' ? 'raw' : 'tree')}>
+                    {tokenBodyViewMode === 'tree' ? 'RAW' : 'Дерево'}
+                  </button>
+                {/if}
+              </div>
+              {#if groupByAliasCandidates.length}
+                <div class="field-param-showcase">
+                  {#each groupByAliasCandidates as alias}
+                    <button
+                      type="button"
+                      class="param-token-chip"
+                      title="Перетащи в Token Body JSON"
+                      draggable="true"
+                      on:dragstart={(e) => aliasChipDragStart(alias, e)}
+                    >
+                      {alias}
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+              {#if tokenBodyJsonValid && tokenBodyViewMode === 'tree'}
+                <div class="response-tree-wrap"><JsonTreeView node={tokenBodyJsonTree} name="token_body" level={0} /></div>
+              {:else}
+                <textarea
+                  class="json-code-editor"
+                  spellcheck="false"
+                  bind:this={tokenBodyEl}
+                  value={selected?.oauth2RequestBodyJson || '{}'}
+                  on:input={(e) => mutateSelected((d) => (d.oauth2RequestBodyJson = e.currentTarget.value))}
+                  on:dragover|preventDefault
+                  on:drop={(e) => dropAliasTokenToField(e, 'oauth2RequestBodyJson', tokenBodyEl)}
+                ></textarea>
+              {/if}
             </label>
             <div class="rule-card">
               <div class="rule-card-head">
