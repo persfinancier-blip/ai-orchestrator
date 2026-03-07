@@ -8667,7 +8667,7 @@ function syncParameterEditorsHeight() {
           {#if selected?.paginationEnabled}
             <div class="data-section">
               <div class="response-head field-head parameter-subhead">
-                <small>Хлебные крошки параметров</small>
+                <small>Параметры пагинации</small>
                 <button type="button" class="view-toggle" on:click={addPaginationParameter}>Параметр +</button>
               </div>
               {#if selected?.paginationParameters?.length}
@@ -8694,6 +8694,25 @@ function syncParameterEditorsHeight() {
                   <div class="rule-card pagination-param-editor">
                     <div class="rule-card-head">
                       <small>Настройка параметра</small>
+                    </div>
+                    <div class="pagination-param-helper">
+                      <p class="hint small-hint">
+                        {#if !paginationCursorResponsePathOptions.length}
+                          Если список путей пустой, обнови ответ API.
+                        {:else}
+                          Путь можно выбрать из ответа. При необходимости обнови ответ API.
+                        {/if}
+                      </p>
+                      <button
+                        type="button"
+                        class="mini-refresh-btn"
+                        title="Обновить ответ API"
+                        aria-label="Обновить ответ API"
+                        on:click={checkApiNow}
+                        disabled={checking}
+                      >
+                        {checking ? '…' : '↻'}
+                      </button>
                     </div>
                     <div class="pagination-grid pagination-param-grid pagination-param-inline-row">
                       <div class="pagination-field">
@@ -9670,6 +9689,34 @@ function syncParameterEditorsHeight() {
     color:#94a3b8;
   }
   .pagination-param-editor { margin-top:8px; }
+  .pagination-param-helper {
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:8px;
+  }
+  .pagination-param-helper .hint {
+    flex:1;
+    font-size:12px;
+    line-height:1.3;
+  }
+  .mini-refresh-btn {
+    width:28px;
+    min-width:28px;
+    height:28px;
+    padding:0;
+    border:1px solid #cbd5e1;
+    border-radius:8px;
+    background:#fff;
+    color:#334155;
+    font-size:14px;
+    line-height:1;
+  }
+  .mini-refresh-btn:hover:not(:disabled) {
+    border-color:#94a3b8;
+    background:#f8fafc;
+    color:#0f172a;
+  }
   .pagination-param-grid { margin-top:0; }
   .pagination-param-inline-row {
     grid-template-columns: minmax(160px, 220px) minmax(220px, 1fr) minmax(220px, 1fr) minmax(220px, 1fr);
