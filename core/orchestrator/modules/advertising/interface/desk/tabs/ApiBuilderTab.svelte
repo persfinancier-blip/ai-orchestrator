@@ -8741,7 +8741,11 @@ function syncParameterEditorsHeight() {
                 <small>Лимиты и безопасность</small>
               </div>
               <div class="pagination-safety-layout">
-                <div class="pagination-numeric-grid">
+                <div class="pagination-subsection">
+                  <div class="pagination-subsection-head">
+                    <small class="pagination-subsection-title">Лимиты</small>
+                  </div>
+                  <div class="pagination-numeric-grid">
                   <div class="pagination-setting-item">
                     <div class="pagination-setting-head">
                       <small class="pagination-setting-title">Лимит страниц</small>
@@ -8794,7 +8798,7 @@ function syncParameterEditorsHeight() {
                     />
                   </div>
 
-                  <div class="pagination-setting-item">
+                  <div class="pagination-setting-item pagination-setting-item-full">
                     <div class="pagination-setting-head">
                       <small class="pagination-setting-title">Одинаковые ответы подряд</small>
                       <button
@@ -8822,8 +8826,14 @@ function syncParameterEditorsHeight() {
                   </div>
                 </div>
 
-                <div class="pagination-boolean-list">
-                  <div class="pagination-bool-row">
+                </div>
+
+                <div class="pagination-subsection">
+                  <div class="pagination-subsection-head">
+                    <small class="pagination-subsection-title">Условия остановки</small>
+                  </div>
+                  <div class="pagination-boolean-list">
+                    <div class="pagination-bool-row">
                     <small class="pagination-setting-title">Остановка при отсутствии нового значения пагинации</small>
                     <button
                       type="button"
@@ -8839,7 +8849,7 @@ function syncParameterEditorsHeight() {
                     </button>
                   </div>
 
-                  <div class="pagination-bool-row">
+                    <div class="pagination-bool-row">
                     <small class="pagination-setting-title">Остановка при HTTP ошибке</small>
                     <button
                       type="button"
@@ -8853,8 +8863,9 @@ function syncParameterEditorsHeight() {
                         <span class="pagination-inline-indicator"></span>
                       {/if}
                     </button>
-                  </div>
+                    </div>
                 </div>
+              </div>
               </div>
               <div class="pagination-stop-rules">
                 <div class="response-head field-head parameter-subhead">
@@ -9569,12 +9580,28 @@ function syncParameterEditorsHeight() {
     margin-top:8px;
     display:flex;
     flex-direction:column;
-    gap:10px;
+    gap:8px;
+  }
+  .pagination-subsection {
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+  }
+  .pagination-subsection-head {
+    display:flex;
+    align-items:center;
+    justify-content:flex-start;
+  }
+  .pagination-subsection-title {
+    margin:0;
+    font-size:11px;
+    font-weight:600;
+    color:#64748b;
   }
   .pagination-numeric-grid {
     display:grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap:10px;
+    gap:8px;
     align-items:start;
   }
   .pagination-setting-item {
@@ -9582,29 +9609,32 @@ function syncParameterEditorsHeight() {
     border:1px solid #e2e8f0;
     border-radius:10px;
     background:#fff;
-    padding:8px;
+    padding:7px 8px;
     display:flex;
     flex-direction:column;
-    gap:8px;
+    gap:6px;
+  }
+  .pagination-setting-item-full {
+    grid-column:1 / -1;
   }
   .pagination-boolean-list {
     display:flex;
     flex-direction:column;
-    gap:8px;
+    gap:6px;
   }
   .pagination-bool-row {
     border:1px solid #e2e8f0;
     border-radius:10px;
     background:#fff;
-    padding:8px 10px;
+    padding:7px 8px;
     display:flex;
     align-items:center;
     justify-content:space-between;
-    gap:10px;
+    gap:8px;
   }
   .pagination-setting-head {
     display:flex;
-    align-items:flex-start;
+    align-items:center;
     justify-content:space-between;
     gap:8px;
   }
@@ -9618,9 +9648,10 @@ function syncParameterEditorsHeight() {
     min-width:0;
   }
   .pagination-inline-toggle {
-    width:auto;
-    min-width:68px;
-    padding:4px 8px;
+    width:64px;
+    min-width:64px;
+    height:24px;
+    padding:0 8px;
     border:1px solid #cbd5e1;
     border-radius:999px;
     background:#fff;
@@ -9630,9 +9661,9 @@ function syncParameterEditorsHeight() {
     display:inline-flex;
     align-items:center;
     justify-content:center;
-    gap:6px;
+    gap:5px;
     white-space:nowrap;
-    flex-shrink:0;
+    flex:0 0 64px;
   }
   .pagination-inline-toggle.active-inline-toggle {
     border-color:#0f172a;
