@@ -8741,11 +8741,7 @@ function syncParameterEditorsHeight() {
                 <small>Лимиты и безопасность</small>
               </div>
               <div class="pagination-safety-layout">
-                <div class="pagination-subsection">
-                  <div class="pagination-subsection-head">
-                    <small class="pagination-subsection-title">Лимиты</small>
-                  </div>
-                  <div class="pagination-numeric-grid">
+                <div class="pagination-numeric-grid">
                   <div class="pagination-setting-item">
                     <div class="pagination-setting-head">
                       <small class="pagination-setting-title">Лимит страниц</small>
@@ -8798,7 +8794,7 @@ function syncParameterEditorsHeight() {
                     />
                   </div>
 
-                  <div class="pagination-setting-item pagination-setting-item-full">
+                  <div class="pagination-setting-item">
                     <div class="pagination-setting-head">
                       <small class="pagination-setting-title">Одинаковые ответы подряд</small>
                       <button
@@ -8826,13 +8822,7 @@ function syncParameterEditorsHeight() {
                   </div>
                 </div>
 
-                </div>
-
-                <div class="pagination-subsection">
-                  <div class="pagination-subsection-head">
-                    <small class="pagination-subsection-title">Условия остановки</small>
-                  </div>
-                  <div class="pagination-boolean-list">
+                <div class="pagination-boolean-list">
                     <div class="pagination-bool-row">
                     <small class="pagination-setting-title">Остановка при отсутствии нового значения пагинации</small>
                     <button
@@ -8865,7 +8855,6 @@ function syncParameterEditorsHeight() {
                     </button>
                     </div>
                 </div>
-              </div>
               </div>
               <div class="pagination-stop-rules">
                 <div class="response-head field-head parameter-subhead">
@@ -9577,56 +9566,37 @@ function syncParameterEditorsHeight() {
   .pagination-grid { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
   .pagination-field small { display:block; margin-bottom:4px; font-size:11px; color:#64748b; }
   .pagination-safety-layout {
-    margin-top:8px;
-    display:flex;
-    flex-direction:column;
-    gap:8px;
-  }
-  .pagination-subsection {
+    margin-top:6px;
     display:flex;
     flex-direction:column;
     gap:6px;
   }
-  .pagination-subsection-head {
-    display:flex;
-    align-items:center;
-    justify-content:flex-start;
-  }
-  .pagination-subsection-title {
-    margin:0;
-    font-size:11px;
-    font-weight:600;
-    color:#64748b;
-  }
   .pagination-numeric-grid {
     display:grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap:8px;
     align-items:start;
   }
   .pagination-setting-item {
     min-width:0;
-    border:1px solid #e2e8f0;
-    border-radius:10px;
-    background:#fff;
-    padding:7px 8px;
+    border:0;
+    border-radius:0;
+    background:transparent;
+    padding:0;
     display:flex;
     flex-direction:column;
-    gap:6px;
-  }
-  .pagination-setting-item-full {
-    grid-column:1 / -1;
+    gap:4px;
   }
   .pagination-boolean-list {
-    display:flex;
-    flex-direction:column;
+    display:grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap:6px;
   }
   .pagination-bool-row {
-    border:1px solid #e2e8f0;
-    border-radius:10px;
-    background:#fff;
-    padding:7px 8px;
+    border:0;
+    border-radius:0;
+    background:transparent;
+    padding:0;
     display:flex;
     align-items:center;
     justify-content:space-between;
@@ -9640,9 +9610,9 @@ function syncParameterEditorsHeight() {
   }
   .pagination-setting-title {
     margin:0;
-    font-size:12px;
+    font-size:11px;
     font-weight:600;
-    line-height:1.35;
+    line-height:1.25;
     color:#334155;
     flex:1;
     min-width:0;
@@ -9679,6 +9649,8 @@ function syncParameterEditorsHeight() {
   }
   .pagination-value-input {
     width:100%;
+    padding:6px 8px;
+    border-radius:10px;
   }
   .pagination-value-input:disabled {
     background:#f8fafc;
@@ -9732,6 +9704,9 @@ function syncParameterEditorsHeight() {
     .parameter-sources-grid { grid-template-columns: 1fr; }
     .data-row, .table-rule-row, .join-rule-row, .filter-rule-row, .param-row, .date-param-inline-row, .field-date-row { grid-template-columns: 1fr; }
     .pagination-numeric-grid {
+      grid-template-columns: 1fr;
+    }
+    .pagination-boolean-list {
       grid-template-columns: 1fr;
     }
     .pagination-param-inline-row,
