@@ -8585,10 +8585,9 @@ function syncParameterEditorsHeight() {
                 {:else}
                   <p class="hint">Добавь параметры через «Таблица +» или «Дата +».</p>
                 {/if}
+                <p class="hint small-hint data-helper-note">Группировка работает одинаково для параметров из таблиц и дат.</p>
               </div>
             </div>
-
-            <p class="hint small-hint">Группировка работает одинаково для параметров из таблиц и дат.</p>
 
             <div class="data-section">
               <div class="response-head field-head parameter-subhead">
@@ -9375,6 +9374,13 @@ function syncParameterEditorsHeight() {
   .parameter-subhead { margin-top:12px; }
   .data-builder-box { border:1px solid #e2e8f0; border-radius:12px; padding:10px; background:#fff; margin-top:8px; display:flex; flex-direction:column; gap:10px; }
   .data-section { display:flex; flex-direction:column; gap:6px; }
+  .data-helper-note {
+    margin:14px 0 10px;
+    padding:8px 10px;
+    border:1px dashed #dbe4ef;
+    border-radius:10px;
+    background:#f8fafc;
+  }
   .parameter-sources-grid {
     display:grid;
     grid-template-columns: minmax(0, 1fr);
