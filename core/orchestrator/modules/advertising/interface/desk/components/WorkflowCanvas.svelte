@@ -2488,23 +2488,45 @@
     };
   }
 
-  function canSwitchSettingsNodeTemplate() {
-    if (!settingsNode || (!isApiNode(settingsNode) && !isApiToolNode(settingsNode))) return false;
-    const nextTemplateId = String(apiLibrarySelection?.templateId || '').trim();
-    if (!nextTemplateId) return false;
-    const currentTemplateId = String(nodeTemplateId(settingsNode) || '').trim();
-    return nextTemplateId !== currentTemplateId;
+  function currentSettingsTemplateStoreId() {
+    if (settingsApiTemplateSource?.storeId) return Math.trunc(Number(settingsApiTemplateSource.storeId));
+    const raw = Number(String(nodeTemplateStoreId(settingsNode) || '').trim());
+    return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 0;
   }
 
-  function switchSettingsNodeTemplate() {
+  function canSwitchSettingsNodeTemplate() {
+    if (!settingsNode || (!isApiNode(settingsNode) && !isApiToolNode(settingsNode))) return false;
+    const selectedStoreId = Number(apiLibrarySelection?.storeId || 0);
+    if (!Number.isFinite(selectedStoreId) || selectedStoreId <= 0) return false;
+    const currentStoreId = currentSettingsTemplateStoreId();
+    if (currentStoreId <= 0) return true;
+    return Math.trunc(selectedStoreId) !== currentStoreId;
+  }
+
+  async function switchSettingsNodeTemplate() {
     if (!settingsNode || (!isApiNode(settingsNode) && !isApiToolNode(settingsNode))) return;
     if (!canSwitchSettingsNodeTemplate()) return;
-    const templateId = String(apiLibrarySelection?.templateId || '').trim();
-    if (!templateId) return;
-    applyTemplateToNode(settingsNode.id, templateId);
+    const selectedStoreId = Math.trunc(Number(apiLibrarySelection?.storeId || 0));
+    if (!Number.isFinite(selectedStoreId) || selectedStoreId <= 0) return;
+    let source = dynamicApiSources.find((src) => Number(src?.storeId || 0) === selectedStoreId) || null;
+    if (!source) {
+      await loadDynamicSourceCatalog();
+      source = dynamicApiSources.find((src) => Number(src?.storeId || 0) === selectedStoreId) || null;
+    }
+    if (!source) {
+      banner = 'Не удалось найти выбранный шаблон в библиотеке. Обнови список API и попробуй снова.';
+      return;
+    }
+    applyTemplateToNode(settingsNode.id, source.id);
+    apiLibrarySelection = {
+      ...(apiLibrarySelection || { ref: '', name: '', storeId: 0, templateId: '' }),
+      storeId: selectedStoreId,
+      templateId: source.id,
+      name: String(source.name || apiLibrarySelection?.name || '').trim()
+    };
     apiTemplateUsageExpanded = false;
     apiTemplateUsageRefreshTick += 1;
-    const switchedName = String(apiLibrarySelection?.name || settingsApiTemplateSource?.name || '').trim();
+    const switchedName = String(source.name || apiLibrarySelection?.name || settingsApiTemplateSource?.name || '').trim();
     banner = switchedName ? `Шаблон в ноде изменён: ${switchedName}` : 'Шаблон в ноде изменён.';
   }
 
@@ -4598,14 +4620,28 @@
         <div class="node-modal-body node-modal-body-api">
           {#if settingsNode}
             {@const currentTemplateName = String(settingsApiTemplateSource?.name || '').trim() || 'Шаблон не привязан'}
+            {@const currentTemplateStoreId = currentSettingsTemplateStoreId()}
             {@const otherNodesCount = apiTemplateUsageSummary.otherNodes.length}
             {@const processCount = apiTemplateUsageSummary.processes.length}
             {@const switchDisabled = !canSwitchSettingsNodeTemplate()}
-            {@const hasLibrarySelection = Boolean(apiLibrarySelection?.templateId)}
+            {@const selectedLibraryName = String(apiLibrarySelection?.name || '').trim()}
+            {@const selectedLibraryStoreId = Number(apiLibrarySelection?.storeId || 0)}
+            {@const hasLibrarySelection = Boolean(selectedLibraryName || selectedLibraryStoreId > 0)}
+            {@const libraryMatchesCurrent =
+              selectedLibraryStoreId > 0 &&
+              currentTemplateStoreId > 0 &&
+              Math.trunc(selectedLibraryStoreId) === currentTemplateStoreId}
+            {@const libraryReadyToSwitch =
+              selectedLibraryStoreId > 0 &&
+              (currentTemplateStoreId <= 0 || Math.trunc(selectedLibraryStoreId) !== currentTemplateStoreId)}
             <section class="api-template-current-block">
               <div class="api-template-line api-template-line-main">
                 <span class="api-template-key">Текущий шаблон:</span>
                 <span class="api-template-value">{currentTemplateName}</span>
+              </div>
+              <div class="api-template-line api-template-line-selected">
+                <span class="api-template-key">Выбран в библиотеке:</span>
+                <span class="api-template-value api-template-value-muted">{hasLibrarySelection ? selectedLibraryName : 'В библиотеке ничего не выбрано'}</span>
               </div>
               <div class="api-template-line api-template-line-usage">
                 <span class="api-template-usage-text">
@@ -4661,13 +4697,16 @@
                   disabled={switchDisabled}
                   title={switchDisabled ? 'Выбери другой сохранённый шаблон в библиотеке ниже' : 'Перепривязать ноду к выбранному шаблону'}
                 >
-                  {switchDisabled && hasLibrarySelection ? 'Этот шаблон уже подключён' : 'Сменить шаблон'}
+                  Сменить шаблон
                 </button>
-                {#if hasLibrarySelection}
-                  <span class="api-template-switch-hint">
-                    Выбран в библиотеке: {String(apiLibrarySelection?.name || '').trim() || 'без названия'}
-                    {switchDisabled ? ' (уже подключён)' : ''}
-                  </span>
+                {#if !hasLibrarySelection}
+                  <span class="api-template-switch-hint">В библиотеке ничего не выбрано.</span>
+                {:else if selectedLibraryStoreId <= 0}
+                  <span class="api-template-switch-hint">Выбран черновик. Сначала сохрани шаблон в библиотеке.</span>
+                {:else if libraryMatchesCurrent}
+                  <span class="api-template-switch-hint">Этот шаблон уже подключён.</span>
+                {:else if libraryReadyToSwitch}
+                  <span class="api-template-switch-hint">Готов к перепривязке.</span>
                 {:else}
                   <span class="api-template-switch-hint">Выбери шаблон в секции “Список API”, затем нажми “Сменить шаблон”.</span>
                 {/if}
@@ -5077,6 +5116,11 @@
     font-size: 14px;
     font-weight: 600;
     color: #0f172a;
+  }
+  .api-template-value-muted {
+    font-size: 13px;
+    font-weight: 500;
+    color: #1e293b;
   }
   .api-template-usage-text {
     font-size: 12px;
