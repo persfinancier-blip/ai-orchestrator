@@ -167,13 +167,17 @@
 </script>
 
 <main class="workflow-desk-root">
-  <header class="desk-header">
-    <h1>Рабочий стол данных</h1>
-    <nav class="desk-tabs">
-      <button class:active={pane === 'workspace'} on:click={() => setPane('workspace')}>Рабочий стол</button>
-      <button class:active={pane === 'api'} on:click={() => setPane('api')}>API</button>
-    </nav>
+  <header class="top">
+    <div>
+      <h1>Рабочий стол данных</h1>
+      <p class="sub">Управление процессами и API-шаблонами в едином рабочем пространстве.</p>
+    </div>
   </header>
+
+  <nav class="tabs">
+    <button class:active={pane === 'workspace'} on:click={() => setPane('workspace')}>Рабочий стол</button>
+    <button class:active={pane === 'api'} on:click={() => setPane('api')}>API</button>
+  </nav>
 
   {#if pane === 'workspace'}
     <WorkflowCanvas />
@@ -218,12 +222,11 @@
     gap: 10px;
   }
 
-  .desk-header {
+  .top {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     gap: 10px;
-    flex-wrap: wrap;
   }
 
   h1 {
@@ -233,13 +236,19 @@
     letter-spacing: 0.01em;
   }
 
-  .desk-tabs {
+  .sub {
+    margin: 2px 0 0;
+    color: #3b4a63;
+    font-size: 12px;
+  }
+
+  .tabs {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
   }
 
-  .desk-tabs button {
+  .tabs button {
     border: 1px solid #dbe4f0;
     border-radius: 10px;
     background: #fff;
@@ -250,7 +259,7 @@
     cursor: pointer;
   }
 
-  .desk-tabs button.active {
+  .tabs button.active {
     background: #0f172a;
     color: #fff;
     border-color: #0f172a;
