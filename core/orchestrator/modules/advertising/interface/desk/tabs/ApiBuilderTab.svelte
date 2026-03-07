@@ -9791,16 +9791,20 @@ function syncParameterEditorsHeight() {
     border:1px solid #e2e8f0;
     border-radius:10px;
     background:#f8fafc;
+    display:flex;
+    align-items:baseline;
+    gap:8px;
+    flex-wrap:wrap;
   }
   .current-template-label {
-    display:block;
-    margin:0 0 4px;
+    display:inline;
+    margin:0;
     font-size:11px;
     color:#64748b;
   }
   .current-template-name {
-    font-size:13px;
-    line-height:1.3;
+    font-size:13.5px;
+    line-height:1.2;
     font-weight:600;
     color:#0f172a;
     word-break:break-word;
