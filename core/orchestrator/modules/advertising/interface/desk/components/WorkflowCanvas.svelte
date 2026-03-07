@@ -4487,18 +4487,40 @@
   .issue.info { border-color: #bfdbfe; background: #eff6ff; }
   .empty { color: #64748b; font-size: 12px; }
   .node-modal-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.48); z-index: 40; }
-  .node-modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; background: #fff; border: 1px solid #dbe4f0; border-radius: 14px; box-shadow: 0 18px 48px rgba(15, 23, 42, 0.28); z-index: 41; }
+  .node-modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(760px, calc(100vw - 32px));
+    max-height: calc(100vh - 48px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: #fff;
+    border: 1px solid #dbe4f0;
+    border-radius: 14px;
+    box-shadow: 0 18px 48px rgba(15, 23, 42, 0.28);
+    z-index: 41;
+  }
   .node-modal.node-modal-wide { width: min(1600px, calc(100vw - 24px)); max-height: calc(100vh - 24px); }
   .node-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; border-bottom: 1px solid #e2e8f0; position: sticky; top: 0; background: #fff; }
   .node-modal-head h4 { margin: 0; font-size: 16px; }
   .close-btn { border: 1px solid #dbe4f0; border-radius: 9px; background: #fff; cursor: pointer; padding: 4px 10px; }
-  .node-modal-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .node-modal-body {
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 0;
+    overflow: auto;
+  }
   .node-modal-body label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #334155; }
   .node-modal-body input,
   .node-modal-body select,
   .node-modal-body textarea { border: 1px solid #dbe4f0; border-radius: 8px; padding: 7px 8px; font-family: inherit; font-size: 13px; }
   .node-modal-body textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  .node-modal-body-api { padding: 8px; background: #f8fafc; }
+  .node-modal-body-api { padding: 8px; background: #f8fafc; min-height: 0; overflow: auto; }
   .node-modal-body-api :global(.panel) { border: 0; border-radius: 0; padding: 0; background: transparent; }
   .interval-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .help { font-size: 12px; color: #475569; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; }

@@ -8807,11 +8807,10 @@ function syncParameterEditorsHeight() {
   .panel-embedded .layout { grid-template-columns: minmax(0, 1fr); }
   .panel-embedded .main { order:1; }
   .panel-embedded .compare-aside { order:2; }
-  .panel-embedded .saved-aside {
-    min-height:clamp(360px, 58vh, 640px);
-    max-height:min(72vh, 760px);
+  .panel-embedded .saved-aside { order:3; }
+  .panel-embedded .api-list {
+    max-height:min(42vh, 420px);
   }
-  .panel-embedded .api-list { order:3; min-height:clamp(180px, 30vh, 300px); }
   .panel-embedded .raw-grid { grid-template-columns: 1fr; }
   @media (max-width: 1500px) { .layout { grid-template-columns: 1fr; } }
 
@@ -8819,9 +8818,7 @@ function syncParameterEditorsHeight() {
   .saved-aside {
     display:flex;
     flex-direction:column;
-    min-height:clamp(460px, 62vh, 760px);
-    max-height:min(78vh, 980px);
-    overflow:hidden;
+    min-height:0;
   }
   .aside-title { font-weight:700; font-size:14px; line-height:1.3; margin-bottom:8px; }
 
@@ -8902,8 +8899,8 @@ function syncParameterEditorsHeight() {
   .list { display:flex; flex-direction:column; gap:8px; min-width:0; }
   .api-list {
     flex:1 1 auto;
-    min-height:clamp(180px, 28vh, 320px);
-    max-height:100%;
+    min-height:clamp(220px, 30vh, 420px);
+    max-height:min(58vh, 720px);
     overflow:auto;
     padding-right:4px;
   }
@@ -9194,11 +9191,7 @@ function syncParameterEditorsHeight() {
     .connect-actions { justify-content:flex-start; flex-wrap:wrap; }
     .raw-grid { grid-template-columns: 1fr; }
     .saved-inline-actions { grid-template-columns: 1fr; }
-    .saved-aside {
-      min-height:clamp(360px, 64vh, 580px);
-      max-height:min(78vh, 680px);
-    }
-    .api-list { min-height:200px; }
+    .api-list { min-height:220px; max-height:min(50vh, 460px); }
     .parameter-sources-grid { grid-template-columns: 1fr; }
     .data-row, .table-rule-row, .join-rule-row, .filter-rule-row, .param-row, .date-param-inline-row, .field-date-row { grid-template-columns: 1fr; }
     .pagination-safety-layout {
