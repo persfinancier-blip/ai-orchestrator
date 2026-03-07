@@ -125,6 +125,8 @@
     compareValue: string;
   };
 
+  type ResponseLogMode = 'minimal' | 'standard' | 'debug';
+
   type OAuth2ResponseMapping = {
     id: string;
     responsePath: string;
@@ -200,6 +202,12 @@
     asyncConcurrency: number;
     executionDelayMs: number;
     responseLogEnabled: boolean;
+    responseLogMode: ResponseLogMode;
+    responseLogWriteRequestPayload: boolean;
+    responseLogWriteResponsePayload: boolean;
+    responseLogWritePaginationValues: boolean;
+    responseLogOnlyErrors: boolean;
+    responseLogResponsePayloadLimit: number;
     responseLogSchema: string;
     responseLogTable: string;
     groupByAliases: string[];
@@ -310,6 +318,37 @@
     { name: 'updated_by', types: ['text', 'character varying', 'varchar'] }
   ];
 
+  const API_LOG_TEMPLATE_REQUIRED_COLUMNS: Array<{ name: string; types: string[] }> = [
+    { name: 'ao_source', types: ['text', 'character varying', 'varchar'] },
+    { name: 'ao_run_id', types: ['text', 'character varying', 'varchar'] },
+    { name: 'ao_created_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] },
+    { name: 'ao_updated_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] },
+    { name: 'ao_contract_schema', types: ['text', 'character varying', 'varchar'] },
+    { name: 'ao_contract_name', types: ['text', 'character varying', 'varchar'] },
+    { name: 'ao_contract_version', types: ['integer', 'int', 'int4', 'bigint', 'int8'] },
+    { name: 'run_id', types: ['text', 'character varying', 'varchar'] },
+    { name: 'api_name', types: ['text', 'character varying', 'varchar'] },
+    { name: 'execution_mode', types: ['text', 'character varying', 'varchar'] },
+    { name: 'sync_planner', types: ['text', 'character varying', 'varchar'] },
+    { name: 'dispatch_mode', types: ['text', 'character varying', 'varchar'] },
+    { name: 'entity_key', types: ['text', 'character varying', 'varchar'] },
+    { name: 'entity_label', types: ['text', 'character varying', 'varchar'] },
+    { name: 'row_index', types: ['integer', 'int', 'int4', 'bigint', 'int8'] },
+    { name: 'wave_no', types: ['integer', 'int', 'int4', 'bigint', 'int8'] },
+    { name: 'page_no', types: ['integer', 'int', 'int4', 'bigint', 'int8'] },
+    { name: 'iteration_reason', types: ['text', 'character varying', 'varchar'] },
+    { name: 'decision', types: ['text', 'character varying', 'varchar'] },
+    { name: 'stop_reason', types: ['text', 'character varying', 'varchar'] },
+    { name: 'error_message', types: ['text', 'character varying', 'varchar'] },
+    { name: 'status_code', types: ['integer', 'int', 'int4', 'bigint', 'int8'] },
+    { name: 'request_payload', types: ['jsonb', 'json'] },
+    { name: 'response_payload', types: ['jsonb', 'json'] },
+    { name: 'pagination_values', types: ['jsonb', 'json'] },
+    { name: 'duration_ms', types: ['integer', 'int', 'int4', 'bigint', 'int8', 'numeric', 'decimal'] },
+    { name: 'created_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] },
+    { name: 'updated_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] }
+  ];
+
   const CONDITION_OPERATORS: Record<'text' | 'number' | 'date' | 'boolean', Array<{ value: string; label: string }>> = {
     text: [
       { value: 'equals', label: 'равно' },
@@ -344,6 +383,8 @@
   let api_storage_pick_value = '';
   let response_log_picker_open = false;
   let response_log_pick_value = '';
+  let responseLogTableCompatibility: Record<string, { ok: boolean; reason: string }> = {};
+  let responseLogTablesRefreshing = false;
 
   let loading = false;
   let saving = false;
@@ -734,8 +775,14 @@ function formatBytes(bytes: number) {
       asyncConcurrency: 3,
       executionDelayMs: 0,
       responseLogEnabled: false,
+      responseLogMode: 'standard',
+      responseLogWriteRequestPayload: true,
+      responseLogWriteResponsePayload: true,
+      responseLogWritePaginationValues: true,
+      responseLogOnlyErrors: false,
+      responseLogResponsePayloadLimit: 120000,
       responseLogSchema: 'bronze',
-      responseLogTable: 'wb_ads_raw',
+      responseLogTable: 'api_step_log',
       groupByAliases: [],
       bodyItemsPath: 'items',
       previewRequestLimit: 5,
@@ -988,8 +1035,30 @@ function formatBytes(bytes: number) {
       (row as any)?.response_log_enabled === undefined
         ? Boolean((responseLogCfg as any)?.enabled)
         : Boolean((row as any)?.response_log_enabled);
+    const responseLogModeRaw = String((responseLogCfg as any)?.mode || 'standard').trim().toLowerCase();
+    const responseLogMode: ResponseLogMode =
+      responseLogModeRaw === 'minimal' || responseLogModeRaw === 'debug' ? (responseLogModeRaw as ResponseLogMode) : 'standard';
+    const responseLogWriteRequestPayload =
+      (responseLogCfg as any)?.write_request_payload === undefined
+        ? true
+        : Boolean((responseLogCfg as any)?.write_request_payload);
+    const responseLogWriteResponsePayload =
+      (responseLogCfg as any)?.write_response_payload === undefined
+        ? true
+        : Boolean((responseLogCfg as any)?.write_response_payload);
+    const responseLogWritePaginationValues =
+      (responseLogCfg as any)?.write_pagination_values === undefined
+        ? true
+        : Boolean((responseLogCfg as any)?.write_pagination_values);
+    const responseLogOnlyErrors = Boolean((responseLogCfg as any)?.only_errors);
+    const responseLogResponsePayloadLimit = Math.max(
+      0,
+      Number.isFinite(Number((responseLogCfg as any)?.response_payload_limit))
+        ? Number((responseLogCfg as any)?.response_payload_limit)
+        : Number((responseLogCfg as any)?.response_payload_max_chars || 120000)
+    );
     const responseLogSchema = String((row as any)?.response_log_schema || (responseLogCfg as any)?.schema || 'bronze').trim() || 'bronze';
-    const responseLogTable = String((row as any)?.response_log_table || (responseLogCfg as any)?.table || 'wb_ads_raw').trim() || 'wb_ads_raw';
+    const responseLogTable = String((row as any)?.response_log_table || (responseLogCfg as any)?.table || 'api_step_log').trim() || 'api_step_log';
     const bodyItemsPath = String(row?.body_items_path || executionCfg?.body_items_path || 'items').trim() || 'items';
     const previewRequestLimit = Number.isFinite(Number(row?.preview_request_limit))
       ? Number(row?.preview_request_limit)
@@ -1282,6 +1351,12 @@ function formatBytes(bytes: number) {
       asyncConcurrency,
       executionDelayMs,
       responseLogEnabled,
+      responseLogMode,
+      responseLogWriteRequestPayload,
+      responseLogWriteResponsePayload,
+      responseLogWritePaginationValues,
+      responseLogOnlyErrors,
+      responseLogResponsePayloadLimit,
       responseLogSchema,
       responseLogTable,
       groupByAliases: normalizedGroupBy,
@@ -1431,6 +1506,12 @@ function formatBytes(bytes: number) {
       execution_delay_ms: Math.max(0, Number(d.executionDelayMs || 0)),
       response_log: {
         enabled: Boolean(d.responseLogEnabled),
+        mode: d.responseLogMode || 'standard',
+        write_request_payload: Boolean(d.responseLogWriteRequestPayload),
+        write_response_payload: Boolean(d.responseLogWriteResponsePayload),
+        write_pagination_values: Boolean(d.responseLogWritePaginationValues),
+        only_errors: Boolean(d.responseLogOnlyErrors),
+        response_payload_limit: Math.max(0, Number(d.responseLogResponsePayloadLimit || 0)),
         schema: String(d.responseLogSchema || '').trim(),
         table: String(d.responseLogTable || '').trim()
       },
@@ -1595,6 +1676,75 @@ function formatBytes(bytes: number) {
     return formatQualifiedTable(String(draft.responseLogSchema || '').trim(), String(draft.responseLogTable || '').trim());
   }
 
+  function responseLogTableKey(schema: string, table: string) {
+    return `${String(schema || '').trim()}.${String(table || '').trim()}`;
+  }
+
+  async function checkResponseLogTableCompatibility(schema: string, table: string) {
+    const s = String(schema || '').trim();
+    const t = String(table || '').trim();
+    if (!s || !t) return { ok: false, reason: 'Не выбрана таблица лога' };
+    const key = responseLogTableKey(s, t);
+    if (responseLogTableCompatibility[key]) return responseLogTableCompatibility[key];
+    try {
+      const res = await apiJson<{ columns: Array<{ name: string; type: string }> }>(
+        `${apiBase}/columns?schema=${encodeURIComponent(s)}&table=${encodeURIComponent(t)}`,
+        { headers: headers() }
+      );
+      const cols = Array.isArray(res?.columns) ? res.columns : [];
+      if (!cols.length) {
+        const miss = { ok: false, reason: 'Таблица не найдена или не содержит колонок' };
+        responseLogTableCompatibility = { ...responseLogTableCompatibility, [key]: miss };
+        return miss;
+      }
+      const map = new Map(cols.map((c) => [String(c?.name || '').toLowerCase(), normalizeTypeName(String(c?.type || ''))]));
+      for (const need of API_LOG_TEMPLATE_REQUIRED_COLUMNS) {
+        const actual = map.get(need.name);
+        if (!actual || !need.types.some((type) => actual.includes(normalizeTypeName(type)))) {
+          const bad = { ok: false, reason: `Нет обязательного поля: ${need.name}` };
+          responseLogTableCompatibility = { ...responseLogTableCompatibility, [key]: bad };
+          return bad;
+        }
+      }
+      const good = { ok: true, reason: '' };
+      responseLogTableCompatibility = { ...responseLogTableCompatibility, [key]: good };
+      return good;
+    } catch (e: any) {
+      const fail = { ok: false, reason: String(e?.message || 'Не удалось проверить таблицу') };
+      responseLogTableCompatibility = { ...responseLogTableCompatibility, [key]: fail };
+      return fail;
+    }
+  }
+
+  async function refreshResponseLogTableCompatibility() {
+    if (responseLogTablesRefreshing) return;
+    responseLogTablesRefreshing = true;
+    try {
+      const list = Array.isArray(existingTables) ? existingTables : [];
+      for (const item of list) {
+        const schema = String(item?.schema_name || '').trim();
+        const table = String(item?.table_name || '').trim();
+        if (!schema || !table) continue;
+        await checkResponseLogTableCompatibility(schema, table);
+      }
+    } finally {
+      responseLogTablesRefreshing = false;
+    }
+  }
+
+  function responseLogCompatibleTables() {
+    return (Array.isArray(existingTables) ? existingTables : []).filter((item) => {
+      const schema = String(item?.schema_name || '').trim();
+      const table = String(item?.table_name || '').trim();
+      const key = responseLogTableKey(schema, table);
+      return Boolean(responseLogTableCompatibility[key]?.ok);
+    });
+  }
+
+  function firstCompatibleResponseLogTable() {
+    return responseLogCompatibleTables()[0] || null;
+  }
+
   function toggleResponseLogPicker() {
     response_log_picker_open = !response_log_picker_open;
     response_log_pick_value = responseLogQualifiedTable(selected);
@@ -1603,15 +1753,57 @@ function formatBytes(bytes: number) {
   function toggleResponseLogEnabled() {
     mutateSelected((d) => {
       d.responseLogEnabled = !Boolean(d.responseLogEnabled);
-      if (
-        d.responseLogEnabled &&
-        (!String(d.responseLogSchema || '').trim() || !String(d.responseLogTable || '').trim()) &&
-        Array.isArray(existingTables) &&
-        existingTables.length
-      ) {
-        d.responseLogSchema = String(existingTables[0].schema_name || '').trim();
-        d.responseLogTable = String(existingTables[0].table_name || '').trim();
+      if (d.responseLogEnabled) {
+        const currentSchema = String(d.responseLogSchema || '').trim();
+        const currentTable = String(d.responseLogTable || '').trim();
+        if (!currentSchema || !currentTable) {
+          const fallback = firstCompatibleResponseLogTable();
+          if (fallback) {
+            d.responseLogSchema = String(fallback.schema_name || '').trim();
+            d.responseLogTable = String(fallback.table_name || '').trim();
+          }
+        }
       }
+    });
+  }
+
+  function setResponseLogMode(mode: string) {
+    mutateSelected((d) => {
+      const normalized: ResponseLogMode = mode === 'minimal' || mode === 'debug' ? (mode as ResponseLogMode) : 'standard';
+      d.responseLogMode = normalized;
+      if (normalized === 'minimal') {
+        d.responseLogWriteRequestPayload = false;
+        d.responseLogWriteResponsePayload = false;
+        d.responseLogWritePaginationValues = false;
+      } else if (normalized === 'debug') {
+        d.responseLogWriteRequestPayload = true;
+        d.responseLogWriteResponsePayload = true;
+        d.responseLogWritePaginationValues = true;
+      }
+    });
+  }
+
+  function toggleResponseLogWriteRequestPayload() {
+    mutateSelected((d) => {
+      d.responseLogWriteRequestPayload = !Boolean(d.responseLogWriteRequestPayload);
+    });
+  }
+
+  function toggleResponseLogWriteResponsePayload() {
+    mutateSelected((d) => {
+      d.responseLogWriteResponsePayload = !Boolean(d.responseLogWriteResponsePayload);
+    });
+  }
+
+  function toggleResponseLogWritePaginationValues() {
+    mutateSelected((d) => {
+      d.responseLogWritePaginationValues = !Boolean(d.responseLogWritePaginationValues);
+    });
+  }
+
+  function toggleResponseLogOnlyErrors() {
+    mutateSelected((d) => {
+      d.responseLogOnlyErrors = !Boolean(d.responseLogOnlyErrors);
     });
   }
 
@@ -1674,11 +1866,17 @@ function formatBytes(bytes: number) {
       err = 'Таблица лога должна быть из списка подключённых таблиц.';
       return;
     }
-    mutateSelected((d) => {
-      d.responseLogSchema = schemaTrimmed;
-      d.responseLogTable = tableTrimmed;
+    checkResponseLogTableCompatibility(schemaTrimmed, tableTrimmed).then((compat) => {
+      if (!compat.ok) {
+        err = `Эта таблица не подходит для лога API: ${compat.reason}`;
+        return;
+      }
+      mutateSelected((d) => {
+        d.responseLogSchema = schemaTrimmed;
+        d.responseLogTable = tableTrimmed;
+      });
+      response_log_picker_open = false;
     });
-    response_log_picker_open = false;
   }
 
   function tableCacheKey(schema: string, table: string) {
@@ -7101,10 +7299,22 @@ function handleDefinitionInput(value: string) {
   ) {
     const dispatchMode = isGroupedDispatchEnabled(draft) ? 'group_by' : 'single';
     const identity = runEntityIdentity(reqPlan, entityIndex);
+    const logMode = (draft.responseLogMode || 'standard') as ResponseLogMode;
+    const includeRequestPayload =
+      logMode === 'debug' ? true : logMode === 'minimal' ? false : Boolean(draft.responseLogWriteRequestPayload);
+    const includeResponsePayload =
+      logMode === 'debug' ? true : logMode === 'minimal' ? false : Boolean(draft.responseLogWriteResponsePayload);
+    const includePaginationValues =
+      logMode === 'debug' ? true : logMode === 'minimal' ? false : Boolean(draft.responseLogWritePaginationValues);
+    const onlyErrors = Boolean(draft.responseLogOnlyErrors);
+    const responsePayloadLimit = Math.max(0, Number(draft.responseLogResponsePayloadLimit || 0));
     const rows: any[] = [];
     const list = Array.isArray(responses) ? responses : [];
     for (let i = 0; i < list.length; i += 1) {
       const entry = list[i] && typeof list[i] === 'object' ? list[i] : {};
+      const statusCode = Number.isFinite(Number(entry?.status)) ? Number(entry?.status) : null;
+      const hasError = Boolean(String(entry?.error || '').trim()) || (typeof statusCode === 'number' && statusCode >= 400);
+      if (onlyErrors && !hasError) continue;
       const requestPayload =
         entry?.request && typeof entry.request === 'object'
           ? entry.request
@@ -7116,6 +7326,24 @@ function handleDefinitionInput(value: string) {
               body: reqPlan?.body && typeof reqPlan.body === 'object' ? deepClone(reqPlan.body) : reqPlan?.body
             }
           : null;
+      let responsePayload: any = entry?.response ?? null;
+      if (includeResponsePayload && responsePayloadLimit > 0) {
+        try {
+          const raw = typeof responsePayload === 'string' ? responsePayload : JSON.stringify(responsePayload);
+          if (typeof raw === 'string' && raw.length > responsePayloadLimit) {
+            responsePayload =
+              typeof responsePayload === 'string'
+                ? `${raw.slice(0, responsePayloadLimit)}...`
+                : {
+                    __truncated: true,
+                    preview: raw.slice(0, responsePayloadLimit),
+                    total_chars: raw.length
+                  };
+          }
+        } catch {
+          // keep original response payload when serialization fails
+        }
+      }
       rows.push({
         run_id: runId,
         api_name: String(draft?.name || '').trim(),
@@ -7129,13 +7357,16 @@ function handleDefinitionInput(value: string) {
         wave_no: Number(entry?.wave || 0) || null,
         page_no: Number(entry?.page || i + 1) || i + 1,
         iteration_reason: String(entry?.iteration_reason || '').trim() || (i === 0 ? 'initial_request' : 'pagination_values_updated'),
-        decision: String(entry?.decision || '').trim() || 'continue',
+        decision: String(entry?.decision || '').trim() || (hasError ? 'fail' : 'continue'),
         stop_reason: String(entry?.stop_reason || '').trim() || null,
         error_message: String(entry?.error || '').trim() || null,
-        status_code: Number.isFinite(Number(entry?.status)) ? Number(entry?.status) : null,
-        request_payload: requestPayload,
-        response_payload: entry?.response ?? null,
-        pagination_values: entry?.pagination_values && typeof entry.pagination_values === 'object' ? entry.pagination_values : {},
+        status_code: statusCode,
+        request_payload: includeRequestPayload ? requestPayload : null,
+        response_payload: includeResponsePayload ? responsePayload : null,
+        pagination_values:
+          includePaginationValues && entry?.pagination_values && typeof entry.pagination_values === 'object'
+            ? entry.pagination_values
+            : {},
         duration_ms: Number.isFinite(Number(entry?.duration_ms)) ? Number(entry?.duration_ms) : null,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
@@ -7153,6 +7384,10 @@ function handleDefinitionInput(value: string) {
     }
     if (!isConnectedTable(schema, table)) {
       throw new Error('Для лога ответов выбери таблицу из подключённых');
+    }
+    const compatibility = await checkResponseLogTableCompatibility(schema, table);
+    if (!compatibility.ok) {
+      throw new Error(`Таблица лога не соответствует системному шаблону: ${compatibility.reason}`);
     }
     const payloadRows = Array.isArray(rows) ? rows.filter((x) => x && typeof x === 'object') : [];
     if (!payloadRows.length) return { written: 0, skipped: 0 };
@@ -7899,7 +8134,7 @@ function handleDefinitionInput(value: string) {
     const currentSchema = String(selected.responseLogSchema || '').trim();
     const currentTable = String(selected.responseLogTable || '').trim();
     if (existingTables.length && !isConnectedTable(currentSchema, currentTable)) {
-      const fallback = existingTables[0];
+      const fallback = firstCompatibleResponseLogTable() || existingTables[0];
       if (fallback) {
         mutateSelected((d) => {
           d.responseLogSchema = String(fallback.schema_name || '').trim();
@@ -7907,6 +8142,9 @@ function handleDefinitionInput(value: string) {
         });
       }
     }
+  }
+  $: if (existingTables.length) {
+    void refreshResponseLogTableCompatibility();
   }
   $: {
     const txt = String(responseText || '').trim();
@@ -8370,7 +8608,7 @@ function syncParameterEditorsHeight() {
           <p class="hint small-hint">Причины отправки итерации пишутся в лог: initial_request, pagination_values_updated, page_increment, offset_increment, cursor_updated, next_url_received.</p>
 
           <div class="response-head field-head parameter-subhead">
-            <small>Лог ответов API</small>
+            <small>Настройки логирования API</small>
             <button
               type="button"
               class="group-toggle"
@@ -8384,7 +8622,9 @@ function syncParameterEditorsHeight() {
               {/if}
             </button>
           </div>
+          <p class="hint small-hint">Это журнал шагов API (что отправили, что получили, почему остановились). Это отдельный блок и не связан с «Выходными параметрами».</p>
           {#if selected?.responseLogEnabled}
+            <div class="hint small-hint">Системный шаблон лога: <b>Bronze системный лог API</b>.</div>
             <div class="storage-meta">
               <span>Хранятся в таблице:</span>
               <button
@@ -8398,17 +8638,104 @@ function syncParameterEditorsHeight() {
             {#if response_log_picker_open}
               <div class="storage-picker">
                 <select bind:value={response_log_pick_value}>
-                  {#if response_log_pick_value && !existingTables.some((t) => `${t.schema_name}.${t.table_name}` === response_log_pick_value)}
+                  {#if response_log_pick_value && !responseLogCompatibleTables().some((t) => `${t.schema_name}.${t.table_name}` === response_log_pick_value)}
                     <option value={response_log_pick_value}>{response_log_pick_value}</option>
                   {/if}
-                  {#each existingTables as et}
+                  {#each responseLogCompatibleTables() as et}
                     <option value={`${et.schema_name}.${et.table_name}`}>{et.schema_name}.{et.table_name}</option>
                   {/each}
                 </select>
                 <button type="button" on:click={applyResponseLogChoice} disabled={!response_log_pick_value}>Подключить</button>
               </div>
             {/if}
-            <p class="hint small-hint">Рекомендуется таблица Bronze с полями аудита API-запусков. Каждый шаг запроса пишется отдельной строкой.</p>
+            {#if !responseLogCompatibleTables().length}
+              <p class="hint small-hint">Нет подходящих таблиц для лога. Нужна таблица, которая соответствует системному шаблону Bronze логов API.</p>
+            {/if}
+            <div class="log-mode-grid">
+              <label class="pagination-field">
+                <small>Режим логирования</small>
+                <select
+                  value={selected?.responseLogMode || 'standard'}
+                  on:change={(e) => setResponseLogMode(e.currentTarget.value)}
+                >
+                  <option value="minimal">Минимальный</option>
+                  <option value="standard">Стандартный</option>
+                  <option value="debug">Расширенный (отладка)</option>
+                </select>
+              </label>
+              <label class="pagination-field">
+                <small>Ограничение размера response (символов)</small>
+                <input
+                  type="number"
+                  min="0"
+                  value={selected?.responseLogResponsePayloadLimit || 0}
+                  on:input={(e) =>
+                    mutateSelected((d) => {
+                      d.responseLogResponsePayloadLimit = Math.max(0, Number(e.currentTarget.value) || 0);
+                    })}
+                />
+                <p class="hint small-hint">0 = без ограничения. Защищает от слишком тяжелых логов.</p>
+              </label>
+            </div>
+            <div class="pagination-logic-list">
+              <div class="pagination-logic-item">
+                <span>Писать request_payload</span>
+                <button
+                  type="button"
+                  class="group-toggle group-toggle-sm"
+                  class:active-group-toggle={Boolean(selected?.responseLogWriteRequestPayload)}
+                  on:click={toggleResponseLogWriteRequestPayload}
+                >
+                  <span>{selected?.responseLogWriteRequestPayload ? 'Вкл' : 'Выкл'}</span>
+                  {#if Boolean(selected?.responseLogWriteRequestPayload)}
+                    <span class="group-toggle-indicator"></span>
+                  {/if}
+                </button>
+              </div>
+              <div class="pagination-logic-item">
+                <span>Писать response_payload</span>
+                <button
+                  type="button"
+                  class="group-toggle group-toggle-sm"
+                  class:active-group-toggle={Boolean(selected?.responseLogWriteResponsePayload)}
+                  on:click={toggleResponseLogWriteResponsePayload}
+                >
+                  <span>{selected?.responseLogWriteResponsePayload ? 'Вкл' : 'Выкл'}</span>
+                  {#if Boolean(selected?.responseLogWriteResponsePayload)}
+                    <span class="group-toggle-indicator"></span>
+                  {/if}
+                </button>
+              </div>
+              <div class="pagination-logic-item">
+                <span>Писать pagination_values</span>
+                <button
+                  type="button"
+                  class="group-toggle group-toggle-sm"
+                  class:active-group-toggle={Boolean(selected?.responseLogWritePaginationValues)}
+                  on:click={toggleResponseLogWritePaginationValues}
+                >
+                  <span>{selected?.responseLogWritePaginationValues ? 'Вкл' : 'Выкл'}</span>
+                  {#if Boolean(selected?.responseLogWritePaginationValues)}
+                    <span class="group-toggle-indicator"></span>
+                  {/if}
+                </button>
+              </div>
+              <div class="pagination-logic-item">
+                <span>Писать только ошибки</span>
+                <button
+                  type="button"
+                  class="group-toggle group-toggle-sm"
+                  class:active-group-toggle={Boolean(selected?.responseLogOnlyErrors)}
+                  on:click={toggleResponseLogOnlyErrors}
+                >
+                  <span>{selected?.responseLogOnlyErrors ? 'Вкл' : 'Выкл'}</span>
+                  {#if Boolean(selected?.responseLogOnlyErrors)}
+                    <span class="group-toggle-indicator"></span>
+                  {/if}
+                </button>
+              </div>
+            </div>
+            <p class="hint small-hint">Если список таблиц пустой, сначала создай/подключи таблицу по системному шаблону Bronze логов API.</p>
           {/if}
         </div>
 
@@ -10126,6 +10453,34 @@ function syncParameterEditorsHeight() {
   .empty-preview-state { min-height:96px; display:flex; flex-direction:column; align-items:flex-start; justify-content:center; gap:8px; padding:10px; }
   .pagination-grid { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
   .pagination-field small { display:block; margin-bottom:4px; font-size:11px; color:#64748b; }
+  .log-mode-grid {
+    margin-top:8px;
+    display:grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap:8px;
+  }
+  .pagination-logic-list {
+    margin-top:8px;
+    display:grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap:8px;
+  }
+  .pagination-logic-item {
+    border:1px solid #e2e8f0;
+    border-radius:10px;
+    background:#fff;
+    padding:8px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:8px;
+    min-width:0;
+  }
+  .pagination-logic-item > span {
+    font-size:12px;
+    color:#334155;
+    line-height:1.3;
+  }
   .pagination-safety-layout {
     margin-top:6px;
     display:flex;
