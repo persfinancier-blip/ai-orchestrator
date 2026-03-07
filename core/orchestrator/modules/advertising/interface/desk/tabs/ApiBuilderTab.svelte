@@ -8249,7 +8249,7 @@ function syncParameterEditorsHeight() {
           ></textarea>
         {/if}
         {#if !myApiPreviewDraft}
-          <p class="hint small-hint">Нажми «Что уйдет (превью)» или «Проверить» в строке URL.</p>
+          <p class="hint small-hint">Нажми «Проверить» в строке URL.</p>
         {/if}
         {#if myPreviewApplyMessage}
           <div class="template-parse-note">{myPreviewApplyMessage}</div>
@@ -8281,7 +8281,6 @@ function syncParameterEditorsHeight() {
           />
           <div class="connect-actions">
             <button class="primary" on:click={checkApiNow} disabled={checking}>{checking ? 'Проверка...' : 'Проверить'}</button>
-            <button type="button" class="view-toggle" on:click={previewRequestsNow} disabled={checking}>Что уйдет (превью)</button>
           </div>
         </div>
 
