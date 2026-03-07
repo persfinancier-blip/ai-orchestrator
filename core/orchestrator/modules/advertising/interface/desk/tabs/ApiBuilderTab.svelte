@@ -125,6 +125,12 @@
     compareValue: string;
   };
 
+  type OAuth2ResponseMapping = {
+    id: string;
+    responsePath: string;
+    alias: string;
+  };
+
   type ApiDraft = {
     localId: string;
     storeId?: number;
@@ -142,6 +148,14 @@
     oauth2TokenField: string;
     oauth2ExpiresField: string;
     oauth2TokenTypeField: string;
+    oauth2RequestMethod: HttpMethod;
+    oauth2RequestUrl: string;
+    oauth2RequestHost: string;
+    oauth2RequestPath: string;
+    oauth2RequestHeadersJson: string;
+    oauth2RequestQueryJson: string;
+    oauth2RequestBodyJson: string;
+    oauth2ResponseMappings: OAuth2ResponseMapping[];
     queryJson: string;
     bodyJson: string;
     paginationEnabled: boolean;
@@ -662,6 +676,25 @@ function formatBytes(bytes: number) {
       oauth2TokenField: 'access_token',
       oauth2ExpiresField: 'expires_in',
       oauth2TokenTypeField: 'token_type',
+      oauth2RequestMethod: 'POST',
+      oauth2RequestUrl: '',
+      oauth2RequestHost: '',
+      oauth2RequestPath: '',
+      oauth2RequestHeadersJson: toPrettyJson({
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+      }),
+      oauth2RequestQueryJson: toPrettyJson({}),
+      oauth2RequestBodyJson: toPrettyJson({
+        client_id: '{{client_id}}',
+        client_secret: '{{client_secret}}',
+        grant_type: 'client_credentials'
+      }),
+      oauth2ResponseMappings: [
+        { id: uid(), responsePath: 'access_token', alias: 'access_token' },
+        { id: uid(), responsePath: 'expires_in', alias: 'expires_in' },
+        { id: uid(), responsePath: 'token_type', alias: 'token_type' }
+      ],
       queryJson: '',
       bodyJson: '',
       paginationEnabled: false,
@@ -725,6 +758,13 @@ function formatBytes(bytes: number) {
     const legacy = tryObj(mapping?.source ?? mapping?.config ?? mapping?.payload);
     const pagination = tryObj(row?.pagination_json || mapping?.pagination || legacy?.pagination);
     const oauth2 = tryObj(mapping?.oauth2 || legacy?.oauth2);
+    const oauth2Flow = tryObj(
+      mapping?.oauth2_flow ||
+        mapping?.oauth2Flow ||
+        config?.oauth2_flow ||
+        legacy?.oauth2_flow ||
+        legacy?.oauth2Flow
+    );
     const parameterDefinitionsRaw = Array.isArray(row?.parameter_definitions)
       ? row.parameter_definitions
       : Array.isArray(mapping?.parameter_definitions)
@@ -968,6 +1008,62 @@ function formatBytes(bytes: number) {
     const oauth2TokenField = String(row?.oauth2_token_field || oauth2?.token_field || 'access_token');
     const oauth2ExpiresField = String(row?.oauth2_expires_field || oauth2?.expires_field || 'expires_in');
     const oauth2TokenTypeField = String(row?.oauth2_token_type_field || oauth2?.token_type_field || 'token_type');
+    const oauth2RequestRaw = tryObj(oauth2Flow?.request || oauth2Flow?.token_request);
+    const oauth2RequestMethod = toHttpMethod(String(oauth2RequestRaw?.method || 'POST').toUpperCase());
+    const oauth2RequestUrl = String(oauth2RequestRaw?.url || oauth2Flow?.token_url || oauth2TokenUrl || '').trim();
+    let oauth2RequestHost = String(oauth2RequestRaw?.host || '').trim();
+    let oauth2RequestPath = String(oauth2RequestRaw?.path || '').trim();
+    if (oauth2RequestUrl && (!oauth2RequestHost || !oauth2RequestPath)) {
+      try {
+        const parsed = /^https?:\/\//i.test(oauth2RequestUrl)
+          ? new URL(oauth2RequestUrl)
+          : oauth2TokenUrl && /^https?:\/\//i.test(oauth2TokenUrl)
+          ? new URL(resolveAbsoluteUrl(oauth2RequestUrl, { ...d, baseUrl: new URL(oauth2TokenUrl).origin } as ApiDraft))
+          : null;
+        if (parsed) {
+          if (!oauth2RequestHost) oauth2RequestHost = `${parsed.protocol}//${parsed.host}`;
+          if (!oauth2RequestPath) oauth2RequestPath = decodeUrlPathname(parsed.pathname);
+        }
+      } catch {
+        // ignore parse errors
+      }
+    }
+    if (!oauth2RequestPath && oauth2RequestUrl && !/^https?:\/\//i.test(oauth2RequestUrl)) {
+      oauth2RequestPath = oauth2RequestUrl.startsWith('/') ? oauth2RequestUrl : `/${oauth2RequestUrl}`;
+    }
+    const oauth2RequestHeadersObj = tryObj(
+      oauth2RequestRaw?.headers_json || oauth2RequestRaw?.headers || {
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+      }
+    );
+    const oauth2RequestQueryObj = tryObj(oauth2RequestRaw?.query_json || oauth2RequestRaw?.query || {});
+    const oauth2RequestBodyObj = tryObj(
+      oauth2RequestRaw?.body_json || oauth2RequestRaw?.body || {
+        client_id: oauth2ClientId || '{{client_id}}',
+        client_secret: oauth2ClientSecret || '{{client_secret}}',
+        grant_type: oauth2GrantType || 'client_credentials'
+      }
+    );
+    const oauth2MappingsRaw = Array.isArray(oauth2Flow?.response_mappings)
+      ? oauth2Flow.response_mappings
+      : Array.isArray(oauth2Flow?.responseMappings)
+      ? oauth2Flow.responseMappings
+      : [];
+    const oauth2ResponseMappings: OAuth2ResponseMapping[] = oauth2MappingsRaw
+      .map((m: any) => ({
+        id: String(m?.id || uid()),
+        responsePath: String(m?.response_path || m?.responsePath || '').trim(),
+        alias: String(m?.alias || '').trim()
+      }))
+      .filter((m: OAuth2ResponseMapping) => m.responsePath && m.alias);
+    if (!oauth2ResponseMappings.length) {
+      oauth2ResponseMappings.push(
+        { id: uid(), responsePath: oauth2TokenField || 'access_token', alias: 'access_token' },
+        { id: uid(), responsePath: oauth2ExpiresField || 'expires_in', alias: 'expires_in' },
+        { id: uid(), responsePath: oauth2TokenTypeField || 'token_type', alias: 'token_type' }
+      );
+    }
     const exampleRequestValue = String(row?.example_request || mapping?.exampleRequest || legacy?.exampleRequest || '');
     const paginationEnabledValue =
       row?.pagination_enabled ?? Boolean(pagination?.enabled) ?? false;
@@ -1123,6 +1219,14 @@ function formatBytes(bytes: number) {
       oauth2TokenField,
       oauth2ExpiresField,
       oauth2TokenTypeField,
+      oauth2RequestMethod,
+      oauth2RequestUrl,
+      oauth2RequestHost,
+      oauth2RequestPath,
+      oauth2RequestHeadersJson: toPrettyJson(oauth2RequestHeadersObj),
+      oauth2RequestQueryJson: toPrettyJson(oauth2RequestQueryObj),
+      oauth2RequestBodyJson: toPrettyJson(oauth2RequestBodyObj),
+      oauth2ResponseMappings,
       queryJson: toPrettyJson(tryObj(row?.query_json || legacy?.query_json || legacy?.queryJson || legacy?.query || legacy?.params)),
       bodyJson: toPrettyJson(tryObj(row?.body_json || legacy?.body_json || legacy?.bodyJson || legacy?.body || legacy?.data)),
       paginationEnabled: paginationEnabledValue,
@@ -1336,6 +1440,28 @@ function formatBytes(bytes: number) {
       data_model: dataModelPayload,
       binding_rules: bindingRulesPayload
     };
+    const oauth2FlowPayload =
+      d.authMode === 'oauth2_client_credentials'
+        ? {
+            mode: 'manual_subrequest',
+            request: {
+              method: d.oauth2RequestMethod || 'POST',
+              url: String(d.oauth2RequestUrl || '').trim(),
+              host: String(d.oauth2RequestHost || '').trim(),
+              path: String(d.oauth2RequestPath || '').trim(),
+              headers_json: tryObj(d.oauth2RequestHeadersJson),
+              query_json: tryObj(d.oauth2RequestQueryJson),
+              body_json: tryObj(d.oauth2RequestBodyJson)
+            },
+            response_mappings: (Array.isArray(d.oauth2ResponseMappings) ? d.oauth2ResponseMappings : [])
+              .map((m) => ({
+                id: String(m?.id || uid()),
+                response_path: String(m?.responsePath || '').trim(),
+                alias: String(m?.alias || '').trim()
+              }))
+              .filter((m) => m.response_path && m.alias)
+          }
+        : { mode: 'manual' };
 
     return {
       id: d.storeId || undefined,
@@ -1383,11 +1509,12 @@ function formatBytes(bytes: number) {
         response_targets: d.responseTargets,
         picked_paths: d.pickedPaths,
         pagination_parameters: paginationParametersPayload,
+        oauth2_flow: oauth2FlowPayload,
         oauth2:
           d.authMode === 'oauth2_client_credentials'
             ? {
                 mode: d.authMode,
-                token_url: d.oauth2TokenUrl,
+                token_url: d.oauth2RequestUrl || d.oauth2TokenUrl,
                 client_id: d.oauth2ClientId,
                 client_secret: d.oauth2ClientSecret,
                 grant_type: d.oauth2GrantType || 'client_credentials',
@@ -1402,7 +1529,7 @@ function formatBytes(bytes: number) {
       },
       auth_mode: d.authMode,
       auth_json: parsed?.authJson ?? tryObj(d.authJson),
-      oauth2_token_url: d.oauth2TokenUrl,
+      oauth2_token_url: d.oauth2RequestUrl || d.oauth2TokenUrl,
       oauth2_client_id: d.oauth2ClientId,
       oauth2_client_secret: d.oauth2ClientSecret,
       oauth2_grant_type: d.oauth2GrantType,
@@ -1807,6 +1934,14 @@ function formatBytes(bytes: number) {
     selected && activePaginationParameterId
       ? selected.paginationParameters.find((param) => param.id === activePaginationParameterId) ?? null
       : null;
+  $: if (selected?.authMode === AUTH_MODE_OAUTH2) {
+    const mappings = Array.isArray(selected.oauth2ResponseMappings) ? selected.oauth2ResponseMappings : [];
+    if (!mappings.length) {
+      mutateSelected((d) => {
+        d.oauth2ResponseMappings = [{ id: uid(), responsePath: 'access_token', alias: 'access_token' }];
+      });
+    }
+  }
 
   $: if (selected && selectedParameterId && !selected.parameterDefinitions.some((param) => param.id === selectedParameterId)) {
     selectedParameterId = null;
@@ -1874,6 +2009,32 @@ function formatBytes(bytes: number) {
   function removePickedPath(path: string) {
     mutateSelected((d) => {
       d.pickedPaths = d.pickedPaths.filter((x) => x !== path);
+    });
+  }
+
+  function addOAuth2ResponseMapping() {
+    mutateSelected((d) => {
+      d.oauth2ResponseMappings = [
+        ...(Array.isArray(d.oauth2ResponseMappings) ? d.oauth2ResponseMappings : []),
+        { id: uid(), responsePath: '', alias: '' }
+      ];
+    });
+  }
+
+  function removeOAuth2ResponseMapping(id: string) {
+    mutateSelected((d) => {
+      d.oauth2ResponseMappings = (Array.isArray(d.oauth2ResponseMappings) ? d.oauth2ResponseMappings : []).filter((m) => m.id !== id);
+      if (!d.oauth2ResponseMappings.length) {
+        d.oauth2ResponseMappings = [{ id: uid(), responsePath: 'access_token', alias: 'access_token' }];
+      }
+    });
+  }
+
+  function updateOAuth2ResponseMapping(id: string, patch: Partial<OAuth2ResponseMapping>) {
+    mutateSelected((d) => {
+      d.oauth2ResponseMappings = (Array.isArray(d.oauth2ResponseMappings) ? d.oauth2ResponseMappings : []).map((m) =>
+        m.id === id ? { ...m, ...patch } : m
+      );
     });
   }
 
@@ -2944,33 +3105,128 @@ function formatBytes(bytes: number) {
     throw lastError || new Error('Ошибка запроса после повторов');
   }
 
-  async function getOAuthToken(d: ApiDraft): Promise<{ token: string; tokenType: string }> {
-    const cacheKey = refOf(d);
-    const cached = oauthTokenCache[cacheKey];
-    if (cached && Date.now() < cached.expiresAt - 60_000) {
-      return { token: cached.token, tokenType: cached.tokenType || 'Bearer' };
+  function oauth2MappingsForDraft(d: ApiDraft) {
+    const normalized = (Array.isArray(d.oauth2ResponseMappings) ? d.oauth2ResponseMappings : [])
+      .map((m) => ({
+        id: String(m?.id || uid()),
+        responsePath: String(m?.responsePath || '').trim(),
+        alias: String(m?.alias || '').trim()
+      }))
+      .filter((m) => m.responsePath && m.alias);
+    if (normalized.length) return normalized;
+    return [
+      { id: uid(), responsePath: d.oauth2TokenField || 'access_token', alias: 'access_token' },
+      { id: uid(), responsePath: d.oauth2ExpiresField || 'expires_in', alias: 'expires_in' },
+      { id: uid(), responsePath: d.oauth2TokenTypeField || 'token_type', alias: 'token_type' }
+    ];
+  }
+
+  function resolveTokenRequestUrl(d: ApiDraft) {
+    const directUrl = String(d.oauth2RequestUrl || d.oauth2TokenUrl || '').trim();
+    if (directUrl) return resolveAbsoluteUrl(directUrl, d);
+    const host = String(d.oauth2RequestHost || '').trim().replace(/\/$/, '');
+    const pathRaw = String(d.oauth2RequestPath || '').trim();
+    const path = pathRaw ? (pathRaw.startsWith('/') ? pathRaw : `/${pathRaw}`) : '';
+    if (!host) return '';
+    return `${host}${path}`;
+  }
+
+  function buildTokenRequestBase(d: ApiDraft) {
+    return {
+      method: toHttpMethod(String(d.oauth2RequestMethod || 'POST').toUpperCase()),
+      url: resolveTokenRequestUrl(d),
+      headers: parseJsonObjectField('Подзапрос токена: headers', d.oauth2RequestHeadersJson || '{}'),
+      query: parseJsonObjectField('Подзапрос токена: query', d.oauth2RequestQueryJson || '{}'),
+      body:
+        (() => {
+          const parsed = parseJsonAnyField('Подзапрос токена: body', d.oauth2RequestBodyJson || '{}');
+          return parsed && typeof parsed === 'object' ? deepClone(parsed) : {};
+        })()
+    };
+  }
+
+  type OAuthTokenResolveResult = {
+    token: string;
+    tokenType: string;
+    mappedAliases: Record<string, any>;
+    requestPreview: any;
+    responsePreview: any;
+    cacheHit: boolean;
+  };
+
+  async function getOAuthToken(
+    d: ApiDraft,
+    contextValues: Record<string, any> = {}
+  ): Promise<OAuthTokenResolveResult> {
+    const reqBase = buildTokenRequestBase(d);
+    if (!reqBase.url) {
+      throw new Error('Token request: не указан URL/Host подзапроса токена');
     }
 
-    const tokenUrl = resolveAbsoluteUrl(d.oauth2TokenUrl, d);
-    const payload = {
-      client_id: d.oauth2ClientId,
-      client_secret: d.oauth2ClientSecret,
-      grant_type: d.oauth2GrantType || 'client_credentials'
-    };
-    const proxyResp = await runHttpRequestViaServer(
-      tokenUrl,
+    const reqHeaders = deepClone(reqBase.headers || {});
+    const reqQuery = deepClone(reqBase.query || {});
+    const reqBody = deepClone(reqBase.body || {});
+
+    applyParametersToValue(reqHeaders, contextValues || {});
+    applyParametersToValue(reqQuery, contextValues || {});
+    applyParametersToValue(reqBody, contextValues || {});
+
+    let reqUrl = replaceParameterTokens(reqBase.url, contextValues || {});
+    const reqUrlObj = new URL(reqUrl);
+    Object.entries(reqQuery || {}).forEach(([k, v]) => reqUrlObj.searchParams.set(k, String(v)));
+    reqUrl = reqUrlObj.toString();
+
+    const unresolved = new Set<string>();
+    collectParameterTokens(reqUrl, unresolved);
+    collectParameterTokens(reqHeaders, unresolved);
+    collectParameterTokens(reqQuery, unresolved);
+    collectParameterTokens(reqBody, unresolved);
+    if (unresolved.size) {
+      throw new Error(`Token request: не удалось подставить параметры: ${Array.from(unresolved).join(', ')}`);
+    }
+
+    const cacheKey = `${refOf(d)}|${reqBase.method}|${reqUrl}|${JSON.stringify(reqHeaders)}|${JSON.stringify(reqBody)}`;
+    const cached = oauthTokenCache[cacheKey];
+    if (cached && Date.now() < cached.expiresAt - 60_000) {
+      const mappedFromCache = {
+        access_token: cached.token,
+        token_type: cached.tokenType || 'Bearer',
+        expires_in: Math.max(0, Math.floor((cached.expiresAt - Date.now()) / 1000))
+      };
+      return {
+        token: cached.token,
+        tokenType: cached.tokenType || 'Bearer',
+        mappedAliases: mappedFromCache,
+        requestPreview: {
+          method: reqBase.method,
+          url: reqUrl,
+          headers: reqHeaders,
+          body: reqBody,
+          source: 'cache'
+        },
+        responsePreview: {
+          status: 200,
+          from_cache: true
+        },
+        cacheHit: true
+      };
+    }
+
+    const proxyResp = await runHttpRequestViaServerWithRetry(
+      reqUrl,
       {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify(payload)
+        method: reqBase.method,
+        headers: reqHeaders,
+        body: reqBase.method === 'GET' || reqBase.method === 'DELETE' ? undefined : JSON.stringify(reqBody)
       },
       30_000
     );
-    const resOk = Boolean(proxyResp?.ok);
-    const resStatus = Number(proxyResp?.status || 0);
-    const txt = String(proxyResp?.body_text || '');
-    const json = proxyResp?.body_json && typeof proxyResp.body_json === 'object'
-      ? proxyResp.body_json
+    const httpPayload = proxyResp?.proxied || {};
+    const resOk = Boolean(httpPayload?.ok);
+    const resStatus = Number(httpPayload?.status || 0);
+    const txt = String(httpPayload?.body_text || '');
+    const json = httpPayload?.body_json && typeof httpPayload.body_json === 'object'
+      ? httpPayload.body_json
       : (() => {
           try {
             return txt ? JSON.parse(txt) : {};
@@ -2979,15 +3235,44 @@ function formatBytes(bytes: number) {
           }
         })();
     if (!resOk) {
-      throw new Error(`OAuth2: ${resStatus} ${JSON.stringify(json)}`);
+      throw new Error(`Token request: HTTP ${resStatus}. ${txt || JSON.stringify(json)}`);
     }
-    const tokenField = d.oauth2TokenField || 'access_token';
-    const expiresField = d.oauth2ExpiresField || 'expires_in';
-    const typeField = d.oauth2TokenTypeField || 'token_type';
-    const token = String(json?.[tokenField] || '').trim();
-    if (!token) throw new Error(`OAuth2: поле ${tokenField} не найдено`);
-    const expiresIn = Number(json?.[expiresField] || 0);
-    const tokenType = String(json?.[typeField] || 'Bearer').trim() || 'Bearer';
+
+    const mappings = oauth2MappingsForDraft(d);
+    const mappedAliases: Record<string, any> = {};
+    const missingMappings: string[] = [];
+    for (const map of mappings) {
+      const val = getByPath(json, map.responsePath);
+      if (val === undefined) {
+        missingMappings.push(`${map.alias} <- ${map.responsePath}`);
+        continue;
+      }
+      mappedAliases[map.alias] = val;
+    }
+    if (missingMappings.length) {
+      throw new Error(`Token response mapping: не найдены поля: ${missingMappings.join(', ')}`);
+    }
+
+    const tokenAlias = Object.prototype.hasOwnProperty.call(mappedAliases, 'access_token')
+      ? 'access_token'
+      : String(d.oauth2TokenField || 'access_token');
+    const token = String(mappedAliases[tokenAlias] ?? getByPath(json, tokenAlias) ?? '').trim();
+    if (!token) {
+      throw new Error(`Token response mapping: не найден токен (alias/поле ${tokenAlias})`);
+    }
+    const tokenType = String(
+      mappedAliases.token_type ??
+        getByPath(json, d.oauth2TokenTypeField || 'token_type') ??
+        getByPath(json, 'token_type') ??
+        'Bearer'
+    ).trim() || 'Bearer';
+    const expiresInRaw =
+      mappedAliases.expires_in ??
+      getByPath(json, d.oauth2ExpiresField || 'expires_in') ??
+      getByPath(json, 'expires_in') ??
+      0;
+    const expiresIn = Number(expiresInRaw || 0);
+
     oauthTokenCache = {
       ...oauthTokenCache,
       [cacheKey]: {
@@ -2996,7 +3281,29 @@ function formatBytes(bytes: number) {
         expiresAt: Date.now() + Math.max(0, expiresIn) * 1000
       }
     };
-    return { token, tokenType };
+
+    return {
+      token,
+      tokenType,
+      mappedAliases: {
+        ...mappedAliases,
+        access_token: token,
+        token_type: tokenType,
+        expires_in: expiresIn
+      },
+      requestPreview: {
+        method: reqBase.method,
+        url: reqUrl,
+        headers: reqHeaders,
+        body: reqBody
+      },
+      responsePreview: {
+        status: resStatus,
+        headers: httpPayload?.headers || {},
+        body: json && typeof json === 'object' && Object.keys(json).length ? json : txt
+      },
+      cacheHit: false
+    };
   }
 
   function previewUrlFromInput(selectedDraft: ApiDraft | null): string {
@@ -5317,6 +5624,18 @@ function handleDefinitionInput(value: string) {
     );
   }
 
+  function oauth2RequestAliases(draft: ApiDraft | null) {
+    if (!draft || draft.authMode !== AUTH_MODE_OAUTH2) return [];
+    const tokens = new Set<string>();
+    collectParameterTokens(String(draft.oauth2RequestUrl || ''), tokens);
+    collectParameterTokens(String(draft.oauth2RequestHost || ''), tokens);
+    collectParameterTokens(String(draft.oauth2RequestPath || ''), tokens);
+    collectParameterTokens(String(draft.oauth2RequestHeadersJson || ''), tokens);
+    collectParameterTokens(String(draft.oauth2RequestQueryJson || ''), tokens);
+    collectParameterTokens(String(draft.oauth2RequestBodyJson || ''), tokens);
+    return uniqueAliasList(Array.from(tokens));
+  }
+
   async function loadParameterRowsForAliases(
     definitions: ParameterDefinition[],
     aliases: string[]
@@ -5441,11 +5760,20 @@ function handleDefinitionInput(value: string) {
     const requiredAliases = uniqueAliasList([
       ...groupByAliases,
       ...bindingRules.map((rule) => rule.alias),
-      ...templateAliases
+      ...templateAliases,
+      ...oauth2RequestAliases(draft)
     ]);
+    const oauth2ProvidedAliasesLower = new Set(
+      (draft.authMode === AUTH_MODE_OAUTH2 ? oauth2MappingsForDraft(draft) : [])
+        .map((m) => String(m.alias || '').trim().toLowerCase())
+        .filter(Boolean)
+    );
+    const requiredAliasesFiltered = requiredAliases.filter(
+      (alias) => !oauth2ProvidedAliasesLower.has(String(alias || '').trim().toLowerCase())
+    );
     const dataset = hasDataModelConfigured(draft)
-      ? await loadDataModelRowsForAliases(draft, requiredAliases)
-      : await loadParameterRowsForAliases(draft.parameterDefinitions, requiredAliases);
+      ? await loadDataModelRowsForAliases(draft, requiredAliasesFiltered)
+      : await loadParameterRowsForAliases(draft.parameterDefinitions, requiredAliasesFiltered);
     Object.assign(issues, dataset.issues);
     if (!dataset.rows.length) {
       const issueEntries = Object.entries(issues);
@@ -5471,29 +5799,29 @@ function handleDefinitionInput(value: string) {
       { key: Record<string, any>; rows: Array<Record<string, any>> }
     >;
 
-    let oauthAuthValue = '';
-    if (draft.authMode === 'oauth2_client_credentials') {
-      if (!draft.oauth2TokenUrl || !draft.oauth2ClientId || !draft.oauth2ClientSecret) {
-        throw new Error('OAuth2: заполни token URL, client_id и client_secret');
-      }
-      const tokenData = await getOAuthToken(draft);
-      oauthAuthValue = `${tokenData.tokenType} ${tokenData.token}`;
-    }
-
     const plans: Array<any> = [];
     const groupedKnownAliasesLower = new Set([
       ...bindingAliasOptions(draft).map((x) => x.toLowerCase()),
+      ...Array.from(oauth2ProvidedAliasesLower),
       ...Array.from(paginationAliasesLower)
     ]);
     for (const group of grouped.values()) {
       const authHdr = parseJsonObjectField('Авторизация', draft.authJson);
-      if (oauthAuthValue) {
-        authHdr.Authorization = oauthAuthValue;
-      }
       const hdr = parseJsonObjectField('Headers JSON', draft.headersJson);
       const queryObj = parseJsonObjectField('Query JSON', draft.queryJson);
       const bodyBaseRaw = parseJsonAnyField('Body JSON', draft.bodyJson);
       const bodyObj = bodyBaseRaw && typeof bodyBaseRaw === 'object' ? deepClone(bodyBaseRaw) : {};
+      const groupFirstMap = (group.rows[0] || {}) as Record<string, any>;
+
+      let oauthResolvedAliases: Record<string, any> = {};
+      let oauthRequestPreview: any = null;
+      let oauthResponsePreview: any = null;
+      if (draft.authMode === 'oauth2_client_credentials') {
+        const tokenData = await getOAuthToken(draft, groupFirstMap);
+        oauthResolvedAliases = tokenData.mappedAliases || {};
+        oauthRequestPreview = tokenData.requestPreview;
+        oauthResponsePreview = tokenData.responsePreview;
+      }
 
       const itemRules = bindingRules.filter((rule) => rule.target === 'body_item');
       const scalarRules = bindingRules.filter((rule) => rule.target !== 'body_item');
@@ -5534,14 +5862,14 @@ function handleDefinitionInput(value: string) {
         setByPath(bodyObj, draft.bodyItemsPath || 'items', items);
       }
 
-      const groupFirstMap = (group.rows[0] || {}) as Record<string, any>;
-      applyParametersToValue(authHdr, groupFirstMap);
-      applyParametersToValue(hdr, groupFirstMap);
-      applyParametersToValue(queryObj, groupFirstMap);
-      applyParametersToValue(bodyObj, groupFirstMap);
+      const runtimeValues = { ...groupFirstMap, ...oauthResolvedAliases };
+      applyParametersToValue(authHdr, runtimeValues);
+      applyParametersToValue(hdr, runtimeValues);
+      applyParametersToValue(queryObj, runtimeValues);
+      applyParametersToValue(bodyObj, runtimeValues);
 
       let url = `${draft.baseUrl.replace(/\/$/, '')}${draft.path.startsWith('/') ? draft.path : `/${draft.path}`}`;
-      url = replaceParameterTokens(url, groupFirstMap);
+      url = replaceParameterTokens(url, runtimeValues);
       const u = new URL(url);
       Object.entries(queryObj || {}).forEach(([k, v]) => u.searchParams.set(k, String(v)));
       url = u.toString();
@@ -5566,11 +5894,14 @@ function handleDefinitionInput(value: string) {
       plans.push({
         group: group.key,
         rows_in_group: group.rows.length,
-        context_values: deepClone(groupFirstMap),
+        context_values: deepClone(runtimeValues),
         method: draft.method,
         url,
         headers: { 'Content-Type': 'application/json', ...authHdr, ...hdr },
-        body: draft.method === 'GET' || draft.method === 'DELETE' ? undefined : bodyObj
+        body: draft.method === 'GET' || draft.method === 'DELETE' ? undefined : bodyObj,
+        token_request_preview: oauthRequestPreview,
+        token_response_preview: oauthResponsePreview,
+        token_resolved_aliases: deepClone(oauthResolvedAliases)
       });
     }
 
@@ -5613,9 +5944,18 @@ function handleDefinitionInput(value: string) {
 
     const requiredAliases = uniqueAliasList([
       ...bindingRules.map((rule) => rule.alias),
-      ...templateAliases
+      ...templateAliases,
+      ...oauth2RequestAliases(draft)
     ]);
-    if (!requiredAliases.length) {
+    const oauth2ProvidedAliasesLower = new Set(
+      (draft.authMode === AUTH_MODE_OAUTH2 ? oauth2MappingsForDraft(draft) : [])
+        .map((m) => String(m.alias || '').trim().toLowerCase())
+        .filter(Boolean)
+    );
+    const requiredAliasesFiltered = requiredAliases.filter(
+      (alias) => !oauth2ProvidedAliasesLower.has(String(alias || '').trim().toLowerCase())
+    );
+    if (!requiredAliasesFiltered.length) {
       return {
         allRequests: [] as any[],
         previewRequests: [] as any[],
@@ -5624,8 +5964,8 @@ function handleDefinitionInput(value: string) {
     }
 
     const dataset = hasDataModelConfigured(draft)
-      ? await loadDataModelRowsForAliases(draft, requiredAliases)
-      : await loadParameterRowsForAliases(draft.parameterDefinitions, requiredAliases);
+      ? await loadDataModelRowsForAliases(draft, requiredAliasesFiltered)
+      : await loadParameterRowsForAliases(draft.parameterDefinitions, requiredAliasesFiltered);
     Object.assign(issues, dataset.issues);
     if (!dataset.rows.length) {
       const issueEntries = Object.entries(issues);
@@ -5646,39 +5986,38 @@ function handleDefinitionInput(value: string) {
       );
     }
 
-    let oauthAuthValue = '';
-    if (draft.authMode === 'oauth2_client_credentials') {
-      if (!draft.oauth2TokenUrl || !draft.oauth2ClientId || !draft.oauth2ClientSecret) {
-        throw new Error('OAuth2: заполни token URL, client_id и client_secret');
-      }
-      const tokenData = await getOAuthToken(draft);
-      oauthAuthValue = `${tokenData.tokenType} ${tokenData.token}`;
-    }
-
     const plans: Array<any> = [];
     const knownAliasesLower = new Set([
       ...bindingAliasOptions(draft).map((x) => x.toLowerCase()),
+      ...Array.from(oauth2ProvidedAliasesLower),
       ...Array.from(paginationAliasesLower)
     ]);
     for (let rowIndex = 0; rowIndex < dataset.rows.length; rowIndex++) {
       const row = (dataset.rows[rowIndex] || {}) as Record<string, any>;
       const authHdr = parseJsonObjectField('Авторизация', draft.authJson);
-      if (oauthAuthValue) {
-        authHdr.Authorization = oauthAuthValue;
-      }
       const hdr = parseJsonObjectField('Headers JSON', draft.headersJson);
       const queryObj = parseJsonObjectField('Query JSON', draft.queryJson);
       const bodyBaseRaw = parseJsonAnyField('Body JSON', draft.bodyJson);
       const bodyObj = bodyBaseRaw && typeof bodyBaseRaw === 'object' ? deepClone(bodyBaseRaw) : {};
+      let oauthResolvedAliases: Record<string, any> = {};
+      let oauthRequestPreview: any = null;
+      let oauthResponsePreview: any = null;
+      if (draft.authMode === 'oauth2_client_credentials') {
+        const tokenData = await getOAuthToken(draft, row);
+        oauthResolvedAliases = tokenData.mappedAliases || {};
+        oauthRequestPreview = tokenData.requestPreview;
+        oauthResponsePreview = tokenData.responsePreview;
+      }
 
       applyBindingRulesToRequest(bindingRules, row, authHdr, hdr, queryObj, bodyObj);
-      applyParametersToValue(authHdr, row);
-      applyParametersToValue(hdr, row);
-      applyParametersToValue(queryObj, row);
-      applyParametersToValue(bodyObj, row);
+      const runtimeValues = { ...row, ...oauthResolvedAliases };
+      applyParametersToValue(authHdr, runtimeValues);
+      applyParametersToValue(hdr, runtimeValues);
+      applyParametersToValue(queryObj, runtimeValues);
+      applyParametersToValue(bodyObj, runtimeValues);
 
       let url = `${draft.baseUrl.replace(/\/$/, '')}${draft.path.startsWith('/') ? draft.path : `/${draft.path}`}`;
-      url = replaceParameterTokens(url, row);
+      url = replaceParameterTokens(url, runtimeValues);
       const u = new URL(url);
       Object.entries(queryObj || {}).forEach(([k, v]) => u.searchParams.set(k, String(v)));
       url = u.toString();
@@ -5702,11 +6041,14 @@ function handleDefinitionInput(value: string) {
 
       plans.push({
         row_index: rowIndex + 1,
-        context_values: deepClone(row),
+        context_values: deepClone(runtimeValues),
         method: draft.method,
         url,
         headers: { 'Content-Type': 'application/json', ...authHdr, ...hdr },
-        body: draft.method === 'GET' || draft.method === 'DELETE' ? undefined : bodyObj
+        body: draft.method === 'GET' || draft.method === 'DELETE' ? undefined : bodyObj,
+        token_request_preview: oauthRequestPreview,
+        token_response_preview: oauthResponsePreview,
+        token_resolved_aliases: deepClone(oauthResolvedAliases)
       });
     }
 
@@ -7194,14 +7536,6 @@ function handleDefinitionInput(value: string) {
       const bodyBaseRaw = parseJsonAnyField('Body JSON', s.bodyJson);
       const bodyObjBase = bodyBaseRaw && typeof bodyBaseRaw === 'object' ? JSON.parse(JSON.stringify(bodyBaseRaw)) : {};
 
-      if (s.authMode === 'oauth2_client_credentials') {
-        if (!s.oauth2TokenUrl || !s.oauth2ClientId || !s.oauth2ClientSecret) {
-          throw new Error('OAuth2: заполни token URL, client_id и client_secret');
-        }
-        const t = await getOAuthToken(s);
-        authHdr.Authorization = `${t.tokenType} ${t.token}`;
-      }
-
       const sanitizedAliases = sanitizeAliasReferences(s);
       const definitionAliases = uniqueAliasList(
         (Array.isArray(s.parameterDefinitions) ? s.parameterDefinitions : [])
@@ -7224,8 +7558,13 @@ function handleDefinitionInput(value: string) {
           .filter(Boolean)
       );
       const paginationAliasesLower = paginationAliasLowerSet(s);
+      const oauth2ProvidedAliasesLower = new Set(
+        (s.authMode === AUTH_MODE_OAUTH2 ? oauth2MappingsForDraft(s) : [])
+          .map((m) => String(m.alias || '').trim().toLowerCase())
+          .filter(Boolean)
+      );
       const knownAliasesLower = new Set(
-        [...definitionAliases, ...dataModelAliases, ...dateModelAliases, ...apiModelAliases, ...Array.from(paginationAliasesLower)].map((x) =>
+        [...definitionAliases, ...dataModelAliases, ...dateModelAliases, ...apiModelAliases, ...Array.from(paginationAliasesLower), ...Array.from(oauth2ProvidedAliasesLower)].map((x) =>
           x.toLowerCase()
         )
       );
@@ -7238,11 +7577,20 @@ function handleDefinitionInput(value: string) {
       collectParameterTokens(queryObjBase, initialTokens);
       collectParameterTokens(bodyObjBase, initialTokens);
       const requestedAliases = excludePaginationAliases(
-        [...Array.from(initialTokens), ...sanitizedAliases.bindingRules.map((r) => r.alias)],
+        [...Array.from(initialTokens), ...sanitizedAliases.bindingRules.map((r) => r.alias), ...oauth2RequestAliases(s)],
         paginationAliasesLower
-      );
-      const { map: parameterValues, issues: parameterIssues } = await resolveRuntimeAliasValues(s, requestedAliases);
-
+      ).filter((alias) => !oauth2ProvidedAliasesLower.has(String(alias || '').trim().toLowerCase()));
+      const { map: parameterValuesRaw, issues: parameterIssues } = await resolveRuntimeAliasValues(s, requestedAliases);
+      let tokenRequestPreview: any = null;
+      let tokenResponsePreview: any = null;
+      let tokenResolvedAliases: Record<string, any> = {};
+      if (s.authMode === 'oauth2_client_credentials') {
+        const tokenData = await getOAuthToken(s, parameterValuesRaw || {});
+        tokenRequestPreview = tokenData.requestPreview;
+        tokenResponsePreview = tokenData.responsePreview;
+        tokenResolvedAliases = tokenData.mappedAliases || {};
+      }
+      const parameterValues = { ...(parameterValuesRaw || {}), ...tokenResolvedAliases };
       const hasParameterValues = Object.keys(parameterValues).length > 0;
       if (hasParameterValues) {
         applyParametersToValue(authHdr, parameterValues);
@@ -7299,7 +7647,10 @@ function handleDefinitionInput(value: string) {
           ? {
               request: execution.sentRequests[0] || null,
               resolved_parameters: parameterValues,
-              parameter_issues: Object.keys(parameterIssues).length ? parameterIssues : undefined
+              parameter_issues: Object.keys(parameterIssues).length ? parameterIssues : undefined,
+              token_request: tokenRequestPreview || undefined,
+              token_response: tokenResponsePreview || undefined,
+              token_mapped_aliases: Object.keys(tokenResolvedAliases).length ? tokenResolvedAliases : undefined
             }
           : {
               requests: execution.sentRequests,
@@ -7308,7 +7659,10 @@ function handleDefinitionInput(value: string) {
               truncated: pageCounter > execution.sentRequests.length,
               resolved_parameters: parameterValues,
               parameter_issues: Object.keys(parameterIssues).length ? parameterIssues : undefined,
-              execution_issues: execution.issues
+              execution_issues: execution.issues,
+              token_request: tokenRequestPreview || undefined,
+              token_response: tokenResponsePreview || undefined,
+              token_mapped_aliases: Object.keys(tokenResolvedAliases).length ? tokenResolvedAliases : undefined
             };
       myApiPreview = JSON.stringify(sentPreviewPayload, null, 2);
       myPreviewDirty = false;
@@ -8039,6 +8393,7 @@ function syncParameterEditorsHeight() {
               on:drop={(e) => dropAliasTokenToField(e, 'authJson', authEl)}
             ></textarea>
           {/if}
+          <p class="hint small-hint">Основной API-запрос: настрой вручную, как в документации сервиса. Пример: <code>Authorization: Bearer {"{{access_token}}"}</code></p>
         </label>
         <div class="auth-mode-buttons">
           <button
@@ -8052,51 +8407,106 @@ function syncParameterEditorsHeight() {
             }
             aria-pressed={selected?.authMode === AUTH_MODE_OAUTH2}
           >
-            <span>{selected?.authMode === AUTH_MODE_OAUTH2 ? 'OAuth2 включен (client_credentials)' : 'OAuth2 выключен (client_credentials)'}</span>
+            <span>{selected?.authMode === AUTH_MODE_OAUTH2 ? 'Подзапрос токена включен' : 'Подзапрос токена выключен'}</span>
             {#if selected?.authMode === AUTH_MODE_OAUTH2}
               <span class="group-toggle-indicator"></span>
             {/if}
           </button>
         </div>
         {#if selected?.authMode === 'oauth2_client_credentials'}
-          <div class="oauth-grid">
-            <input
-              placeholder="Token URL"
-              value={selected?.oauth2TokenUrl || ''}
-              on:input={(e) => mutateSelected((d) => (d.oauth2TokenUrl = e.currentTarget.value))}
-            />
-            <input
-              placeholder="Client ID"
-              value={selected?.oauth2ClientId || ''}
-              on:input={(e) => mutateSelected((d) => (d.oauth2ClientId = e.currentTarget.value))}
-            />
-            <input
-              placeholder="Client Secret"
-              value={selected?.oauth2ClientSecret || ''}
-              on:input={(e) => mutateSelected((d) => (d.oauth2ClientSecret = e.currentTarget.value))}
-            />
-            <input
-              placeholder="Grant type"
-              value={selected?.oauth2GrantType || ''}
-              on:input={(e) => mutateSelected((d) => (d.oauth2GrantType = e.currentTarget.value))}
-            />
-            <input
-              placeholder="Поле токена"
-              value={selected?.oauth2TokenField || ''}
-              on:input={(e) => mutateSelected((d) => (d.oauth2TokenField = e.currentTarget.value))}
-            />
-            <input
-              placeholder="Поле expires_in"
-              value={selected?.oauth2ExpiresField || ''}
-              on:input={(e) => mutateSelected((d) => (d.oauth2ExpiresField = e.currentTarget.value))}
-            />
-            <input
-              placeholder="Поле token_type"
-              value={selected?.oauth2TokenTypeField || ''}
-              on:input={(e) => mutateSelected((d) => (d.oauth2TokenTypeField = e.currentTarget.value))}
-            />
+          <div class="auth-subrequest-box">
+            <p class="hint small-hint">
+              Подзапрос токена: метод, адрес, headers/query/body и разбор ответа в алиасы. Без скрытой магии.
+            </p>
+            <div class="oauth-subreq-grid">
+              <select
+                value={selected?.oauth2RequestMethod || 'POST'}
+                on:change={(e) => mutateSelected((d) => (d.oauth2RequestMethod = toHttpMethod(e.currentTarget.value)))}
+              >
+                <option value="GET">GET</option>
+                <option value="POST">POST</option>
+                <option value="PUT">PUT</option>
+                <option value="PATCH">PATCH</option>
+                <option value="DELETE">DELETE</option>
+              </select>
+              <input
+                placeholder="URL/адрес подзапроса токена"
+                value={selected?.oauth2RequestUrl || ''}
+                on:input={(e) =>
+                  mutateSelected((d) => {
+                    d.oauth2RequestUrl = e.currentTarget.value;
+                    d.oauth2TokenUrl = e.currentTarget.value;
+                  })}
+              />
+              <input
+                placeholder="Host (если URL не задан)"
+                value={selected?.oauth2RequestHost || ''}
+                on:input={(e) => mutateSelected((d) => (d.oauth2RequestHost = e.currentTarget.value))}
+              />
+              <input
+                placeholder="Path (если URL не задан)"
+                value={selected?.oauth2RequestPath || ''}
+                on:input={(e) => mutateSelected((d) => (d.oauth2RequestPath = e.currentTarget.value))}
+              />
+            </div>
+            <div class="raw-grid">
+              <label>
+                <div class="response-head field-head"><span>Token Headers JSON</span></div>
+                <textarea
+                  class="json-code-editor"
+                  spellcheck="false"
+                  value={selected?.oauth2RequestHeadersJson || '{}'}
+                  on:input={(e) => mutateSelected((d) => (d.oauth2RequestHeadersJson = e.currentTarget.value))}
+                ></textarea>
+              </label>
+              <label>
+                <div class="response-head field-head"><span>Token Query JSON</span></div>
+                <textarea
+                  class="json-code-editor"
+                  spellcheck="false"
+                  value={selected?.oauth2RequestQueryJson || '{}'}
+                  on:input={(e) => mutateSelected((d) => (d.oauth2RequestQueryJson = e.currentTarget.value))}
+                ></textarea>
+              </label>
+            </div>
+            <label>
+              <div class="response-head field-head"><span>Token Body JSON</span></div>
+              <textarea
+                class="json-code-editor"
+                spellcheck="false"
+                value={selected?.oauth2RequestBodyJson || '{}'}
+                on:input={(e) => mutateSelected((d) => (d.oauth2RequestBodyJson = e.currentTarget.value))}
+              ></textarea>
+            </label>
+            <div class="rule-card">
+              <div class="rule-card-head">
+                <small>Как разобрать token response в параметры</small>
+                <button type="button" class="icon-btn plus-dark" title="Добавить mapping" on:click={addOAuth2ResponseMapping}>+</button>
+              </div>
+              {#if selected?.oauth2ResponseMappings?.length}
+                <div class="pagination-stop-rules-list">
+                  {#each selected.oauth2ResponseMappings as map (map.id)}
+                    <div class="data-row oauth2-map-row">
+                      <input
+                        placeholder="Путь поля в ответе (например access_token)"
+                        value={map.responsePath}
+                        on:input={(e) => updateOAuth2ResponseMapping(map.id, { responsePath: e.currentTarget.value })}
+                      />
+                      <input
+                        placeholder="Alias параметра (например access_token)"
+                        value={map.alias}
+                        on:input={(e) => updateOAuth2ResponseMapping(map.id, { alias: e.currentTarget.value })}
+                      />
+                      <button type="button" class="chip-remove" title="Удалить mapping" on:click={() => removeOAuth2ResponseMapping(map.id)}>x</button>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+            <p class="hint small-hint">
+              После подзапроса алиасы доступны в основном запросе через <code>{"{{alias}}"}</code>.
+            </p>
           </div>
-          <p class="hint">OAuth2: конструктор автоматически получает токен и подставляет заголовок Authorization.</p>
         {/if}
 
         <div class="raw-grid">
@@ -9461,9 +9871,26 @@ function syncParameterEditorsHeight() {
   .auth-section { display:block; margin-top:14px; }
   .auth-mode-buttons { margin:10px 0 10px; display:flex; gap:8px; }
   .auth-mode-btn { width:fit-content; min-width:280px; }
-  .oauth-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:8px; }
-  .oauth-grid input { margin:0; }
-  .auth-mode-buttons + .oauth-grid + .hint { margin-top:0; }
+  .auth-subrequest-box {
+    margin:8px 0 12px;
+    border:1px solid #e2e8f0;
+    border-radius:12px;
+    background:#fff;
+    padding:10px;
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+  }
+  .oauth-subreq-grid {
+    display:grid;
+    grid-template-columns: minmax(120px, 0.6fr) minmax(240px, 1.6fr) minmax(180px, 1fr) minmax(180px, 1fr);
+    gap:8px;
+    align-items:center;
+  }
+  .oauth2-map-row {
+    grid-template-columns: minmax(240px, 1.3fr) minmax(220px, 1fr) auto;
+    align-items:center;
+  }
   .pagination-box { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#f8fafc; }
   .dispatch-box { margin-top:10px; margin-bottom:14px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:#f8fafc; }
   .parameter-subhead { margin-top:12px; }
@@ -9810,6 +10237,10 @@ function syncParameterEditorsHeight() {
     .saved-inline-actions { grid-template-columns: 1fr; }
     .api-list { min-height:220px; max-height:min(50vh, 460px); }
     .parameter-sources-grid { grid-template-columns: 1fr; }
+    .oauth-subreq-grid,
+    .oauth2-map-row {
+      grid-template-columns: 1fr;
+    }
     .data-row, .table-rule-row, .join-rule-row, .filter-rule-row, .param-row, .date-param-inline-row, .field-date-row { grid-template-columns: 1fr; }
     .pagination-numeric-grid {
       grid-template-columns: 1fr;
