@@ -2948,7 +2948,6 @@
     nodeModalResizeState = null;
     document.body.style.removeProperty('cursor');
     document.body.style.removeProperty('user-select');
-    if (nodeModalEl) nodeModalEl.style.removeProperty('cursor');
   }
 
   function startNodeModalResize(e: MouseEvent, edge: 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw') {
@@ -2968,48 +2967,6 @@
     window.addEventListener('mouseup', stopNodeModalResize);
     document.body.style.cursor = resizeCursorByEdge(edge);
     document.body.style.userSelect = 'none';
-  }
-
-  function detectNodeModalResizeEdge(e: MouseEvent): 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw' | null {
-    if (!nodeModalEl || nodeModalFullscreen || !settingsNode) return null;
-    if (!isApiNode(settingsNode) && !isApiToolNode(settingsNode)) return null;
-    const rect = nodeModalEl.getBoundingClientRect();
-    const zone = 8;
-    const nearLeft = e.clientX >= rect.left && e.clientX <= rect.left + zone;
-    const nearRight = e.clientX <= rect.right && e.clientX >= rect.right - zone;
-    const nearTop = e.clientY >= rect.top && e.clientY <= rect.top + zone;
-    const nearBottom = e.clientY <= rect.bottom && e.clientY >= rect.bottom - zone;
-
-    if (nearTop && nearLeft) return 'nw';
-    if (nearTop && nearRight) return 'ne';
-    if (nearBottom && nearLeft) return 'sw';
-    if (nearBottom && nearRight) return 'se';
-    if (nearTop) return 'n';
-    if (nearBottom) return 's';
-    if (nearRight) return 'e';
-    if (nearLeft) return 'w';
-    return null;
-  }
-
-  function onNodeModalMouseMoveForResize(e: MouseEvent) {
-    if (nodeModalResizeState) return;
-    const edge = detectNodeModalResizeEdge(e);
-    if (!nodeModalEl) return;
-    if (edge) {
-      nodeModalEl.style.cursor = resizeCursorByEdge(edge);
-    } else {
-      nodeModalEl.style.removeProperty('cursor');
-    }
-  }
-
-  function onNodeModalMouseDownForResize(e: MouseEvent) {
-    const edge = detectNodeModalResizeEdge(e);
-    if (!edge) return;
-    startNodeModalResize(e, edge);
-  }
-
-  function onNodeModalMouseLeaveForResize() {
-    if (!nodeModalResizeState && nodeModalEl) nodeModalEl.style.removeProperty('cursor');
   }
 
   function nodeModalInlineStyle() {
@@ -4211,9 +4168,6 @@
       class:node-modal-manual={Boolean(nodeModalRect) && !nodeModalFullscreen}
       class:node-modal-resizable={(isApiNode(settingsNode) || isApiToolNode(settingsNode)) && !nodeModalFullscreen}
       style={nodeModalInlineStyle()}
-      on:mousedown={onNodeModalMouseDownForResize}
-      on:mousemove={onNodeModalMouseMoveForResize}
-      on:mouseleave={onNodeModalMouseLeaveForResize}
     >
       <div class="node-modal-head">
         <h4>Настройка узла: {settingsNode.config.name}</h4>
@@ -4447,6 +4401,16 @@
             {/key}
           {/if}
         </div>
+      {/if}
+      {#if (isApiNode(settingsNode) || isApiToolNode(settingsNode)) && !nodeModalFullscreen}
+        <button type="button" class="modal-resize-handle modal-resize-n" aria-label="Изменить высоту сверху" on:mousedown={(e) => startNodeModalResize(e, 'n')}></button>
+        <button type="button" class="modal-resize-handle modal-resize-s" aria-label="Изменить высоту снизу" on:mousedown={(e) => startNodeModalResize(e, 's')}></button>
+        <button type="button" class="modal-resize-handle modal-resize-e" aria-label="Изменить ширину справа" on:mousedown={(e) => startNodeModalResize(e, 'e')}></button>
+        <button type="button" class="modal-resize-handle modal-resize-w" aria-label="Изменить ширину слева" on:mousedown={(e) => startNodeModalResize(e, 'w')}></button>
+        <button type="button" class="modal-resize-handle modal-resize-ne" aria-label="Изменить размер справа сверху" on:mousedown={(e) => startNodeModalResize(e, 'ne')}></button>
+        <button type="button" class="modal-resize-handle modal-resize-nw" aria-label="Изменить размер слева сверху" on:mousedown={(e) => startNodeModalResize(e, 'nw')}></button>
+        <button type="button" class="modal-resize-handle modal-resize-se" aria-label="Изменить размер справа снизу" on:mousedown={(e) => startNodeModalResize(e, 'se')}></button>
+        <button type="button" class="modal-resize-handle modal-resize-sw" aria-label="Изменить размер слева снизу" on:mousedown={(e) => startNodeModalResize(e, 'sw')}></button>
       {/if}
     </div>
   {/if}
@@ -4734,7 +4698,6 @@
     border-radius: 12px;
   }
   .node-modal.node-modal-resizable {
-    resize: both;
     min-width: 760px;
     min-height: 420px;
   }
@@ -4768,6 +4731,23 @@
     border-color: #fecdd3;
     color: #be123c;
   }
+  .modal-resize-handle {
+    position: absolute;
+    border: 0;
+    background: transparent;
+    padding: 0;
+    margin: 0;
+    z-index: 6;
+    touch-action: none;
+  }
+  .modal-resize-n { top: 0; left: 12px; right: 12px; height: 8px; cursor: ns-resize; }
+  .modal-resize-s { bottom: 0; left: 12px; right: 12px; height: 8px; cursor: ns-resize; }
+  .modal-resize-e { right: 0; top: 12px; bottom: 12px; width: 8px; cursor: ew-resize; }
+  .modal-resize-w { left: 0; top: 12px; bottom: 12px; width: 8px; cursor: ew-resize; }
+  .modal-resize-ne { top: 0; right: 0; width: 12px; height: 12px; cursor: nesw-resize; }
+  .modal-resize-nw { top: 0; left: 0; width: 12px; height: 12px; cursor: nwse-resize; }
+  .modal-resize-se { bottom: 0; right: 0; width: 12px; height: 12px; cursor: nwse-resize; }
+  .modal-resize-sw { bottom: 0; left: 0; width: 12px; height: 12px; cursor: nesw-resize; }
   .node-modal-body {
     padding: 12px 14px;
     display: flex;
