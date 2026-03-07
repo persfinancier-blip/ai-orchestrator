@@ -31,8 +31,7 @@
 
 <nav class="top-nav">
   <a href="#desk" class:active={route === 'desk'}>Пространство</a>
-  <a href="#desk/data" class:active={route === 'desk/data' && pane !== 'api'}>Данные</a>
-  <a href="#desk/data?pane=api" class:active={(route === 'desk/data' && pane === 'api') || route === 'desk/workflow'}>API</a>
+  <a href="#desk/data" class:active={route === 'desk/data' || route === 'desk/workflow'}>Данные</a>
   <a href="#desk/tables" class:active={route === 'desk/tables'}>Таблицы</a>
   <a href="#legacy" class:active={route === 'legacy'}>Старый дашборд</a>
 </nav>
