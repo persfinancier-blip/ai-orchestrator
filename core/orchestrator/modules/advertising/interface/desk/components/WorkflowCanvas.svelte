@@ -314,6 +314,14 @@
     processes: []
   };
   let settingsApiTemplateSource: DynamicApiSource | null = null;
+  let settingsCurrentTemplateBinding = { storeId: 0, templateId: '' };
+  let settingsSelectedLibraryBinding = { storeId: 0, templateId: '', ref: '' };
+  let settingsSelectedLibraryName = '';
+  let settingsHasLibraryIdentity = false;
+  let settingsHasLibrarySelection = false;
+  let settingsLibraryMatchesCurrentTemplate = false;
+  let settingsLibraryReadyToSwitch = false;
+  let settingsCanSwitchTemplate = false;
   let apiTemplateUsageNodeKey = '';
 
   let canvasEl: HTMLDivElement;
@@ -347,6 +355,28 @@
     if (!settingsNode || (!isApiNode(settingsNode) && !isApiToolNode(settingsNode))) return null;
     return resolveTemplateSourceForNode(settingsNode, getApiRequestForNode(settingsNode));
   })();
+  $: settingsCurrentTemplateBinding = (() => {
+    settingsNode;
+    return currentSettingsTemplateBinding();
+  })();
+  $: settingsSelectedLibraryBinding = (() => {
+    apiLibrarySelection;
+    return selectedLibraryTemplateBinding();
+  })();
+  $: settingsSelectedLibraryName = String(apiLibrarySelection?.name || '').trim();
+  $: settingsHasLibraryIdentity =
+    settingsSelectedLibraryBinding.storeId > 0 || Boolean(settingsSelectedLibraryBinding.templateId);
+  $: settingsHasLibrarySelection = Boolean(settingsSelectedLibraryName || settingsHasLibraryIdentity);
+  $: settingsLibraryMatchesCurrentTemplate =
+    settingsHasLibraryIdentity &&
+    (settingsCurrentTemplateBinding.storeId > 0 || Boolean(settingsCurrentTemplateBinding.templateId)) &&
+    templateBindingsMatch(settingsCurrentTemplateBinding, settingsSelectedLibraryBinding);
+  $: settingsLibraryReadyToSwitch = settingsHasLibraryIdentity && !settingsLibraryMatchesCurrentTemplate;
+  $: settingsCanSwitchTemplate =
+    Boolean(settingsNode && (isApiNode(settingsNode) || isApiToolNode(settingsNode))) &&
+    settingsHasLibraryIdentity &&
+    (!(settingsCurrentTemplateBinding.storeId > 0 || Boolean(settingsCurrentTemplateBinding.templateId)) ||
+      !settingsLibraryMatchesCurrentTemplate);
   $: apiTemplateUsageSummary = buildApiTemplateUsageSummary(
     settingsApiTemplateSource,
     settingsNode,
@@ -2570,31 +2600,10 @@
     return selected.storeId > 0 || Boolean(selected.templateId);
   }
 
-  function selectedLibraryMatchesCurrentTemplate() {
-    const selected = selectedLibraryTemplateBinding();
-    if (!(selected.storeId > 0 || selected.templateId)) return false;
-    const current = currentSettingsTemplateBinding();
-    if (!(current.storeId > 0 || current.templateId)) return false;
-    return templateBindingsMatch(current, selected);
-  }
-
-  function currentSettingsTemplateStoreId() {
-    return currentSettingsTemplateBinding().storeId;
-  }
-
-  function canSwitchSettingsNodeTemplate() {
-    if (!settingsNode || (!isApiNode(settingsNode) && !isApiToolNode(settingsNode))) return false;
-    const selected = selectedLibraryTemplateBinding();
-    if (!(selected.storeId > 0 || selected.templateId)) return false;
-    const current = currentSettingsTemplateBinding();
-    if (!(current.storeId > 0 || current.templateId)) return true;
-    return !templateBindingsMatch(current, selected);
-  }
-
   async function switchSettingsNodeTemplate() {
     if (!settingsNode || (!isApiNode(settingsNode) && !isApiToolNode(settingsNode))) return;
-    if (!canSwitchSettingsNodeTemplate()) return;
-    const selected = selectedLibraryTemplateBinding();
+    if (!settingsCanSwitchTemplate) return;
+    const selected = settingsSelectedLibraryBinding;
     let source =
       dynamicApiSources.find((src) => selected.storeId > 0 && Number(src?.storeId || 0) === selected.storeId) ||
       dynamicApiSources.find((src) => Boolean(selected.templateId) && normalizeTemplateId(src?.id || '') === selected.templateId) ||
@@ -4731,12 +4740,7 @@
             {@const currentTemplateName = String(settingsApiTemplateSource?.name || '').trim() || 'Шаблон не привязан'}
             {@const otherNodesCount = apiTemplateUsageSummary.otherNodes.length}
             {@const processCount = apiTemplateUsageSummary.processes.length}
-            {@const switchDisabled = !canSwitchSettingsNodeTemplate()}
-            {@const selectedLibraryName = String(apiLibrarySelection?.name || '').trim()}
-            {@const hasLibraryIdentity = hasSelectedLibraryTemplateIdentity()}
-            {@const hasLibrarySelection = Boolean(selectedLibraryName || hasLibraryIdentity)}
-            {@const libraryMatchesCurrent = hasLibraryIdentity && selectedLibraryMatchesCurrentTemplate()}
-            {@const libraryReadyToSwitch = hasLibraryIdentity && !libraryMatchesCurrent}
+            {@const switchDisabled = !settingsCanSwitchTemplate}
             <section class="api-template-current-block">
               <div class="api-template-line api-template-line-main">
                 <span class="api-template-key">Текущий шаблон:</span>
@@ -4744,7 +4748,9 @@
               </div>
               <div class="api-template-line api-template-line-selected">
                 <span class="api-template-key">Выбран в библиотеке:</span>
-                <span class="api-template-value api-template-value-muted">{hasLibrarySelection ? selectedLibraryName : 'В библиотеке ничего не выбрано'}</span>
+                <span class="api-template-value api-template-value-muted">
+                  {settingsHasLibrarySelection ? settingsSelectedLibraryName : 'В библиотеке ничего не выбрано'}
+                </span>
               </div>
               <div class="api-template-line api-template-line-usage">
                 <span class="api-template-usage-text">
@@ -4802,13 +4808,13 @@
                 >
                   Сменить шаблон
                 </button>
-                {#if !hasLibrarySelection}
+                {#if !settingsHasLibrarySelection}
                   <span class="api-template-switch-hint">В библиотеке ничего не выбрано.</span>
-                {:else if !hasLibraryIdentity}
+                {:else if !settingsHasLibraryIdentity}
                   <span class="api-template-switch-hint">Выбран черновик. Сначала сохрани шаблон в библиотеке.</span>
-                {:else if libraryMatchesCurrent}
+                {:else if settingsLibraryMatchesCurrentTemplate}
                   <span class="api-template-switch-hint">Этот шаблон уже подключён.</span>
-                {:else if libraryReadyToSwitch}
+                {:else if settingsLibraryReadyToSwitch}
                   <span class="api-template-switch-hint">Готов к перепривязке.</span>
                 {:else}
                   <span class="api-template-switch-hint">Выбери шаблон в секции “Список API”, затем нажми “Сменить шаблон”.</span>
