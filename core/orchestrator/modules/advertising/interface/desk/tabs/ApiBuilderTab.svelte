@@ -8495,16 +8495,6 @@ function syncParameterEditorsHeight() {
                     d.oauth2TokenUrl = e.currentTarget.value;
                   })}
               />
-              <input
-                placeholder="Host (если URL не задан)"
-                value={selected?.oauth2RequestHost || ''}
-                on:input={(e) => mutateSelected((d) => (d.oauth2RequestHost = e.currentTarget.value))}
-              />
-              <input
-                placeholder="Path (если URL не задан)"
-                value={selected?.oauth2RequestPath || ''}
-                on:input={(e) => mutateSelected((d) => (d.oauth2RequestPath = e.currentTarget.value))}
-              />
             </div>
             <div class="raw-grid">
               <label>
@@ -9940,7 +9930,7 @@ function syncParameterEditorsHeight() {
   }
   .oauth-subreq-grid {
     display:grid;
-    grid-template-columns: minmax(120px, 0.6fr) minmax(240px, 1.6fr) minmax(180px, 1fr) minmax(180px, 1fr);
+    grid-template-columns: minmax(120px, 0.6fr) minmax(320px, 1.8fr);
     gap:8px;
     align-items:center;
   }
