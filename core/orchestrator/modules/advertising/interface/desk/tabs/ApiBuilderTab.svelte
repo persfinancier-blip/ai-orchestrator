@@ -9540,6 +9540,30 @@ function syncParameterEditorsHeight() {
         </div>
       {/if}
 
+      <div class="current-template-box">
+        <small class="current-template-label">Текущий шаблон</small>
+        <div class="current-template-name">{selected?.name || 'Шаблон не выбран'}</div>
+      </div>
+
+      <div class="template-controls">
+        <input
+          class="template-name {nameDuplicateHint ? 'warn' : ''}"
+          value={nameDraft}
+          on:input={(e) => {
+            nameDraft = e.currentTarget.value;
+            if (selected) mutateSelected((d) => (d.name = e.currentTarget.value));
+          }}
+          placeholder="Название API"
+        />
+        {#if nameDuplicateHint}
+          <div class="name-warn">{nameDuplicateHint}</div>
+        {/if}
+        <div class="saved-inline-actions">
+          <button class="primary template-main-btn" on:click={addApi} disabled={!canAddTemplate}>Добавить</button>
+          <button class="primary template-main-btn" on:click={saveSelected} disabled={!canSaveSelected}>{saving ? 'Сохранение...' : 'Сохранить'}</button>
+        </div>
+      </div>
+
       <div class="template-list-controls">
         <input
           class="template-search"
@@ -9650,30 +9674,6 @@ function syncParameterEditorsHeight() {
           {#if templateParseMessage}
             <span class="template-parse-note">{templateParseMessage}</span>
           {/if}
-        </div>
-      </div>
-
-      <div class="current-template-box">
-        <small class="current-template-label">Текущий шаблон</small>
-        <div class="current-template-name">{selected?.name || 'Шаблон не выбран'}</div>
-      </div>
-
-      <div class="template-controls">
-        <input
-          class="template-name {nameDuplicateHint ? 'warn' : ''}"
-          value={nameDraft}
-          on:input={(e) => {
-            nameDraft = e.currentTarget.value;
-            if (selected) mutateSelected((d) => (d.name = e.currentTarget.value));
-          }}
-          placeholder="Название API"
-        />
-        {#if nameDuplicateHint}
-          <div class="name-warn">{nameDuplicateHint}</div>
-        {/if}
-        <div class="saved-inline-actions">
-          <button class="primary template-main-btn" on:click={addApi} disabled={!canAddTemplate}>Добавить</button>
-          <button class="primary template-main-btn" on:click={saveSelected} disabled={!canSaveSelected}>{saving ? 'Сохранение...' : 'Сохранить'}</button>
         </div>
       </div>
     </aside>
