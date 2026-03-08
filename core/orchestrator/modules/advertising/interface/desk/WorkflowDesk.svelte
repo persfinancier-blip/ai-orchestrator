@@ -47,7 +47,7 @@
     }
     if (!res.ok) {
       const msg = payload?.details || payload?.error || `${res.status} ${res.statusText}`;
-      throw new Error(String(msg || 'РћС€РёР±РєР° API'));
+      throw new Error(String(msg || 'Ошибка API'));
     }
     return payload as T;
   }
@@ -63,7 +63,7 @@
     if (tablesLoading) return;
     tablesLoading = true;
     tablesError = '';
-    tablesStatus = 'РџСЂРѕРІРµСЂСЏРµРј РїРѕРґРєР»СЋС‡РµРЅРёРµ Рє Р±Р°Р·Рµ...';
+    tablesStatus = 'Проверяем подключение к базе...';
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), TABLES_TIMEOUT_MS);
     try {
@@ -81,21 +81,21 @@
       try {
         payload = rawText ? JSON.parse(rawText) : {};
       } catch {
-        throw new Error('РЎРµСЂРІРµСЂ РІРµСЂРЅСѓР» РЅРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ JSON РїСЂРё Р·Р°РіСЂСѓР·РєРµ С‚Р°Р±Р»РёС†.');
+        throw new Error('Сервер вернул некорректный JSON при загрузке таблиц.');
       }
       if (!res.ok) {
         const msg = payload?.details || payload?.error || `${res.status} ${res.statusText}`;
-        throw new Error(String(msg || 'РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё С‚Р°Р±Р»РёС†'));
+        throw new Error(String(msg || 'Ошибка загрузки таблиц'));
       }
       if (!Array.isArray(payload?.existing_tables)) {
-        throw new Error('РЎРµСЂРІРµСЂ РІРµСЂРЅСѓР» РЅРµРѕР¶РёРґР°РЅРЅС‹Р№ С„РѕСЂРјР°С‚ СЃРїРёСЃРєР° С‚Р°Р±Р»РёС†.');
+        throw new Error('Сервер вернул неожиданный формат списка таблиц.');
       }
       existingTables = [...(payload.existing_tables as ExistingTable[])];
-      tablesStatus = `РџРѕРґРєР»СЋС‡РµРЅРёРµ Рє Р±Р°Р·Рµ: OK. РўР°Р±Р»РёС† РґРѕСЃС‚СѓРїРЅРѕ: ${existingTables.length}.`;
+      tablesStatus = `Подключение к базе: OK. Таблиц доступно: ${existingTables.length}.`;
     } catch (e: any) {
-      const msg = e?.name === 'AbortError' ? 'РўР°Р№РјР°СѓС‚ РїСЂРѕРІРµСЂРєРё РїРѕРґРєР»СЋС‡РµРЅРёСЏ Рє Р±Р°Р·Рµ.' : String(e?.message || e);
+      const msg = e?.name === 'AbortError' ? 'Таймаут проверки подключения к базе.' : String(e?.message || e);
       tablesError = msg;
-      tablesStatus = `РџРѕРґРєР»СЋС‡РµРЅРёРµ Рє Р±Р°Р·Рµ: РѕС€РёР±РєР°. ${msg}`;
+      tablesStatus = `Подключение к базе: ошибка. ${msg}`;
     } finally {
       clearTimeout(timeoutId);
       tablesLoading = false;
@@ -152,8 +152,8 @@
 
     handoffInfo = apiStoreId
       ? fromNode
-        ? `РћС‚РєСЂС‹С‚ РёР· workflow-СѓР·Р»Р°: ${fromNode}. РЁР°Р±Р»РѕРЅ API ID: ${apiStoreId}`
-        : `РћС‚РєСЂС‹С‚ РёР· workflow-СѓР·Р»Р° API. РЁР°Р±Р»РѕРЅ ID: ${apiStoreId}`
+        ? `Открыт из workflow-узла: ${fromNode}. Шаблон API ID: ${apiStoreId}`
+        : `Открыт из workflow-узла API. Шаблон ID: ${apiStoreId}`
       : '';
 
     if (nextPane === 'api' || nextPane === 'parser') {
@@ -189,13 +189,13 @@
 <main class="page">
   <header class="top">
     <div>
-      <h1>Р Р°Р±РѕС‡РёР№ СЃС‚РѕР» РґР°РЅРЅС‹С…</h1>
-      <p class="sub">РЈРїСЂР°РІР»РµРЅРёРµ РїСЂРѕС†РµСЃСЃР°РјРё, API-С€Р°Р±Р»РѕРЅР°РјРё Рё С€Р°Р±Р»РѕРЅР°РјРё РїР°СЂСЃРёРЅРіР° РІ РµРґРёРЅРѕРј СЂР°Р±РѕС‡РµРј РїСЂРѕСЃС‚СЂР°РЅСЃС‚РІРµ.</p>
+      <h1>Рабочий стол данных</h1>
+      <p class="sub">Управление процессами, API-шаблонами и шаблонами парсинга в едином рабочем пространстве.</p>
     </div>
   </header>
 
   <nav class="tabs">
-    <button class:active={pane === 'workspace'} on:click={() => setPane('workspace')}>Р Р°Р±РѕС‡РёР№ СЃС‚РѕР»</button>
+    <button class:active={pane === 'workspace'} on:click={() => setPane('workspace')}>Рабочий стол</button>
     <button class:active={pane === 'api'} on:click={() => setPane('api')}>Запросы</button>
     <button class:active={pane === 'parser'} on:click={() => setPane('parser')}>Работа с данными</button>
   </nav>
@@ -211,7 +211,7 @@
     {/if}
     {#if tablesError}
       <div class="alert">
-        <div class="alert-title">РћС€РёР±РєР°</div>
+        <div class="alert-title">Ошибка</div>
         <pre>{tablesError}</pre>
       </div>
     {/if}
