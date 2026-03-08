@@ -1,5 +1,6 @@
 import express from 'express';
 import crypto from 'node:crypto';
+import vm from 'node:vm';
 import { pool } from './db.mjs';
 import { executeParserRows, parserRuntimeTestkit } from './parserRuntime.mjs';
 import {
@@ -3133,16 +3134,45 @@ async function handleProcessNodeJob(client, config, job, payload = {}) {
 
   const toolType = String(node?.config?.toolType || '').trim().toLowerCase();
   const parserBatch = output?.meta?.parser_batch && typeof output.meta.parser_batch === 'object' ? output.meta.parser_batch : null;
-  if (toolType === 'table_parser' && parserBatch) {
-    const nextIndex = nodeIndex + 1;
-    const hasNextNode = nextIndex < order.length;
-    const basePriority = Math.max(1, Math.trunc(Number(job?.priority || JOB_DEFAULT_PRIORITY)));
-    const parserBatchNo = Math.max(1, Math.trunc(Number(chunkNo || stepOrder)));
-    const spawnedJobIds = [];
+  const basePriority = Math.max(1, Math.trunc(Number(job?.priority || JOB_DEFAULT_PRIORITY)));
+  const graphEdges = Array.isArray(subgraph?.edges) ? subgraph.edges : [];
+  const currentNodeId = String(node?.id || '').trim();
 
-    if (hasNextNode) {
-      const downstreamChunkKey = `${chunkKey}:rows_${parserBatchNo}`;
-      const nextNode = order[nextIndex];
+  const resolveSuccessors = (outputPort = 'out') => {
+    let successors = getNodeSuccessors(order, graphEdges, currentNodeId, outputPort);
+    if (!successors.length && !graphEdges.length && nodeIndex + 1 < order.length) {
+      const fallbackNode = order[nodeIndex + 1];
+      successors = fallbackNode ? [{ nodeIndex: nodeIndex + 1, nodeId: String(fallbackNode.id || '').trim() }] : [];
+    }
+    const uniq = new Map();
+    successors.forEach((s) => {
+      const idx = Math.max(0, Math.trunc(Number(s?.nodeIndex || -1)));
+      const nodeId = String(s?.nodeId || '').trim();
+      if (idx < 0 || !nodeId) return;
+      if (!order[idx] || String(order[idx]?.id || '').trim() !== nodeId) return;
+      uniq.set(`${idx}:${nodeId}`, { nodeIndex: idx, nodeId });
+    });
+    return [...uniq.values()].sort((a, b) => a.nodeIndex - b.nodeIndex);
+  };
+
+  const enqueueSuccessors = async (successors, nextInputValue, options = {}) => {
+    const outPort = String(options?.output_port || 'out').trim() || 'out';
+    const chunkPrefix = String(options?.chunk_key_prefix || '').trim();
+    const dedupeScope = String(options?.dedupe_scope || `${chunkKey}:${chunkNo}`).trim();
+    const extraPayload = options?.extra_payload && typeof options.extra_payload === 'object' ? options.extra_payload : {};
+    const extraEventPayload =
+      options?.extra_event_payload && typeof options.extra_event_payload === 'object' ? options.extra_event_payload : {};
+    const spawned = [];
+    for (let idx = 0; idx < successors.length; idx += 1) {
+      const s = successors[idx];
+      const nextNode = order[s.nodeIndex];
+      if (!nextNode) continue;
+      const nextChunkNo = Math.max(1, Math.trunc(Number(options?.chunk_no || s.nodeIndex + 1)));
+      const nextChunkKey = chunkPrefix
+        ? `${chunkPrefix}:to_${String(nextNode?.id || s.nodeIndex)}`
+        : successors.length > 1
+          ? `node_${s.nodeIndex}:from_${currentNodeId || nodeIndex}`
+          : `node_${s.nodeIndex}`;
       const nextJobId = await enqueueWorkflowJob(client, config, {
         tenant_id: processCtx.tenant_id,
         client_id: processCtx.client_id,
@@ -3160,18 +3190,19 @@ async function handleProcessNodeJob(client, config, job, payload = {}) {
           run_uid: runUid,
           desk_row: payload?.desk_row || {},
           process,
-          node_index: nextIndex,
+          node_index: s.nodeIndex,
           node: nextNode,
-          input_value: output,
-          chunk_key: downstreamChunkKey,
-          chunk_no: parserBatchNo
+          input_value: nextInputValue,
+          chunk_key: nextChunkKey,
+          chunk_no: nextChunkNo,
+          ...extraPayload
         },
-        dedupe_key: `run_node:${runUid}:${nextIndex}:batch:${parserBatchNo}:${parserBatch.offset || 0}`,
+        dedupe_key: `run_node:${runUid}:${s.nodeIndex}:from:${currentNodeId || nodeIndex}:port:${outPort}:${dedupeScope}`,
         priority: basePriority,
         max_attempts: JOB_DEFAULT_MAX_ATTEMPTS
       });
-      if (!nextJobId) throw new Error(`next_node_job_not_created:${nextIndex}:batch:${parserBatchNo}`);
-      spawnedJobIds.push(nextJobId);
+      if (!nextJobId) throw new Error(`next_node_job_not_created:${s.nodeIndex}:${nextNode?.id || ''}`);
+      spawned.push(nextJobId);
       await emitWorkflowEvent(client, config, {
         event_type: 'chunk_enqueued',
         tenant_id: processCtx.tenant_id,
@@ -3185,10 +3216,35 @@ async function handleProcessNodeJob(client, config, job, payload = {}) {
         context_json: processCtx.context_json || {},
         run_uid: runUid,
         source_run_uid: runUid,
-        chunk_key: downstreamChunkKey,
-        chunk_no: parserBatchNo,
-        payload: { job_id: nextJobId, node_id: String(nextNode?.id || ''), batch_offset: Number(parserBatch.offset || 0) }
+        chunk_key: nextChunkKey,
+        chunk_no: nextChunkNo,
+        payload: {
+          job_id: nextJobId,
+          node_id: String(nextNode?.id || ''),
+          from_node_id: currentNodeId,
+          from_port: outPort,
+          ...extraEventPayload
+        }
       });
+    }
+    return spawned;
+  };
+
+  if (toolType === 'table_parser' && parserBatch) {
+    const parserBatchNo = Math.max(1, Math.trunc(Number(chunkNo || stepOrder)));
+    const outputPort = getOutputPortByNode(node, output, processCtx);
+    const successors = resolveSuccessors(outputPort);
+    const spawnedJobIds = [];
+    if (successors.length) {
+      const downstreamChunkKey = `${chunkKey}:rows_${parserBatchNo}`;
+      const downstreamJobs = await enqueueSuccessors(successors, output, {
+        output_port: outputPort,
+        chunk_no: parserBatchNo,
+        chunk_key_prefix: downstreamChunkKey,
+        dedupe_scope: `batch:${parserBatchNo}:${Number(parserBatch.offset || 0)}`,
+        extra_event_payload: { batch_offset: Number(parserBatch.offset || 0) }
+      });
+      spawnedJobIds.push(...downstreamJobs);
     }
 
     if (parserBatch.has_more && parserBatch?.next_cursor && typeof parserBatch.next_cursor === 'object') {
@@ -3243,62 +3299,22 @@ async function handleProcessNodeJob(client, config, job, payload = {}) {
       });
     }
 
-    if (!spawnedJobIds.length) {
-      return { completed: true };
-    }
+    if (!spawnedJobIds.length) return { completed: true };
     return { next_job_id: spawnedJobIds[0], spawned_job_ids: spawnedJobIds, parser_batch: parserBatch };
   }
 
-  if (nodeIndex >= order.length - 1 || String(node?.config?.toolType || '').trim().toLowerCase() === 'end_process') {
+  if (toolType === 'end_process') {
     return { completed: true };
   }
 
-  const nextIndex = nodeIndex + 1;
-  const nextNode = order[nextIndex];
-  const nextJobId = await enqueueWorkflowJob(client, config, {
-    tenant_id: processCtx.tenant_id,
-    client_id: processCtx.client_id,
-    desk_id: processCtx.desk_id,
-    desk_version_id: processCtx.desk_version_id,
-    start_node_id: processCtx.start_node_id,
-    process_code: processCtx.process_code,
-    scope_type: processCtx.scope_type,
-    scope_ref: processCtx.scope_ref,
-    context_json: processCtx.context_json || {},
-    parent_run_uid: runUid,
-    parent_job_id: Math.trunc(Number(job?.job_id || 0)),
-    job_type: 'process_node',
-    payload_json: {
-      run_uid: runUid,
-      desk_row: payload?.desk_row || {},
-      process,
-      node_index: nextIndex,
-      node: nextNode,
-      input_value: output
-    },
-    dedupe_key: `run_node:${runUid}:${nextIndex}`,
-    priority: Math.max(1, Math.trunc(Number(job?.priority || JOB_DEFAULT_PRIORITY))),
-    max_attempts: JOB_DEFAULT_MAX_ATTEMPTS
-  });
-  if (!nextJobId) {
-    throw new Error(`next_node_job_not_created:${nextIndex}`);
+  const outputPort = getOutputPortByNode(node, output, processCtx);
+  const successors = resolveSuccessors(outputPort);
+  if (!successors.length) {
+    return { completed: true };
   }
-  await emitWorkflowEvent(client, config, {
-    event_type: 'chunk_enqueued',
-    tenant_id: processCtx.tenant_id,
-    client_id: processCtx.client_id,
-    desk_id: processCtx.desk_id,
-    desk_version_id: processCtx.desk_version_id,
-    start_node_id: processCtx.start_node_id,
-    process_code: processCtx.process_code,
-    scope_type: processCtx.scope_type,
-    scope_ref: processCtx.scope_ref,
-    context_json: processCtx.context_json || {},
-    run_uid: runUid,
-    source_run_uid: runUid,
-    chunk_key: `node_${nextIndex}`,
-    chunk_no: nextIndex + 1,
-    payload: { job_id: nextJobId, node_id: String(nextNode?.id || '') }
+  const spawnedJobIds = await enqueueSuccessors(successors, output, {
+    output_port: outputPort,
+    dedupe_scope: `${chunkKey}:${chunkNo}`
   });
 
   const cursorCandidate = getByPath({ response: output }, 'response.cursor');
@@ -3328,7 +3344,7 @@ async function handleProcessNodeJob(client, config, job, payload = {}) {
       ]
     );
   }
-  return { next_job_id: nextJobId };
+  return { next_job_id: spawnedJobIds[0], spawned_job_ids: spawnedJobIds };
 }
 
 async function executeWorkflowJobByType(client, config, job) {
@@ -3743,6 +3759,10 @@ function nodeTemplateRefs(node) {
     const settings = node?.config?.settings && typeof node.config.settings === 'object' ? node.config.settings : {};
     refs.push(String(settings?.templateId || '').trim());
     refs.push(String(settings?.templateStoreId || '').trim());
+  } else if (node.type === 'tool' && String(node?.config?.toolType || '').trim() === 'http_request') {
+    const settings = node?.config?.settings && typeof node.config.settings === 'object' ? node.config.settings : {};
+    refs.push(String(settings?.templateId || '').trim());
+    refs.push(String(settings?.templateStoreId || '').trim());
   }
   return uniqueAliasList(refs.filter(Boolean));
 }
@@ -4031,7 +4051,8 @@ function isApiNode(node) {
 }
 
 function isApiToolNode(node) {
-  return Boolean(node && node.type === 'tool' && String(node?.config?.toolType || '').trim() === 'api_request');
+  const toolType = String(node?.config?.toolType || '').trim().toLowerCase();
+  return Boolean(node && node.type === 'tool' && (toolType === 'api_request' || toolType === 'http_request'));
 }
 
 function normalizeApiRequestFromTemplateRow(template) {
@@ -4976,6 +4997,397 @@ async function runDeskById(deskId, triggerMeta = {}, options = {}) {
   }
 }
 
+function normalizeToolSettingsJson(raw, fallback = {}) {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  if (typeof raw !== 'string') return fallback;
+  const parsed = parseJsonObjectSafe(raw, fallback);
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : fallback;
+}
+
+function normalizeCodeTimeout(raw, fallbackMs = 5000) {
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) return Math.max(100, Math.trunc(fallbackMs));
+  return Math.max(100, Math.trunc(value));
+}
+
+function normalizeSwitchCaseValues(settings = {}) {
+  return [
+    String(settings.switchCase1Value || '').trim(),
+    String(settings.switchCase2Value || '').trim(),
+    String(settings.switchCase3Value || '').trim(),
+    String(settings.switchCase4Value || '').trim()
+  ];
+}
+
+function getOutputPortByNode(node, inputValue, processCtx = {}) {
+  const toolType = String(node?.config?.toolType || '').trim().toLowerCase();
+  if (toolType !== 'condition_if' && toolType !== 'condition_switch') {
+    return pickOutputPort(node?.config?.settings?.outputPort, 'out');
+  }
+
+  const settings = node?.config?.settings && typeof node.config.settings === 'object' ? node.config.settings : {};
+  const envelope = normalizeNodeIoEnvelope(inputValue, processCtx);
+  const rows = Array.isArray(envelope?.rows) ? envelope.rows : [];
+  const firstRow = rows.length ? rows[0] : {};
+
+  if (toolType === 'condition_if') {
+    const fieldPath = String(settings.conditionField || '').trim();
+    const leftValue = fieldPath ? getByPath(firstRow, fieldPath) : firstRow;
+    const operator = String(settings.conditionOperator || 'equals').trim();
+    const compareValue = String(settings.conditionValue || '').trim();
+    const match = evaluateConditionValue(leftValue, operator, compareValue);
+    return pickOutputPort(match ? settings.ifTruePort : settings.ifFalsePort, match ? 'true' : 'false');
+  }
+
+  const switchField = String(settings.switchField || '').trim();
+  const leftValue = switchField ? getByPath(firstRow, switchField) : firstRow;
+  const cases = normalizeSwitchCaseValues(settings);
+  const matchedIndex = cases.findIndex((item) => item !== '' && evaluateConditionValue(leftValue, 'equals', item));
+  if (matchedIndex >= 0) return pickOutputPort(`case_${matchedIndex + 1}`, `case_${matchedIndex + 1}`);
+  return pickOutputPort(settings.switchDefaultPort, 'default');
+}
+
+function getNodeSuccessors(order, edges, currentNodeId, outputPort) {
+  const byId = new Map((order || []).map((node, idx) => [node.id, idx]));
+  const targetPort = String(outputPort || 'out').trim() || 'out';
+  const out = [];
+  for (const edge of edges || []) {
+    if (String(edge?.from || '').trim() !== String(currentNodeId || '').trim()) continue;
+    if (String(edge?.fromPort || 'out').trim() !== targetPort) continue;
+    const targetNodeId = String(edge?.to || '').trim();
+    if (!targetNodeId || !byId.has(targetNodeId)) continue;
+    out.push({ nodeIndex: byId.get(targetNodeId), nodeId: targetNodeId });
+  }
+  return out;
+}
+
+function pickOutputPort(port, fallbackPort) {
+  const normalized = String(port || '').trim();
+  return normalized || fallbackPort;
+}
+
+function evaluateConditionValue(left, operatorRaw, rightRaw) {
+  const op = normalizeStopRuleOperator(operatorRaw);
+  return compareByOperator(left, op, rightRaw);
+}
+
+function buildTokenReplaceMap(node, inputEnvelope, processCtx, extra = {}) {
+  const settings = node?.config?.settings && typeof node.config.settings === 'object' ? node.config.settings : {};
+  const overrides = normalizeToolSettingsJson(settings.parameterOverrides, {});
+  const scope = processCtx?.context_json && typeof processCtx.context_json === 'object' ? processCtx.context_json : {};
+  const map = {
+    ...(typeof extra === 'object' && !Array.isArray(extra) ? extra : {}),
+    ...(scope || {})
+  };
+  const firstRow = Array.isArray(inputEnvelope?.rows) && inputEnvelope.rows.length ? inputEnvelope.rows[0] : null;
+  if (firstRow && typeof firstRow === 'object' && !Array.isArray(firstRow)) {
+    Object.entries(firstRow).forEach(([k, v]) => {
+      if (!(k in map)) map[k] = v;
+    });
+  }
+  Object.entries(overrides).forEach(([k, v]) => {
+    if (v !== undefined) map[k] = v;
+  });
+  map.__scope_type = String(processCtx?.scope_type || '').trim();
+  map.__scope_ref = String(processCtx?.scope_ref || '').trim();
+  map.__tenant_id = processCtx?.tenant_id == null ? '' : String(processCtx.tenant_id);
+  return map;
+}
+
+async function executeHttpToolNode(client, node, inputValue, processCtx = {}) {
+  const settings = node?.config?.settings && typeof node.config.settings === 'object' ? node.config.settings : {};
+  const method = String(settings.apiMethod || settings.method || 'GET').trim().toUpperCase() || 'GET';
+  const urlTemplate = String(settings.apiUrl || settings.url || '').trim();
+  if (!urlTemplate) throw new Error('http_request_url_empty');
+  const headerTemplate = normalizeToolSettingsJson(settings.apiHeaders, {});
+  const queryTemplate = normalizeToolSettingsJson(settings.apiQuery, {});
+  const bodyTemplate = normalizeToolSettingsJson(settings.apiBody, {});
+
+  const inputEnvelope = normalizeNodeIoEnvelope(inputValue, processCtx);
+  const inputRows = Array.isArray(inputEnvelope.rows) && inputEnvelope.rows.length ? inputEnvelope.rows : [{}];
+  const requestEntities = inputRows.map((r) => (r && typeof r === 'object' && !Array.isArray(r) ? r : { value: r }));
+  const maxAttemptsRows = requestEntities.length;
+  const requestsPreview = [];
+  const responsesPreview = [];
+  let requestCount = 0;
+  let success = 0;
+  let failed = 0;
+  let rowCount = 0;
+  let lastStatus = 0;
+
+  for (let i = 0; i < requestEntities.length; i += 1) {
+    const row = requestEntities[i] || {};
+    const tokenMap = buildTokenReplaceMap(node, inputEnvelope, processCtx, row);
+    const requestHeaders = parseHttpHeaders(deepClone(headerTemplate));
+    const requestQuery = deepClone(queryTemplate);
+    const requestBody = deepClone(bodyTemplate);
+    const urlResolved = replaceParameterTokens(urlTemplate, tokenMap);
+    applyParametersToValue(requestHeaders, tokenMap);
+    applyParametersToValue(requestQuery, tokenMap);
+    applyParametersToValue(requestBody, tokenMap);
+
+    try {
+      const url = new URL(urlResolved);
+      Object.entries(requestQuery || {}).forEach(([key, value]) => {
+        if (value === undefined || value === null) return;
+        url.searchParams.set(key, String(value));
+      });
+      const reqPayload = {
+        request_index: i + 1,
+        method,
+        url: url.toString(),
+        headers: requestHeaders,
+        query: requestQuery,
+        body: method === 'GET' || method === 'DELETE' ? undefined : requestBody
+      };
+      requestCount += 1;
+      if (requestsPreview.length < MAX_REQUESTS_PREVIEW) requestsPreview.push(reqPayload);
+
+      const resp = await executeHttpWithRetry({
+        method,
+        url: reqPayload.url,
+        headers: reqPayload.headers,
+        body: reqPayload.body
+      });
+      lastStatus = Number(resp?.status || 0);
+      const bodyResp = resp?.body;
+      if (resp?.ok) success += 1;
+      else failed += 1;
+      if (responsesPreview.length < MAX_RESPONSES_PREVIEW) {
+        responsesPreview.push({
+          request_index: i + 1,
+          status: lastStatus,
+          response: bodyResp
+        });
+      }
+      if (bodyResp !== undefined && bodyResp !== null) {
+        if (Array.isArray(bodyResp)) {
+          rowCount += bodyResp.length;
+        } else {
+          rowCount += 1;
+        }
+      }
+    } catch (e) {
+      failed += 1;
+      lastStatus = 0;
+      if (responsesPreview.length < MAX_RESPONSES_PREVIEW) {
+        responsesPreview.push({
+          request_index: i + 1,
+          status: 0,
+          response: { error: String(e?.message || e || 'http_request_failed') }
+        });
+      }
+    }
+  }
+
+  const requestRows = [];
+  for (let i = 0; i < maxAttemptsRows; i += 1) {
+    const responseRow = responsesPreview[i]?.response;
+    if (responseRow !== undefined) requestRows.push(responseRow);
+  }
+  const outputEnvelope = composeNodeOutputEnvelope(processCtx, node, requestRows, {
+    source_type: 'http_request',
+    request_count: requestCount,
+    success,
+    failed,
+    node_template_mode: 'tool_settings'
+  }, {
+    source_type: 'http_request',
+    request_preview: requestsPreview,
+    response_preview: responsesPreview
+  });
+
+  return {
+    output: outputEnvelope,
+    metrics: {
+      requestCount,
+      success,
+      failed,
+      payloadCount: rowCount,
+      status: lastStatus
+    },
+    request_payload: {
+      method,
+      url: urlTemplate,
+      rows_total: maxAttemptsRows,
+      headers: headerTemplate,
+      query: queryTemplate,
+      body: bodyTemplate
+    },
+    response_payload: {
+      total_requests: requestCount,
+      success,
+      failed,
+      responses: responsesPreview
+    }
+  };
+}
+
+function normalizeSplitSettings(settings = {}) {
+  const splitMode = String(settings.splitMode || 'duplicate').trim().toLowerCase();
+  const splitMultiplier = Number(settings.splitMultiplier);
+  const factor = Number.isFinite(splitMultiplier) ? Math.max(1, splitMultiplier) : 2;
+  return {
+    mode: splitMode === 'split' ? 'split' : 'duplicate',
+    multiplier: factor,
+    splitKeyField: String(settings.splitKeyField || '').trim(),
+    splitPrefix: String(settings.splitPrefix || '').trim()
+  };
+}
+
+function executeSplitDataInMemory(inputValue, processCtx, settings = {}) {
+  const cfg = normalizeSplitSettings(settings);
+  const envelope = normalizeNodeIoEnvelope(inputValue, processCtx);
+  const srcRows = Array.isArray(envelope?.rows) ? envelope.rows : [];
+  let rows = [];
+  if (!srcRows.length) {
+    rows = [];
+  } else if (cfg.mode === 'split') {
+    const step = Math.max(1, Math.trunc(cfg.multiplier || 1));
+    rows = srcRows.filter((_, idx) => idx % step === 0);
+  } else {
+    const dup = Math.max(1, Math.trunc(cfg.multiplier || 1));
+    rows = srcRows.flatMap((row, rowIndex) => {
+      const cloneRow = row && typeof row === 'object' && !Array.isArray(row) ? row : { value: row };
+      return Array.from({ length: dup }).map((_, i) => ({
+        ...deepClone(cloneRow),
+        ...(cfg.splitKeyField ? { [cfg.splitKeyField]: cfg.splitPrefix ? `${cfg.splitPrefix}${rowIndex + 1}_${i + 1}` : i + 1 } : {})
+      }));
+    });
+  }
+
+  return {
+    output: composeNodeOutputEnvelope(processCtx, { type: 'tool', config: { name: '', toolType: 'split_data' } }, rows, {
+      source_type: 'split_data',
+      split_mode: cfg.mode,
+      split_multiplier: cfg.multiplier
+    }),
+    metrics: {
+      source_rows: srcRows.length,
+      output_rows: rows.length
+    }
+  };
+}
+
+function normalizeMergeSettings(settings = {}) {
+  return {
+    mode: String(settings.mergeMode || 'dedupe').trim().toLowerCase(),
+    dedupeByRaw: String(settings.dedupeBy || '').trim(),
+    keep: String(settings.mergeKeep || 'first').trim().toLowerCase(),
+    emptySourceRaw: String(settings.mergeEmptySource || '[]').trim()
+  };
+}
+
+function executeMergeDataInMemory(inputValue, processCtx, settings = {}) {
+  const cfg = normalizeMergeSettings(settings);
+  const envelope = normalizeNodeIoEnvelope(inputValue, processCtx);
+  const srcRows = Array.isArray(envelope?.rows) ? envelope.rows : [];
+  let rows = Array.isArray(srcRows) ? srcRows : [];
+  if (cfg.mode === 'dedupe' && rows.length) {
+    const dedupeBy = parseCsvList(cfg.dedupeByRaw);
+    const keepFirst = cfg.keep !== 'last';
+    const map = new Map();
+    for (const row of rows) {
+      const base = row && typeof row === 'object' && !Array.isArray(row) ? row : { value: row };
+      const keyFields = dedupeBy.length ? dedupeBy : Object.keys(base).sort();
+      const key = keyFields
+        .map((field) => {
+          const value = base?.[field];
+          return `${field}=${Number.isNaN(value) ? String(value ?? '') : value}`;
+        })
+        .join('|');
+      if (!key) continue;
+      if (!map.has(key) || !keepFirst) map.set(key, base);
+    }
+    rows = Array.from(map.values());
+  }
+  if (!rows.length && cfg.mode === 'dedupe') {
+    const fallback = normalizeToolSettingsJson(cfg.emptySourceRaw, []);
+    rows = Array.isArray(fallback) ? fallback : [];
+  }
+  return {
+    output: composeNodeOutputEnvelope(processCtx, { type: 'tool', config: { name: '', toolType: 'merge_data' } }, rows, {
+      source_type: 'merge_data',
+      merge_mode: cfg.mode,
+      dedupe_by: cfg.dedupeByRaw
+    }),
+    metrics: {
+      source_rows: srcRows.length,
+      output_rows: rows.length
+    }
+  };
+}
+
+async function executeCodeNode(_client, node, inputValue, processCtx = {}) {
+  const settings = node?.config?.settings && typeof node.config.settings === 'object' ? node.config.settings : {};
+  const code = String(settings.scriptCode || '').trim() || 'return input;';
+  const timeoutMs = normalizeCodeTimeout(settings.codeTimeoutMs, 5000);
+  const envelope = normalizeNodeIoEnvelope(inputValue, processCtx);
+  const contextJson = processCtx?.context_json && typeof processCtx.context_json === 'object' ? processCtx.context_json : {};
+  const logs = [];
+  const sandbox = {
+    input: deepClone(envelope),
+    rows: deepClone(envelope.rows),
+    context: deepClone(contextJson),
+    meta: {
+      ...(envelope.meta || {}),
+      tool_type: 'code_node'
+    },
+    code: String(code),
+    console: {
+      log: (...args) => {
+        logs.push(args.map((x) => String(x)).join(' '));
+      }
+    },
+    setTimeout,
+    Promise,
+    Math,
+    Date,
+    JSON,
+    Number,
+    String,
+    Boolean,
+    Array,
+    Object
+  };
+  const wrapped = `(async () => { ${code} })()`;
+  const script = new vm.Script(wrapped, { filename: `workflow_code_node_${String(node?.id || '').trim() || 'node'}.mjs` });
+  const ctx = vm.createContext(sandbox);
+  const runPromise = Promise.resolve(script.runInContext(ctx, { timeout: timeoutMs }));
+  const timeoutSignal = new Promise((_, reject) => {
+    setTimeout(() => reject(new Error(`code_node_timeout:${timeoutMs}`)), timeoutMs);
+  });
+  const rawResult = await Promise.race([runPromise, timeoutSignal]);
+  const result = await Promise.resolve(rawResult);
+  const outputRows = toArrayRows(result);
+
+  return {
+    output: composeNodeOutputEnvelope(
+      processCtx,
+      node,
+      outputRows,
+      {
+        source_type: 'code_node',
+        logs: logs.slice(-100),
+        timeout_ms: timeoutMs,
+        script
+      },
+      {
+        source_type: 'code_node',
+        rows: envelope.row_count,
+        logs: logs.slice(-100)
+      }
+    ),
+    metrics: {
+      rows_in: envelope.row_count,
+      rows_out: outputRows.length,
+      timeout_ms: timeoutMs
+    },
+    request_payload: { code, timeout_ms: timeoutMs },
+    response_payload: { rows: outputRows.length, logs: logs.slice(-100) }
+  };
+}
+
 function reserveRunSlot(deskId, runUid) {
   if (schedulerState.activeRuns.size >= MAX_PARALLEL_RUNS) return false;
   const key = String(deskId || '').trim();
@@ -5230,7 +5642,9 @@ function normalizeGraphEdge(raw, validNodeIds) {
   const from = String(raw.from || '').trim();
   const to = String(raw.to || '').trim();
   if (!from || !to || !validNodeIds.has(from) || !validNodeIds.has(to)) return null;
-  return { from, to };
+  const fromPort = String(raw.fromPort || 'out').trim() || 'out';
+  const toPort = String(raw.toPort || 'in').trim() || 'in';
+  return { from, to, fromPort, toPort };
 }
 
 function parseGraph(graphJson) {
@@ -5915,13 +6329,13 @@ function compareByOperator(left, operator, right) {
   const op = String(operator || '').trim().toLowerCase();
   if (!op || op === '=' || op === 'eq') return String(left ?? '') === String(right ?? '');
   if (op === '!=' || op === '<>' || op === 'neq') return String(left ?? '') !== String(right ?? '');
-  if (op === '>') return Number(left) > Number(right);
-  if (op === '>=') return Number(left) >= Number(right);
-  if (op === '<') return Number(left) < Number(right);
-  if (op === '<=') return Number(left) <= Number(right);
+  if (op === '>' || op === 'gt') return Number(left) > Number(right);
+  if (op === '>=' || op === 'gte') return Number(left) >= Number(right);
+  if (op === '<' || op === 'lt') return Number(left) < Number(right);
+  if (op === '<=' || op === 'lte') return Number(left) <= Number(right);
   if (op === 'contains') return String(left ?? '').includes(String(right ?? ''));
   if (op === 'not_contains') return !String(left ?? '').includes(String(right ?? ''));
-  if (op === 'empty') return left === undefined || left === null || String(left) === '';
+  if (op === 'empty' || op === 'is_empty') return left === undefined || left === null || String(left) === '';
   if (op === 'not_empty' || op === 'exists') return !(left === undefined || left === null || String(left) === '');
   return String(left ?? '') === String(right ?? '');
 }
@@ -6211,7 +6625,17 @@ async function executeDbWriteNode(client, config, processCtx, node, inputValue) 
 }
 
 async function executeProcessNode(client, config, processCtx, node, templates, inputValue, execOptions = {}) {
-  if (isApiNode(node) || isApiToolNode(node)) {
+  const toolType = String(node?.config?.toolType || '').trim().toLowerCase();
+  if (toolType === 'http_request') {
+    const httpOut = await executeHttpToolNode(client, node, inputValue, processCtx || {});
+    return {
+      output: httpOut.output,
+      metrics: httpOut.metrics || {},
+      request_payload: httpOut.request_payload || {},
+      response_payload: httpOut.response_payload || {}
+    };
+  }
+  if (isApiNode(node) || (node?.type === 'tool' && toolType === 'api_request')) {
     const refs = nodeTemplateRefs(node);
     const template = templates.find((tpl) => refs.some((ref) => sourceMatchesTemplateRef(tpl, ref)));
     if (!template) throw new Error(`api_template_not_found:${requestSignature(node)}`);
@@ -6239,7 +6663,6 @@ async function executeProcessNode(client, config, processCtx, node, templates, i
       response_payload: exec.responsePreview || {}
     };
   }
-  const toolType = String(node?.config?.toolType || '').trim().toLowerCase();
   if (toolType === 'start_process') {
     return {
       output: {
@@ -6282,6 +6705,63 @@ async function executeProcessNode(client, config, processCtx, node, templates, i
       request_payload: {},
       response_payload: { end: true }
     };
+  }
+  if (toolType === 'split_data') {
+    const splitOut = executeSplitDataInMemory(inputValue, processCtx, node?.config?.settings || {});
+    return {
+      output: splitOut.output,
+      metrics: splitOut.metrics || {},
+      request_payload: {
+        mode: 'split_data',
+        settings: node?.config?.settings || {}
+      },
+      response_payload: splitOut.output
+    };
+  }
+  if (toolType === 'merge_data') {
+    const mergeOut = executeMergeDataInMemory(inputValue, processCtx, node?.config?.settings || {});
+    return {
+      output: mergeOut.output,
+      metrics: mergeOut.metrics || {},
+      request_payload: {
+        mode: 'merge_data',
+        settings: node?.config?.settings || {}
+      },
+      response_payload: mergeOut.output
+    };
+  }
+  if (toolType === 'condition_if' || toolType === 'condition_switch') {
+    const envelope = normalizeNodeIoEnvelope(inputValue, processCtx);
+    const selectedOutputPort = getOutputPortByNode(node, envelope, processCtx);
+    const out = composeNodeOutputEnvelope(
+      processCtx,
+      node,
+      envelope.rows,
+      {
+        source_type: toolType,
+        selected_output_port: selectedOutputPort
+      },
+      {
+        input_rows: envelope.row_count,
+        selected_output_port: selectedOutputPort
+      }
+    );
+    return {
+      output: out,
+      metrics: {
+        rows_in: envelope.row_count,
+        rows_out: out.row_count,
+        selected_output_port: selectedOutputPort
+      },
+      request_payload: {
+        mode: toolType,
+        settings: node?.config?.settings || {}
+      },
+      response_payload: out
+    };
+  }
+  if (toolType === 'code_node') {
+    return executeCodeNode(client, node, inputValue, processCtx || {});
   }
   return {
     output: inputValue ?? {},

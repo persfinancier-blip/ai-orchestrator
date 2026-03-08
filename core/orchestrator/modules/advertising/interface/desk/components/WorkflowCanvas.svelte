@@ -479,7 +479,19 @@
   const uid = (p: string) => `${p}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
   const toolCfg = (n: WorkflowNode) => n.config as { name: string; toolType: ToolType; settings: Record<string, string> };
   const apiCfg = (n: WorkflowNode) => n.config as SourceItem & { apiRequest?: ApiNodeRequest };
-  const supportedToolTypeSet = new Set<ToolType>(['start_process', 'api_request', 'table_parser', 'db_write', 'end_process']);
+  const supportedToolTypeSet = new Set<ToolType>([
+    'start_process',
+    'api_request',
+    'http_request',
+    'table_parser',
+    'db_write',
+    'split_data',
+    'merge_data',
+    'condition_if',
+    'condition_switch',
+    'code_node',
+    'end_process'
+  ]);
   const fallbackNodeRegistryEntries: NodeRegistryEntry[] = [
     {
       id: 1,
@@ -519,13 +531,103 @@
     },
     {
       id: 3,
+      node_type_code: 'http_request',
+      node_name_ru: 'HTTP-запрос',
+      description_ru: 'Выполняет HTTP-запрос по произвольному URL на серверном уровне.',
+      section_code: 'requests',
+      section_name_ru: 'Запросы',
+      section_order: 20,
+      node_order: 20,
+      is_enabled: true,
+      is_system: true,
+      hidden_in_palette: false,
+      node_label_ru: 'HTTP',
+      icon_key: 'http_request',
+      visual_preset_key: 'request',
+      editor_type_code: 'http_request',
+      runtime_handler_code: 'http_request'
+    },
+    {
+      id: 4,
+      node_type_code: 'condition_if',
+      node_name_ru: 'If',
+      description_ru: 'Условная развилка на две ветки: true и false.',
+      section_code: 'logic',
+      section_name_ru: 'Логика',
+      section_order: 25,
+      node_order: 10,
+      is_enabled: true,
+      is_system: true,
+      hidden_in_palette: false,
+      node_label_ru: 'If',
+      icon_key: 'condition_if',
+      visual_preset_key: 'logic',
+      editor_type_code: 'condition_if',
+      runtime_handler_code: 'condition_if'
+    },
+    {
+      id: 5,
+      node_type_code: 'condition_switch',
+      node_name_ru: 'Switch/Case',
+      description_ru: 'Ветвление по значению поля в несколько исходящих веток.',
+      section_code: 'logic',
+      section_name_ru: 'Логика',
+      section_order: 25,
+      node_order: 20,
+      is_enabled: true,
+      is_system: true,
+      hidden_in_palette: false,
+      node_label_ru: 'Switch',
+      icon_key: 'condition_switch',
+      visual_preset_key: 'logic',
+      editor_type_code: 'condition_switch',
+      runtime_handler_code: 'condition_switch'
+    },
+    {
+      id: 6,
+      node_type_code: 'split_data',
+      node_name_ru: 'Split',
+      description_ru: 'Разделяет поток: дублирует строки или отбирает каждую N-ю.',
+      section_code: 'data_processing',
+      section_name_ru: 'Работа с данными',
+      section_order: 30,
+      node_order: 10,
+      is_enabled: true,
+      is_system: true,
+      hidden_in_palette: false,
+      node_label_ru: 'Split',
+      icon_key: 'split_data',
+      visual_preset_key: 'data',
+      editor_type_code: 'split_data',
+      runtime_handler_code: 'split_data'
+    },
+    {
+      id: 7,
+      node_type_code: 'merge_data',
+      node_name_ru: 'Merge',
+      description_ru: 'Объединяет строки потока и удаляет дубликаты по заданным полям.',
+      section_code: 'data_processing',
+      section_name_ru: 'Работа с данными',
+      section_order: 30,
+      node_order: 20,
+      is_enabled: true,
+      is_system: true,
+      hidden_in_palette: false,
+      node_label_ru: 'Merge',
+      icon_key: 'merge_data',
+      visual_preset_key: 'data',
+      editor_type_code: 'merge_data',
+      runtime_handler_code: 'merge_data'
+    },
+    {
+      id: 8,
       node_type_code: 'table_parser',
       node_name_ru: 'Парсер данных',
       description_ru: 'Разбирает входные данные, выделяет строки и подготавливает результат для следующей ноды.',
       section_code: 'data_processing',
       section_name_ru: 'Работа с данными',
       section_order: 30,
-      node_order: 10,
+      node_order: 30,
       is_enabled: true,
       is_system: true,
       hidden_in_palette: false,
@@ -536,7 +638,25 @@
       runtime_handler_code: 'table_parser'
     },
     {
-      id: 4,
+      id: 9,
+      node_type_code: 'code_node',
+      node_name_ru: 'Code',
+      description_ru: 'Выполняет JS-код на серверной стороне в изолированном окружении.',
+      section_code: 'tools',
+      section_name_ru: 'Инструменты',
+      section_order: 35,
+      node_order: 10,
+      is_enabled: true,
+      is_system: true,
+      hidden_in_palette: false,
+      node_label_ru: 'Code',
+      icon_key: 'code_node',
+      visual_preset_key: 'logic',
+      editor_type_code: 'code_node',
+      runtime_handler_code: 'code_node'
+    },
+    {
+      id: 10,
       node_type_code: 'db_write',
       node_name_ru: 'Запись в БД',
       description_ru: 'Сохраняет результат в таблицу базы данных через insert, upsert или update.',
@@ -554,7 +674,7 @@
       runtime_handler_code: 'db_write'
     },
     {
-      id: 5,
+      id: 11,
       node_type_code: 'end_process',
       node_name_ru: 'Конец процесса',
       description_ru: 'Фиксирует завершение цепочки.',
@@ -2515,7 +2635,7 @@
   }
 
   function isApiToolNode(n: WorkflowNode | null | undefined) {
-    return Boolean(n && n.type === 'tool' && toolCfg(n).toolType === 'api_request');
+    return Boolean(n && n.type === 'tool' && (toolCfg(n).toolType === 'api_request' || toolCfg(n).toolType === 'http_request'));
   }
 
   function isParserToolNode(n: WorkflowNode | null | undefined) {
@@ -2523,7 +2643,14 @@
   }
 
   function isWideSettingsNode(n: WorkflowNode | null | undefined) {
-    return Boolean(n && (isApiNode(n) || isApiToolNode(n) || isParserToolNode(n)));
+    return Boolean(
+      n &&
+        (isApiNode(n) ||
+          (n.type === 'tool' && toolCfg(n).toolType === 'api_request') ||
+          isParserToolNode(n) ||
+          toolCfg(n).toolType === 'condition_switch' ||
+          toolCfg(n).toolType === 'code_node')
+    );
   }
 
   function getApiRequestForNode(n: WorkflowNode | null | undefined): ApiNodeRequest {
@@ -3432,6 +3559,58 @@
         paginationCursorReqPath: 'cursor',
         paginationCursorResPath: 'response.cursor'
       };
+    if (toolType === 'http_request') {
+      return {
+        templateId: '',
+        templateStoreId: '',
+        apiMethod: 'GET',
+        apiUrl: '',
+        apiAuthMode: 'manual',
+        apiHeaders: '{}',
+        apiQuery: '{}',
+        apiBody: '{}'
+      };
+    }
+    if (toolType === 'split_data')
+      return {
+        splitMode: 'duplicate',
+        splitMultiplier: '2',
+        splitKeyField: '',
+        splitPrefix: ''
+      };
+    if (toolType === 'merge_data')
+      return {
+        mergeMode: 'dedupe',
+        dedupeBy: '',
+        mergeKeep: 'first',
+        mergeEmptySource: '[]'
+      };
+    if (toolType === 'condition_if')
+      return {
+        conditionField: '',
+        conditionOperator: 'equals',
+        conditionValue: '',
+        ifTruePort: 'true',
+        ifFalsePort: 'false',
+        conditionSimulateRoute: 'true'
+      };
+    if (toolType === 'condition_switch')
+      return {
+        switchField: '',
+        switchDefaultPort: 'default',
+        switchDefaultValue: '',
+        switchCase1Value: '',
+        switchCase2Value: '',
+        switchCase3Value: '',
+        switchCase4Value: '',
+        switchSimulatePort: 'default'
+      };
+    if (toolType === 'code_node')
+      return {
+        scriptCode: 'return input;',
+        codeTimeoutMs: '5000',
+        codeContext: '{}'
+      };
     if (toolType === 'table_parser')
       return {
         templateId: '',
@@ -3677,6 +3856,20 @@
           settings.apiBody = tpl.bodyText;
         }
       }
+      if (item.toolType === 'http_request') {
+        const firstTemplate = dynamicApiSources[0];
+        if (firstTemplate) {
+          const tpl = normalizeApiRequest(firstTemplate.requestTemplate);
+          settings.templateId = firstTemplate.id;
+          settings.templateStoreId = firstTemplate.storeId ? String(firstTemplate.storeId) : '';
+          settings.apiMethod = tpl.method;
+          settings.apiUrl = tpl.url;
+          settings.apiAuthMode = tpl.authMode;
+          settings.apiHeaders = tpl.headersText;
+          settings.apiQuery = tpl.queryText;
+          settings.apiBody = tpl.bodyText;
+        }
+      }
       nodes = [...nodes, { id: uid('node'), type: 'tool', x: p.x, y: p.y, config: { name: item.name, toolType: item.toolType, settings } }];
     }
   }
@@ -3762,7 +3955,13 @@
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return;
     const isStartTool = node.type === 'tool' && toolCfg(node).toolType === 'start_process';
-    if (!isStartTool && !isApiNode(node) && !isApiToolNode(node) && !isParserToolNode(node)) {
+    const canOpenSettings =
+      isStartTool ||
+      isApiNode(node) ||
+      isApiToolNode(node) ||
+      isParserToolNode(node) ||
+      ['split_data', 'merge_data', 'condition_if', 'condition_switch', 'code_node'].includes(toolCfg(node).toolType || '');
+    if (!canOpenSettings) {
       banner = 'Для этого узла пока нет отдельной настройки по двойному клику';
       return;
     }
@@ -4031,12 +4230,27 @@
           outRows = inRows > 0 ? inRows : 1;
         }
       }
-      if (cfg.toolType === 'table_parser') outRows = Math.max(0, Math.round(inRows * Math.max(0.1, Number(cfg.settings.parserMultiplier || 1))));
-      if (cfg.toolType === 'db_write') outRows = Math.max(0, Math.round(inRows * Math.max(0, Math.min(100, Number(cfg.settings.writeSuccessRate || 98))) / 100));
-      if (cfg.toolType === 'end_process') outRows = 0;
+    if (cfg.toolType === 'table_parser') outRows = Math.max(0, Math.round(inRows * Math.max(0.1, Number(cfg.settings.parserMultiplier || 1))));
+    if (cfg.toolType === 'db_write') outRows = Math.max(0, Math.round(inRows * Math.max(0, Math.min(100, Number(cfg.settings.writeSuccessRate || 98))) / 100));
+    if (cfg.toolType === 'end_process') outRows = 0;
+    if (cfg.toolType === 'split_data') {
+      const mode = String(cfg.settings.splitMode || 'duplicate').trim().toLowerCase();
+      const factor = Number(cfg.settings.splitMultiplier || 1);
+      if (mode === 'split') {
+        const raw = Number.isFinite(factor) && factor > 0 ? Math.max(0, factor) : 1;
+        outRows = Math.max(0, Math.round(inRows / raw));
+      } else {
+        const raw = Number.isFinite(factor) && factor > 1 ? Math.max(1, factor) : 2;
+        outRows = Math.max(0, Math.round(inRows * raw));
+      }
     }
-    return outRows;
+    if (cfg.toolType === 'merge_data') outRows = inRows;
+    if (cfg.toolType === 'condition_if') outRows = inRows;
+    if (cfg.toolType === 'condition_switch') outRows = inRows;
+    if (cfg.toolType === 'code_node') outRows = inRows;
   }
+  return outRows;
+}
 
   function setNodeRuntime(n: WorkflowNode, inRows: number, outRows: number, forceStatus?: NodeRuntime['status']) {
     const lossRows = Math.max(0, inRows - outRows);
@@ -4188,13 +4402,28 @@
       }
       if (n.type === 'tool') {
         const cfg = toolCfg(n);
-        if (cfg.toolType === 'start_process') outRows = inRows > 0 ? inRows : 1;
-        if (cfg.toolType === 'schedule_process') outRows = inRows;
-        if (cfg.toolType === 'api_request') outRows = inRows > 0 ? inRows : 1;
-        if (cfg.toolType === 'table_parser') outRows = Math.max(0, Math.round(inRows * Math.max(0.1, Number(cfg.settings.parserMultiplier || 1))));
-        if (cfg.toolType === 'db_write') outRows = Math.max(0, Math.round(inRows * Math.max(0, Math.min(100, Number(cfg.settings.writeSuccessRate || 98))) / 100));
-        if (cfg.toolType === 'end_process') outRows = 0;
+    if (cfg.toolType === 'start_process') outRows = inRows > 0 ? inRows : 1;
+    if (cfg.toolType === 'schedule_process') outRows = inRows;
+    if (cfg.toolType === 'api_request') outRows = inRows > 0 ? inRows : 1;
+    if (cfg.toolType === 'table_parser') outRows = Math.max(0, Math.round(inRows * Math.max(0.1, Number(cfg.settings.parserMultiplier || 1))));
+    if (cfg.toolType === 'db_write') outRows = Math.max(0, Math.round(inRows * Math.max(0, Math.min(100, Number(cfg.settings.writeSuccessRate || 98))) / 100));
+    if (cfg.toolType === 'end_process') outRows = 0;
+    if (cfg.toolType === 'split_data') {
+      const mode = String(cfg.settings.splitMode || 'duplicate').trim().toLowerCase();
+      const factor = Number(cfg.settings.splitMultiplier || 1);
+      if (mode === 'split') {
+        const raw = Number.isFinite(factor) && factor > 0 ? Math.max(0, factor) : 1;
+        outRows = Math.max(0, Math.round(inRows / raw));
+      } else {
+        const raw = Number.isFinite(factor) && factor > 1 ? Math.max(1, factor) : 2;
+        outRows = Math.max(0, Math.round(inRows * raw));
       }
+    }
+    if (cfg.toolType === 'merge_data') outRows = inRows;
+    if (cfg.toolType === 'condition_if') outRows = inRows;
+    if (cfg.toolType === 'condition_switch') outRows = inRows;
+    if (cfg.toolType === 'code_node') outRows = inRows;
+  }
       const lossRows = Math.max(0, inRows - outRows);
       const lossPct = inRows > 0 ? Number(((lossRows / inRows) * 100).toFixed(2)) : 0;
       const successPct = inRows > 0 ? Number((((inRows - lossRows) / inRows) * 100).toFixed(2)) : n.type === 'tool' && toolCfg(n).toolType !== 'start_process' ? 0 : 100;
@@ -5212,6 +5441,68 @@
             <label>Резервный канал<input value={toolCfg(selectedNode).settings.channel || ''} on:input={(e) => onSettingInput(selectedNode.id, 'channel', e)} /></label>
             <label>Успешная запись, %<input value={toolCfg(selectedNode).settings.writeSuccessRate || ''} on:input={(e) => onSettingInput(selectedNode.id, 'writeSuccessRate', e)} /></label>
           {/if}
+          {#if toolCfg(selectedNode).toolType === 'http_request'}
+            <label>
+              Метод
+              <select value={toolCfg(selectedNode).settings.apiMethod || 'GET'} on:change={(e) => updateSetting(selectedNode.id, 'apiMethod', selectValue(e))}>
+                <option value="GET">GET</option>
+                <option value="POST">POST</option>
+                <option value="PUT">PUT</option>
+                <option value="PATCH">PATCH</option>
+                <option value="DELETE">DELETE</option>
+              </select>
+            </label>
+            <label>URL<input value={toolCfg(selectedNode).settings.apiUrl || ''} on:input={(e) => onSettingInput(selectedNode.id, 'apiUrl', e)} /></label>
+          {/if}
+          {#if toolCfg(selectedNode).toolType === 'split_data'}
+            <label>
+              Режим
+              <select value={toolCfg(selectedNode).settings.splitMode || 'duplicate'} on:change={(e) => updateSetting(selectedNode.id, 'splitMode', selectValue(e))}>
+                <option value="duplicate">Дублировать строки</option>
+                <option value="split">Отбирать каждую N-ю строку</option>
+              </select>
+            </label>
+            <label>Коэффициент<input value={toolCfg(selectedNode).settings.splitMultiplier || '2'} on:input={(e) => onSettingInput(selectedNode.id, 'splitMultiplier', e)} /></label>
+          {/if}
+          {#if toolCfg(selectedNode).toolType === 'merge_data'}
+            <label>
+              Режим
+              <select value={toolCfg(selectedNode).settings.mergeMode || 'dedupe'} on:change={(e) => updateSetting(selectedNode.id, 'mergeMode', selectValue(e))}>
+                <option value="dedupe">Дедупликация</option>
+                <option value="passthrough">Без изменений</option>
+              </select>
+            </label>
+            <label>Поля дедупликации<input value={toolCfg(selectedNode).settings.dedupeBy || ''} on:input={(e) => onSettingInput(selectedNode.id, 'dedupeBy', e)} /></label>
+          {/if}
+          {#if toolCfg(selectedNode).toolType === 'condition_if'}
+            <label>Поле<input value={toolCfg(selectedNode).settings.conditionField || ''} on:input={(e) => onSettingInput(selectedNode.id, 'conditionField', e)} /></label>
+            <label>
+              Оператор
+              <select value={toolCfg(selectedNode).settings.conditionOperator || 'equals'} on:change={(e) => updateSetting(selectedNode.id, 'conditionOperator', selectValue(e))}>
+                <option value="equals">Равно</option>
+                <option value="not_equals">Не равно</option>
+                <option value="gt">Больше</option>
+                <option value="gte">Больше или равно</option>
+                <option value="lt">Меньше</option>
+                <option value="lte">Меньше или равно</option>
+                <option value="contains">Содержит</option>
+                <option value="not_contains">Не содержит</option>
+                <option value="is_empty">Пусто</option>
+                <option value="not_empty">Не пусто</option>
+              </select>
+            </label>
+            <label>Значение<input value={toolCfg(selectedNode).settings.conditionValue || ''} on:input={(e) => onSettingInput(selectedNode.id, 'conditionValue', e)} /></label>
+          {/if}
+          {#if toolCfg(selectedNode).toolType === 'condition_switch'}
+            <label>Поле<input value={toolCfg(selectedNode).settings.switchField || ''} on:input={(e) => onSettingInput(selectedNode.id, 'switchField', e)} /></label>
+            <label>Case 1<input value={toolCfg(selectedNode).settings.switchCase1Value || ''} on:input={(e) => onSettingInput(selectedNode.id, 'switchCase1Value', e)} /></label>
+            <label>Case 2<input value={toolCfg(selectedNode).settings.switchCase2Value || ''} on:input={(e) => onSettingInput(selectedNode.id, 'switchCase2Value', e)} /></label>
+            <label>Case 3<input value={toolCfg(selectedNode).settings.switchCase3Value || ''} on:input={(e) => onSettingInput(selectedNode.id, 'switchCase3Value', e)} /></label>
+            <label>Case 4<input value={toolCfg(selectedNode).settings.switchCase4Value || ''} on:input={(e) => onSettingInput(selectedNode.id, 'switchCase4Value', e)} /></label>
+          {/if}
+          {#if toolCfg(selectedNode).toolType === 'code_node'}
+            <label>Таймаут, мс<input value={toolCfg(selectedNode).settings.codeTimeoutMs || '5000'} on:input={(e) => onSettingInput(selectedNode.id, 'codeTimeoutMs', e)} /></label>
+          {/if}
         {:else}
           <div class="empty">Выберите ноду на рабочем поле, чтобы увидеть настройки.</div>
         {/if}
@@ -5471,7 +5762,7 @@
         </div>
       {/if}
 
-      {#if isApiNode(settingsNode) || isApiToolNode(settingsNode)}
+      {#if isApiNode(settingsNode) || (settingsNode.type === 'tool' && toolCfg(settingsNode).toolType === 'api_request')}
         <div class="node-modal-body node-modal-body-api">
           {#if settingsNode}
             {@const currentTemplateName = String(settingsApiTemplateSource?.name || '').trim() || 'Шаблон не привязан'}
@@ -5573,6 +5864,37 @@
           {/if}
         </div>
       {/if}
+      {#if settingsNode.type === 'tool' && toolCfg(settingsNode).toolType === 'http_request'}
+        <div class="node-modal-body">
+          <div class="help">Прямой HTTP запрос без привязки к библиотечному шаблону.</div>
+          <label>
+            Метод
+            <select value={toolCfg(settingsNode).settings.apiMethod || 'GET'} on:change={(e) => updateSetting(settingsNode.id, 'apiMethod', selectValue(e))}>
+              <option value="GET">GET</option>
+              <option value="POST">POST</option>
+              <option value="PUT">PUT</option>
+              <option value="PATCH">PATCH</option>
+              <option value="DELETE">DELETE</option>
+            </select>
+          </label>
+          <label>
+            URL
+            <input value={toolCfg(settingsNode).settings.apiUrl || ''} on:input={(e) => onSettingInput(settingsNode.id, 'apiUrl', e)} />
+          </label>
+          <label>
+            Headers (JSON)
+            <textarea rows="4" value={toolCfg(settingsNode).settings.apiHeaders || '{}'} on:input={(e) => onSettingInput(settingsNode.id, 'apiHeaders', e)}></textarea>
+          </label>
+          <label>
+            Query (JSON)
+            <textarea rows="4" value={toolCfg(settingsNode).settings.apiQuery || '{}'} on:input={(e) => onSettingInput(settingsNode.id, 'apiQuery', e)}></textarea>
+          </label>
+          <label>
+            Body (JSON)
+            <textarea rows="6" value={toolCfg(settingsNode).settings.apiBody || '{}'} on:input={(e) => onSettingInput(settingsNode.id, 'apiBody', e)}></textarea>
+          </label>
+        </div>
+      {/if}
       {#if isParserToolNode(settingsNode)}
         <div class="node-modal-body node-modal-body-api">
           {#key `${settingsNode.id}:${toolCfg(settingsNode).settings.templateStoreId || 0}:${toolCfg(settingsNode).settings.templateId || ''}`}
@@ -5586,6 +5908,119 @@
               on:configChange={(event) => replaceToolSettings(settingsNode.id, event.detail?.settings || {})}
             />
           {/key}
+        </div>
+      {/if}
+      {#if settingsNode.type === 'tool' && toolCfg(settingsNode).toolType === 'split_data'}
+        <div class="node-modal-body">
+          <div class="help">Разделяет входной поток: либо дублирует строки, либо берет каждую N-ю.</div>
+          <label>
+            Режим
+            <select value={toolCfg(settingsNode).settings.splitMode || 'duplicate'} on:change={(e) => updateSetting(settingsNode.id, 'splitMode', selectValue(e))}>
+              <option value="duplicate">Дублировать строки</option>
+              <option value="split">Отбирать каждую N-ю строку</option>
+            </select>
+          </label>
+          <label>
+            Коэффициент
+            <input type="number" min="1" value={toolCfg(settingsNode).settings.splitMultiplier || '2'} on:input={(e) => onSettingInput(settingsNode.id, 'splitMultiplier', e)} />
+          </label>
+          <label>
+            Имя технического поля (опционально)
+            <input value={toolCfg(settingsNode).settings.splitKeyField || ''} on:input={(e) => onSettingInput(settingsNode.id, 'splitKeyField', e)} />
+          </label>
+          <label>
+            Префикс значения поля
+            <input value={toolCfg(settingsNode).settings.splitPrefix || ''} on:input={(e) => onSettingInput(settingsNode.id, 'splitPrefix', e)} />
+          </label>
+        </div>
+      {/if}
+      {#if settingsNode.type === 'tool' && toolCfg(settingsNode).toolType === 'merge_data'}
+        <div class="node-modal-body">
+          <div class="help">Объединяет поток и может удалять дубликаты по выбранным полям.</div>
+          <label>
+            Режим
+            <select value={toolCfg(settingsNode).settings.mergeMode || 'dedupe'} on:change={(e) => updateSetting(settingsNode.id, 'mergeMode', selectValue(e))}>
+              <option value="dedupe">Дедупликация</option>
+              <option value="passthrough">Без изменений</option>
+            </select>
+          </label>
+          <label>
+            Поля для дедупликации (через запятую)
+            <input value={toolCfg(settingsNode).settings.dedupeBy || ''} on:input={(e) => onSettingInput(settingsNode.id, 'dedupeBy', e)} />
+          </label>
+          <label>
+            Какой дубль оставлять
+            <select value={toolCfg(settingsNode).settings.mergeKeep || 'first'} on:change={(e) => updateSetting(settingsNode.id, 'mergeKeep', selectValue(e))}>
+              <option value="first">Первый</option>
+              <option value="last">Последний</option>
+            </select>
+          </label>
+          <label>
+            Данные по умолчанию, если поток пуст (JSON array)
+            <textarea rows="4" value={toolCfg(settingsNode).settings.mergeEmptySource || '[]'} on:input={(e) => onSettingInput(settingsNode.id, 'mergeEmptySource', e)}></textarea>
+          </label>
+        </div>
+      {/if}
+      {#if settingsNode.type === 'tool' && toolCfg(settingsNode).toolType === 'condition_if'}
+        <div class="node-modal-body">
+          <div class="help">Условная развилка в порт `true` или `false` по первой строке входного потока.</div>
+          <label>
+            Поле (path)
+            <input value={toolCfg(settingsNode).settings.conditionField || ''} on:input={(e) => onSettingInput(settingsNode.id, 'conditionField', e)} placeholder="Например: metrics.drr" />
+          </label>
+          <label>
+            Оператор
+            <select value={toolCfg(settingsNode).settings.conditionOperator || 'equals'} on:change={(e) => updateSetting(settingsNode.id, 'conditionOperator', selectValue(e))}>
+              <option value="equals">Равно</option>
+              <option value="not_equals">Не равно</option>
+              <option value="gt">Больше</option>
+              <option value="gte">Больше или равно</option>
+              <option value="lt">Меньше</option>
+              <option value="lte">Меньше или равно</option>
+              <option value="contains">Содержит</option>
+              <option value="not_contains">Не содержит</option>
+              <option value="is_empty">Пусто</option>
+              <option value="not_empty">Не пусто</option>
+            </select>
+          </label>
+          <label>
+            Значение для сравнения
+            <input value={toolCfg(settingsNode).settings.conditionValue || ''} on:input={(e) => onSettingInput(settingsNode.id, 'conditionValue', e)} />
+          </label>
+        </div>
+      {/if}
+      {#if settingsNode.type === 'tool' && toolCfg(settingsNode).toolType === 'condition_switch'}
+        <div class="node-modal-body">
+          <div class="help">Ветвление по значению поля: `case_1..case_4` или `default`.</div>
+          <label>
+            Поле (path)
+            <input value={toolCfg(settingsNode).settings.switchField || ''} on:input={(e) => onSettingInput(settingsNode.id, 'switchField', e)} placeholder="Например: status" />
+          </label>
+          <div class="advanced-grid">
+            <label>Case 1<input value={toolCfg(settingsNode).settings.switchCase1Value || ''} on:input={(e) => onSettingInput(settingsNode.id, 'switchCase1Value', e)} /></label>
+            <label>Case 2<input value={toolCfg(settingsNode).settings.switchCase2Value || ''} on:input={(e) => onSettingInput(settingsNode.id, 'switchCase2Value', e)} /></label>
+            <label>Case 3<input value={toolCfg(settingsNode).settings.switchCase3Value || ''} on:input={(e) => onSettingInput(settingsNode.id, 'switchCase3Value', e)} /></label>
+            <label>Case 4<input value={toolCfg(settingsNode).settings.switchCase4Value || ''} on:input={(e) => onSettingInput(settingsNode.id, 'switchCase4Value', e)} /></label>
+          </div>
+          <label>
+            Порт по умолчанию
+            <select value={toolCfg(settingsNode).settings.switchDefaultPort || 'default'} on:change={(e) => updateSetting(settingsNode.id, 'switchDefaultPort', selectValue(e))}>
+              <option value="default">default</option>
+            </select>
+          </label>
+        </div>
+      {/if}
+      {#if settingsNode.type === 'tool' && toolCfg(settingsNode).toolType === 'code_node'}
+        <div class="node-modal-body">
+          <div class="help">JS-код выполняется в sandbox. Доступны переменные: `input`, `rows`, `context`, `meta`.</div>
+          <label>
+            Таймаут, мс
+            <input type="number" min="100" value={toolCfg(settingsNode).settings.codeTimeoutMs || '5000'} on:input={(e) => onSettingInput(settingsNode.id, 'codeTimeoutMs', e)} />
+          </label>
+          <label>
+            Код
+            <textarea rows="14" value={toolCfg(settingsNode).settings.scriptCode || 'return input;'} on:input={(e) => onSettingInput(settingsNode.id, 'scriptCode', e)}></textarea>
+          </label>
         </div>
       {/if}
       {#if isWideSettingsNode(settingsNode) && !nodeModalFullscreen}

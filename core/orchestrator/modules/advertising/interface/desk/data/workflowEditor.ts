@@ -1,5 +1,17 @@
 export type SourceGroup = 'api_requests' | 'data_tables' | 'math_calculations';
-export type ToolType = 'start_process' | 'schedule_process' | 'api_request' | 'table_parser' | 'db_write' | 'end_process';
+export type ToolType =
+  | 'start_process'
+  | 'schedule_process'
+  | 'api_request'
+  | 'http_request'
+  | 'table_parser'
+  | 'db_write'
+  | 'split_data'
+  | 'merge_data'
+  | 'condition_if'
+  | 'condition_switch'
+  | 'code_node'
+  | 'end_process';
 
 export type ApiRequestTemplate = {
   method: string;
@@ -162,6 +174,42 @@ export const tools: ToolItem[] = [
     description: 'HTTP-запрос к внешнему API'
   },
   {
+    id: 'tool_http_request',
+    name: 'HTTP Request',
+    toolType: 'http_request',
+    description: 'Прямой HTTP-запрос без привязки к шаблону'
+  },
+  {
+    id: 'tool_split',
+    name: 'Split',
+    toolType: 'split_data',
+    description: 'Деление/раздувание потока строк'
+  },
+  {
+    id: 'tool_merge',
+    name: 'Merge',
+    toolType: 'merge_data',
+    description: 'Объединение и дедупликация строк'
+  },
+  {
+    id: 'tool_if',
+    name: 'If',
+    toolType: 'condition_if',
+    description: 'Условная развилка true/false'
+  },
+  {
+    id: 'tool_switch',
+    name: 'Switch/Case',
+    toolType: 'condition_switch',
+    description: 'Ветвление по значению поля'
+  },
+  {
+    id: 'tool_code',
+    name: 'Code',
+    toolType: 'code_node',
+    description: 'Выполнение JS кода на сервере'
+  },
+  {
     id: 'tool_parser',
     name: 'Парсер данных',
     toolType: 'table_parser',
@@ -185,7 +233,13 @@ export const toolPorts: Record<ToolType, { inputs: string[]; outputs: string[] }
   start_process: { inputs: ['in'], outputs: ['out'] },
   schedule_process: { inputs: ['in'], outputs: ['out'] },
   api_request: { inputs: ['in'], outputs: ['out'] },
+  http_request: { inputs: ['in'], outputs: ['out'] },
   table_parser: { inputs: ['in'], outputs: ['out'] },
   db_write: { inputs: ['in'], outputs: ['out'] },
+  split_data: { inputs: ['in'], outputs: ['out'] },
+  merge_data: { inputs: ['in'], outputs: ['out'] },
+  condition_if: { inputs: ['in'], outputs: ['true', 'false'] },
+  condition_switch: { inputs: ['in'], outputs: ['case_1', 'case_2', 'case_3', 'case_4', 'default'] },
+  code_node: { inputs: ['in'], outputs: ['out'] },
   end_process: { inputs: ['in'], outputs: [] }
 };
