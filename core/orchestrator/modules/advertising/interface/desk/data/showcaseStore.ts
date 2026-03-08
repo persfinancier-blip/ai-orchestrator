@@ -86,15 +86,22 @@ function dateAgo(daysAgo: number): string {
 
 export function generateShowcaseRows(count = 200): ShowcaseRow[] {
   const rows: ShowcaseRow[] = [];
-  const skuPool = 10 + Math.floor(Math.random() * 11);
-  const campaignPool = 10 + Math.floor(Math.random() * 11);
+  const skuPool = 16 + Math.floor(Math.random() * 14);
+  const campaignPool = 16 + Math.floor(Math.random() * 14);
+  const archetypes = [
+    { revenue: 280000, spend: 52000, orders: 620, cr2: 7.1, position: 5, searchShare: 0.82, shelfShare: 0.66 },
+    { revenue: 170000, spend: 70000, orders: 300, cr2: 3.8, position: 14, searchShare: 0.58, shelfShare: 0.44 },
+    { revenue: 90000, spend: 26000, orders: 210, cr2: 2.1, position: 26, searchShare: 0.33, shelfShare: 0.24 },
+    { revenue: 52000, spend: 38000, orders: 95, cr2: 0.9, position: 39, searchShare: 0.16, shelfShare: 0.12 }
+  ];
+
   for (let i = 0; i < count; i += 1) {
-    const cluster = i % 3;
-    const revenueBase = cluster === 0 ? 180000 : cluster === 1 ? 70000 : 120000;
-    const spendBase = cluster === 0 ? 36000 : cluster === 1 ? 32000 : 42000;
-    const revenue = Math.round(revenueBase + rnd(-15000, 18000));
-    const spend = Math.round(spendBase + rnd(-6000, 6000));
-    const orders = Math.round((cluster === 0 ? 430 : cluster === 1 ? 180 : 280) + rnd(-35, 40));
+    const cluster = i % archetypes.length;
+    const base = archetypes[cluster];
+
+    const revenue = Math.max(5000, Math.round(base.revenue + rnd(-42000, 48000)));
+    const spend = Math.max(1500, Math.round(base.spend + rnd(-14000, 16000)));
+    const orders = Math.max(1, Math.round(base.orders + rnd(-95, 110)));
 
     const roi = Number((revenue / Math.max(spend, 1)).toFixed(2));
     const drr = Number(((spend / Math.max(revenue, 1)) * 100).toFixed(2));
@@ -114,10 +121,10 @@ export function generateShowcaseRows(count = 200): ShowcaseRow[] {
       spend,
       drr,
       roi,
-      cr2: Number((rnd(0.5, 8.5)).toFixed(2)),
-      position: Math.round(rnd(2, 45)),
-      search_share: Number(rnd(0.2, 0.9).toFixed(3)),
-      shelf_share: Number(rnd(0.1, 0.7).toFixed(3)),
+      cr2: Number((Math.max(0.2, base.cr2 + rnd(-1.4, 1.8))).toFixed(2)),
+      position: Math.max(1, Math.round(base.position + rnd(-6, 7))),
+      search_share: Number((Math.max(0.02, Math.min(0.98, base.searchShare + rnd(-0.12, 0.12)))).toFixed(3)),
+      shelf_share: Number((Math.max(0.02, Math.min(0.95, base.shelfShare + rnd(-0.10, 0.10)))).toFixed(3)),
       date: dateAgo(i % 30),
     });
   }
@@ -128,14 +135,14 @@ function createState(): ShowcaseState {
   return {
     datasets,
     fields,
-    rows: generateShowcaseRows(220),
+    rows: generateShowcaseRows(440),
   };
 }
 
 export const showcaseStore = writable<ShowcaseState>(createState());
 
 export function regenerateShowcase(): void {
-  showcaseStore.update((prev) => ({ ...prev, rows: generateShowcaseRows(220) }));
+  showcaseStore.update((prev) => ({ ...prev, rows: generateShowcaseRows(440) }));
 }
 
 export function fieldName(code: string): string {

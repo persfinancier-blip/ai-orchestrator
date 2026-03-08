@@ -22,6 +22,7 @@
   import type { GroupingConfig } from './space/cluster/types';
   import { dbscan3 } from './space/cluster/dbscan3';
   import { buildFeatureVec3, dbscanParamsFromDetail, weightsForCfg } from './space/cluster/features';
+  import { groupByRadius } from './space/cluster/radiusGrouping';
 
   const STORAGE_KEY_VISUALS = 'desk-space-visual-schemes-v2';
   const STORAGE_KEY_DATASETS = 'desk-space-datasets-v2';
@@ -85,11 +86,12 @@
     wX: 1,
     wY: 1,
     wZ: 1,
-    minClusterSize: 5,
+    minClusterSize: 2,
     recompute: 'auto'
   };
 
   let clusterSeed = 0;
+  let renderRaf: number | null = null;
 
   function fieldsAll(): ShowcaseField[] {
     return (showcase?.fields ?? []) as ShowcaseField[];
@@ -132,11 +134,13 @@
     axisX,
     axisY,
     axisZ,
+    textFields: textFieldsAll,
     numberFields: numberFieldsAll,
     dateFields: dateFieldsAll,
+    minGroupSize: 1,
 
     // ✅ FIX: прокидываем параметры voxel-LOD (ползунок "Детализация групп")
-    lodEnabled: grouping.enabled,
+    lodEnabled: false,
     lodDetail: Number(grouping.detail),
     lodMinCount: 2
   });
@@ -145,6 +149,8 @@
   let fixedAssign: Map<string, number> = new Map();
   let fixedCounts: Map<number, number> = new Map();
   let fixedConfigKey = '';
+  let proximityCacheKey = '';
+  let proximityCache = new Map<number, { labels: Int32Array; counts: Map<number, number> }>();
 
   function colorForCluster(id: number): string {
     if (id < 0) return '#94a3b8';
@@ -153,6 +159,8 @@
   }
 
   function getTextValue(p: SpacePoint, field: string): string {
+    const byFeature = String(p.textValues?.[field] ?? '').trim();
+    if (byFeature) return byFeature;
     if (p.sourceField === field) return p.label ?? '';
     return '';
   }
@@ -168,11 +176,49 @@
       cfg.wY.toFixed(2),
       cfg.wZ.toFixed(2),
       String(cfg.minClusterSize),
-      cfg.recompute
+      cfg.recompute,
+      axisX,
+      axisY,
+      axisZ,
+      String(clusterSeed)
     ].join('::');
   }
 
   function computeClustersNow(input: SpacePoint[]): { labels: Int32Array; counts: Map<number, number> } {
+    if (grouping.principle === 'proximity') {
+      const weights: [number, number, number] = grouping.customWeights ? [grouping.wX, grouping.wY, grouping.wZ] : [1, 1, 1];
+      const detailKey = Math.round(Number(grouping.detail) * 500); // finer cache grid for smoother slider
+      const firstId = input[0]?.id ?? '';
+      const lastId = input[input.length - 1]?.id ?? '';
+      const baseKey = [
+        input.length,
+        firstId,
+        lastId,
+        axisX,
+        axisY,
+        axisZ,
+        weights[0].toFixed(2),
+        weights[1].toFixed(2),
+        weights[2].toFixed(2)
+      ].join('|');
+
+      if (baseKey !== proximityCacheKey) {
+        proximityCacheKey = baseKey;
+        proximityCache = new Map();
+      }
+
+      const cached = proximityCache.get(detailKey);
+      if (cached) return cached;
+
+      const res = groupByRadius({
+        points: input,
+        detail: detailKey / 500,
+        weights
+      });
+      proximityCache.set(detailKey, res);
+      return res;
+    }
+
     const vecs = buildFeatureVec3({
       points: input,
       cfg: grouping,
@@ -204,23 +250,131 @@
     fixedConfigKey = makeFixedConfigKey(grouping);
   }
 
-  function stableHash32(input: string): number {
-    let h = 0;
-    for (let i = 0; i < input.length; i += 1) h = (h * 31 + input.charCodeAt(i)) | 0;
-    return Math.abs(h);
+  function aggregateByLabels(input: SpacePoint[], labels: Int32Array, counts: Map<number, number>): SpacePoint[] {
+    const clusters = new Map<number, SpacePoint[]>();
+    const out: SpacePoint[] = [];
+
+    for (let i = 0; i < input.length; i += 1) {
+      const point = input[i];
+      const clusterId = labels[i];
+      const size = counts.get(clusterId) ?? 0;
+
+      if (clusterId < 0 || size < grouping.minClusterSize) {
+        out.push({ ...point, color: pointsColor });
+        continue;
+      }
+
+      if (!clusters.has(clusterId)) clusters.set(clusterId, []);
+      clusters.get(clusterId)!.push(point);
+    }
+
+    for (const [clusterId, pointsInCluster] of clusters.entries()) {
+      let sx = 0;
+      let sy = 0;
+      let sz = 0;
+      let minX = Infinity;
+      let minY = Infinity;
+      let minZ = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      let maxZ = -Infinity;
+
+      const sums: Record<string, number> = {};
+      const avgCounts: Record<string, number> = {};
+
+      for (const p of pointsInCluster) {
+        sx += p.x;
+        sy += p.y;
+        sz += p.z;
+        minX = Math.min(minX, p.x);
+        minY = Math.min(minY, p.y);
+        minZ = Math.min(minZ, p.z);
+        maxX = Math.max(maxX, p.x);
+        maxY = Math.max(maxY, p.y);
+        maxZ = Math.max(maxZ, p.z);
+
+        const metrics = p.metrics ?? {};
+        for (const k of Object.keys(metrics)) {
+          const v = Number(metrics[k]);
+          if (!Number.isFinite(v)) continue;
+          sums[k] = (sums[k] ?? 0) + v;
+          avgCounts[k] = (avgCounts[k] ?? 0) + 1;
+        }
+      }
+
+      const n = pointsInCluster.length;
+      const metrics: Record<string, number> = {};
+      for (const k of Object.keys(sums)) {
+        const c = avgCounts[k] ?? 0;
+        metrics[k] = c ? sums[k] / c : Number.NaN;
+      }
+
+      const sumRevenue = pointsInCluster.reduce((acc, p) => acc + Number(p.metrics?.revenue ?? 0), 0);
+      const sumSpend = pointsInCluster.reduce((acc, p) => acc + Number(p.metrics?.spend ?? 0), 0);
+      const sumOrders = pointsInCluster.reduce((acc, p) => acc + Number(p.metrics?.orders ?? 0), 0);
+      metrics.revenue = sumRevenue;
+      metrics.spend = sumSpend;
+      metrics.orders = sumOrders;
+      metrics.drr = sumRevenue > 0 ? (sumSpend / sumRevenue) * 100 : 0;
+      metrics.roi = sumSpend > 0 ? sumRevenue / sumSpend : 0;
+
+      out.push({
+        id: `cluster:${clusterId}:${n}`,
+        label: `Группа (${n})`,
+        sourceField: pointsInCluster[0]?.sourceField ?? '',
+        metrics,
+        x: sx / n,
+        y: sy / n,
+        z: sz / n,
+        isCluster: true,
+        clusterCount: n,
+        span: { x: maxX - minX, y: maxY - minY, z: maxZ - minZ },
+        color: colorForCluster(clusterId)
+      });
+    }
+
+    return out;
+  }
+
+  function pullToCenter(pointsIn: SpacePoint[], detail: number): SpacePoint[] {
+    const t = Math.min(1, Math.max(0, Number(detail)));
+    if (t >= 0.9999) return pointsIn;
+    return pointsIn.map((p) => ({
+      ...p,
+      x: p.x * t,
+      y: p.y * t,
+      z: p.z * t
+    }));
   }
 
   function applyClustering(input: SpacePoint[]): SpacePoint[] {
-    // ✅ когда группировка выключена — красим все точки выбранным цветом
-    if (!grouping.enabled) return input.map((p) => ({ ...p, color: pointsColor }));
+    if (!grouping.enabled || !input.length) return input.map((p) => ({ ...p, color: pointsColor }));
+    if ((grouping.principle === 'efficiency' || grouping.principle === 'behavior') && !grouping.featureFields.length) {
+      return input.map((p) => ({ ...p, color: pointsColor }));
+    }
 
-    // voxel-LOD сам меняет число точек:
-    // detail=min => почти все одиночки
-    // detail=max => одна точка-кластер
-    return input.map((p) => {
-      if (p.isCluster) return { ...p, color: colorForCluster(stableHash32(p.id)) };
-      return { ...p, color: pointsColor };
-    });
+    let labels: Int32Array;
+    let counts: Map<number, number>;
+
+    if (grouping.recompute === 'auto') {
+      const res = computeClustersNow(input);
+      labels = res.labels;
+      counts = res.counts;
+    } else {
+      const key = makeFixedConfigKey(grouping);
+      if (!fixedAssign.size || fixedConfigKey !== key) rebuildFixedAssignments(input);
+
+      labels = new Int32Array(input.length).fill(-1);
+      counts = fixedCounts;
+      for (let i = 0; i < input.length; i += 1) {
+        const id = fixedAssign.get(input[i].id);
+        labels[i] = Number.isFinite(id as number) ? (id as number) : -1;
+      }
+    }
+
+    const grouped = aggregateByLabels(input, labels, counts);
+    if (grouping.principle === 'proximity') return pullToCenter(grouped, grouping.detail);
+    return grouped;
   }
 
   function recomputeClusters(): void {
@@ -234,15 +388,40 @@
     }
   }
 
-  $: if (scene) {
-    scene.setTheme({ bg: visualBg, edge: visualEdge });
-    scene.setAxisCodes({ x: axisX, y: axisY, z: axisZ });
+  function scheduleSceneRender(): void {
+    if (!scene) return;
+    if (renderRaf) cancelAnimationFrame(renderRaf);
+    renderRaf = requestAnimationFrame(() => {
+      if (!scene) return;
+      scene.setTheme({ bg: visualBg, edge: visualEdge });
+      scene.setAxisCodes({ x: axisX, y: axisY, z: axisZ });
+      const clustered = applyClustering(points);
+      const info = scene.setPoints(clustered);
+      renderedCount = info.renderedCount;
+      bboxLabel = info.bboxLabel;
+    });
+  }
 
-    const clustered = applyClustering(points);
-    const info = scene.setPoints(clustered);
-
-    renderedCount = info.renderedCount;
-    bboxLabel = info.bboxLabel;
+  // Явно перечисляем зависимости рендера, иначе Svelte не отслеживает их внутри вызова функции.
+  $: {
+    void points;
+    void grouping.enabled;
+    void grouping.principle;
+    void grouping.detail;
+    void grouping.featureFields;
+    void grouping.minClusterSize;
+    void grouping.recompute;
+    void grouping.customWeights;
+    void grouping.wX;
+    void grouping.wY;
+    void grouping.wZ;
+    void visualBg;
+    void visualEdge;
+    void axisX;
+    void axisY;
+    void axisZ;
+    void clusterSeed;
+    if (scene) scheduleSceneRender();
   }
 
   function toggleDisplayMenu(): void {
@@ -437,6 +616,7 @@
     window.removeEventListener('keydown', onKey);
     window.removeEventListener('click', onGlobalClick, true);
 
+    if (renderRaf) cancelAnimationFrame(renderRaf);
     scene?.dispose();
     scene = null;
   });
@@ -564,14 +744,20 @@
   }
 
   :global(.graph-root) {
-    width: 100%;
+    width: 1200px;
     display: block;
+    min-width: 1200px;
+    max-width: 1200px;
   }
 
   :global(.stage) {
     position: relative;
+    width: 1200px;
     height: 560px;
+    min-width: 1200px;
     min-height: 560px;
+    max-width: 1200px;
+    max-height: 560px;
     border-radius: 18px;
     overflow: hidden;
     background: #ffffff;

@@ -318,8 +318,10 @@ export function buildPoints(args: {
   axisX: string;
   axisY: string;
   axisZ: string;
+  textFields?: ShowcaseField[];
   numberFields: ShowcaseField[];
   dateFields: ShowcaseField[];
+  minGroupSize?: number;
 
   lodEnabled?: boolean;
   lodDetail?: number; // 0..1
@@ -331,31 +333,28 @@ export function buildPoints(args: {
     axisX,
     axisY,
     axisZ,
+    textFields = [],
     numberFields,
     dateFields,
+    minGroupSize = 1,
     lodEnabled = false,
     lodDetail = 0.5,
     lodMinCount = 5
   } = args;
 
+  const safeMinGroupSize = Math.max(1, Number(minGroupSize) || 1);
   if (!entityFields.length) return [];
 
   const numberCodes = numberFields.map((f) => f.code);
   const dateCodes = dateFields.map((f) => f.code);
+  const textCodes = textFields.map((f) => f.code);
 
   const result: SpacePoint[] = [];
 
-  entityFields.forEach((entityField) => {
-    const groups = new Map<string, ShowcaseRow[]>();
+  function pushGroupPoint(groupRows: ShowcaseRow[], key: string, sourceField: string): void {
+    if (groupRows.length < safeMinGroupSize) return;
+    const safeKey = key || '—';
 
-    rows.forEach((row) => {
-      const key = String((row as Record<string, unknown>)[entityField] ?? '').trim();
-      if (!key) return;
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key)!.push(row);
-    });
-
-    groups.forEach((groupRows, key) => {
       const metrics: Record<string, number> = {};
 
       for (const code of numberCodes) {
@@ -383,15 +382,49 @@ export function buildPoints(args: {
       metrics.drr = metrics.revenue > 0 ? (metrics.spend / metrics.revenue) * 100 : 0;
       metrics.roi = metrics.spend > 0 ? metrics.revenue / metrics.spend : 0;
 
+      const textValues: Record<string, string> = {};
+      for (const code of textCodes) {
+        const freq = new Map<string, number>();
+        for (const r of groupRows) {
+          const value = String((r as any)[code] ?? '').trim();
+          if (!value) continue;
+          freq.set(value, (freq.get(value) ?? 0) + 1);
+        }
+        let best = '';
+        let bestCnt = -1;
+        for (const [v, c] of freq.entries()) {
+          if (c > bestCnt) {
+            best = v;
+            bestCnt = c;
+          }
+        }
+        if (best) textValues[code] = best;
+      }
+
       result.push({
-        id: `${entityField}:${key}`,
-        label: key,
-        sourceField: entityField,
+        id: `${sourceField}:${safeKey}`,
+        label: safeKey,
+        sourceField,
+        textValues,
         metrics,
         x: 0,
         y: 0,
         z: 0
       });
+  }
+
+  entityFields.forEach((entityField) => {
+    const groups = new Map<string, ShowcaseRow[]>();
+
+    rows.forEach((row) => {
+      const key = String((row as Record<string, unknown>)[entityField] ?? '').trim();
+      if (!key) return;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(row);
+    });
+
+    groups.forEach((groupRows, key) => {
+      pushGroupPoint(groupRows, key, entityField);
     });
   });
 

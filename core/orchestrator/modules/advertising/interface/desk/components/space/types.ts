@@ -8,6 +8,7 @@ export type SpacePoint = {
   id: string;
   label: string;
   sourceField: string;
+  textValues?: Record<string, string>;
   metrics: Record<string, number>;
   x: number;
   y: number;

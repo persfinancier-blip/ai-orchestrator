@@ -4,7 +4,7 @@ import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRe
 
 import type { ShowcaseField } from '../../data/showcaseStore';
 import type { SpacePoint } from '../types';
-import { buildBBox, normalizeBBox, calcMax, sanitizePoints, formatValueByMetric } from '../pipeline';
+import { buildBBox, calcMax, sanitizePoints, formatValueByMetric } from '../pipeline';
 
 export type SpaceSceneTheme = {
   bg: string;
@@ -23,6 +23,11 @@ export type SpaceSceneCallbacks = {
 };
 
 export class SpaceScene {
+  private static readonly FIXED_BBOX = {
+    minX: -50, maxX: 50,
+    minY: -50, maxY: 50,
+    minZ: -50, maxZ: 50
+  };
   private deps: SpaceSceneDeps;
   private cb: SpaceSceneCallbacks;
 
@@ -147,7 +152,7 @@ export class SpaceScene {
     this.clearMesh(this.pointsMesh);
     this.pointsMesh = undefined;
 
-    const renderable = sanitizePoints(points);
+    const renderable = this.fitIntoFixedCube(sanitizePoints(points));
     this.renderPoints = renderable;
 
     if (this.renderPoints.length) {
@@ -160,6 +165,11 @@ export class SpaceScene {
     const o = new THREE.Object3D();
     this.renderPoints.forEach((point, idx) => {
       o.position.set(point.x, point.y, point.z);
+      const count = Math.max(1, Number(point.clusterCount ?? 1));
+      // Увеличиваем только действительно крупные группы, чтобы при простом включении
+      // группировки точки не выглядели "жирнее" без явного объединения.
+      const scale = point.isCluster && count >= 5 ? Math.min(2.2, 1 + Math.log2(count) * 0.22) : 1;
+      o.scale.setScalar(scale);
       o.updateMatrix();
       this.pointsMesh!.setMatrixAt(idx, o.matrix);
     });
@@ -184,6 +194,44 @@ export class SpaceScene {
 
     this.fitCamera(renderable);
     return { renderedCount: renderable.length, bboxLabel };
+  }
+
+  private fitIntoFixedCube(list: SpacePoint[]): SpacePoint[] {
+    if (!list.length) return list;
+
+    const src = buildBBox(list);
+    const srcCenterX = (src.minX + src.maxX) / 2;
+    const srcCenterY = (src.minY + src.maxY) / 2;
+    const srcCenterZ = (src.minZ + src.maxZ) / 2;
+
+    const srcSpanX = Math.max(1e-6, src.maxX - src.minX);
+    const srcSpanY = Math.max(1e-6, src.maxY - src.minY);
+    const srcSpanZ = Math.max(1e-6, src.maxZ - src.minZ);
+    const srcMaxSpan = Math.max(srcSpanX, srcSpanY, srcSpanZ);
+
+    const pad = 2;
+    const dst = SpaceScene.FIXED_BBOX;
+    const dstCenterX = (dst.minX + dst.maxX) / 2;
+    const dstCenterY = (dst.minY + dst.maxY) / 2;
+    const dstCenterZ = (dst.minZ + dst.maxZ) / 2;
+    const dstMaxSpan = Math.max(
+      (dst.maxX - dst.minX) - pad * 2,
+      (dst.maxY - dst.minY) - pad * 2,
+      (dst.maxZ - dst.minZ) - pad * 2
+    );
+    const scale = dstMaxSpan / srcMaxSpan;
+
+    return list.map((p) => {
+      const x = (p.x - srcCenterX) * scale + dstCenterX;
+      const y = (p.y - srcCenterY) * scale + dstCenterY;
+      const z = (p.z - srcCenterZ) * scale + dstCenterZ;
+      return {
+        ...p,
+        x: Math.max(dst.minX + pad, Math.min(dst.maxX - pad, x)),
+        y: Math.max(dst.minY + pad, Math.min(dst.maxY - pad, y)),
+        z: Math.max(dst.minZ + pad, Math.min(dst.maxZ - pad, z))
+      };
+    });
   }
 
   public dispose(): void {
@@ -225,28 +273,9 @@ export class SpaceScene {
   private fitCamera(list: SpacePoint[]): void {
     if (!this.camera || !this.controls) return;
 
-    if (!list.length) {
-      this.camera.position.set(0, 0, 40);
-      this.controls.target.set(0, 0, 0);
-      this.controls.update();
-      return;
-    }
-
-    const bbox = buildBBox(list);
-    const center = new THREE.Vector3(
-      (bbox.minX + bbox.maxX) / 2,
-      (bbox.minY + bbox.maxY) / 2,
-      (bbox.minZ + bbox.maxZ) / 2
-    );
-
-    const spanX = Math.max(0.001, bbox.maxX - bbox.minX);
-    const spanY = Math.max(0.001, bbox.maxY - bbox.minY);
-    const spanZ = Math.max(0.001, bbox.maxZ - bbox.minZ);
-    const maxSpan = Math.max(spanX, spanY, spanZ);
-
-    const distance = Math.max(10, maxSpan * 1.55);
-    this.camera.position.set(center.x + distance * 0.55, center.y + distance * 0.45, center.z + distance);
-    this.controls.target.copy(center);
+    // Фиксированный вид: не подгоняем камеру под текущий bbox точек.
+    this.camera.position.set(0, 80, 220);
+    this.controls.target.set(0, 0, 0);
     this.controls.update();
   }
 
@@ -312,7 +341,7 @@ export class SpaceScene {
     this.disposeCornerFrame();
     this.disposeAxisLabels();
 
-    const bbox = normalizeBBox(list);
+    const bbox = SpaceScene.FIXED_BBOX;
 
     const A = new THREE.Vector3(bbox.minX, bbox.minY, bbox.minZ);
     const Bx = new THREE.Vector3(bbox.maxX, bbox.minY, bbox.minZ);

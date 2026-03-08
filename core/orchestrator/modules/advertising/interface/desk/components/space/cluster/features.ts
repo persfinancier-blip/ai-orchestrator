@@ -77,8 +77,10 @@ export function weightsForCfg(cfg: GroupingConfig): [number, number, number] {
 // detail 0..1 -> eps/minPts (подобрано для 0..1 пространства)
 export function dbscanParamsFromDetail(detail01: number): { eps: number; minPts: number } {
   const d = Math.min(1, Math.max(0, detail01));
-  // меньше detail => меньше eps => больше мелких групп
-  const eps = 0.03 + (0.18 - 0.03) * d;     // 0.03..0.18
-  const minPts = Math.round(3 + (12 - 3) * d); // 3..12
+  // Расширенный диапазон, чтобы ползунок давал заметный эффект:
+  // detail=0 -> очень детально (много небольших групп),
+  // detail=1 -> грубо (крупные группы)
+  const eps = 0.008 + (0.42 - 0.008) * d; // 0.008..0.42
+  const minPts = Math.round(2 + (18 - 2) * d); // 2..18
   return { eps, minPts };
 }
