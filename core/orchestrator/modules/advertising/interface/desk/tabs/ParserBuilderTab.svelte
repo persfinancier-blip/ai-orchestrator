@@ -1,5 +1,6 @@
 ﻿<script lang="ts">
   import { createEventDispatcher, onMount } from 'svelte';
+  import { buildSourceNodePreviewFromTemplate } from './parserSourcePreviewCore.js';
 
   type ExistingTable = { schema_name: string; table_name: string };
   type ParserSettings = Record<string, string>;
@@ -34,6 +35,9 @@
     storeId: number;
     name: string;
     description: string;
+    config_json?: Record<string, any>;
+    output_parameters?: Array<Record<string, any>>;
+    picked_paths?: string[];
   };
 
   export let apiBase: string;
@@ -255,6 +259,7 @@
   let previewData: ParserPreview | null = null;
   let previewRaw: any = null;
   let previewUpdatedAt = '';
+  let sourceNodePreviewMessage = '';
 
   $: {
     const next = normalizeSettings(initialSettings);
@@ -280,6 +285,39 @@
     sourceTemplates.find((item) => item.ref === String(settings.sourceNodeTemplateRef || '').trim()) ||
     sourceTemplates.find((item) => String(item.storeId || 0) === String(settings.sourceNodeTemplateStoreId || '').trim()) ||
     null;
+  $: sourceNodePreview = settings.sourceMode === 'node' ? buildSourceNodePreviewFromTemplate(currentSourceTemplate) : { rows: [], columns: [], message: '' };
+  $: sourceNodePreviewJson = sourceNodePreview.rows.length ? JSON.stringify(sourceNodePreview.rows, null, 2) : '';
+  $: sourceNodePreviewMessage = sourceNodePreview.message || '';
+  $: sourcePreviewColumns =
+    settings.sourceMode === 'node'
+      ? sourceNodePreview.columns
+      : Array.isArray(previewData?.raw_columns)
+      ? previewData.raw_columns
+      : [];
+  $: sourcePreviewRows =
+    settings.sourceMode === 'node'
+      ? sourceNodePreview.rows
+      : Array.isArray(previewData?.raw_sample_rows)
+      ? previewData.raw_sample_rows
+      : [];
+  $: sourcePreviewRowCount =
+    settings.sourceMode === 'node'
+      ? currentSourceTemplate
+        ? sourceNodePreview.rows.length
+        : '-'
+      : (previewData?.raw_row_count ?? '-');
+  $: sourcePreviewColumnCount =
+    settings.sourceMode === 'node'
+      ? currentSourceTemplate
+        ? sourceNodePreview.columns.length
+        : '-'
+      : (previewData?.raw_column_count ?? '-');
+  $: sourcePreviewSourceRef =
+    settings.sourceMode === 'node'
+      ? currentSourceTemplate
+        ? sourceTemplateLabel(currentSourceTemplate)
+        : '-'
+      : previewData?.source_ref || '-';
   $: if (!selectedDraft && currentTemplate) {
     templateNameInput = templateNameInput || currentTemplate.name;
     templateDescriptionInput = templateDescriptionInput || currentTemplate.description;
@@ -382,7 +420,10 @@
           templateType: 'api_request' as const,
           storeId: Number(item?.id || 0),
           name: String(item?.api_name || item?.name || '').trim(),
-          description: String(item?.description || '').trim()
+          description: String(item?.description || '').trim(),
+          config_json: item?.config_json && typeof item.config_json === 'object' ? item.config_json : {},
+          output_parameters: Array.isArray(item?.output_parameters) ? item.output_parameters : [],
+          picked_paths: Array.isArray(item?.picked_paths) ? item.picked_paths : []
         }))
         .filter((item) => item.storeId > 0 && item.name);
       const parserTemplates: SourceNodeTemplate[] = (Array.isArray(parserPayload?.parser_configs) ? parserPayload.parser_configs : [])
@@ -391,7 +432,8 @@
           templateType: 'table_parser' as const,
           storeId: Number(item?.id || 0),
           name: String(item?.parser_name || item?.name || '').trim(),
-          description: String(item?.description || '').trim()
+          description: String(item?.description || '').trim(),
+          config_json: item?.config_json && typeof item.config_json === 'object' ? item.config_json : {}
         }))
         .filter((item) => item.storeId > 0 && item.name);
       sourceTemplates = [...apiTemplates, ...parserTemplates];
@@ -494,12 +536,28 @@
     previewLoading = true;
     previewError = '';
     try {
+      let inputValue = settings.sampleInput;
+      if (settings.sourceMode === 'node') {
+        if (!currentSourceTemplate) {
+          previewError = 'Сначала выбери шаблон ноды-источника.';
+          previewData = null;
+          previewRaw = null;
+          return;
+        }
+        if (!sourceNodePreviewJson) {
+          previewError = sourceNodePreviewMessage || 'У выбранного шаблона ноды ещё не настроены выходные параметры.';
+          previewData = null;
+          previewRaw = null;
+          return;
+        }
+        inputValue = sourceNodePreviewJson;
+      }
       const payload = await apiJson<{ preview?: ParserPreview; result?: any }>(`${apiBase}/parser-configs/preview`, {
         method: 'POST',
         headers: headers(),
         body: JSON.stringify({
           config_json: buildTemplatePayload(settings),
-          input_value: settings.sampleInput,
+          input_value: inputValue,
           cursor: { offset: 0 }
         })
       });
@@ -596,13 +654,14 @@
 
           <label>
             Пример входных данных для preview
-            <textarea
-              rows="10"
-              value={settings.sampleInput}
-              on:input={(e) => patchSetting('sampleInput', textareaValue(e))}
-              placeholder="Вставь пример JSON, CSV, NDJSON или текст, который приходит от выбранного шаблона ноды"
-            ></textarea>
-            <span class="hint">Этот пример нужен только для preview. В runtime parser читает реальный output предыдущей ноды пакетно.</span>
+            {#if currentSourceTemplate && sourceNodePreviewJson}
+              <textarea rows="10" readonly value={sourceNodePreviewJson}></textarea>
+              <span class="hint">{sourceNodePreviewMessage}</span>
+            {:else if currentSourceTemplate}
+              <div class="inline-hint">{sourceNodePreviewMessage}</div>
+            {:else}
+              <div class="inline-hint">Выбери шаблон ноды-источника, чтобы автоматически увидеть ожидаемый вход.</div>
+            {/if}
           </label>
         {/if}
 
@@ -652,40 +711,40 @@
         {/if}
 
         <div class="preview-metrics">
-          <span>Сырых строк: {previewData?.raw_row_count ?? '-'}</span>
-          <span>Сырых колонок: {previewData?.raw_column_count ?? '-'}</span>
+          <span>Сырых строк: {sourcePreviewRowCount}</span>
+          <span>Сырых колонок: {sourcePreviewColumnCount}</span>
           <span>Формат: {previewData?.source_format || '-'}</span>
           <span>Источник: {settings.sourceMode === 'node' ? 'Нода' : settings.sourceMode === 'table' ? 'Таблица' : 'Файл / ссылка'}</span>
         </div>
 
         <div class="preview-meta">
-          <span>Источник: {previewData?.source_ref || '-'}</span>
+          <span>Источник: {sourcePreviewSourceRef}</span>
           <span>Пакет: {previewData?.batch?.returned_rows ?? 0} / {previewData?.batch?.batch_size ?? '-'}</span>
           <span>Есть ещё данные: {previewData?.batch?.has_more ? 'да' : 'нет'}</span>
           <span>Обновлено: {previewUpdatedAt ? new Date(previewUpdatedAt).toLocaleString('ru-RU') : '-'}</span>
         </div>
 
-        {#if previewData?.raw_columns?.length}
+        {#if sourcePreviewColumns.length}
           <div class="preview-columns">
-            {#each previewData.raw_columns as column}
+            {#each sourcePreviewColumns as column}
               <span>{column}</span>
             {/each}
           </div>
         {/if}
-        {#if previewData?.raw_sample_rows?.length}
+        {#if sourcePreviewRows.length}
           <div class="preview-table-wrap">
             <table class="preview-table">
               <thead>
                 <tr>
-                  {#each previewData.raw_columns as column}
+                  {#each sourcePreviewColumns as column}
                     <th>{column}</th>
                   {/each}
                 </tr>
               </thead>
               <tbody>
-                {#each previewData.raw_sample_rows as row}
+                {#each sourcePreviewRows as row}
                   <tr>
-                    {#each previewData.raw_columns as column}
+                    {#each sourcePreviewColumns as column}
                       <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
                     {/each}
                   </tr>
@@ -694,7 +753,7 @@
             </table>
           </div>
         {:else}
-          <div class="empty-box">Нет preview входа. Выбери источник и обнови preview.</div>
+          <div class="empty-box">{settings.sourceMode === 'node' && sourceNodePreviewMessage ? sourceNodePreviewMessage : 'Нет preview входа. Выбери источник и обнови preview.'}</div>
         {/if}
       </div>
     </section>
