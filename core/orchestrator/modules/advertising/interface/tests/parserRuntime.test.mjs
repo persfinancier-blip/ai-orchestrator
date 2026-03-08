@@ -368,6 +368,7 @@ test('parser runtime: dedupe and grouping aggregate rows without DB-bound flow',
     { brand: 'A', total_qty: 5, sku_count: 2, max_price: 12 },
     { brand: 'B', total_qty: 4, sku_count: 1, max_price: 20 }
   ]);
+  assert.equal(result.stats.applied_steps_count, 3);
   assert.match(result.stats.applied_steps.join(' | '), /Удаление дублей/);
   assert.match(result.stats.applied_steps.join(' | '), /Группировка по полям/);
 });

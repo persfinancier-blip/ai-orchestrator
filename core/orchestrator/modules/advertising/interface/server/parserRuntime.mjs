@@ -1168,7 +1168,9 @@ export async function executeParserRows(client, rawSettings = {}, options = {}) 
       working_set_path: cfg.recordPath || '(корень)',
       source_path: cfg.inputPath || '(вход целиком)',
       warnings: diagnostics.warnings,
-      applied_steps: diagnostics.steps
+      warnings_count: diagnostics.warnings.length,
+      applied_steps: diagnostics.steps,
+      applied_steps_count: diagnostics.steps.length
     }
   };
 }
