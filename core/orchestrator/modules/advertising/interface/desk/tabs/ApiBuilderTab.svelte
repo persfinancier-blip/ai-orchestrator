@@ -10238,16 +10238,13 @@ function syncParameterEditorsHeight() {
               <div class="hint">Здесь формируется универсальный выходной контракт шаблона на основе текущего тестового результата, а не буквального пути одного тестового ответа.</div>
             </div>
             <button
-              class="icon-btn refresh-btn output-contract-refresh-btn"
+              class="icon-btn refresh-btn"
               type="button"
               title="Обновить тестовый результат и дерево ответа"
               aria-label="Обновить тестовый результат и дерево ответа"
               on:click={refreshOutputContractNow}
               disabled={checking || loading || !selectedRef}
-            >
-              <span aria-hidden="true">{checking ? '…' : '↻'}</span>
-              <span>Обновить</span>
-            </button>
+            >{checking ? '…' : '↻'}</button>
           </div>
           <div class="targets-layout">
             <div class="crumbs-panel output-tree-panel">
@@ -10600,21 +10597,6 @@ function syncParameterEditorsHeight() {
   .targets-wrap { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:transparent; }
   .targets-head { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; margin-bottom:8px; }
   .targets-title { font-size:13px; font-weight:700; color:#0f172a; }
-  .output-contract-refresh-btn {
-    width:auto;
-    min-width:128px;
-    padding:5px 10px;
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    gap:6px;
-    border-radius:10px;
-    border:1px solid #e2e8f0;
-    background:#fff;
-    font-size:11px;
-    font-weight:500;
-    color:#16a34a;
-  }
   .targets-layout { display:grid; grid-template-columns:minmax(0, 1.1fr) minmax(0, 1fr); gap:10px; align-items:start; }
   .crumbs-panel { border:1px dashed #dbe3ef; border-radius:12px; padding:8px; background:#fff; margin-bottom:10px; }
   .crumbs-title-row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
