@@ -81,6 +81,8 @@
     filterField: '',
     filterOperator: '',
     filterValue: '',
+    filterRulesJson: '[]',
+    computedFieldsJson: '[]',
     parserMultiplier: '1',
     sampleInput: '',
     lookupEnabled: 'false',
@@ -89,8 +91,17 @@
     lookupSourceField: '',
     lookupTargetField: '',
     lookupFields: '',
-    lookupPrefix: ''
+    lookupPrefix: '',
+    lookupJoinMode: 'left_join',
+    dedupeEnabled: 'false',
+    dedupeMode: 'full_row',
+    dedupeFields: '',
+    dedupeKeep: 'first',
+    groupEnabled: 'false',
+    groupByFields: '',
+    aggregateRulesJson: '[]'
   };
+  const COMPUTED_EXPRESSION_PLACEHOLDER = 'если({price} > 0, {price} * 0.9, 0)';
 
   function normalizeSettings(raw: Record<string, any> | null | undefined): ParserSettings {
     const next: ParserSettings = { ...DEFAULT_SETTINGS };
@@ -138,6 +149,8 @@
     next.filterField = String(src.filterField || src.filter_field || next.filterField || '').trim();
     next.filterOperator = String(src.filterOperator || src.filter_operator || next.filterOperator || '').trim();
     next.filterValue = String(src.filterValue || src.filter_value || next.filterValue || '');
+    next.filterRulesJson = stringifyJson(src.filterRules || src.filter_rules, next.filterRulesJson || '[]');
+    next.computedFieldsJson = stringifyJson(src.computedFields || src.computed_fields, next.computedFieldsJson || '[]');
     next.parserMultiplier = String(src.parserMultiplier || src.parser_multiplier || next.parserMultiplier || '1').trim() || '1';
     next.sampleInput = String(src.sampleInput || src.sample_input || next.sampleInput || '');
     next.lookupEnabled = boolString(src.lookupEnabled ?? src.lookup_enabled ?? next.lookupEnabled);
@@ -149,6 +162,18 @@
       ? (src.lookupFields || src.lookup_fields).join(', ')
       : String(src.lookupFields || src.lookup_fields || next.lookupFields || '').trim();
     next.lookupPrefix = String(src.lookupPrefix || src.lookup_prefix || next.lookupPrefix || '').trim();
+    next.lookupJoinMode = String(src.lookupJoinMode || src.lookup_join_mode || next.lookupJoinMode || 'left_join').trim() || 'left_join';
+    next.dedupeEnabled = boolString(src.dedupeEnabled ?? src.dedupe_enabled ?? next.dedupeEnabled);
+    next.dedupeMode = String(src.dedupeMode || src.dedupe_mode || next.dedupeMode || 'full_row').trim() || 'full_row';
+    next.dedupeFields = Array.isArray(src.dedupeFields || src.dedupe_fields)
+      ? (src.dedupeFields || src.dedupe_fields).join(', ')
+      : String(src.dedupeFields || src.dedupe_fields || next.dedupeFields || '').trim();
+    next.dedupeKeep = String(src.dedupeKeep || src.dedupe_keep || next.dedupeKeep || 'first').trim() || 'first';
+    next.groupEnabled = boolString(src.groupEnabled ?? src.group_enabled ?? next.groupEnabled);
+    next.groupByFields = Array.isArray(src.groupByFields || src.group_by_fields)
+      ? (src.groupByFields || src.group_by_fields).join(', ')
+      : String(src.groupByFields || src.group_by_fields || next.groupByFields || '').trim();
+    next.aggregateRulesJson = stringifyJson(src.aggregateRules || src.aggregate_rules, next.aggregateRulesJson || '[]');
     next.templateId = String(src.templateId || '').trim();
     next.templateStoreId = String(src.templateStoreId || '').trim();
     return next;
@@ -180,6 +205,21 @@
     if (!txt) return fallback;
     try {
       return JSON.parse(txt);
+    } catch {
+      return fallback;
+    }
+  }
+
+  function parseCsvText(raw: string) {
+    return String(raw || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  function toPrettyJson(value: any, fallback = '[]') {
+    try {
+      return JSON.stringify(value, null, 2);
     } catch {
       return fallback;
     }
@@ -228,6 +268,8 @@
       filterField: settingsValue.filterField,
       filterOperator: settingsValue.filterOperator,
       filterValue: settingsValue.filterValue,
+      filterRules: parseJsonSafe(settingsValue.filterRulesJson, []),
+      computedFields: parseJsonSafe(settingsValue.computedFieldsJson, []),
       parserMultiplier: settingsValue.parserMultiplier,
       lookupEnabled: settingsValue.lookupEnabled === 'true',
       lookupSchema: settingsValue.lookupSchema,
@@ -235,7 +277,15 @@
       lookupSourceField: settingsValue.lookupSourceField,
       lookupTargetField: settingsValue.lookupTargetField,
       lookupFields: settingsValue.lookupFields,
-      lookupPrefix: settingsValue.lookupPrefix
+      lookupPrefix: settingsValue.lookupPrefix,
+      lookupJoinMode: settingsValue.lookupJoinMode,
+      dedupeEnabled: settingsValue.dedupeEnabled === 'true',
+      dedupeMode: settingsValue.dedupeMode,
+      dedupeFields: settingsValue.dedupeFields,
+      dedupeKeep: settingsValue.dedupeKeep,
+      groupEnabled: settingsValue.groupEnabled === 'true',
+      groupByFields: settingsValue.groupByFields,
+      aggregateRules: parseJsonSafe(settingsValue.aggregateRulesJson, [])
     };
     return cfg;
   }
@@ -318,6 +368,45 @@
         ? sourceTemplateLabel(currentSourceTemplate)
         : '-'
       : previewData?.source_ref || '-';
+  $: workingFieldCandidates = Array.from(
+    new Set([
+      ...sourcePreviewColumns,
+      ...(Array.isArray(previewData?.columns) ? previewData.columns : []),
+      ...parseCsvText(settings.selectFields),
+      ...parseCsvText(settings.groupByFields),
+      ...parseCsvText(settings.dedupeFields)
+    ].filter(Boolean))
+  );
+  $: renameMapValue = parseJsonSafe(settings.renameMap, {});
+  $: defaultValuesValue = parseJsonSafe(settings.defaultValues, {});
+  $: typeMapValue = parseJsonSafe(settings.typeMap, {});
+  $: selectedFieldPaths = parseCsvText(settings.selectFields);
+  $: selectedFieldRows = selectedFieldPaths.map((path) => {
+    const fallbackKey = String(path || '').split('.').filter(Boolean).slice(-1)[0] || String(path || '').trim();
+    return {
+      path,
+      alias: String(renameMapValue?.[path] || renameMapValue?.[fallbackKey] || fallbackKey).trim(),
+      type: String(typeMapValue?.[path] || typeMapValue?.[fallbackKey] || '').trim(),
+      defaultValue:
+        defaultValuesValue?.[path] !== undefined
+          ? String(defaultValuesValue[path])
+          : defaultValuesValue?.[fallbackKey] !== undefined
+          ? String(defaultValuesValue[fallbackKey])
+          : ''
+    };
+  });
+  $: filterRules = parseJsonSafe(settings.filterRulesJson, []);
+  $: computedFields = parseJsonSafe(settings.computedFieldsJson, []);
+  $: aggregateRules = parseJsonSafe(settings.aggregateRulesJson, []);
+  $: parserWarnings = Array.isArray(previewData?.stats?.warnings) ? previewData.stats.warnings : [];
+  $: parserAppliedSteps = Array.isArray(previewData?.stats?.applied_steps) ? previewData.stats.applied_steps : [];
+  $: autoParseInfo = {
+    detectedFormat: String(previewData?.stats?.detected_format || previewData?.source_format || '-'),
+    payloadOrigin: String(previewData?.stats?.payload_origin || '-'),
+    inputKind: String(previewData?.stats?.input_kind || '-'),
+    workingSetPath: String(previewData?.stats?.working_set_path || settings.recordPath || '(корень)'),
+    sourcePath: String(previewData?.stats?.source_path || settings.inputPath || '(вход целиком)')
+  };
   $: if (!selectedDraft && currentTemplate) {
     templateNameInput = templateNameInput || currentTemplate.name;
     templateDescriptionInput = templateDescriptionInput || currentTemplate.description;
@@ -356,6 +445,97 @@
       next.sourceNodeTemplateName = selected.name;
     }
     dispatchSettings(next);
+  }
+
+  function patchJsonSetting(key: string, value: any, fallback = '[]') {
+    patchSetting(key, toPrettyJson(value, fallback));
+  }
+
+  function rebuildFieldSettings(rows: Array<{ path: string; alias?: string; type?: string; defaultValue?: string }>) {
+    const next = cloneSettings(settings);
+    const cleanRows = rows
+      .map((row) => ({
+        path: String(row?.path || '').trim(),
+        alias: String(row?.alias || '').trim(),
+        type: String(row?.type || '').trim(),
+        defaultValue: row?.defaultValue ?? ''
+      }))
+      .filter((row) => row.path);
+    next.selectFields = cleanRows.map((row) => row.path).join(', ');
+    const renameMap: Record<string, any> = {};
+    const defaultValues: Record<string, any> = {};
+    const typeMap: Record<string, any> = {};
+    for (const row of cleanRows) {
+      const fallbackKey = String(row.path || '').split('.').filter(Boolean).slice(-1)[0] || row.path;
+      if (row.alias && row.alias !== fallbackKey) renameMap[row.path] = row.alias;
+      if (row.defaultValue !== '') defaultValues[row.path] = row.defaultValue;
+      if (row.type) typeMap[row.path] = row.type;
+    }
+    next.renameMap = toPrettyJson(renameMap, '{}');
+    next.defaultValues = toPrettyJson(defaultValues, '{}');
+    next.typeMap = toPrettyJson(typeMap, '{}');
+    dispatchSettings(next);
+  }
+
+  function addAllDetectedFields() {
+    const rows = workingFieldCandidates.map((path) => ({ path }));
+    rebuildFieldSettings(rows);
+  }
+
+  function addSelectedField(path: string) {
+    const wanted = String(path || '').trim();
+    if (!wanted) return;
+    if (selectedFieldPaths.includes(wanted)) return;
+    rebuildFieldSettings([...selectedFieldRows, { path: wanted }]);
+  }
+
+  function updateSelectedFieldRow(index: number, patch: Record<string, any>) {
+    const rows = selectedFieldRows.map((row, idx) => (idx === index ? { ...row, ...patch } : row));
+    rebuildFieldSettings(rows);
+  }
+
+  function removeSelectedField(index: number) {
+    rebuildFieldSettings(selectedFieldRows.filter((_row, idx) => idx !== index));
+  }
+
+  function updateRulesSetting(key: string, rows: any[]) {
+    patchJsonSetting(key, rows);
+  }
+
+  function addFilterRule() {
+    updateRulesSetting('filterRulesJson', [...filterRules, { field: '', operator: '=', value: '', secondValue: '' }]);
+  }
+
+  function updateFilterRule(index: number, patch: Record<string, any>) {
+    updateRulesSetting('filterRulesJson', filterRules.map((row: any, idx: number) => (idx === index ? { ...row, ...patch } : row)));
+  }
+
+  function removeFilterRule(index: number) {
+    updateRulesSetting('filterRulesJson', filterRules.filter((_row: any, idx: number) => idx !== index));
+  }
+
+  function addComputedField() {
+    updateRulesSetting('computedFieldsJson', [...computedFields, { name: '', expression: '', type: '' }]);
+  }
+
+  function updateComputedField(index: number, patch: Record<string, any>) {
+    updateRulesSetting('computedFieldsJson', computedFields.map((row: any, idx: number) => (idx === index ? { ...row, ...patch } : row)));
+  }
+
+  function removeComputedField(index: number) {
+    updateRulesSetting('computedFieldsJson', computedFields.filter((_row: any, idx: number) => idx !== index));
+  }
+
+  function addAggregateRule() {
+    updateRulesSetting('aggregateRulesJson', [...aggregateRules, { field: '', op: 'count', as: '' }]);
+  }
+
+  function updateAggregateRule(index: number, patch: Record<string, any>) {
+    updateRulesSetting('aggregateRulesJson', aggregateRules.map((row: any, idx: number) => (idx === index ? { ...row, ...patch } : row)));
+  }
+
+  function removeAggregateRule(index: number) {
+    updateRulesSetting('aggregateRulesJson', aggregateRules.filter((_row: any, idx: number) => idx !== index));
   }
 
   function patchFromDraft(draft: ParserDraft) {
@@ -596,6 +776,11 @@
     return (event.currentTarget as HTMLTextAreaElement | null)?.value ?? '';
   }
 
+  function clearSelectValue(event: Event) {
+    const target = event.currentTarget as HTMLSelectElement | null;
+    if (target) target.value = '';
+  }
+
   onMount(() => {
     void loadDrafts(storeIdFromSettings(initialSettings));
     void loadSourceTemplates();
@@ -767,109 +952,143 @@
           </div>
         </div>
 
-        <div class="form-grid form-grid-3">
-          <label>
-            Формат
-            <select value={settings.sourceFormat} on:change={(e) => patchSetting('sourceFormat', selectValue(e))}>
-              <option value="auto">Определять автоматически</option>
-              <option value="json">JSON</option>
-              <option value="csv">CSV</option>
-              <option value="ndjson">NDJSON</option>
-              <option value="text">Текст</option>
-              <option value="zip">ZIP</option>
-            </select>
-          </label>
-          <label>
-            Размер пакета
-            <input type="number" min="1" max="5000" value={settings.batchSize} on:input={(e) => patchSetting('batchSize', inputValue(e))} />
-          </label>
-        </div>
-
-        <div class="form-grid form-grid-3">
-          <label>
-            Путь до входа
-            <input value={settings.inputPath} on:input={(e) => patchSetting('inputPath', inputValue(e))} placeholder="response.data" />
-          </label>
-          <label>
-            Путь до массива записей
-            <input value={settings.recordPath} on:input={(e) => patchSetting('recordPath', inputValue(e))} placeholder="items.rows" />
-          </label>
-          <label>
-            Делимитер CSV
-            <input value={settings.csvDelimiter} on:input={(e) => patchSetting('csvDelimiter', inputValue(e))} placeholder="," />
-          </label>
-        </div>
-
-        {#if settings.sourceFormat === 'zip'}
-          <div class="form-grid form-grid-2">
-            <label>
-              Файл внутри ZIP
-              <input value={settings.archiveEntry} on:input={(e) => patchSetting('archiveEntry', inputValue(e))} placeholder="export/data.csv" />
-            </label>
-            <label>
-              Формат файла внутри ZIP
-              <select value={settings.archiveFormat} on:change={(e) => patchSetting('archiveFormat', selectValue(e))}>
-                <option value="auto">Определять автоматически</option>
-                <option value="csv">CSV</option>
-                <option value="json">JSON</option>
-                <option value="ndjson">NDJSON</option>
-                <option value="text">Текст</option>
-              </select>
-            </label>
-          </div>
-        {/if}
-
-        <div class="form-grid form-grid-3">
-          <label>
-            Поля
-            <input value={settings.selectFields} on:input={(e) => patchSetting('selectFields', inputValue(e))} placeholder="id, name, meta.updatedAt" />
-            <span class="hint">Какие поля оставить в результате. Пусто = взять все поля объекта.</span>
-          </label>
-          <label>
-            Переименовать поля (JSON)
-            <textarea rows="4" value={settings.renameMap} on:input={(e) => patchSetting('renameMap', textareaValue(e))}></textarea>
-          </label>
-          <label>
-            Значения по умолчанию (JSON)
-            <textarea rows="4" value={settings.defaultValues} on:input={(e) => patchSetting('defaultValues', textareaValue(e))}></textarea>
-          </label>
-        </div>
-
-        <div class="form-grid form-grid-3">
-          <label>
-            Типы полей (JSON)
-            <textarea rows="4" value={settings.typeMap} on:input={(e) => patchSetting('typeMap', textareaValue(e))}></textarea>
-            <span class="hint">Например: {`{"id":"integer","updated_at":"timestamp"}`}</span>
-          </label>
-          <label>
-            Фильтр: поле
-            <input value={settings.filterField} on:input={(e) => patchSetting('filterField', inputValue(e))} placeholder="status" />
-          </label>
-          <label>
-            Фильтр: оператор и значение
-            <div class="field-inline">
-              <select value={settings.filterOperator} on:change={(e) => patchSetting('filterOperator', selectValue(e))}>
-                <option value="">Без фильтра</option>
-                <option value="=">=</option>
-                <option value="!=">!=</option>
-                <option value=">">&gt;</option>
-                <option value=">=">&gt;=</option>
-                <option value="<">&lt;</option>
-                <option value="<=">&lt;=</option>
-                <option value="contains">содержит</option>
-                <option value="not_contains">не содержит</option>
-                <option value="empty">пусто</option>
-                <option value="not_empty">не пусто</option>
-              </select>
-              <input value={settings.filterValue} on:input={(e) => patchSetting('filterValue', inputValue(e))} placeholder="active" />
-            </div>
-          </label>
-        </div>
         <div class="subsection">
           <div class="subsection-head">
-            <h4>Lookup из таблицы</h4>
+            <h4>Авторазбор входа</h4>
+          </div>
+          <div class="preview-metrics">
+            <span>Распознанный формат: {autoParseInfo.detectedFormat}</span>
+            <span>Источник payload: {autoParseInfo.payloadOrigin}</span>
+            <span>Тип входа: {autoParseInfo.inputKind}</span>
+          </div>
+          <div class="preview-meta">
+            <span>Путь до входа: {autoParseInfo.sourcePath}</span>
+            <span>Рабочий набор: {autoParseInfo.workingSetPath}</span>
+          </div>
+          {#if parserWarnings.length}
+            <div class="warnings-box">
+              {#each parserWarnings as warning}
+                <div class="warning-line">{warning}</div>
+              {/each}
+            </div>
+          {:else}
+            <div class="inline-hint">Авторазбор сам пытается распознать JSON, JSON в строке, CSV, NDJSON, текст и служебные runtime-обёртки. Если payload большой, preview остаётся ограниченным, но рабочий набор определяется корректно.</div>
+          {/if}
+        </div>
+
+        <div class="subsection">
+          <div class="subsection-head">
+            <h4>Рабочий набор данных</h4>
+          </div>
+          <div class="form-grid form-grid-3">
+            <label>
+              Формат
+              <select value={settings.sourceFormat} on:change={(e) => patchSetting('sourceFormat', selectValue(e))}>
+                <option value="auto">Определять автоматически</option>
+                <option value="json">JSON</option>
+                <option value="csv">CSV</option>
+                <option value="ndjson">NDJSON</option>
+                <option value="text">Текст</option>
+                <option value="zip">ZIP</option>
+              </select>
+            </label>
+            <label>
+              Путь до входа
+              <input value={settings.inputPath} on:input={(e) => patchSetting('inputPath', inputValue(e))} placeholder="response.data" />
+            </label>
+            <label>
+              Путь до массива записей
+              <input value={settings.recordPath} on:input={(e) => patchSetting('recordPath', inputValue(e))} placeholder="items.rows" />
+            </label>
+          </div>
+          <div class="form-grid form-grid-3">
+            <label>
+              Делимитер CSV
+              <input value={settings.csvDelimiter} on:input={(e) => patchSetting('csvDelimiter', inputValue(e))} placeholder="," />
+            </label>
+            <label>
+              Размер пакета
+              <input type="number" min="1" max="5000" value={settings.batchSize} on:input={(e) => patchSetting('batchSize', inputValue(e))} />
+            </label>
+            <label>
+              Множитель парсинга
+              <input type="number" min="1" value={settings.parserMultiplier} on:input={(e) => patchSetting('parserMultiplier', inputValue(e))} />
+            </label>
+          </div>
+          {#if settings.sourceFormat === 'zip'}
+            <div class="form-grid form-grid-2">
+              <label>
+                Файл внутри ZIP
+                <input value={settings.archiveEntry} on:input={(e) => patchSetting('archiveEntry', inputValue(e))} placeholder="export/data.csv" />
+              </label>
+              <label>
+                Формат файла внутри ZIP
+                <select value={settings.archiveFormat} on:change={(e) => patchSetting('archiveFormat', selectValue(e))}>
+                  <option value="auto">Определять автоматически</option>
+                  <option value="csv">CSV</option>
+                  <option value="json">JSON</option>
+                  <option value="ndjson">NDJSON</option>
+                  <option value="text">Текст</option>
+                </select>
+              </label>
+            </div>
+          {/if}
+          <div class="inline-hint">Рабочий набор — это тот узел или массив строк, над которым потом выполняются выбор полей, формулы, фильтры, обогащение и группировки.</div>
+        </div>
+
+        <div class="subsection">
+          <div class="subsection-head">
+            <h4>Приведение данных в порядок</h4>
+            <div class="subsection-actions">
+              <button type="button" class="mini-btn" on:click={addAllDetectedFields} disabled={!workingFieldCandidates.length}>Взять все поля</button>
+              <button type="button" class="mini-btn" on:click={() => rebuildFieldSettings([])} disabled={!selectedFieldRows.length}>Очистить</button>
+            </div>
+          </div>
+          <div class="field-picker">
+            <select on:change={(e) => { addSelectedField(selectValue(e)); clearSelectValue(e); }}>
+              <option value="">Добавить поле из рабочего набора</option>
+              {#each workingFieldCandidates.filter((item) => !selectedFieldPaths.includes(item)) as fieldName}
+                <option value={fieldName}>{fieldName}</option>
+              {/each}
+            </select>
+          </div>
+          {#if selectedFieldRows.length}
+            <div class="rules-grid">
+              <div class="rules-grid-head">Поле источника</div>
+              <div class="rules-grid-head">Алиас</div>
+              <div class="rules-grid-head">Тип</div>
+              <div class="rules-grid-head">Значение по умолчанию</div>
+              <div class="rules-grid-head"></div>
+              {#each selectedFieldRows as row, index}
+                <select value={row.path} on:change={(e) => updateSelectedFieldRow(index, { path: selectValue(e) })}>
+                  {#each workingFieldCandidates as fieldName}
+                    <option value={fieldName}>{fieldName}</option>
+                  {/each}
+                </select>
+                <input value={row.alias} on:input={(e) => updateSelectedFieldRow(index, { alias: inputValue(e) })} placeholder="alias" />
+                <select value={row.type} on:change={(e) => updateSelectedFieldRow(index, { type: selectValue(e) })}>
+                  <option value="">Без приведения</option>
+                  <option value="text">Текст</option>
+                  <option value="integer">Целое число</option>
+                  <option value="numeric">Число</option>
+                  <option value="boolean">Логический</option>
+                  <option value="json">JSON</option>
+                  <option value="timestamp">Дата и время</option>
+                </select>
+                <input value={row.defaultValue} on:input={(e) => updateSelectedFieldRow(index, { defaultValue: inputValue(e) })} placeholder="по умолчанию" />
+                <button type="button" class="icon-btn danger-icon-btn" on:click={() => removeSelectedField(index)}>x</button>
+              {/each}
+            </div>
+          {:else}
+            <div class="inline-hint">По умолчанию parser может взять все поля рабочего набора. Чтобы явно зафиксировать контракт полей, нажми «Взять все поля» и удали лишнее.</div>
+          {/if}
+        </div>
+
+        <div class="subsection">
+          <div class="subsection-head">
+            <h4>Обогащение данными из таблиц</h4>
             <label class="switch-line">
-              <span>Включить lookup</span>
+              <span>Включить обогащение</span>
               <select value={settings.lookupEnabled} on:change={(e) => patchSetting('lookupEnabled', selectValue(e))}>
                 <option value="false">Нет</option>
                 <option value="true">Да</option>
@@ -877,9 +1096,18 @@
             </label>
           </div>
           {#if settings.lookupEnabled === 'true'}
-            <div class="form-grid form-grid-3">
+            <div class="form-grid form-grid-4">
               <label>
-                Схема lookup
+                Режим соединения
+                <select value={settings.lookupJoinMode} on:change={(e) => patchSetting('lookupJoinMode', selectValue(e))}>
+                  <option value="left_join">Левое соединение</option>
+                  <option value="first_match">Первое совпадение</option>
+                  <option value="only_matches">Только совпавшие</option>
+                  <option value="all_matches">Все совпадения</option>
+                </select>
+              </label>
+              <label>
+                Схема таблицы
                 <select value={settings.lookupSchema} on:change={(e) => patchSetting('lookupSchema', selectValue(e))}>
                   <option value="">Выбери схему</option>
                   {#each Array.from(new Set(sourceTableOptions().map((item) => item.schema_name))) as schemaName}
@@ -888,7 +1116,7 @@
                 </select>
               </label>
               <label>
-                Таблица lookup
+                Таблица
                 <select value={settings.lookupTable} on:change={(e) => patchSetting('lookupTable', selectValue(e))}>
                   <option value="">Выбери таблицу</option>
                   {#each sourceTableOptions().filter((item) => !settings.lookupSchema || item.schema_name === settings.lookupSchema) as item}
@@ -897,7 +1125,7 @@
                 </select>
               </label>
               <label>
-                Поля lookup
+                Поля для подтягивания
                 <input value={settings.lookupFields} on:input={(e) => patchSetting('lookupFields', inputValue(e))} placeholder="client_id, token" />
               </label>
             </div>
@@ -907,16 +1135,158 @@
                 <input value={settings.lookupSourceField} on:input={(e) => patchSetting('lookupSourceField', inputValue(e))} placeholder="client_id" />
               </label>
               <label>
-                Поле поиска в lookup
+                Поле поиска
                 <input value={settings.lookupTargetField} on:input={(e) => patchSetting('lookupTargetField', inputValue(e))} placeholder="client_id" />
               </label>
               <label>
-                Префикс полей
+                Префикс новых полей
                 <input value={settings.lookupPrefix} on:input={(e) => patchSetting('lookupPrefix', inputValue(e))} placeholder="lookup_" />
               </label>
             </div>
           {:else}
-            <div class="inline-hint">Lookup нужен, если parser должен обогатить строки из существующей таблицы перед передачей дальше по workflow.</div>
+            <div class="inline-hint">Этот блок нужен, когда нужно подтянуть дополнительные поля из существующей таблицы и подготовить enriched rows для следующей ноды.</div>
+          {/if}
+        </div>
+
+        <div class="subsection">
+          <div class="subsection-head">
+            <h4>Фильтры</h4>
+            <button type="button" class="mini-btn" on:click={addFilterRule}>Фильтр +</button>
+          </div>
+          {#if filterRules.length}
+            <div class="rules-grid rules-grid-filters">
+              <div class="rules-grid-head">Поле</div>
+              <div class="rules-grid-head">Оператор</div>
+              <div class="rules-grid-head">Значение</div>
+              <div class="rules-grid-head">Второе значение</div>
+              <div class="rules-grid-head"></div>
+              {#each filterRules as rule, index}
+                <input value={rule.field || ''} on:input={(e) => updateFilterRule(index, { field: inputValue(e) })} placeholder="status" />
+                <select value={rule.operator || '='} on:change={(e) => updateFilterRule(index, { operator: selectValue(e) })}>
+                  <option value="=">Равно</option>
+                  <option value="!=">Не равно</option>
+                  <option value=">">Больше</option>
+                  <option value=">=">Больше или равно</option>
+                  <option value="<">Меньше</option>
+                  <option value="<=">Меньше или равно</option>
+                  <option value="contains">Содержит</option>
+                  <option value="not_contains">Не содержит</option>
+                  <option value="empty">Пусто</option>
+                  <option value="not_empty">Не пусто</option>
+                  <option value="between">Между</option>
+                  <option value="in_list">В списке</option>
+                </select>
+                <input value={rule.value || ''} on:input={(e) => updateFilterRule(index, { value: inputValue(e) })} placeholder="active" />
+                <input value={rule.secondValue || ''} on:input={(e) => updateFilterRule(index, { secondValue: inputValue(e) })} placeholder="для между" />
+                <button type="button" class="icon-btn danger-icon-btn" on:click={() => removeFilterRule(index)}>x</button>
+              {/each}
+            </div>
+          {:else}
+            <div class="inline-hint">Фильтры применяются после вычисляемых полей и могут работать как по исходным, так и по новым колонкам.</div>
+          {/if}
+        </div>
+
+        <div class="subsection">
+          <div class="subsection-head">
+            <h4>Вычисляемые поля</h4>
+            <button type="button" class="mini-btn" on:click={addComputedField}>Поле +</button>
+          </div>
+          <div class="inline-hint">Используй поля в формулах как {"{поле}"}. Поддержаны функции: если, и, или, не, пусто, сегодня, сейчас, год, месяц, день, дата, дата_разница, длина, подстрока, верхний_регистр, нижний_регистр, заменить.</div>
+          {#if computedFields.length}
+            <div class="rules-grid rules-grid-computed">
+              <div class="rules-grid-head">Новое поле</div>
+              <div class="rules-grid-head">Формула</div>
+              <div class="rules-grid-head">Тип</div>
+              <div class="rules-grid-head"></div>
+              {#each computedFields as rule, index}
+                <input value={rule.name || ''} on:input={(e) => updateComputedField(index, { name: inputValue(e) })} placeholder="discount_value" />
+                <input value={rule.expression || ''} on:input={(e) => updateComputedField(index, { expression: inputValue(e) })} placeholder={COMPUTED_EXPRESSION_PLACEHOLDER} />
+                <select value={rule.type || ''} on:change={(e) => updateComputedField(index, { type: selectValue(e) })}>
+                  <option value="">Без приведения</option>
+                  <option value="text">Текст</option>
+                  <option value="integer">Целое число</option>
+                  <option value="numeric">Число</option>
+                  <option value="boolean">Логический</option>
+                  <option value="timestamp">Дата и время</option>
+                </select>
+                <button type="button" class="icon-btn danger-icon-btn" on:click={() => removeComputedField(index)}>x</button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+
+        <div class="subsection">
+          <div class="subsection-head">
+            <h4>Удаление дублей</h4>
+          </div>
+          <div class="form-grid form-grid-4">
+            <label>
+              Включить
+              <select value={settings.dedupeEnabled} on:change={(e) => patchSetting('dedupeEnabled', selectValue(e))}>
+                <option value="false">Нет</option>
+                <option value="true">Да</option>
+              </select>
+            </label>
+            <label>
+              Режим
+              <select value={settings.dedupeMode} on:change={(e) => patchSetting('dedupeMode', selectValue(e))}>
+                <option value="full_row">Полные дубликаты</option>
+                <option value="by_fields">По выбранным полям</option>
+              </select>
+            </label>
+            <label>
+              По каким полям
+              <input value={settings.dedupeFields} on:input={(e) => patchSetting('dedupeFields', inputValue(e))} placeholder="sku, nm_id" />
+            </label>
+            <label>
+              Какую запись оставить
+              <select value={settings.dedupeKeep} on:change={(e) => patchSetting('dedupeKeep', selectValue(e))}>
+                <option value="first">Первую</option>
+                <option value="last">Последнюю</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <div class="subsection">
+          <div class="subsection-head">
+            <h4>Группировки и агрегаты</h4>
+            <button type="button" class="mini-btn" on:click={addAggregateRule}>Агрегат +</button>
+          </div>
+          <div class="form-grid form-grid-2">
+            <label>
+              Включить группировку
+              <select value={settings.groupEnabled} on:change={(e) => patchSetting('groupEnabled', selectValue(e))}>
+                <option value="false">Нет</option>
+                <option value="true">Да</option>
+              </select>
+            </label>
+            <label>
+              Поля группировки
+              <input value={settings.groupByFields} on:input={(e) => patchSetting('groupByFields', inputValue(e))} placeholder="date, campaign_id" />
+            </label>
+          </div>
+          {#if aggregateRules.length}
+            <div class="rules-grid rules-grid-aggregates">
+              <div class="rules-grid-head">Поле</div>
+              <div class="rules-grid-head">Агрегат</div>
+              <div class="rules-grid-head">Имя результата</div>
+              <div class="rules-grid-head"></div>
+              {#each aggregateRules as rule, index}
+                <input value={rule.field || ''} on:input={(e) => updateAggregateRule(index, { field: inputValue(e) })} placeholder="amount" />
+                <select value={rule.op || 'count'} on:change={(e) => updateAggregateRule(index, { op: selectValue(e) })}>
+                  <option value="count">Количество</option>
+                  <option value="sum">Сумма</option>
+                  <option value="min">Минимум</option>
+                  <option value="max">Максимум</option>
+                  <option value="avg">Среднее</option>
+                </select>
+                <input value={rule.as || ''} on:input={(e) => updateAggregateRule(index, { as: inputValue(e) })} placeholder="total_amount" />
+                <button type="button" class="icon-btn danger-icon-btn" on:click={() => removeAggregateRule(index)}>x</button>
+              {/each}
+            </div>
+          {:else}
+            <div class="inline-hint">Сначала укажи поля группировки, затем добавь нужные агрегаты: сумма, количество, минимум, максимум или среднее.</div>
           {/if}
         </div>
 
@@ -934,11 +1304,11 @@
               <input type="number" min="65536" value={settings.maxJsonBytes} on:input={(e) => patchSetting('maxJsonBytes', inputValue(e))} />
             </label>
             <label>
-              Множитель парсинга
-              <input type="number" min="1" value={settings.parserMultiplier} on:input={(e) => patchSetting('parserMultiplier', inputValue(e))} />
+              Размер пакета runtime
+              <input type="number" min="1" max="5000" value={settings.batchSize} on:input={(e) => patchSetting('batchSize', inputValue(e))} />
             </label>
           </div>
-          <div class="inline-hint">В runtime одна и та же нода обрабатывает пакеты по очереди. Пользователь не рисует отдельные ноды под чанки и не обязан знать их количество заранее.</div>
+          <div class="inline-hint">Одна нода «Работа с данными» обрабатывает пакеты по очереди. Пользователь не рисует отдельные ноды под чанки. Preview ограничен, а основной runtime остаётся пакетным.</div>
         </div>
 
         <div class="subsection">
@@ -959,6 +1329,13 @@
             <span>Есть ещё данные: {previewData?.batch?.has_more ? 'да' : 'нет'}</span>
             <span>Обновлено: {previewUpdatedAt ? new Date(previewUpdatedAt).toLocaleString('ru-RU') : '-'}</span>
           </div>
+          {#if parserAppliedSteps.length}
+            <div class="applied-steps">
+              {#each parserAppliedSteps as step}
+                <span>{step}</span>
+              {/each}
+            </div>
+          {/if}
           {#if previewData?.columns?.length}
             <div class="preview-columns">
               {#each previewData.columns as column}
@@ -1261,6 +1638,9 @@
   .form-grid-3 {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+  .form-grid-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
   label {
     display: flex;
     flex-direction: column;
@@ -1313,10 +1693,38 @@
     justify-content: space-between;
     gap: 10px;
   }
+  .subsection-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
   .subsection-head h4 {
     margin: 0;
     font-size: 14px;
     color: #0f172a;
+  }
+  .warnings-box,
+  .applied-steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .warning-line,
+  .applied-steps span {
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    line-height: 1.3;
+  }
+  .warning-line {
+    background: #fff7ed;
+    border: 1px solid #fed7aa;
+    color: #9a3412;
+  }
+  .applied-steps span {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    color: #334155;
   }
   .switch-line {
     flex-direction: row;
@@ -1324,10 +1732,42 @@
     gap: 8px;
     font-size: 12px;
   }
-  .field-inline {
-    display: grid;
-    grid-template-columns: minmax(120px, 0.7fr) minmax(0, 1fr);
+  .field-picker {
+    display: flex;
     gap: 8px;
+    align-items: center;
+  }
+  .rules-grid {
+    display: grid;
+    gap: 8px;
+    align-items: center;
+  }
+  .rules-grid-filters {
+    grid-template-columns: minmax(0, 1fr) minmax(170px, 0.9fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+  }
+  .rules-grid-computed {
+    grid-template-columns: minmax(170px, 0.8fr) minmax(0, 1.5fr) minmax(150px, 0.6fr) auto;
+  }
+  .rules-grid-aggregates {
+    grid-template-columns: minmax(0, 1fr) minmax(170px, 0.8fr) minmax(0, 1fr) auto;
+  }
+  .rules-grid:not(.rules-grid-filters):not(.rules-grid-computed):not(.rules-grid-aggregates) {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(170px, 0.6fr) minmax(0, 1fr) auto;
+  }
+  .rules-grid-head {
+    font-size: 11px;
+    color: #64748b;
+    font-weight: 600;
+  }
+  .danger-icon-btn {
+    color: #b91c1c;
+    border-color: #fecaca;
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
   .current-template-box,
   .selected-source-box,
@@ -1424,8 +1864,15 @@
     .parser-layout {
       grid-template-columns: minmax(260px, 0.9fr) minmax(420px, 1.25fr) minmax(280px, 0.95fr);
     }
-    .form-grid-3 {
+    .form-grid-3,
+    .form-grid-4 {
       grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .rules-grid,
+    .rules-grid-filters,
+    .rules-grid-computed,
+    .rules-grid-aggregates {
+      grid-template-columns: 1fr;
     }
   }
   @media (max-width: 1120px) {
@@ -1434,7 +1881,13 @@
     }
     .form-grid-2,
     .form-grid-3,
-    .field-inline {
+    .form-grid-4 {
+      grid-template-columns: 1fr;
+    }
+    .rules-grid,
+    .rules-grid-filters,
+    .rules-grid-computed,
+    .rules-grid-aggregates {
       grid-template-columns: 1fr;
     }
   }

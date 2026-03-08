@@ -242,3 +242,132 @@ test('parser runtime: ZIP -> CSV parses selected entry without loading whole arc
     await fs.rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test('parser runtime: auto-unwrapper extracts business payload from runtime wrapper and JSON string', async () => {
+  const wrapped = {
+    total_requests: 1,
+    success: 1,
+    failed: 0,
+    payloads_only: [
+      {
+        __truncated: true,
+        preview: JSON.stringify({
+          list: [
+            { id: '101', title: 'Alpha', state: 'active' },
+            { id: '102', title: 'Beta', state: 'paused' }
+          ],
+          total: '2'
+        })
+      }
+    ]
+  };
+
+  const result = await executeParserRows(
+    { query: async () => ({ rows: [] }) },
+    {
+      sourceMode: 'input',
+      sourceFormat: 'auto',
+      recordPath: 'list',
+      batchSize: '50'
+    },
+    {
+      inputValue: wrapped
+    }
+  );
+
+  assert.equal(result.rows.length, 2);
+  assert.deepEqual(result.rows[0], { id: '101', title: 'Alpha', state: 'active' });
+  assert.ok(['runtime_wrapper_payloads', 'truncated_preview_json'].includes(result.stats.payload_origin));
+  assert.equal(result.stats.working_set_path, 'list');
+});
+
+test('parser runtime: computed fields and filters transform working rows', async () => {
+  const result = await executeParserRows(
+    { query: async () => ({ rows: [] }) },
+    {
+      sourceMode: 'input',
+      sourceFormat: 'json',
+      recordPath: 'items',
+      computedFields: [
+        { name: 'discount_price', expression: 'если({price} > 100, {price} * 0.9, {price})', type: 'numeric' },
+        { name: 'title_upper', expression: 'верхний_регистр({title})', type: 'text' },
+        { name: 'sku_len', expression: 'длина({sku})', type: 'integer' }
+      ],
+      filterRules: [
+        { field: 'price', operator: 'between', value: '100', secondValue: '250' },
+        { field: 'state', operator: 'in_list', value: 'active,pending' }
+      ]
+    },
+    {
+      inputValue: {
+        items: [
+          { sku: 'ab1', title: 'Alpha', price: 120, state: 'active' },
+          { sku: 'ab2', title: 'Beta', price: 99, state: 'active' },
+          { sku: 'ab3', title: 'Gamma', price: 210, state: 'pending' },
+          { sku: 'ab4', title: 'Delta', price: 260, state: 'active' }
+        ]
+      }
+    }
+  );
+
+  assert.equal(result.rows.length, 2);
+  assert.deepEqual(result.rows[0], {
+    sku: 'ab1',
+    title: 'Alpha',
+    price: 120,
+    state: 'active',
+    discount_price: 108,
+    title_upper: 'ALPHA',
+    sku_len: 3
+  });
+  assert.deepEqual(result.rows[1], {
+    sku: 'ab3',
+    title: 'Gamma',
+    price: 210,
+    state: 'pending',
+    discount_price: 189,
+    title_upper: 'GAMMA',
+    sku_len: 3
+  });
+  assert.match(result.stats.applied_steps.join(' | '), /Вычисляемые поля/);
+  assert.match(result.stats.applied_steps.join(' | '), /Фильтры/);
+});
+
+test('parser runtime: dedupe and grouping aggregate rows without DB-bound flow', async () => {
+  const result = await executeParserRows(
+    { query: async () => ({ rows: [] }) },
+    {
+      sourceMode: 'input',
+      sourceFormat: 'json',
+      recordPath: 'items',
+      dedupeEnabled: true,
+      dedupeMode: 'by_fields',
+      dedupeFields: 'sku',
+      dedupeKeep: 'first',
+      groupEnabled: true,
+      groupByFields: 'brand',
+      aggregateRules: [
+        { field: 'qty', op: 'sum', as: 'total_qty' },
+        { field: 'sku', op: 'count', as: 'sku_count' },
+        { field: 'price', op: 'max', as: 'max_price' }
+      ]
+    },
+    {
+      inputValue: {
+        items: [
+          { sku: 'a1', brand: 'A', qty: 2, price: 10 },
+          { sku: 'a1', brand: 'A', qty: 2, price: 10 },
+          { sku: 'a2', brand: 'A', qty: 3, price: 12 },
+          { sku: 'b1', brand: 'B', qty: 4, price: 20 }
+        ]
+      }
+    }
+  );
+
+  assert.deepEqual(result.rows, [
+    { brand: 'A', total_qty: 5, sku_count: 2, max_price: 12 },
+    { brand: 'B', total_qty: 4, sku_count: 1, max_price: 20 }
+  ]);
+  assert.match(result.stats.applied_steps.join(' | '), /Удаление дублей/);
+  assert.match(result.stats.applied_steps.join(' | '), /Группировка по полям/);
+});

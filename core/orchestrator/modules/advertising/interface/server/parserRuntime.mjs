@@ -95,6 +95,34 @@ function boolFromAny(value, fallback = false) {
   return Boolean(fallback);
 }
 
+function tryParseJsonString(value) {
+  if (typeof value !== 'string') return { ok: false, value };
+  const text = String(value || '').trim();
+  if (!text) return { ok: false, value };
+  try {
+    return { ok: true, value: JSON.parse(text) };
+  } catch {
+    return { ok: false, value };
+  }
+}
+
+function looksLikeHtml(value) {
+  const text = String(value || '').trim().toLowerCase();
+  if (!text) return false;
+  return (
+    text.startsWith('<!doctype html') ||
+    text.startsWith('<html') ||
+    text.startsWith('<head') ||
+    text.startsWith('<body') ||
+    text.startsWith('<div') ||
+    text.startsWith('<script')
+  );
+}
+
+function cloneJson(value) {
+  return value === undefined ? value : JSON.parse(JSON.stringify(value));
+}
+
 function normalizeParserFormat(value) {
   const raw = String(value || '').trim().toLowerCase();
   if (!raw) return 'auto';
@@ -139,6 +167,7 @@ function inferFormat(value, explicitFormat = 'auto', hint = '') {
   if (hintFormat !== 'auto') return hintFormat;
   if (typeof value === 'string') {
     const txt = value.trim();
+    if (looksLikeHtml(txt)) return 'text';
     if (txt.startsWith('{') || txt.startsWith('[')) return 'json';
     if (txt.includes('\n') && txt.split('\n').every((line) => !line.trim() || line.trim().startsWith('{'))) return 'ndjson';
     if (txt.includes(',') && txt.includes('\n')) return 'csv';
@@ -148,8 +177,124 @@ function inferFormat(value, explicitFormat = 'auto', hint = '') {
   return 'text';
 }
 
+function extractFromResponseIterable(list, mode = 'first') {
+  const items = Array.isArray(list) ? list : [];
+  const extracted = [];
+  const warnings = [];
+  for (const item of items) {
+    const nested =
+      item && typeof item === 'object' && !Array.isArray(item) && Object.prototype.hasOwnProperty.call(item, 'response')
+        ? item.response
+        : item;
+    const payload = unwrapBusinessPayload(nested);
+    if (payload.value !== undefined) {
+      extracted.push(payload.value);
+      warnings.push(...payload.warnings);
+      if (mode === 'first') break;
+    } else if (payload.warnings.length) {
+      warnings.push(...payload.warnings);
+    }
+  }
+  if (!extracted.length) return { value: undefined, warnings };
+  if (extracted.length === 1) return { value: extracted[0], warnings };
+  if (extracted.every((item) => Array.isArray(item))) {
+    return { value: extracted.flat(), warnings, mergedParts: extracted.length };
+  }
+  return { value: extracted, warnings, mergedParts: extracted.length };
+}
+
+function unwrapBusinessPayload(value) {
+  if (value === undefined) return { value: undefined, origin: 'missing', warnings: [] };
+  if (typeof value === 'string') {
+    const text = String(value || '').trim();
+    if (!text) return { value: '', origin: 'empty_text', warnings: [] };
+    if (looksLikeHtml(text)) {
+      return {
+        value: text,
+        origin: 'html_text',
+        warnings: ['Получен HTML вместо JSON. Авторазбор переключён в текстовый режим.']
+      };
+    }
+    const parsed = tryParseJsonString(text);
+    if (parsed.ok) {
+      const nested = unwrapBusinessPayload(parsed.value);
+      return {
+        value: nested.value,
+        origin: nested.origin === 'direct' ? 'json_string' : nested.origin,
+        warnings: nested.warnings
+      };
+    }
+    return { value: value, origin: 'plain_text', warnings: [] };
+  }
+  if (Array.isArray(value)) return { value, origin: 'direct', warnings: [] };
+  if (!value || typeof value !== 'object') return { value, origin: 'scalar', warnings: [] };
+
+  if (value.__truncated && typeof value.preview === 'string') {
+    const parsedPreview = tryParseJsonString(value.preview);
+    if (parsedPreview.ok) {
+      const nested = unwrapBusinessPayload(parsedPreview.value);
+      return {
+        value: nested.value,
+        origin: 'truncated_preview_json',
+        warnings: ['Для preview использован JSON, восстановленный из строкового preview.']
+      };
+    }
+    return {
+      value: undefined,
+      origin: 'truncated_preview_invalid',
+      warnings: ['Полный payload недоступен: preview обрезан и не содержит валидный JSON.']
+    };
+  }
+
+  if (Array.isArray(value.payloads_only)) {
+    const extracted = extractFromResponseIterable(value.payloads_only, 'all');
+    if (extracted.value !== undefined) {
+      return {
+        value: extracted.value,
+        origin: 'runtime_wrapper_payloads',
+        warnings: extracted.warnings
+      };
+    }
+  }
+
+  if (Array.isArray(value.responses)) {
+    const extracted = extractFromResponseIterable(value.responses, 'all');
+    if (extracted.value !== undefined) {
+      return {
+        value: extracted.value,
+        origin: 'runtime_wrapper_responses',
+        warnings: extracted.warnings
+      };
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(value, 'response')) {
+    const nested = unwrapBusinessPayload(value.response);
+    return {
+      value: nested.value,
+      origin: nested.origin === 'direct' ? 'response_field' : nested.origin,
+      warnings: nested.warnings
+    };
+  }
+
+  return { value, origin: 'direct', warnings: [] };
+}
+
 function normalizeParserSettings(raw = {}, overrides = {}) {
   const settings = raw && typeof raw === 'object' ? raw : {};
+  const filterRules = parseJsonArraySafe(overrides.filterRules ?? settings.filterRules ?? settings.filter_rules, []);
+  const computedFields = parseJsonArraySafe(overrides.computedFields ?? settings.computedFields ?? settings.computed_fields, []);
+  const aggregateRules = parseJsonArraySafe(overrides.aggregateRules ?? settings.aggregateRules ?? settings.aggregate_rules, []);
+  const dedupeEnabled = boolFromAny(overrides.dedupeEnabled ?? settings.dedupeEnabled ?? settings.dedupe_enabled, false);
+  const groupEnabled = boolFromAny(overrides.groupEnabled ?? settings.groupEnabled ?? settings.group_enabled, false);
+  const legacyFilterField = String((overrides.filterField ?? settings.filterField ?? settings.filter_field) || '').trim();
+  const legacyFilterOperator = String((overrides.filterOperator ?? settings.filterOperator ?? settings.filter_operator) || '').trim();
+  const legacyFilterValue = overrides.filterValue ?? settings.filterValue ?? settings.filter_value ?? '';
+  const normalizedFilterRules = filterRules.length
+    ? filterRules
+    : legacyFilterField || legacyFilterOperator
+    ? [{ field: legacyFilterField, operator: legacyFilterOperator, value: legacyFilterValue }]
+    : [];
   return {
     sourceMode: normalizeSourceMode(overrides.sourceMode ?? settings.sourceMode ?? settings.source_mode),
     sourceFormat: normalizeParserFormat(overrides.sourceFormat ?? settings.sourceFormat ?? settings.source_format),
@@ -171,9 +316,25 @@ function normalizeParserSettings(raw = {}, overrides = {}) {
     renameMap: parseJsonObjectSafe(overrides.renameMap ?? settings.renameMap ?? settings.rename_map, {}),
     defaultValues: parseJsonObjectSafe(overrides.defaultValues ?? settings.defaultValues ?? settings.default_values, {}),
     typeMap: parseJsonObjectSafe(overrides.typeMap ?? settings.typeMap ?? settings.type_map, {}),
-    filterField: String((overrides.filterField ?? settings.filterField ?? settings.filter_field) || '').trim(),
-    filterOperator: String((overrides.filterOperator ?? settings.filterOperator ?? settings.filter_operator) || '').trim(),
-    filterValue: overrides.filterValue ?? settings.filterValue ?? settings.filter_value ?? '',
+    filterField: legacyFilterField,
+    filterOperator: legacyFilterOperator,
+    filterValue: legacyFilterValue,
+    filterRules: normalizedFilterRules
+      .map((rule) => ({
+        field: String(rule?.field || '').trim(),
+        operator: String(rule?.operator || '').trim(),
+        value: rule?.value ?? '',
+        secondValue: rule?.secondValue ?? rule?.second_value ?? '',
+        caseSensitive: boolFromAny(rule?.caseSensitive ?? rule?.case_sensitive, false)
+      }))
+      .filter((rule) => rule.field || rule.operator),
+    computedFields: computedFields
+      .map((rule) => ({
+        name: String(rule?.name || '').trim(),
+        expression: String(rule?.expression || '').trim(),
+        type: String(rule?.type || '').trim()
+      }))
+      .filter((rule) => rule.name && rule.expression),
     parserMultiplier: Math.max(1, Math.trunc(Number(overrides.parserMultiplier ?? settings.parserMultiplier ?? settings.parser_multiplier ?? 1))),
     sampleInput: overrides.sampleInput ?? settings.sampleInput ?? settings.sample_input ?? '',
     lookupEnabled: boolFromAny(overrides.lookupEnabled ?? settings.lookupEnabled ?? settings.lookup_enabled, false),
@@ -182,7 +343,24 @@ function normalizeParserSettings(raw = {}, overrides = {}) {
     lookupSourceField: String((overrides.lookupSourceField ?? settings.lookupSourceField ?? settings.lookup_source_field) || '').trim(),
     lookupTargetField: String((overrides.lookupTargetField ?? settings.lookupTargetField ?? settings.lookup_target_field) || '').trim(),
     lookupFields: parseCsvList(overrides.lookupFields ?? settings.lookupFields ?? settings.lookup_fields),
-    lookupPrefix: String((overrides.lookupPrefix ?? settings.lookupPrefix ?? settings.lookup_prefix) || '').trim()
+    lookupPrefix: String((overrides.lookupPrefix ?? settings.lookupPrefix ?? settings.lookup_prefix) || '').trim(),
+    lookupJoinMode: String((overrides.lookupJoinMode ?? settings.lookupJoinMode ?? settings.lookup_join_mode) || 'left_join').trim().toLowerCase() || 'left_join',
+    dedupeEnabled,
+    dedupeMode: String((overrides.dedupeMode ?? settings.dedupeMode ?? settings.dedupe_mode) || 'full_row').trim().toLowerCase() || 'full_row',
+    dedupeFields: parseCsvList(overrides.dedupeFields ?? settings.dedupeFields ?? settings.dedupe_fields),
+    dedupeKeep: String((overrides.dedupeKeep ?? settings.dedupeKeep ?? settings.dedupe_keep) || 'first').trim().toLowerCase() || 'first',
+    groupEnabled,
+    groupByFields: parseCsvList(overrides.groupByFields ?? settings.groupByFields ?? settings.group_by_fields),
+    aggregateRules: aggregateRules
+      .map((rule) => ({
+        field: String(rule?.field || '').trim(),
+        op: String(rule?.op || rule?.operator || '').trim().toLowerCase(),
+        as: String(rule?.as || rule?.alias || '').trim(),
+        conditionField: String(rule?.conditionField || rule?.condition_field || '').trim(),
+        conditionOperator: String(rule?.conditionOperator || rule?.condition_operator || '').trim(),
+        conditionValue: rule?.conditionValue ?? rule?.condition_value ?? ''
+      }))
+      .filter((rule) => rule.op && (rule.field || rule.op === 'count'))
   };
 }
 
@@ -198,6 +376,17 @@ function candidateByInputPath(inputValue, inputEnvelope, inputPath) {
 
 function extractRecordsFromJsonValue(value, recordPath = '') {
   const source = value;
+  if (Array.isArray(source) && recordPath) {
+    const combined = [];
+    for (const item of source) {
+      const nested =
+        getByPath(item, recordPath) ??
+        getByPath({ row: item, response: item, value: item, input: item }, recordPath);
+      if (Array.isArray(nested)) combined.push(...nested);
+      else if (nested !== undefined) combined.push(nested);
+    }
+    if (combined.length) return combined;
+  }
   let extracted = source;
   if (recordPath) {
     extracted =
@@ -240,6 +429,111 @@ function convertFieldType(value, typeName) {
   return value;
 }
 
+function parseDateValue(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const dt = new Date(value);
+  return Number.isFinite(dt.getTime()) ? dt : null;
+}
+
+function buildExpressionFunctions() {
+  return {
+    _if: (cond, whenTrue, whenFalse) => (cond ? whenTrue : whenFalse),
+    _and: (...args) => args.every(Boolean),
+    _or: (...args) => args.some(Boolean),
+    _not: (value) => !value,
+    _empty: (value) => value === undefined || value === null || String(value) === '',
+    _today: () => new Date().toISOString().slice(0, 10),
+    _now: () => new Date().toISOString(),
+    _year: (value) => {
+      const dt = parseDateValue(value);
+      return dt ? dt.getUTCFullYear() : null;
+    },
+    _month: (value) => {
+      const dt = parseDateValue(value);
+      return dt ? dt.getUTCMonth() + 1 : null;
+    },
+    _day: (value) => {
+      const dt = parseDateValue(value);
+      return dt ? dt.getUTCDate() : null;
+    },
+    _date: (year, month, day) => {
+      const y = Number(year);
+      const m = Number(month);
+      const d = Number(day);
+      if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
+      return new Date(Date.UTC(Math.trunc(y), Math.max(0, Math.trunc(m) - 1), Math.trunc(d))).toISOString().slice(0, 10);
+    },
+    _dateDiff: (left, right, unit = 'day') => {
+      const a = parseDateValue(left);
+      const b = parseDateValue(right);
+      if (!a || !b) return null;
+      const diffMs = a.getTime() - b.getTime();
+      const normalizedUnit = String(unit || 'day').trim().toLowerCase();
+      if (normalizedUnit === 'hour') return Math.trunc(diffMs / 3600000);
+      if (normalizedUnit === 'minute') return Math.trunc(diffMs / 60000);
+      return Math.trunc(diffMs / 86400000);
+    },
+    _length: (value) => (value === undefined || value === null ? 0 : String(value).length),
+    _substring: (value, start, len) => {
+      const text = String(value ?? '');
+      const from = Math.max(0, Math.trunc(Number(start || 0)));
+      if (len === undefined || len === null || len === '') return text.slice(from);
+      const size = Math.max(0, Math.trunc(Number(len || 0)));
+      return text.slice(from, from + size);
+    },
+    _upper: (value) => String(value ?? '').toUpperCase(),
+    _lower: (value) => String(value ?? '').toLowerCase(),
+    _replace: (value, from, to) => String(value ?? '').split(String(from ?? '')).join(String(to ?? ''))
+  };
+}
+
+const COMPUTED_FN_REPLACEMENTS = [
+  [/если\s*\(/gi, 'fn._if('],
+  [/и\s*\(/gi, 'fn._and('],
+  [/или\s*\(/gi, 'fn._or('],
+  [/не\s*\(/gi, 'fn._not('],
+  [/пусто\s*\(/gi, 'fn._empty('],
+  [/сегодня\s*\(/gi, 'fn._today('],
+  [/сейчас\s*\(/gi, 'fn._now('],
+  [/год\s*\(/gi, 'fn._year('],
+  [/месяц\s*\(/gi, 'fn._month('],
+  [/день\s*\(/gi, 'fn._day('],
+  [/дата_разница\s*\(/gi, 'fn._dateDiff('],
+  [/дата\s*\(/gi, 'fn._date('],
+  [/длина\s*\(/gi, 'fn._length('],
+  [/подстрока\s*\(/gi, 'fn._substring('],
+  [/верхний_регистр\s*\(/gi, 'fn._upper('],
+  [/нижний_регистр\s*\(/gi, 'fn._lower('],
+  [/заменить\s*\(/gi, 'fn._replace(']
+];
+
+function sanitizeComputedExpression(expression) {
+  let jsExpr = String(expression || '').trim();
+  if (!jsExpr) return '';
+  jsExpr = jsExpr.replace(/\{([^{}]+)\}/g, (_m, fieldPath) => `field(${JSON.stringify(String(fieldPath || '').trim())})`);
+  for (const [pattern, replacement] of COMPUTED_FN_REPLACEMENTS) jsExpr = jsExpr.replace(pattern, replacement);
+  if (/[;\[\]`\\]/.test(jsExpr)) throw new Error('parser_expression_unsafe_chars');
+  if (/\b(?:globalThis|window|process|Function|constructor|require|import|eval|this|new)\b/.test(jsExpr)) {
+    throw new Error('parser_expression_unsafe_identifier');
+  }
+  if (!/^[\w\s"'.,()+\-*/%<>=!&|:?]+$/.test(jsExpr)) throw new Error('parser_expression_invalid_chars');
+  return jsExpr;
+}
+
+function evaluateComputedExpression(expression, row) {
+  const jsExpr = sanitizeComputedExpression(expression);
+  if (!jsExpr) return undefined;
+  const field = (path) => {
+    const key = String(path || '').trim();
+    if (!key) return undefined;
+    if (Object.prototype.hasOwnProperty.call(row, key)) return row[key];
+    return getByPath(row, key);
+  };
+  const fn = buildExpressionFunctions();
+  const evaluator = new Function('field', 'fn', `"use strict"; return (${jsExpr});`);
+  return evaluator(field, fn);
+}
+
 function applyFieldMapping(record, cfg) {
   const src = normalizeObjectRow(record);
   let out = {};
@@ -277,16 +571,24 @@ function compareByOperator(left, operator, right) {
   if (op === 'not_contains') return !String(left ?? '').includes(String(right ?? ''));
   if (op === 'empty') return left === undefined || left === null || String(left) === '';
   if (op === 'not_empty' || op === 'exists') return !(left === undefined || left === null || String(left) === '');
+  if (op === 'between') {
+    if (Array.isArray(right)) {
+      const [minValue, maxValue] = right;
+      return Number(left) >= Number(minValue) && Number(left) <= Number(maxValue);
+    }
+    return false;
+  }
+  if (op === 'in_list') {
+    const values = Array.isArray(right) ? right : parseCsvList(right);
+    return values.map((item) => String(item ?? '')).includes(String(left ?? ''));
+  }
   return String(left ?? '') === String(right ?? '');
 }
 
 function applyParserTransform(record, cfg) {
   const mapped = applyFieldMapping(record, cfg);
-  if (cfg.filterField || cfg.filterOperator) {
-    if (!compareByOperator(mapped?.[cfg.filterField], cfg.filterOperator, cfg.filterValue)) return null;
-  }
   if (cfg.parserMultiplier <= 1) return [mapped];
-  return Array.from({ length: cfg.parserMultiplier }).map(() => JSON.parse(JSON.stringify(mapped)));
+  return Array.from({ length: cfg.parserMultiplier }).map(() => cloneJson(mapped));
 }
 
 function columnsFromRows(rows) {
@@ -296,6 +598,100 @@ function columnsFromRows(rows) {
     for (const key of Object.keys(row)) cols.add(String(key));
   }
   return Array.from(cols);
+}
+
+function applyComputedFieldsToRows(rows, cfg, diagnostics) {
+  if (!Array.isArray(cfg.computedFields) || !cfg.computedFields.length) return rows;
+  return rows.map((row) => {
+    const next = { ...row };
+    for (const rule of cfg.computedFields) {
+      try {
+        const evaluated = evaluateComputedExpression(rule.expression, next);
+        next[rule.name] = rule.type ? convertFieldType(evaluated, rule.type) : evaluated;
+      } catch (e) {
+        diagnostics.warnings.push(`Не удалось вычислить поле "${rule.name}": ${String(e?.message || e)}`);
+        next[rule.name] = null;
+      }
+    }
+    return next;
+  });
+}
+
+function applyFilterRulesToRows(rows, cfg) {
+  const rules = Array.isArray(cfg.filterRules) ? cfg.filterRules : [];
+  if (!rules.length) return rows;
+  return rows.filter((row) =>
+    rules.every((rule) => {
+      const left = row?.[rule.field];
+      const right =
+        String(rule.operator || '').trim().toLowerCase() === 'between'
+          ? [rule.value, rule.secondValue]
+          : String(rule.operator || '').trim().toLowerCase() === 'in_list'
+          ? parseCsvList(rule.value)
+          : rule.value;
+      const value = rule.caseSensitive || typeof left !== 'string' ? left : String(left ?? '').toLowerCase();
+      const normalizedRight =
+        rule.caseSensitive || typeof right !== 'string'
+          ? right
+          : String(right ?? '').toLowerCase();
+      return compareByOperator(value, rule.operator, normalizedRight);
+    })
+  );
+}
+
+function applyDedupeToRows(rows, cfg) {
+  if (!cfg.dedupeEnabled) return rows;
+  const keepLast = String(cfg.dedupeKeep || '').trim().toLowerCase() === 'last';
+  const fields = cfg.dedupeMode === 'by_fields' ? cfg.dedupeFields.filter(Boolean) : [];
+  const source = keepLast ? [...rows].reverse() : rows;
+  const seen = new Set();
+  const out = [];
+  for (const row of source) {
+    const key = fields.length
+      ? JSON.stringify(fields.map((field) => row?.[field]))
+      : JSON.stringify(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return keepLast ? out.reverse() : out;
+}
+
+function aggregateValue(rows, rule) {
+  const op = String(rule?.op || '').trim().toLowerCase();
+  const field = String(rule?.field || '').trim();
+  const values = rows
+    .map((row) => row?.[field])
+    .filter((value) => value !== undefined && value !== null && value !== '');
+  if (op === 'count') return rows.length;
+  if (op === 'sum') return values.reduce((sum, value) => sum + Number(value || 0), 0);
+  if (op === 'min') return values.length ? values.reduce((acc, value) => (acc < value ? acc : value)) : null;
+  if (op === 'max') return values.length ? values.reduce((acc, value) => (acc > value ? acc : value)) : null;
+  if (op === 'avg' || op === 'average') return values.length ? values.reduce((sum, value) => sum + Number(value || 0), 0) / values.length : null;
+  return null;
+}
+
+function applyGroupByToRows(rows, cfg) {
+  if (!cfg.groupEnabled || !cfg.groupByFields.length || !cfg.aggregateRules.length) return rows;
+  const groups = new Map();
+  for (const row of rows) {
+    const key = JSON.stringify(cfg.groupByFields.map((field) => row?.[field]));
+    const bucket = groups.get(key) || [];
+    bucket.push(row);
+    groups.set(key, bucket);
+  }
+  const out = [];
+  for (const bucket of groups.values()) {
+    const first = bucket[0] || {};
+    const next = {};
+    for (const field of cfg.groupByFields) next[field] = first?.[field];
+    for (const rule of cfg.aggregateRules) {
+      const alias = String(rule.as || `${rule.op}_${rule.field || 'rows'}`).trim();
+      next[alias] = aggregateValue(bucket, rule);
+    }
+    out.push(next);
+  }
+  return out;
 }
 
 async function applyLookupToRows(client, cfg, rows) {
@@ -320,18 +716,33 @@ async function applyLookupToRows(client, cfg, rows) {
   const map = new Map();
   for (const row of Array.isArray(lookupRes.rows) ? lookupRes.rows : []) {
     const key = String(row?._lookup_key || '').trim();
-    if (key && !map.has(key)) map.set(key, row);
+    if (!key) continue;
+    const bucket = map.get(key) || [];
+    bucket.push(row);
+    map.set(key, bucket);
   }
-  return rows.map((row) => {
-    const hit = map.get(String(row?.[cfg.lookupSourceField] ?? '').trim());
-    if (!hit) return row;
-    const next = { ...row };
-    for (const col of lookupCols) {
-      const target = prefix ? `${prefix}${col}` : col;
-      next[target] = hit[col];
+  const joinMode = String(cfg.lookupJoinMode || 'left_join').trim().toLowerCase();
+  const keepUnmatched = joinMode === 'left_join' || joinMode === 'all_matches';
+  const useAllMatches = joinMode === 'only_matches' || joinMode === 'all_matches';
+  const out = [];
+  for (const row of rows) {
+    const key = String(row?.[cfg.lookupSourceField] ?? '').trim();
+    const hits = map.get(key) || [];
+    if (!hits.length) {
+      if (keepUnmatched) out.push(row);
+      continue;
     }
-    return next;
-  });
+    const selectedHits = useAllMatches ? hits : [hits[0]];
+    for (const hit of selectedHits) {
+      const next = { ...row };
+      for (const col of lookupCols) {
+        const target = prefix ? `${prefix}${col}` : col;
+        next[target] = hit[col];
+      }
+      out.push(next);
+    }
+  }
+  return out;
 }
 
 function toNodeReadable(stream) {
@@ -525,10 +936,18 @@ async function collectFromStreamByFormat(stream, cfg, offset, take) {
 }
 
 async function collectInputRecords(candidate, cfg, offset, take) {
-  const format = inferFormat(candidate, cfg.sourceFormat);
-  if (typeof candidate === 'string') {
+  const unwrapped = unwrapBusinessPayload(candidate);
+  const workingValue = unwrapped.value !== undefined ? unwrapped.value : candidate;
+  const format = inferFormat(workingValue, cfg.sourceFormat);
+  const analysis = {
+    payload_origin: unwrapped.origin,
+    detected_format: format,
+    warnings: Array.isArray(unwrapped.warnings) ? [...unwrapped.warnings] : [],
+    input_kind: Array.isArray(workingValue) ? 'array' : typeof workingValue
+  };
+  if (typeof workingValue === 'string') {
     if (format === 'csv') {
-      const rows = csvParseSync(candidate, {
+      const rows = csvParseSync(workingValue, {
         columns: true,
         skip_empty_lines: true,
         relax_column_count: true,
@@ -536,10 +955,10 @@ async function collectInputRecords(candidate, cfg, offset, take) {
         delimiter: cfg.csvDelimiter || ','
       });
       const slice = rows.slice(offset, offset + take + 1);
-      return { rows: slice.slice(0, take), scanned: rows.length, hasMore: slice.length > take };
+      return { rows: slice.slice(0, take), scanned: rows.length, hasMore: slice.length > take, analysis };
     }
     if (format === 'ndjson') {
-      const lines = String(candidate || '')
+      const lines = String(workingValue || '')
         .split(/\r?\n/)
         .map((x) => x.trim())
         .filter(Boolean)
@@ -551,27 +970,28 @@ async function collectInputRecords(candidate, cfg, offset, take) {
           }
         });
       const slice = lines.slice(offset, offset + take + 1);
-      return { rows: slice.slice(0, take), scanned: lines.length, hasMore: slice.length > take };
+      return { rows: slice.slice(0, take), scanned: lines.length, hasMore: slice.length > take, analysis };
     }
     if (format === 'text') {
+      if (looksLikeHtml(workingValue)) analysis.detected_content_kind = 'html';
       if (cfg.textMode === 'whole') {
-        if (offset > 0) return { rows: [], scanned: 1, hasMore: false };
-        return { rows: take > 0 ? [{ text: candidate }] : [], scanned: 1, hasMore: false };
+        if (offset > 0) return { rows: [], scanned: 1, hasMore: false, analysis };
+        return { rows: take > 0 ? [{ text: workingValue }] : [], scanned: 1, hasMore: false, analysis };
       }
-      const lines = String(candidate || '').split(/\r?\n/).map((line, idx) => ({ text: line, line_no: idx + 1 }));
+      const lines = String(workingValue || '').split(/\r?\n/).map((line, idx) => ({ text: line, line_no: idx + 1 }));
       const slice = lines.slice(offset, offset + take + 1);
-      return { rows: slice.slice(0, take), scanned: lines.length, hasMore: slice.length > take };
+      return { rows: slice.slice(0, take), scanned: lines.length, hasMore: slice.length > take, analysis };
     }
     if (format === 'json') {
-      const parsed = JSON.parse(candidate);
+      const parsed = JSON.parse(workingValue);
       const records = extractRecordsFromJsonValue(parsed, cfg.recordPath);
       const slice = records.slice(offset, offset + take + 1);
-      return { rows: slice.slice(0, take), scanned: records.length, hasMore: slice.length > take };
+      return { rows: slice.slice(0, take), scanned: records.length, hasMore: slice.length > take, analysis };
     }
   }
-  const records = extractRecordsFromJsonValue(candidate, cfg.recordPath);
+  const records = extractRecordsFromJsonValue(workingValue, cfg.recordPath);
   const slice = records.slice(offset, offset + take + 1);
-  return { rows: slice.slice(0, take), scanned: records.length, hasMore: slice.length > take };
+  return { rows: slice.slice(0, take), scanned: records.length, hasMore: slice.length > take, analysis };
 }
 
 async function collectTableRecords(client, cfg, offset, take) {
@@ -622,7 +1042,17 @@ async function collectFileRecords(cfg, sourceUrl, offset, take) {
       ? detectFormatFromContentType(contentType)
       : detectFormatFromUrl(sourceUrl)
     : cfg.sourceFormat;
-  return collectFromStreamByFormat(nodeStream, { ...cfg, sourceFormat: resolvedFormat }, offset, take);
+  const collected = await collectFromStreamByFormat(nodeStream, { ...cfg, sourceFormat: resolvedFormat }, offset, take);
+  return {
+    ...collected,
+    analysis: {
+      payload_origin: 'file_url',
+      detected_format: resolvedFormat,
+      warnings: [],
+      input_kind: 'stream',
+      content_type: contentType || ''
+    }
+  };
 }
 
 async function collectRawRecords(client, cfg, options = {}) {
@@ -638,7 +1068,13 @@ async function collectRawRecords(client, cfg, options = {}) {
       rows: tableRows.rows,
       scanned: tableRows.scanned,
       hasMore: tableRows.hasMore,
-      format: cfg.sourceColumn ? inferFormat(null, cfg.sourceFormat, cfg.sourceColumn) : 'row'
+      format: cfg.sourceColumn ? inferFormat(null, cfg.sourceFormat, cfg.sourceColumn) : 'row',
+      analysis: {
+        payload_origin: 'table',
+        detected_format: cfg.sourceColumn ? inferFormat(null, cfg.sourceFormat, cfg.sourceColumn) : 'row',
+        warnings: [],
+        input_kind: cfg.sourceColumn ? 'table_column' : 'table_row'
+      }
     };
   }
   if (cfg.sourceMode === 'file_url') {
@@ -651,7 +1087,8 @@ async function collectRawRecords(client, cfg, options = {}) {
       rows: fileRows.rows,
       scanned: fileRows.scanned,
       hasMore: fileRows.hasMore,
-      format: inferFormat(null, cfg.sourceFormat, sourceUrl)
+      format: inferFormat(null, cfg.sourceFormat, sourceUrl),
+      analysis: fileRows.analysis || {}
     };
   }
   const candidate = candidateByInputPath(inputValue, inputEnvelope, cfg.inputPath);
@@ -662,7 +1099,8 @@ async function collectRawRecords(client, cfg, options = {}) {
     rows: inputRows.rows,
     scanned: inputRows.scanned,
     hasMore: inputRows.hasMore,
-    format: inferFormat(candidate, cfg.sourceFormat)
+    format: inferFormat(candidate, cfg.sourceFormat),
+    analysis: inputRows.analysis || {}
   };
 }
 
@@ -676,16 +1114,30 @@ export async function executeParserRows(client, rawSettings = {}, options = {}) 
     limit
   });
 
+  const diagnostics = {
+    warnings: [...(Array.isArray(raw?.analysis?.warnings) ? raw.analysis.warnings : [])],
+    steps: []
+  };
   let rows = [];
   for (const record of raw.rows) {
     const transformed = applyParserTransform(record, cfg);
     if (!transformed) continue;
     rows.push(...transformed);
   }
+  diagnostics.steps.push(`Базовое сопоставление полей: ${rows.length} строк`);
   if (rows.length > limit + 1) rows = rows.slice(0, limit + 1);
   const transformedHasMore = rows.length > limit;
   if (transformedHasMore) rows = rows.slice(0, limit);
   rows = await applyLookupToRows(client, cfg, rows);
+  if (cfg.lookupEnabled) diagnostics.steps.push(`Обогащение из таблицы: ${rows.length} строк после присоединения`);
+  rows = applyComputedFieldsToRows(rows, cfg, diagnostics);
+  if (cfg.computedFields.length) diagnostics.steps.push(`Вычисляемые поля: ${cfg.computedFields.length}`);
+  rows = applyFilterRulesToRows(rows, cfg);
+  if (cfg.filterRules.length) diagnostics.steps.push(`Фильтры: ${cfg.filterRules.length}`);
+  rows = applyDedupeToRows(rows, cfg);
+  if (cfg.dedupeEnabled) diagnostics.steps.push(`Удаление дублей: ${cfg.dedupeMode}`);
+  rows = applyGroupByToRows(rows, cfg);
+  if (cfg.groupEnabled && cfg.groupByFields.length) diagnostics.steps.push(`Группировка по полям: ${cfg.groupByFields.join(', ')}`);
 
   const offset = Math.max(0, Math.trunc(Number(options?.cursor?.offset || 0)));
   const hasMore = Boolean(raw.hasMore || transformedHasMore);
@@ -708,7 +1160,15 @@ export async function executeParserRows(client, rawSettings = {}, options = {}) 
     },
     stats: {
       scanned_records: raw.scanned,
-      parsed_rows: rows.length
+      parsed_rows: rows.length,
+      detected_format: raw?.analysis?.detected_format || raw.format,
+      payload_origin: raw?.analysis?.payload_origin || raw.source_type,
+      input_kind: raw?.analysis?.input_kind || raw.source_type,
+      content_type: raw?.analysis?.content_type || '',
+      working_set_path: cfg.recordPath || '(корень)',
+      source_path: cfg.inputPath || '(вход целиком)',
+      warnings: diagnostics.warnings,
+      applied_steps: diagnostics.steps
     }
   };
 }
