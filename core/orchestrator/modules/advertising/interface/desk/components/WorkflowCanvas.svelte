@@ -138,6 +138,12 @@
     updated_at?: string;
     updated_by?: string;
   };
+  type WorkflowDeskOption = {
+    id: number;
+    name: string;
+    description: string;
+    updated_at: string;
+  };
   type ExistingTable = { schema_name: string; table_name: string };
   type WorkflowLogSourceBinding = {
     key: string;
@@ -303,6 +309,8 @@
   let deskRevision = 0;
   let deskName = 'Рабочий стол данных';
   let deskDescription = '';
+  let workflowDeskOptions: WorkflowDeskOption[] = [];
+  let workflowDeskPickId = '';
   let deskSchemaVersion = 1;
   let deskDirty = false;
   let deskLoading = false;
@@ -780,6 +788,17 @@
     return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0;
   }
 
+  function updateDeskHash(nextDeskId: number) {
+    const rawHash = String(window.location.hash || '#desk/data').replace(/^#/, '');
+    const [routeRaw, queryRaw = ''] = rawHash.split('?');
+    const route = String(routeRaw || '').trim() || 'desk/data';
+    const params = new URLSearchParams(queryRaw);
+    if (nextDeskId > 0) params.set('desk_id', String(nextDeskId));
+    else params.delete('desk_id');
+    const target = `#${route}${params.toString() ? `?${params.toString()}` : ''}`;
+    if (window.location.hash !== target) window.location.hash = target;
+  }
+
   function safeIso(value: any) {
     const txt = String(value || '').trim();
     if (!txt) return '';
@@ -1010,6 +1029,7 @@
 
   function applyDeskRow(row: WorkflowDeskRow) {
     deskId = Number(row?.id || 0) || 0;
+    workflowDeskPickId = deskId > 0 ? String(deskId) : '';
     deskRevision = Math.max(1, Number(row?.revision || 1) || 1);
     deskSchemaVersion = Math.max(1, Number(row?.schema_version || 1) || 1);
     deskName = String(row?.desk_name || '').trim() || 'Рабочий стол данных';
@@ -1071,10 +1091,21 @@
         throw new Error(details);
       }
       deskId = Number(payload?.id || deskId || 0) || 0;
+      workflowDeskPickId = deskId > 0 ? String(deskId) : '';
       deskRevision = Math.max(1, Number(payload?.revision || deskRevision + 1 || 1) || 1);
       deskLastSavedSignature = deskSignatureFromState(captureDeskState());
       deskDirty = false;
       deskLastSavedAt = new Date().toISOString();
+      workflowDeskOptions = [
+        {
+          id: deskId,
+          name: safeName,
+          description: safeDesc,
+          updated_at: deskLastSavedAt
+        },
+        ...workflowDeskOptions.filter((item) => Number(item.id || 0) !== deskId)
+      ];
+      updateDeskHash(deskId);
       if (!silent) banner = 'Рабочий стол сохранен на сервере';
       return true;
     } catch (e: any) {
@@ -1087,11 +1118,11 @@
     }
   }
 
-  async function loadWorkflowDeskFromServer() {
+  async function loadWorkflowDeskFromServer(desiredDeskIdOverride = 0) {
     deskLoading = true;
     deskSaveError = '';
     try {
-      const desiredDeskId = hashParamInt('desk_id');
+      const desiredDeskId = desiredDeskIdOverride > 0 ? Math.trunc(desiredDeskIdOverride) : hashParamInt('desk_id');
       const listResp = await fetch(`${API_BASE}/workflow-desks?desk_type=data&limit=100`, {
         method: 'GET',
         headers: { Accept: 'application/json', 'X-AO-ROLE': API_ROLE }
@@ -1107,6 +1138,12 @@
         throw new Error(details);
       }
       const list: WorkflowDeskRow[] = Array.isArray(listPayload?.workflow_desks) ? listPayload.workflow_desks : [];
+      workflowDeskOptions = list.map((row) => ({
+        id: Number(row?.id || 0) || 0,
+        name: String(row?.desk_name || '').trim() || `Рабочий стол ${Number(row?.id || 0) || ''}`.trim(),
+        description: String(row?.description || '').trim(),
+        updated_at: safeIso(row?.updated_at)
+      }));
       let target: WorkflowDeskRow | undefined;
       if (desiredDeskId > 0) {
         target = list.find((r) => Number(r?.id || 0) === desiredDeskId);
@@ -1160,14 +1197,26 @@
           throw new Error(details);
         }
         deskId = Number(createdPayload?.id || 0) || 0;
+        workflowDeskPickId = deskId > 0 ? String(deskId) : '';
         deskRevision = Math.max(1, Number(createdPayload?.revision || 1) || 1);
         deskLastSavedAt = new Date().toISOString();
         deskLastSavedSignature = deskSignatureFromState(captureDeskState());
         deskDirty = false;
+        workflowDeskOptions = [
+          {
+            id: deskId,
+            name: deskName || 'Рабочий стол данных',
+            description: '',
+            updated_at: deskLastSavedAt
+          },
+          ...workflowDeskOptions.filter((item) => Number(item.id || 0) !== deskId)
+        ];
+        updateDeskHash(deskId);
         banner = `Создан новый рабочий стол (ID ${deskId})`;
         return true;
       }
       applyDeskRow(target);
+      updateDeskHash(deskId);
       banner = `Рабочий стол загружен (ID ${deskId})`;
       return true;
     } catch (e: any) {
@@ -1182,6 +1231,14 @@
 
   async function reloadDeskFromServer() {
     await loadWorkflowDeskFromServer();
+    await refreshAutomationContour();
+  }
+
+  async function selectWorkflowDeskById(nextDeskId: number) {
+    if (!Number.isFinite(nextDeskId) || nextDeskId <= 0) return;
+    if (deskSaving || deskLoading) return;
+    workflowDeskPickId = String(nextDeskId);
+    await loadWorkflowDeskFromServer(Math.trunc(nextDeskId));
     await refreshAutomationContour();
   }
 
@@ -4355,6 +4412,22 @@
 
   <div class="desk-bar">
     <div class="desk-storage">
+      <label class="desk-picker">
+        <span>Рабочий стол</span>
+        <select
+          value={workflowDeskPickId}
+          on:change={(e) => selectWorkflowDeskById(Number(selectValue(e) || 0))}
+          disabled={deskSaving || deskLoading || !workflowDeskOptions.length}
+          title="Выбери рабочий стол"
+        >
+          {#if !workflowDeskPickId}
+            <option value="">Выбери рабочий стол</option>
+          {/if}
+          {#each workflowDeskOptions as deskOption (deskOption.id)}
+            <option value={String(deskOption.id)}>{deskOption.name}</option>
+          {/each}
+        </select>
+      </label>
       <span>Хранятся в таблице:</span>
       <strong>{workflowDeskStorageRef}</strong>
       <span>ID: {deskId || '-'}</span>
@@ -5180,6 +5253,25 @@
     font-size: 12px;
     color: #334155;
     align-items: center;
+  }
+  .desk-picker {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #334155;
+  }
+  .desk-picker span {
+    color: #475569;
+  }
+  .desk-picker select {
+    min-width: 240px;
+    max-width: 360px;
+    border: 1px solid #dbe4f0;
+    border-radius: 10px;
+    background: #fff;
+    padding: 6px 10px;
+    color: #0f172a;
   }
   .dirty-flag { color: #b45309; font-weight: 600; }
   .clean-flag { color: #166534; font-weight: 600; }
