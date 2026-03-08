@@ -307,7 +307,7 @@
     templateSaving = true;
     templatesError = '';
     try {
-      const currentId = Number(selectedDraft?.id || currentTemplateStoreId || 0);
+      const currentId = Number(selectedDraft?.id || 0);
       const payload = await apiJson<{ id: number; revision: number }>(`${apiBase}/parser-configs/upsert`, {
         method: 'POST',
         headers: headers(),
