@@ -2406,8 +2406,8 @@ function formatBytes(bytes: number) {
       outputTreeSource = null;
       outputTreeSourceJson = false;
       outputTreeRefreshedAt = Date.now();
-      outputTreeMessage = 'Сначала выполни проверку API, чтобы получить дерево ответа.';
-      if (showMessage) err = 'Сначала выполни проверку API, чтобы получить дерево ответа.';
+      outputTreeMessage = 'Нажми «Обновить», чтобы получить тестовый результат и построить дерево ответа.';
+      if (showMessage) err = 'Нажми «Обновить», чтобы получить тестовый результат и построить дерево ответа.';
       return;
     }
     outputTreeSource = deepClone(responseJson);
@@ -2415,6 +2415,14 @@ function formatBytes(bytes: number) {
     outputTreeRefreshedAt = Date.now();
     outputTreeMessage = 'Источник выходного контракта обновлён из текущего тестового результата.';
     if (showMessage) ok = 'Дерево ответа обновлено для выходного контракта';
+  }
+
+  async function refreshOutputContractNow() {
+    await checkApiNow();
+    await tick();
+    if (!responseIsJson || !responseJson) return;
+    refreshOutputTreeSource(false);
+    ok = 'Тестовый результат обновлён и дерево ответа перестроено для выходного контракта';
   }
 
   function updateOutputTreeSourceFromPayload(payload: any, message = '') {
@@ -10229,8 +10237,16 @@ function syncParameterEditorsHeight() {
               <div class="targets-title">Выходные параметры</div>
               <div class="hint">Здесь формируется универсальный выходной контракт шаблона на основе текущего тестового результата, а не буквального пути одного тестового ответа.</div>
             </div>
-            <button class="view-toggle template-action-btn" type="button" on:click={() => refreshOutputTreeSource()} disabled={!responseIsJson}>
-              Обновить
+            <button
+              class="icon-btn refresh-btn output-contract-refresh-btn"
+              type="button"
+              title="Обновить тестовый результат и дерево ответа"
+              aria-label="Обновить тестовый результат и дерево ответа"
+              on:click={refreshOutputContractNow}
+              disabled={checking || loading || !selectedRef}
+            >
+              <span aria-hidden="true">{checking ? '…' : '↻'}</span>
+              <span>Обновить</span>
             </button>
           </div>
           <div class="targets-layout">
@@ -10258,7 +10274,7 @@ function syncParameterEditorsHeight() {
                   />
                 </div>
               {:else}
-                <div class="empty-box">Сначала выполни проверку API, затем нажми «Обновить», чтобы получить дерево результата для выходного контракта.</div>
+                <div class="empty-box">Нажми «Обновить», чтобы получить тестовый результат и построить дерево для выходного контракта.</div>
               {/if}
             </div>
 
@@ -10584,6 +10600,21 @@ function syncParameterEditorsHeight() {
   .targets-wrap { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:transparent; }
   .targets-head { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; margin-bottom:8px; }
   .targets-title { font-size:13px; font-weight:700; color:#0f172a; }
+  .output-contract-refresh-btn {
+    width:auto;
+    min-width:128px;
+    padding:5px 10px;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:6px;
+    border-radius:10px;
+    border:1px solid #e2e8f0;
+    background:#fff;
+    font-size:11px;
+    font-weight:500;
+    color:#16a34a;
+  }
   .targets-layout { display:grid; grid-template-columns:minmax(0, 1.1fr) minmax(0, 1fr); gap:10px; align-items:start; }
   .crumbs-panel { border:1px dashed #dbe3ef; border-radius:12px; padding:8px; background:#fff; margin-bottom:10px; }
   .crumbs-title-row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
