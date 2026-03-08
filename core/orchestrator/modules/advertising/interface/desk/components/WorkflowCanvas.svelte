@@ -161,6 +161,26 @@
     primary?: WorkflowLogSourceBinding | null;
     details?: WorkflowLogSourceBinding[];
   };
+  type NodeRegistryEntry = {
+    id: number;
+    node_type_code: string;
+    node_name_ru: string;
+    description_ru: string;
+    section_code: string;
+    section_name_ru: string;
+    section_order: number;
+    node_order: number;
+    is_enabled: boolean;
+    is_system: boolean;
+    hidden_in_palette: boolean;
+    node_label_ru: string;
+    icon_key: string;
+    visual_preset_key: string;
+    editor_type_code: string;
+    runtime_handler_code: string;
+    updated_at?: string;
+    updated_by?: string;
+  };
   type DeskProcessSummary = {
     start_node_id: string;
     process_code: string;
@@ -460,37 +480,98 @@
   const toolCfg = (n: WorkflowNode) => n.config as { name: string; toolType: ToolType; settings: Record<string, string> };
   const apiCfg = (n: WorkflowNode) => n.config as SourceItem & { apiRequest?: ApiNodeRequest };
   const supportedToolTypeSet = new Set<ToolType>(['start_process', 'api_request', 'table_parser', 'db_write', 'end_process']);
-  const toolCategoryOrder = ['Старт', 'Запросы', 'Работа с данными', 'Запись', 'Завершение'];
-  const toolUiDictionary: Record<
-    string,
-    { name: string; description: string; category: string; helper?: string }
-  > = {
-    start_process: {
-      name: 'Старт процесса',
-      description: 'Точка начала процесса. Здесь настраивается запуск по расписанию или вручную.',
-      category: 'Старт'
+  const fallbackNodeRegistryEntries: NodeRegistryEntry[] = [
+    {
+      id: 1,
+      node_type_code: 'start_process',
+      node_name_ru: 'Старт процесса',
+      description_ru: 'Точка начала процесса. Здесь настраивается запуск по расписанию или вручную.',
+      section_code: 'start',
+      section_name_ru: 'Старт',
+      section_order: 10,
+      node_order: 10,
+      is_enabled: true,
+      is_system: true,
+      hidden_in_palette: false,
+      node_label_ru: 'Старт',
+      icon_key: 'start_process',
+      visual_preset_key: 'start',
+      editor_type_code: 'start_process',
+      runtime_handler_code: 'start_process'
     },
-    api_request: {
-      name: 'API-запрос',
-      description: 'Отправляет запрос во внешний API и передает ответ дальше по цепочке.',
-      category: 'Запросы'
+    {
+      id: 2,
+      node_type_code: 'api_request',
+      node_name_ru: 'API-запрос',
+      description_ru: 'Отправляет запрос во внешний API и передает ответ дальше по цепочке.',
+      section_code: 'requests',
+      section_name_ru: 'Запросы',
+      section_order: 20,
+      node_order: 10,
+      is_enabled: true,
+      is_system: true,
+      hidden_in_palette: false,
+      node_label_ru: 'API',
+      icon_key: 'api_request',
+      visual_preset_key: 'request',
+      editor_type_code: 'api_builder',
+      runtime_handler_code: 'api_request'
     },
-    table_parser: {
-      name: 'Парсер данных',
-      description: 'Разбирает входные данные, выделяет строки и подготавливает результат для следующей ноды.',
-      category: 'Работа с данными'
+    {
+      id: 3,
+      node_type_code: 'table_parser',
+      node_name_ru: 'Парсер данных',
+      description_ru: 'Разбирает входные данные, выделяет строки и подготавливает результат для следующей ноды.',
+      section_code: 'data_processing',
+      section_name_ru: 'Работа с данными',
+      section_order: 30,
+      node_order: 10,
+      is_enabled: true,
+      is_system: true,
+      hidden_in_palette: false,
+      node_label_ru: 'Парсер',
+      icon_key: 'table_parser',
+      visual_preset_key: 'data',
+      editor_type_code: 'parser_builder',
+      runtime_handler_code: 'table_parser'
     },
-    db_write: {
-      name: 'Запись в БД',
-      description: 'Сохраняет результат в таблицу базы данных (insert/upsert/update).',
-      category: 'Запись'
+    {
+      id: 4,
+      node_type_code: 'db_write',
+      node_name_ru: 'Запись в БД',
+      description_ru: 'Сохраняет результат в таблицу базы данных через insert, upsert или update.',
+      section_code: 'write',
+      section_name_ru: 'Запись',
+      section_order: 40,
+      node_order: 10,
+      is_enabled: true,
+      is_system: true,
+      hidden_in_palette: false,
+      node_label_ru: 'Запись',
+      icon_key: 'db_write',
+      visual_preset_key: 'write',
+      editor_type_code: 'db_write',
+      runtime_handler_code: 'db_write'
     },
-    end_process: {
-      name: 'Конец процесса',
-      description: 'Фиксирует завершение цепочки.',
-      category: 'Завершение'
+    {
+      id: 5,
+      node_type_code: 'end_process',
+      node_name_ru: 'Конец процесса',
+      description_ru: 'Фиксирует завершение цепочки.',
+      section_code: 'finish',
+      section_name_ru: 'Завершение',
+      section_order: 50,
+      node_order: 10,
+      is_enabled: true,
+      is_system: true,
+      hidden_in_palette: false,
+      node_label_ru: 'Финиш',
+      icon_key: 'end_process',
+      visual_preset_key: 'finish',
+      editor_type_code: 'end_process',
+      runtime_handler_code: 'end_process'
     }
-  };
+  ];
   const runPolicyLabelMap: Record<string, string> = {
     single_instance: 'Не запускать повторно, пока текущий запуск не завершен',
     allow_parallel: 'Разрешить параллельные запуски'
@@ -528,14 +609,35 @@
     system: 'Системный'
   };
 
+  let nodeRegistryEntries: NodeRegistryEntry[] = [...fallbackNodeRegistryEntries];
+  let nodeRegistryError = '';
+  let nodeRegistryLoading = false;
   let supportedTools: ToolItem[] = [];
   let groupedTools: Array<{ title: string; items: ToolItem[] }> = [];
   $: supportedTools = tools.filter((tool) => supportedToolTypeSet.has(tool.toolType));
-  $: groupedTools = toolCategoryOrder
-    .map((title) => ({
+  $: groupedTools = Array.from(
+    supportedTools
+      .filter((tool) => {
+        const meta = toolMetaByType(tool.toolType);
+        return Boolean(meta?.is_enabled) && !Boolean(meta?.hidden_in_palette);
+      })
+      .reduce((acc, tool) => {
+        const meta = toolMetaByType(tool.toolType);
+        const section = meta?.section_name_ru || 'Прочее';
+        const hit = acc.get(section) || [];
+        hit.push(tool);
+        acc.set(section, hit);
+        return acc;
+      }, new Map<string, ToolItem[]>())
+      .entries()
+  )
+    .map(([title, items]) => ({
       title,
-      items: supportedTools.filter((tool) => toolCategoryByType(tool.toolType) === title)
+      order: toolSectionOrderByTitle(title),
+      items: [...items].sort((a, b) => toolNodeOrderByType(a.toolType) - toolNodeOrderByType(b.toolType))
     }))
+    .sort((a, b) => a.order - b.order)
+    .map((group) => ({ title: group.title, items: group.items }))
     .filter((group) => group.items.length > 0);
   $: draftProcesses = buildDraftProcessList(nodes);
   $: outdatedPublishedProcesses = publishedProcesses.filter(
@@ -613,20 +715,94 @@
     return `${Math.round((ms / 1000) * 100) / 100} с`;
   }
 
+  function currentNodeRegistryEntries() {
+    return Array.isArray(nodeRegistryEntries) && nodeRegistryEntries.length ? nodeRegistryEntries : fallbackNodeRegistryEntries;
+  }
+
   function toolMetaByType(toolType: string) {
-    return toolUiDictionary[String(toolType || '').trim()] || null;
+    const code = String(toolType || '').trim();
+    return currentNodeRegistryEntries().find((entry) => entry.node_type_code === code) || null;
   }
 
   function toolLabelByType(toolType: string) {
-    return toolMetaByType(toolType)?.name || String(toolType || '').trim() || 'Нода';
+    return toolMetaByType(toolType)?.node_name_ru || String(toolType || '').trim() || 'Нода';
   }
 
   function toolDescriptionByType(toolType: string) {
-    return toolMetaByType(toolType)?.description || '';
+    return toolMetaByType(toolType)?.description_ru || '';
   }
 
   function toolCategoryByType(toolType: string) {
-    return toolMetaByType(toolType)?.category || 'Прочее';
+    return toolMetaByType(toolType)?.section_name_ru || 'Прочее';
+  }
+
+  function toolSectionOrderByTitle(title: string) {
+    const hit = currentNodeRegistryEntries().find((entry) => entry.section_name_ru === title);
+    return Math.trunc(Number(hit?.section_order || 999)) || 999;
+  }
+
+  function toolNodeOrderByType(toolType: string) {
+    return Math.trunc(Number(toolMetaByType(toolType)?.node_order || 999)) || 999;
+  }
+
+  function nodeDisplayName(node: WorkflowNode | null | undefined) {
+    if (!node) return 'Нода';
+    if (node.type === 'tool') {
+      const cfg = toolCfg(node);
+      return String(cfg?.name || '').trim() || toolLabelByType(cfg?.toolType || '');
+    }
+    return String(node?.config?.name || '').trim() || String(node?.id || '').trim() || 'Нода';
+  }
+
+  async function loadNodeRegistry() {
+    nodeRegistryLoading = true;
+    nodeRegistryError = '';
+    try {
+      const raw = await fetch(`${API_BASE}/node-registry`, {
+        method: 'GET',
+        headers: { Accept: 'application/json', 'X-AO-ROLE': API_ROLE }
+      });
+      let payload: any = {};
+      try {
+        payload = await raw.json();
+      } catch {
+        payload = {};
+      }
+      if (!raw.ok) {
+        throw new Error(String(payload?.details || payload?.error || `HTTP ${raw.status}`));
+      }
+      const rows = Array.isArray(payload?.node_registry) ? payload.node_registry : [];
+      nodeRegistryEntries = rows
+        .map((row: any) => ({
+          id: Number(row?.id || 0) || 0,
+          node_type_code: String(row?.node_type_code || '').trim(),
+          node_name_ru: String(row?.node_name_ru || '').trim(),
+          description_ru: String(row?.description_ru || '').trim(),
+          section_code: String(row?.section_code || '').trim(),
+          section_name_ru: String(row?.section_name_ru || '').trim(),
+          section_order: Math.trunc(Number(row?.section_order || 0)) || 0,
+          node_order: Math.trunc(Number(row?.node_order || 0)) || 0,
+          is_enabled: Boolean(row?.is_enabled),
+          is_system: Boolean(row?.is_system),
+          hidden_in_palette: Boolean(row?.hidden_in_palette),
+          node_label_ru: String(row?.node_label_ru || '').trim(),
+          icon_key: String(row?.icon_key || '').trim(),
+          visual_preset_key: String(row?.visual_preset_key || '').trim(),
+          editor_type_code: String(row?.editor_type_code || '').trim(),
+          runtime_handler_code: String(row?.runtime_handler_code || '').trim(),
+          updated_at: String(row?.updated_at || '').trim(),
+          updated_by: String(row?.updated_by || '').trim()
+        }))
+        .filter((entry: NodeRegistryEntry) => Boolean(entry.node_type_code && entry.node_name_ru));
+      if (!nodeRegistryEntries.length) {
+        nodeRegistryEntries = [...fallbackNodeRegistryEntries];
+      }
+    } catch (e: any) {
+      nodeRegistryEntries = [...fallbackNodeRegistryEntries];
+      nodeRegistryError = String(e?.message || e || 'Не удалось загрузить реестр нод');
+    } finally {
+      nodeRegistryLoading = false;
+    }
   }
 
   function triggerLabel(value: string) {
@@ -2848,16 +3024,6 @@
     return five;
   }
 
-  function nodeDisplayName(node: WorkflowNode) {
-    if (!node) return '';
-    if (node.type === 'tool') {
-      const cfg = toolCfg(node);
-      const fallback = toolUiDictionary[cfg.toolType]?.name || String(cfg.toolType || '').trim() || 'Нода';
-      return String(cfg.name || '').trim() || fallback;
-    }
-    return String(node?.config?.name || '').trim() || String(node.id || '').trim() || 'Нода';
-  }
-
   function buildApiTemplateUsageSummary(
     source: DynamicApiSource | null,
     currentNode: WorkflowNode | null,
@@ -4582,6 +4748,7 @@
 
   onMount(async () => {
     resetCanvas();
+    await loadNodeRegistry();
     await loadDynamicSourceCatalog();
     await loadWorkflowDeskFromServer();
     await refreshAutomationContour();
@@ -4985,6 +5152,9 @@
       {#if sourceCatalogError}
         <div class="source-error">{sourceCatalogError}</div>
       {/if}
+      {#if nodeRegistryError}
+        <div class="source-error">Реестр нод недоступен. Используется встроенный резервный список.</div>
+      {/if}
       {#each groupedTools as group (group.title)}
         <section class="tool-group">
           <h5>{group.title}</h5>
@@ -5086,7 +5256,7 @@
       on:mouseleave={onNodeModalMouseLeaveForResize}
     >
       <div class="node-modal-head">
-        <h4>Настройка узла: {settingsNode.config.name}</h4>
+        <h4>Настройка узла: {nodeDisplayName(settingsNode)}</h4>
         <div class="node-modal-actions">
           {#if isWideSettingsNode(settingsNode)}
             <button

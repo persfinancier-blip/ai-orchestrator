@@ -1,4 +1,4 @@
-import express from 'express';
+﻿import express from 'express';
 import { pool } from './db.mjs';
 import { executeParserRows, parserPreviewSummary } from './parserRuntime.mjs';
 
@@ -33,7 +33,29 @@ function qlit(v) {
   return `'${s}'`;
 }
 
-const KNOWN_TYPES = new Set(['text', 'int', 'bigint', 'numeric', 'boolean', 'date', 'timestamptz', 'jsonb', 'uuid']);
+const FIELD_TYPE_SQL_MAP = Object.freeze({
+  text: 'text',
+  int: 'integer',
+  bigint: 'bigint',
+  numeric: 'numeric',
+  boolean: 'boolean',
+  date: 'date',
+  timestamptz: 'timestamptz',
+  jsonb: 'jsonb',
+  uuid: 'uuid',
+  bytea: 'bytea',
+  label: 'text',
+  csv_text: 'text',
+  zip_archive: 'bytea',
+  url: 'text',
+  table_ref: 'text',
+  record_ref: 'text',
+  file_ref: 'text',
+  external_source_ref: 'text',
+  json_payload: 'jsonb',
+  text_payload: 'text'
+});
+const KNOWN_TYPES = new Set(Object.keys(FIELD_TYPE_SQL_MAP));
 const SETTINGS_SCHEMA = 'ao_system';
 const SETTINGS_TABLE = 'table_settings_store';
 const SETTINGS_QNAME = `${qi(SETTINGS_SCHEMA)}.${qi(SETTINGS_TABLE)}`;
@@ -46,6 +68,8 @@ const DEFAULT_CONFIG = Object.freeze({
   api_configs_table: 'api_configs_store',
   parser_configs_schema: 'ao_system',
   parser_configs_table: 'parser_configs_store',
+  node_registry_schema: 'ao_system',
+  node_registry_table: 'node_registry_store',
   workflow_desks_schema: 'ao_system',
   workflow_desks_table: 'workflow_desks_store',
   server_writes_schema: 'ao_system',
@@ -55,6 +79,7 @@ const SETTINGS_CACHE_MS = Number(process.env.AO_SETTINGS_CACHE_MS || 5000);
 let settingsCache = { at: 0, value: { ...DEFAULT_CONFIG } };
 let PROTECTED_SYSTEM_TABLES = new Set([
   `${SETTINGS_SCHEMA}.${SETTINGS_TABLE}`,
+  `${DEFAULT_CONFIG.node_registry_schema}.${DEFAULT_CONFIG.node_registry_table}`,
   `${DEFAULT_CONFIG.server_writes_schema}.${DEFAULT_CONFIG.server_writes_table}`
 ]);
 const SETTINGS_REQUIRED_COLUMNS = [
@@ -126,6 +151,26 @@ const PARSER_CONFIGS_REQUIRED_COLUMNS = [
   { name: 'updated_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] },
   { name: 'updated_by', types: ['text', 'character varying', 'varchar'] }
 ];
+const NODE_REGISTRY_REQUIRED_COLUMNS = [
+  { name: 'id', types: ['bigint', 'int8', 'bigserial', 'integer', 'int4', 'int'] },
+  { name: 'node_type_code', types: ['text', 'character varying', 'varchar'] },
+  { name: 'node_name_ru', types: ['text', 'character varying', 'varchar'] },
+  { name: 'description_ru', types: ['text', 'character varying', 'varchar'] },
+  { name: 'section_code', types: ['text', 'character varying', 'varchar'] },
+  { name: 'section_name_ru', types: ['text', 'character varying', 'varchar'] },
+  { name: 'section_order', types: ['integer', 'int4', 'int', 'bigint', 'int8'] },
+  { name: 'node_order', types: ['integer', 'int4', 'int', 'bigint', 'int8'] },
+  { name: 'is_enabled', types: ['boolean'] },
+  { name: 'is_system', types: ['boolean'] },
+  { name: 'hidden_in_palette', types: ['boolean'] },
+  { name: 'node_label_ru', types: ['text', 'character varying', 'varchar'] },
+  { name: 'icon_key', types: ['text', 'character varying', 'varchar'] },
+  { name: 'visual_preset_key', types: ['text', 'character varying', 'varchar'] },
+  { name: 'editor_type_code', types: ['text', 'character varying', 'varchar'] },
+  { name: 'runtime_handler_code', types: ['text', 'character varying', 'varchar'] },
+  { name: 'updated_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] },
+  { name: 'updated_by', types: ['text', 'character varying', 'varchar'] }
+];
 const WORKFLOW_DESKS_REQUIRED_COLUMNS = [
   { name: 'desk_name', types: ['text', 'character varying', 'varchar'] },
   { name: 'desk_type', types: ['text', 'character varying', 'varchar'] },
@@ -146,6 +191,148 @@ const SYSTEM_CONTRACT_COLUMNS = [
   { name: 'ao_contract_name', type: 'text' },
   { name: 'ao_contract_version', type: 'integer' }
 ];
+export const DEFAULT_NODE_REGISTRY_ROWS = Object.freeze([
+  {
+    node_type_code: 'start_process',
+    node_name_ru: 'Старт процесса',
+    description_ru: 'Точка начала процесса. Здесь настраивается запуск по расписанию или вручную.',
+    section_code: 'start',
+    section_name_ru: 'Старт',
+    section_order: 10,
+    node_order: 10,
+    is_enabled: true,
+    is_system: true,
+    hidden_in_palette: false,
+    node_label_ru: 'Старт',
+    icon_key: 'start_process',
+    visual_preset_key: 'start',
+    editor_type_code: 'start_process',
+    runtime_handler_code: 'start_process'
+  },
+  {
+    node_type_code: 'schedule_process',
+    node_name_ru: 'Расписание процесса',
+    description_ru: 'Служебная старт-нода для планировщика. В палитре обычно скрыта.',
+    section_code: 'start',
+    section_name_ru: 'Старт',
+    section_order: 10,
+    node_order: 20,
+    is_enabled: true,
+    is_system: true,
+    hidden_in_palette: true,
+    node_label_ru: 'Расписание',
+    icon_key: 'schedule_process',
+    visual_preset_key: 'start',
+    editor_type_code: 'start_process',
+    runtime_handler_code: 'schedule_process'
+  },
+  {
+    node_type_code: 'api_request',
+    node_name_ru: 'API-запрос',
+    description_ru: 'Отправляет запрос во внешний API и передает ответ дальше по цепочке.',
+    section_code: 'requests',
+    section_name_ru: 'Запросы',
+    section_order: 20,
+    node_order: 10,
+    is_enabled: true,
+    is_system: true,
+    hidden_in_palette: false,
+    node_label_ru: 'API',
+    icon_key: 'api_request',
+    visual_preset_key: 'request',
+    editor_type_code: 'api_builder',
+    runtime_handler_code: 'api_request'
+  },
+  {
+    node_type_code: 'table_parser',
+    node_name_ru: 'Парсер данных',
+    description_ru: 'Разбирает входные данные, выделяет строки и подготавливает результат для следующей ноды.',
+    section_code: 'data_processing',
+    section_name_ru: 'Работа с данными',
+    section_order: 30,
+    node_order: 10,
+    is_enabled: true,
+    is_system: true,
+    hidden_in_palette: false,
+    node_label_ru: 'Парсер',
+    icon_key: 'table_parser',
+    visual_preset_key: 'data',
+    editor_type_code: 'parser_builder',
+    runtime_handler_code: 'table_parser'
+  },
+  {
+    node_type_code: 'db_write',
+    node_name_ru: 'Запись в БД',
+    description_ru: 'Сохраняет результат в таблицу базы данных через insert, upsert или update.',
+    section_code: 'write',
+    section_name_ru: 'Запись',
+    section_order: 40,
+    node_order: 10,
+    is_enabled: true,
+    is_system: true,
+    hidden_in_palette: false,
+    node_label_ru: 'Запись',
+    icon_key: 'db_write',
+    visual_preset_key: 'write',
+    editor_type_code: 'db_write',
+    runtime_handler_code: 'db_write'
+  },
+  {
+    node_type_code: 'end_process',
+    node_name_ru: 'Конец процесса',
+    description_ru: 'Фиксирует завершение цепочки и останавливает дальнейшее выполнение.',
+    section_code: 'finish',
+    section_name_ru: 'Завершение',
+    section_order: 50,
+    node_order: 10,
+    is_enabled: true,
+    is_system: true,
+    hidden_in_palette: false,
+    node_label_ru: 'Финиш',
+    icon_key: 'end_process',
+    visual_preset_key: 'finish',
+    editor_type_code: 'end_process',
+    runtime_handler_code: 'end_process'
+  }
+]);
+const BUILTIN_NODE_REGISTRY_TEMPLATE = Object.freeze({
+  template_name: 'Реестр системных нод',
+  schema_name: DEFAULT_CONFIG.node_registry_schema,
+  table_name: DEFAULT_CONFIG.node_registry_table,
+  data_level: 'bronze',
+  template_kind: 'system_storage',
+  table_class: 'system_registry',
+  description: 'Системный реестр нод и разделов интерфейса workflow. Хранит названия, порядок, безопасные метаданные показа и служебные признаки.',
+  columns: [
+    { field_name: 'ao_source', field_type: 'text', description: 'Технический источник записи.' },
+    { field_name: 'ao_run_id', field_type: 'text', description: 'Технический идентификатор системного обновления.' },
+    { field_name: 'ao_created_at', field_type: 'timestamptz', description: 'Время создания записи.' },
+    { field_name: 'ao_updated_at', field_type: 'timestamptz', description: 'Время обновления записи.' },
+    { field_name: 'ao_contract_schema', field_type: 'text', description: 'Схема контракта данных.' },
+    { field_name: 'ao_contract_name', field_type: 'text', description: 'Имя контракта данных.' },
+    { field_name: 'ao_contract_version', field_type: 'int', description: 'Версия контракта данных.' },
+    { field_name: 'node_type_code', field_type: 'text', description: 'Служебный код типа ноды.' },
+    { field_name: 'node_name_ru', field_type: 'label', description: 'Основное русское название ноды.' },
+    { field_name: 'description_ru', field_type: 'text', description: 'Краткое русское описание ноды.' },
+    { field_name: 'section_code', field_type: 'text', description: 'Служебный код раздела палитры.' },
+    { field_name: 'section_name_ru', field_type: 'label', description: 'Русское название раздела палитры.' },
+    { field_name: 'section_order', field_type: 'int', description: 'Порядок раздела в палитре.' },
+    { field_name: 'node_order', field_type: 'int', description: 'Порядок ноды внутри раздела.' },
+    { field_name: 'is_enabled', field_type: 'boolean', description: 'Показывать ли ноду как доступную.' },
+    { field_name: 'is_system', field_type: 'boolean', description: 'Системная ли это нода.' },
+    { field_name: 'hidden_in_palette', field_type: 'boolean', description: 'Скрывать ли ноду в палитре.' },
+    { field_name: 'node_label_ru', field_type: 'label', description: 'Короткий ярлык ноды.' },
+    { field_name: 'icon_key', field_type: 'text', description: 'Ключ иконки из безопасного набора интерфейса.' },
+    { field_name: 'visual_preset_key', field_type: 'text', description: 'Ключ визуального пресета ноды.' },
+    { field_name: 'editor_type_code', field_type: 'text', description: 'Код редактора или конструктора, который открывается для ноды.' },
+    { field_name: 'runtime_handler_code', field_type: 'text', description: 'Код обработчика выполнения на сервере.' },
+    { field_name: 'updated_at', field_type: 'timestamptz', description: 'Когда запись в реестре обновили.' },
+    { field_name: 'updated_by', field_type: 'text', description: 'Кто обновил запись.' }
+  ],
+  partition_enabled: false,
+  partition_column: '',
+  partition_interval: 'day'
+});
 
 function normalizeSettingIdent(value, fallback) {
   const v = String(value || '').trim();
@@ -164,12 +351,21 @@ function parserConfigsQname(config) {
   return qi(config.parser_configs_schema) + '.' + qi(config.parser_configs_table);
 }
 
+function nodeRegistryQname(config) {
+  return `${qi(config.node_registry_schema)}.${qi(config.node_registry_table)}`;
+}
+
 function workflowDesksQname(config) {
   return `${qi(config.workflow_desks_schema)}.${qi(config.workflow_desks_table)}`;
 }
 
 function syncProtectedSystemTables(config) {
   const next = new Set([`${SETTINGS_SCHEMA}.${SETTINGS_TABLE}`]);
+  if (config?.node_registry_schema && config?.node_registry_table) {
+    next.add(`${config.node_registry_schema}.${config.node_registry_table}`);
+  } else {
+    next.add(`${DEFAULT_CONFIG.node_registry_schema}.${DEFAULT_CONFIG.node_registry_table}`);
+  }
   if (config?.server_writes_schema && config?.server_writes_table) {
     next.add(`${config.server_writes_schema}.${config.server_writes_table}`);
   } else {
@@ -189,8 +385,9 @@ function normalizeTypeName(type) {
 function normalizeContractFieldType(type) {
   const t = normalizeTypeName(type);
   if (!t) return '';
+  if (KNOWN_TYPES.has(t)) return t;
   if (t === 'text' || t.includes('character varying') || t === 'varchar') return 'text';
-  if (t === 'int' || t === 'integer' || t === 'int4') return 'integer';
+  if (t === 'int' || t === 'integer' || t === 'int4') return 'int';
   if (t === 'bigint' || t === 'int8') return 'bigint';
   if (t.startsWith('numeric') || t.startsWith('decimal')) return 'numeric';
   if (t === 'boolean' || t === 'bool') return 'boolean';
@@ -198,7 +395,13 @@ function normalizeContractFieldType(type) {
   if (t === 'timestamptz' || t.includes('timestamp with time zone')) return 'timestamptz';
   if (t === 'jsonb' || t === 'json') return 'jsonb';
   if (t === 'uuid') return 'uuid';
+  if (t === 'bytea') return 'bytea';
   return '';
+}
+
+export function fieldTypeToSql(type) {
+  const normalized = normalizeContractFieldType(type) || normalizeTypeName(type);
+  return FIELD_TYPE_SQL_MAP[normalized] || '';
 }
 
 function normalizeContractColumnsPayload(columns) {
@@ -303,32 +506,37 @@ async function ensureDefaultSettingsRows(client) {
     {
       key: 'contracts_storage',
       value: { schema: DEFAULT_CONFIG.contracts_schema, table: DEFAULT_CONFIG.contracts_table },
-      description: '��������� ������ ���������� ������'
+      description: 'Системное хранилище версий контрактов данных'
     },
     {
       key: 'templates_storage',
       value: { schema: DEFAULT_CONFIG.templates_schema, table: DEFAULT_CONFIG.templates_table },
-      description: '��������� �������� ������'
+      description: 'Системное хранилище шаблонов таблиц'
     },
     {
       key: 'server_writes_storage',
       value: { schema: DEFAULT_CONFIG.server_writes_schema, table: DEFAULT_CONFIG.server_writes_table },
-      description: '��������� ������ ��������� �������'
+      description: 'Системное хранилище правил серверной записи'
     },
     {
       key: 'api_configs_storage',
       value: { schema: DEFAULT_CONFIG.api_configs_schema, table: DEFAULT_CONFIG.api_configs_table },
-      description: '��������� ��������������� API'
+      description: 'Системное хранилище шаблонов API'
     },
     {
       key: 'parser_configs_storage',
       value: { schema: DEFAULT_CONFIG.parser_configs_schema, table: DEFAULT_CONFIG.parser_configs_table },
-      description: 'Системное хранилище шаблонов parser-ноды'
+      description: 'Системное хранилище шаблонов обработки данных'
+    },
+    {
+      key: 'node_registry_storage',
+      value: { schema: DEFAULT_CONFIG.node_registry_schema, table: DEFAULT_CONFIG.node_registry_table },
+      description: 'Системный реестр нод и разделов интерфейса workflow'
     },
     {
       key: 'workflow_desks_storage',
       value: { schema: DEFAULT_CONFIG.workflow_desks_schema, table: DEFAULT_CONFIG.workflow_desks_table },
-      description: '��������� ������� ������ ��������� � ������'
+      description: 'Системное хранилище рабочих столов workflow'
     }
   ];
 
@@ -425,6 +633,20 @@ function applySettingValue(target, key, value) {
     target.parser_configs_table = normalizeSettingIdent(value, target.parser_configs_table);
     return;
   }
+  if (key === 'node_registry_storage') {
+    const parsed = parseStorageSettingValue(value);
+    target.node_registry_schema = normalizeSettingIdent(parsed.schema, target.node_registry_schema);
+    target.node_registry_table = normalizeSettingIdent(parsed.table, target.node_registry_table);
+    return;
+  }
+  if (key === 'node_registry_storage_schema') {
+    target.node_registry_schema = normalizeSettingIdent(value, target.node_registry_schema);
+    return;
+  }
+  if (key === 'node_registry_storage_table') {
+    target.node_registry_table = normalizeSettingIdent(value, target.node_registry_table);
+    return;
+  }
   if (key === 'workflow_desks_storage') {
     const parsed = parseStorageSettingValue(value);
     target.workflow_desks_schema = normalizeSettingIdent(parsed.schema, target.workflow_desks_schema);
@@ -517,6 +739,17 @@ async function loadRuntimeConfig(client, { force = false } = {}) {
     next.parser_configs_table = DEFAULT_CONFIG.parser_configs_table;
   }
 
+  const nodeRegistryOk = await hasRequiredColumns(
+    client,
+    next.node_registry_schema,
+    next.node_registry_table,
+    NODE_REGISTRY_REQUIRED_COLUMNS
+  );
+  if (!nodeRegistryOk) {
+    next.node_registry_schema = DEFAULT_CONFIG.node_registry_schema;
+    next.node_registry_table = DEFAULT_CONFIG.node_registry_table;
+  }
+
   const workflowDesksOk = await hasRequiredColumns(
     client,
     next.workflow_desks_schema,
@@ -532,8 +765,10 @@ async function loadRuntimeConfig(client, { force = false } = {}) {
   const templatesQn = await ensureTemplatesStorageTable(client, next);
   await ensureApiConfigsTable(client, next);
   await ensureParserConfigsTable(client, next);
+  await ensureNodeRegistryTable(client, next);
   await ensureWorkflowDesksTable(client, next);
   const serverWritesQn = await ensureServerWritesTable(client, next);
+  await ensureBuiltinNodeRegistryTemplateRow(client, next, templatesQn);
   await ensureDefaultServerWriteRules(client, next, serverWritesQn);
 
   await ensureContractVersionForTable(
@@ -587,6 +822,15 @@ async function loadRuntimeConfig(client, { force = false } = {}) {
     next.parser_configs_schema,
     next.parser_configs_table,
     'system_bootstrap:parser_configs_storage',
+    'system_bootstrap',
+    next.contracts_schema
+  );
+  await ensureContractVersionForTable(
+    client,
+    contractsQn,
+    next.node_registry_schema,
+    next.node_registry_table,
+    'system_bootstrap:node_registry_storage',
     'system_bootstrap',
     next.contracts_schema
   );
@@ -890,6 +1134,246 @@ async function ensureParserConfigsTable(client, config) {
   return qn;
 }
 
+async function ensureBuiltinNodeRegistryTemplateRow(client, config, templatesQn) {
+  const runId = `node_registry_template_bootstrap_${Date.now()}`;
+  const params = [
+    BUILTIN_NODE_REGISTRY_TEMPLATE.template_name,
+    BUILTIN_NODE_REGISTRY_TEMPLATE.schema_name,
+    BUILTIN_NODE_REGISTRY_TEMPLATE.table_name,
+    BUILTIN_NODE_REGISTRY_TEMPLATE.data_level,
+    BUILTIN_NODE_REGISTRY_TEMPLATE.template_kind,
+    BUILTIN_NODE_REGISTRY_TEMPLATE.table_class,
+    BUILTIN_NODE_REGISTRY_TEMPLATE.description,
+    JSON.stringify(BUILTIN_NODE_REGISTRY_TEMPLATE.columns),
+    Boolean(BUILTIN_NODE_REGISTRY_TEMPLATE.partition_enabled),
+    String(BUILTIN_NODE_REGISTRY_TEMPLATE.partition_column || ''),
+    String(BUILTIN_NODE_REGISTRY_TEMPLATE.partition_interval || 'day'),
+    runId,
+    config.contracts_schema,
+    defaultContractName(config.templates_schema, config.templates_table)
+  ];
+  const updated = await client.query(
+    `
+    UPDATE ${templatesQn}
+    SET
+      schema_name = $2,
+      table_name = $3,
+      data_level = $4,
+      template_kind = $5,
+      table_class = $6,
+      description = $7,
+      columns = $8::jsonb,
+      partition_enabled = $9,
+      partition_column = $10,
+      partition_interval = $11,
+      ao_source = 'system_bootstrap',
+      ao_run_id = $12,
+      ao_updated_at = now(),
+      ao_contract_schema = $13,
+      ao_contract_name = $14,
+      ao_contract_version = 1
+    WHERE lower(template_name) = lower($1)
+    `,
+    params
+  );
+  if ((updated.rowCount || 0) > 0) return;
+  await client.query(
+    `
+    INSERT INTO ${templatesQn}
+      (
+        template_name,
+        schema_name,
+        table_name,
+        data_level,
+        template_kind,
+        table_class,
+        description,
+        columns,
+        partition_enabled,
+        partition_column,
+        partition_interval,
+        ao_source,
+        ao_run_id,
+        ao_created_at,
+        ao_updated_at,
+        ao_contract_schema,
+        ao_contract_name,
+        ao_contract_version
+      )
+    VALUES
+      ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, 'system_bootstrap', $12, now(), now(), $13, $14, 1)
+    `,
+    params
+  );
+}
+
+async function ensureDefaultNodeRegistryRows(client, qn, config) {
+  const contractName = defaultContractName(config.node_registry_schema, config.node_registry_table);
+  for (const row of DEFAULT_NODE_REGISTRY_ROWS) {
+    const runId = `node_registry_bootstrap_${row.node_type_code}`;
+    await client.query(
+      `
+      INSERT INTO ${qn}
+        (
+          node_type_code,
+          node_name_ru,
+          description_ru,
+          section_code,
+          section_name_ru,
+          section_order,
+          node_order,
+          is_enabled,
+          is_system,
+          hidden_in_palette,
+          node_label_ru,
+          icon_key,
+          visual_preset_key,
+          editor_type_code,
+          runtime_handler_code,
+          updated_at,
+          updated_by,
+          ao_source,
+          ao_run_id,
+          ao_created_at,
+          ao_updated_at,
+          ao_contract_schema,
+          ao_contract_name,
+          ao_contract_version
+        )
+      VALUES
+        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now(), 'system_bootstrap',
+         'system_bootstrap', $16, now(), now(), $17, $18, 1)
+      ON CONFLICT (node_type_code)
+      DO UPDATE SET
+        node_name_ru = EXCLUDED.node_name_ru,
+        description_ru = EXCLUDED.description_ru,
+        section_code = EXCLUDED.section_code,
+        section_name_ru = EXCLUDED.section_name_ru,
+        section_order = EXCLUDED.section_order,
+        node_order = EXCLUDED.node_order,
+        is_enabled = EXCLUDED.is_enabled,
+        is_system = EXCLUDED.is_system,
+        hidden_in_palette = EXCLUDED.hidden_in_palette,
+        node_label_ru = EXCLUDED.node_label_ru,
+        icon_key = EXCLUDED.icon_key,
+        visual_preset_key = EXCLUDED.visual_preset_key,
+        editor_type_code = EXCLUDED.editor_type_code,
+        runtime_handler_code = EXCLUDED.runtime_handler_code,
+        updated_at = now(),
+        updated_by = 'system_bootstrap',
+        ao_source = 'system_bootstrap',
+        ao_run_id = EXCLUDED.ao_run_id,
+        ao_updated_at = now(),
+        ao_contract_schema = EXCLUDED.ao_contract_schema,
+        ao_contract_name = EXCLUDED.ao_contract_name,
+        ao_contract_version = 1
+      `,
+      [
+        row.node_type_code,
+        row.node_name_ru,
+        row.description_ru,
+        row.section_code,
+        row.section_name_ru,
+        Math.trunc(Number(row.section_order || 0)),
+        Math.trunc(Number(row.node_order || 0)),
+        Boolean(row.is_enabled),
+        Boolean(row.is_system),
+        Boolean(row.hidden_in_palette),
+        row.node_label_ru,
+        row.icon_key,
+        row.visual_preset_key,
+        row.editor_type_code,
+        row.runtime_handler_code,
+        runId,
+        config.contracts_schema,
+        contractName
+      ]
+    );
+  }
+}
+
+export function materializeNodeRegistryRow(row) {
+  return {
+    id: Number(row?.id || 0) || 0,
+    node_type_code: String(row?.node_type_code || '').trim(),
+    node_name_ru: String(row?.node_name_ru || '').trim(),
+    description_ru: String(row?.description_ru || '').trim(),
+    section_code: String(row?.section_code || '').trim(),
+    section_name_ru: String(row?.section_name_ru || '').trim(),
+    section_order: Math.trunc(Number(row?.section_order || 0)) || 0,
+    node_order: Math.trunc(Number(row?.node_order || 0)) || 0,
+    is_enabled: Boolean(row?.is_enabled),
+    is_system: Boolean(row?.is_system),
+    hidden_in_palette: Boolean(row?.hidden_in_palette),
+    node_label_ru: String(row?.node_label_ru || '').trim(),
+    icon_key: String(row?.icon_key || '').trim(),
+    visual_preset_key: String(row?.visual_preset_key || '').trim(),
+    editor_type_code: String(row?.editor_type_code || '').trim(),
+    runtime_handler_code: String(row?.runtime_handler_code || '').trim(),
+    updated_at: row?.updated_at || '',
+    updated_by: String(row?.updated_by || '').trim()
+  };
+}
+
+async function ensureNodeRegistryTable(client, config) {
+  const schema = normalizeSettingIdent(config?.node_registry_schema, DEFAULT_CONFIG.node_registry_schema);
+  const table = normalizeSettingIdent(config?.node_registry_table, DEFAULT_CONFIG.node_registry_table);
+  const qn = `${qi(schema)}.${qi(table)}`;
+
+  await client.query(`CREATE SCHEMA IF NOT EXISTS ${qi(schema)}`);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ${qn} (
+      id bigserial PRIMARY KEY,
+      node_type_code text NOT NULL UNIQUE,
+      node_name_ru text NOT NULL,
+      description_ru text NOT NULL DEFAULT '',
+      section_code text NOT NULL,
+      section_name_ru text NOT NULL,
+      section_order integer NOT NULL DEFAULT 100,
+      node_order integer NOT NULL DEFAULT 100,
+      is_enabled boolean NOT NULL DEFAULT true,
+      is_system boolean NOT NULL DEFAULT true,
+      hidden_in_palette boolean NOT NULL DEFAULT false,
+      node_label_ru text NOT NULL DEFAULT '',
+      icon_key text NOT NULL DEFAULT '',
+      visual_preset_key text NOT NULL DEFAULT '',
+      editor_type_code text NOT NULL DEFAULT '',
+      runtime_handler_code text NOT NULL DEFAULT '',
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      updated_by text NOT NULL DEFAULT 'system'
+    )
+  `);
+  await client.query(`
+    ALTER TABLE ${qn}
+      ADD COLUMN IF NOT EXISTS description_ru text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS section_code text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS section_name_ru text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS section_order integer NOT NULL DEFAULT 100,
+      ADD COLUMN IF NOT EXISTS node_order integer NOT NULL DEFAULT 100,
+      ADD COLUMN IF NOT EXISTS is_enabled boolean NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS is_system boolean NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS hidden_in_palette boolean NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS node_label_ru text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS icon_key text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS visual_preset_key text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS editor_type_code text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS runtime_handler_code text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now(),
+      ADD COLUMN IF NOT EXISTS updated_by text NOT NULL DEFAULT 'system'
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_node_registry_store_palette_idx
+    ON ${qn} (is_enabled, hidden_in_palette, section_order, node_order, node_type_code)
+  `);
+  await ensureSystemContractColumns(client, qn);
+  await ensureDefaultNodeRegistryRows(client, qn, {
+    ...config,
+    node_registry_schema: schema,
+    node_registry_table: table
+  });
+  return qn;
+}
+
 async function ensureWorkflowDesksTable(client, config) {
   const schema = normalizeSettingIdent(config?.workflow_desks_schema, DEFAULT_CONFIG.workflow_desks_schema);
   const table = normalizeSettingIdent(config?.workflow_desks_table, DEFAULT_CONFIG.workflow_desks_table);
@@ -966,6 +1450,8 @@ async function ensureDefaultServerWriteRules(client, config, serverWritesQn) {
   const apiTable = normalizeSettingIdent(config?.api_configs_table, DEFAULT_CONFIG.api_configs_table);
   const parserSchema = normalizeSettingIdent(config?.parser_configs_schema, DEFAULT_CONFIG.parser_configs_schema);
   const parserTable = normalizeSettingIdent(config?.parser_configs_table, DEFAULT_CONFIG.parser_configs_table);
+  const nodeRegistrySchema = normalizeSettingIdent(config?.node_registry_schema, DEFAULT_CONFIG.node_registry_schema);
+  const nodeRegistryTable = normalizeSettingIdent(config?.node_registry_table, DEFAULT_CONFIG.node_registry_table);
   const workflowSchema = normalizeSettingIdent(config?.workflow_desks_schema, DEFAULT_CONFIG.workflow_desks_schema);
   const workflowTable = normalizeSettingIdent(config?.workflow_desks_table, DEFAULT_CONFIG.workflow_desks_table);
   const writesSchema = normalizeSettingIdent(config?.server_writes_schema, DEFAULT_CONFIG.server_writes_schema);
@@ -984,11 +1470,12 @@ async function ensureDefaultServerWriteRules(client, config, serverWritesQn) {
           'templates_storage',
           'api_configs_storage',
           'parser_configs_storage',
+          'node_registry_storage',
           'workflow_desks_storage',
           'server_writes_storage'
         ]
       },
-      description: '������ ������������ ������������ ����� � ������� ��������'
+      description: 'Синхронизация системных настроек хранения и правил bootstrap'
     },
     {
       rule_key: 'contracts_auto_create',
@@ -996,7 +1483,7 @@ async function ensureDefaultServerWriteRules(client, config, serverWritesQn) {
       target_table: contractsTable,
       operation: 'insert_contract_version',
       payload: { trigger: ['table_create', 'column_add', 'column_drop', 'table_rename', 'system_bootstrap'] },
-      description: '������ ������������� ������� ������ ���������� ������'
+      description: 'Автоматическая фиксация версии контракта данных после изменения таблицы'
     },
     {
       rule_key: 'templates_storage_sync',
@@ -1004,7 +1491,7 @@ async function ensureDefaultServerWriteRules(client, config, serverWritesQn) {
       target_table: templatesTable,
       operation: 'upsert_template',
       payload: { trigger: ['template_add', 'template_save', 'template_delete'] },
-      description: '������ ��������� ������� ������ � ������������ ���������'
+      description: 'Синхронизация системного хранилища шаблонов таблиц'
     },
     {
       rule_key: 'api_configs_storage_sync',
@@ -1012,7 +1499,7 @@ async function ensureDefaultServerWriteRules(client, config, serverWritesQn) {
       target_table: apiTable,
       operation: 'upsert_api_config',
       payload: { trigger: ['api_add', 'api_save', 'api_delete'] },
-      description: '������ ��������� ��������������� API � ������������ ���������'
+      description: 'Синхронизация системного хранилища шаблонов API'
     },
     {
       rule_key: 'parser_configs_storage_sync',
@@ -1020,7 +1507,15 @@ async function ensureDefaultServerWriteRules(client, config, serverWritesQn) {
       target_table: parserTable,
       operation: 'upsert_parser_config',
       payload: { trigger: ['parser_add', 'parser_save', 'parser_delete'] },
-      description: 'Синхронизация системного хранилища шаблонов parser-ноды'
+      description: 'Синхронизация системного хранилища шаблонов ноды «Работа с данными»'
+    },
+    {
+      rule_key: 'node_registry_storage_sync',
+      target_schema: nodeRegistrySchema,
+      target_table: nodeRegistryTable,
+      operation: 'seed_system_node_registry',
+      payload: { trigger: ['bootstrap', 'settings_reload'] },
+      description: 'Поддерживает системный реестр нод и разделов интерфейса workflow'
     },
     {
       rule_key: 'workflow_desks_storage_sync',
@@ -1028,7 +1523,7 @@ async function ensureDefaultServerWriteRules(client, config, serverWritesQn) {
       target_table: workflowTable,
       operation: 'upsert_workflow_desk',
       payload: { trigger: ['workflow_desk_save', 'workflow_desk_delete'] },
-      description: '������ ��������� ������� ����� ��������� � ������'
+      description: 'Синхронизация системного хранилища рабочих столов'
     },
     {
       rule_key: 'server_writes_rules_self',
@@ -1036,7 +1531,7 @@ async function ensureDefaultServerWriteRules(client, config, serverWritesQn) {
       target_table: writesTable,
       operation: 'upsert_rule',
       payload: { trigger: ['bootstrap', 'settings_reload'] },
-      description: '������ ������������ ���������� ������� �������'
+      description: 'Синхронизация системного хранилища правил серверной записи'
     }
   ];
 
@@ -1339,7 +1834,7 @@ function normalizeColumns(columns) {
   const out = [];
   for (const c of cols) {
     const field_name = String(c?.field_name || '').trim();
-    const field_type = String(c?.field_type || '').trim();
+    const field_type = normalizeContractFieldType(c?.field_type || '');
     const description = String(c?.description || '').trim();
     if (!field_name) continue;
     if (!isIdent(field_name)) throw new Error(`invalid_field_name:${field_name}`);
@@ -2219,6 +2714,28 @@ tableBuilderRouter.post('/parser-configs/preview', requireDataAdmin, async (req,
   }
 });
 
+tableBuilderRouter.get('/node-registry', requireDataAdmin, async (_req, res) => {
+  const client = await pool.connect();
+  try {
+    const config = await loadRuntimeConfig(client);
+    const qn = nodeRegistryQname(config);
+    await ensureNodeRegistryTable(client, config);
+    const r = await client.query(
+      `
+      SELECT *
+      FROM ${qn}
+      WHERE is_enabled = true
+      ORDER BY section_order ASC, node_order ASC, id ASC
+      `
+    );
+    return res.json({ node_registry: (r.rows || []).map(materializeNodeRegistryRow) });
+  } catch (e) {
+    return res.status(500).json({ error: 'node_registry_list_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
 tableBuilderRouter.get('/workflow-desks', requireDataAdmin, async (req, res) => {
   const deskType = String(req.query?.desk_type || '').trim();
   const limit = Math.max(1, Math.min(Number(req.query?.limit || 100), 1000));
@@ -2727,7 +3244,9 @@ tableBuilderRouter.post('/contracts/apply-version', requireDataAdmin, async (req
     }
 
     for (const c of toAdd) {
-      await client.query(`ALTER TABLE ${qname(schema, table)} ADD COLUMN IF NOT EXISTS ${qi(c.field_name)} ${c.field_type}`);
+      const sqlType = fieldTypeToSql(c.field_type);
+      if (!sqlType) throw new Error(`invalid_field_type_sql:${c.field_type}`);
+      await client.query(`ALTER TABLE ${qname(schema, table)} ADD COLUMN IF NOT EXISTS ${qi(c.field_name)} ${sqlType}`);
       await client.query(`COMMENT ON COLUMN ${qname(schema, table)}.${qi(c.field_name)} IS ${qlit(c.description)}`);
     }
 
@@ -2871,7 +3390,11 @@ tableBuilderRouter.post('/tables/create', requireDataAdmin, async (req, res) => 
 
     // create table
     const colDDL = columns
-      .map((c) => `${qi(c.field_name)} ${c.field_type}${c.field_name === partition_column ? ' NOT NULL' : ''}`)
+      .map((c) => {
+        const sqlType = fieldTypeToSql(c.field_type);
+        if (!sqlType) throw new Error(`invalid_field_type_sql:${c.field_type}`);
+        return `${qi(c.field_name)} ${sqlType}${c.field_name === partition_column ? ' NOT NULL' : ''}`;
+      })
       .join(',\n  ');
 
     if (partition_enabled) {
@@ -3520,7 +4043,7 @@ tableBuilderRouter.post('/columns/add', requireDataAdmin, async (req, res) => {
   const schema = String(req.body?.schema || '').trim();
   const table = String(req.body?.table || '').trim();
   const colName = String(req.body?.column?.name || '').trim();
-  const colType = String(req.body?.column?.type || '').trim();
+  const colType = normalizeContractFieldType(req.body?.column?.type || '');
   const colDescription = String(req.body?.column?.description || '').trim();
 
   if (!isIdent(schema) || !isIdent(table) || !isIdent(colName)) {
@@ -3536,7 +4059,7 @@ tableBuilderRouter.post('/columns/add', requireDataAdmin, async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query(
-      `ALTER TABLE ${qname(schema, table)} ADD COLUMN IF NOT EXISTS ${qi(colName)} ${colType}`
+      `ALTER TABLE ${qname(schema, table)} ADD COLUMN IF NOT EXISTS ${qi(colName)} ${fieldTypeToSql(colType)}`
     );
     if (colDescription) {
       await client.query(
@@ -3656,16 +4179,19 @@ export async function bootstrapTableBuilder() {
     const effective = await loadRuntimeConfig(client, { force: true });
     await ensureSettingsTable(client);
     await ensureContractsTable(client, effective);
-    await ensureTemplatesStorageTable(client, effective);
+    const templatesQn = await ensureTemplatesStorageTable(client, effective);
     await ensureApiConfigsTable(client, effective);
     await ensureParserConfigsTable(client, effective);
+    await ensureNodeRegistryTable(client, effective);
     await ensureWorkflowDesksTable(client, effective);
     await ensureServerWritesTable(client, effective);
+    await ensureBuiltinNodeRegistryTemplateRow(client, effective, templatesQn);
     return { ok: true, effective };
   } finally {
     client.release();
   }
 }
+
 
 
 

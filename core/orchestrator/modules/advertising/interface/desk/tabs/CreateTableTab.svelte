@@ -38,7 +38,28 @@
     storage_ctids?: string[];
   };
 
-  const typeOptions = ['text', 'int', 'bigint', 'numeric', 'boolean', 'date', 'timestamptz', 'jsonb', 'uuid'];
+  const typeOptions = [
+    { value: 'text', label: 'Текст' },
+    { value: 'label', label: 'Ярлык / метка' },
+    { value: 'int', label: 'Целое число' },
+    { value: 'bigint', label: 'Большое целое число' },
+    { value: 'numeric', label: 'Число с дробной частью' },
+    { value: 'boolean', label: 'Да / нет' },
+    { value: 'date', label: 'Дата' },
+    { value: 'timestamptz', label: 'Дата и время с часовым поясом' },
+    { value: 'jsonb', label: 'JSON-объект' },
+    { value: 'json_payload', label: 'JSON-пакет' },
+    { value: 'text_payload', label: 'Текстовый пакет' },
+    { value: 'csv_text', label: 'CSV-данные' },
+    { value: 'zip_archive', label: 'ZIP-архив' },
+    { value: 'url', label: 'Ссылка / URL' },
+    { value: 'file_ref', label: 'Ссылка на файл' },
+    { value: 'table_ref', label: 'Ссылка на таблицу' },
+    { value: 'record_ref', label: 'Ссылка на запись' },
+    { value: 'external_source_ref', label: 'Ссылка на внешний источник' },
+    { value: 'uuid', label: 'UUID' },
+    { value: 'bytea', label: 'Бинарные данные' }
+  ] as const;
   const CREATE_TIMEOUT_MS = 30000;
   const IDENT_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
   const CREATE_BUTTON_LABEL = 'Создать таблицу';
@@ -138,6 +159,7 @@
   function normalizeFieldType(value: any): string {
     const raw = String(value || '').trim().toLowerCase();
     if (!raw) return 'text';
+    if (typeOptions.some((item) => item.value === raw)) return raw;
     if (raw === 'int' || raw === 'integer' || raw === 'int4') return 'int';
     if (raw === 'bigint' || raw === 'int8' || raw === 'bigserial') return 'bigint';
     if (raw.startsWith('numeric') || raw.startsWith('decimal')) return 'numeric';
@@ -147,7 +169,8 @@
     if (raw === 'json' || raw === 'jsonb') return 'jsonb';
     if (raw === 'text' || raw === 'varchar' || raw.includes('character varying')) return 'text';
     if (raw === 'uuid') return 'uuid';
-    return typeOptions.includes(raw) ? raw : 'text';
+    if (raw === 'bytea') return 'bytea';
+    return 'text';
   }
 
   function normalizeColumns(cols: ColumnDef[]) {
@@ -491,8 +514,46 @@
     };
   }
 
+  function nodeRegistrySystemTemplate(): DataContract {
+    return {
+      id: 'builtin_node_registry_table',
+      name: 'Реестр системных нод',
+      schema_name: 'ao_system',
+      table_name: 'node_registry_store',
+      table_class: 'system_registry',
+      data_level: 'bronze',
+      template_kind: 'system_storage',
+      description: 'Системный реестр нод и разделов workflow: названия, порядок, безопасные метаданные показа и служебные признаки.',
+      columns: withRequiredTableFields([
+        { field_name: 'node_type_code', field_type: 'text', description: 'Служебный код типа ноды.' },
+        { field_name: 'node_name_ru', field_type: 'label', description: 'Основное русское название ноды.' },
+        { field_name: 'description_ru', field_type: 'text', description: 'Краткое русское описание ноды.' },
+        { field_name: 'section_code', field_type: 'text', description: 'Служебный код раздела палитры.' },
+        { field_name: 'section_name_ru', field_type: 'label', description: 'Русское название раздела палитры.' },
+        { field_name: 'section_order', field_type: 'int', description: 'Порядок раздела в палитре.' },
+        { field_name: 'node_order', field_type: 'int', description: 'Порядок ноды внутри раздела.' },
+        { field_name: 'is_enabled', field_type: 'boolean', description: 'Показывать ли ноду как доступную.' },
+        { field_name: 'is_system', field_type: 'boolean', description: 'Системная ли это нода.' },
+        { field_name: 'hidden_in_palette', field_type: 'boolean', description: 'Скрывать ли ноду в палитре.' },
+        { field_name: 'node_label_ru', field_type: 'label', description: 'Короткий ярлык ноды.' },
+        { field_name: 'icon_key', field_type: 'text', description: 'Ключ иконки из безопасного набора интерфейса.' },
+        { field_name: 'visual_preset_key', field_type: 'text', description: 'Ключ визуального пресета ноды.' },
+        { field_name: 'editor_type_code', field_type: 'text', description: 'Код редактора или конструктора, который открывается для ноды.' },
+        { field_name: 'runtime_handler_code', field_type: 'text', description: 'Код обработчика выполнения на сервере.' },
+        { field_name: 'updated_at', field_type: 'timestamptz', description: 'Когда запись в реестре обновили.' },
+        { field_name: 'updated_by', field_type: 'text', description: 'Кто обновил запись.' }
+      ]),
+      partition_enabled: false,
+      partition_column: '',
+      partition_interval: 'day',
+      contract_version: 1,
+      contract_mode: 'safe_add_only'
+    };
+  }
+
   const FIELD_TYPE_TO_DB_TYPES: Record<string, string[]> = {
     text: ['text', 'character varying', 'varchar'],
+    label: ['text', 'character varying', 'varchar'],
     int: ['integer', 'int4', 'int'],
     bigint: ['bigint', 'int8'],
     numeric: ['numeric', 'decimal'],
@@ -500,7 +561,17 @@
     date: ['date'],
     timestamptz: ['timestamp with time zone', 'timestamptz'],
     jsonb: ['jsonb', 'json'],
-    uuid: ['uuid']
+    json_payload: ['jsonb', 'json'],
+    text_payload: ['text', 'character varying', 'varchar'],
+    csv_text: ['text', 'character varying', 'varchar'],
+    zip_archive: ['bytea'],
+    url: ['text', 'character varying', 'varchar'],
+    table_ref: ['text', 'character varying', 'varchar'],
+    record_ref: ['text', 'character varying', 'varchar'],
+    file_ref: ['text', 'character varying', 'varchar'],
+    external_source_ref: ['text', 'character varying', 'varchar'],
+    uuid: ['uuid'],
+    bytea: ['bytea']
   };
 
   function normalizeTypeName(type: string) {
@@ -675,19 +746,7 @@
           storage_ctids: r?.__ctid ? [String(r.__ctid)] : []
         });
       }
-      tableTemplates = [
-        bronzeDataTemplate(),
-        bronzeApiLogSystemTemplate(),
-        bronzeWorkflowLogSystemTemplate(),
-        silverTemplate(),
-        storageSystemTemplate(),
-        contractsSystemTemplate(),
-        settingsSystemTemplate(),
-        apiConfigsSystemTemplate(),
-        workflowDesksSystemTemplate(),
-        serverWritesSystemTemplate(),
-        ...custom
-      ];
+      tableTemplates = mergeTemplates(builtinTableTemplates(), custom);
       error = '';
     } catch (e: any) {
       storage_status = 'error';
@@ -698,7 +757,11 @@
   }
 
   function loadTableTemplatesFallback() {
-    tableTemplates = [
+    tableTemplates = builtinTableTemplates();
+  }
+
+  function builtinTableTemplates(): DataContract[] {
+    return [
       bronzeDataTemplate(),
       bronzeApiLogSystemTemplate(),
       bronzeWorkflowLogSystemTemplate(),
@@ -707,9 +770,22 @@
       contractsSystemTemplate(),
       settingsSystemTemplate(),
       apiConfigsSystemTemplate(),
+      nodeRegistrySystemTemplate(),
       workflowDesksSystemTemplate(),
       serverWritesSystemTemplate()
     ];
+  }
+
+  function mergeTemplates(builtin: DataContract[], custom: DataContract[]) {
+    const seen = new Set<string>();
+    const out: DataContract[] = [];
+    for (const item of [...builtin, ...custom]) {
+      const key = String(item?.name || '').trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(item);
+    }
+    return out;
   }
 
   function applyTemplate(t: DataContract) {
@@ -1237,7 +1313,7 @@
               <input placeholder="имя поля" bind:value={c.field_name} />
               <select bind:value={c.field_type}>
                 {#each typeOptions as t}
-                  <option value={t}>{t}</option>
+                  <option value={t.value}>{t.label}</option>
                 {/each}
               </select>
               <input placeholder="описание" bind:value={c.description} />
