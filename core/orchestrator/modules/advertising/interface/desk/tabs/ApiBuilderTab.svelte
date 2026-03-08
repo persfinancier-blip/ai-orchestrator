@@ -2,6 +2,14 @@
   import { createEventDispatcher, onDestroy, tick } from 'svelte';
   import JsonTreeView from '../components/JsonTreeView.svelte';
   import { shouldRetryStatus, retryDelayMs, groupRowsByAliases } from './apiBuilderRuntimeCore.js';
+  import {
+    buildAliasFromPath,
+    buildOutputFieldsFromNode,
+    fullOutputContractPath,
+    normalizeTemplatePath,
+    resolveOutputContractValue,
+    valueTypeLabel
+  } from './outputContractCore.js';
   export type ExistingTable = { schema_name: string; table_name: string };
   type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   type DispatchMode = 'single' | 'group_by';
@@ -145,6 +153,14 @@
     alias: string;
   };
 
+  type OutputParameterDefinition = {
+    id: string;
+    rootPath: string;
+    path: string;
+    alias: string;
+    valueType: string;
+  };
+
   type ApiDraft = {
     localId: string;
     storeId?: number;
@@ -197,6 +213,7 @@
     paginationStopRules: PaginationStopRule[];
     paginationParameters: PaginationParameter[];
     pickedPaths: string[];
+    outputParameters: OutputParameterDefinition[];
     responseTargets: Array<{
       id: string;
       schema: string;
@@ -475,6 +492,10 @@
   let responsePathOptions: string[] = [];
   let responsePathPickerOpen = false;
   let responsePathPick = '';
+  let outputTreeSource: any = null;
+  let outputTreeSourceJson = false;
+  let outputTreeRefreshedAt = 0;
+  let outputTreeMessage = '';
   let paginationCursorResponsePathOptions: string[] = [];
   let paginationCursorResponsePick = '';
   let activePaginationParameterId = '';
@@ -787,6 +808,7 @@ function formatBytes(bytes: number) {
       paginationCustomStrategy: '',
       paginationParameters: [],
       pickedPaths: [],
+      outputParameters: [],
       responseTargets: [],
       description: '',
       sectionName: '',
@@ -898,6 +920,27 @@ function formatBytes(bytes: number) {
       : Array.isArray(mapping?.picked_paths)
       ? mapping.picked_paths
       : [];
+    const outputParametersSource = Array.isArray(row?.output_parameters)
+      ? row.output_parameters
+      : Array.isArray(mapping?.output_parameters)
+      ? mapping.output_parameters
+      : [];
+    const normalizedOutputParameters = outputParametersSource
+      .map((item: any) => {
+        const rootPath = normalizeTemplatePath(String(item?.rootPath || item?.root_path || ''));
+        const path = normalizeTemplatePath(String(item?.path || ''));
+        const alias = String(item?.alias || buildAliasFromPath(path || rootPath)).trim();
+        const valueType = String(item?.valueType || item?.value_type || '').trim();
+        if (!alias || (!rootPath && !path)) return null;
+        return {
+          id: String(item?.id || uid()),
+          rootPath,
+          path: rootPath && path.startsWith(`${rootPath}.`) ? path.slice(rootPath.length + 1) : path,
+          alias,
+          valueType: valueType || 'Значение'
+        };
+      })
+      .filter((item: OutputParameterDefinition | null): item is OutputParameterDefinition => Boolean(item));
     const executionCfg = tryObj(mapping?.execution || row?.execution_json || legacy?.execution);
     const bindingRulesRaw = Array.isArray(row?.binding_rules)
       ? row.binding_rules
@@ -1349,7 +1392,8 @@ function formatBytes(bytes: number) {
       paginationStopRules: normalizedPaginationStopRules,
       paginationCustomStrategy: paginationCustomStrategyValue,
       paginationParameters: normalizedPaginationParameters,
-      pickedPaths: pickedPathsSource.map((x: any) => String(x || '').trim()).filter(Boolean),
+      pickedPaths: pickedPathsSource.map((x: any) => normalizeTemplatePath(String(x || '').trim())).filter(Boolean),
+      outputParameters: normalizedOutputParameters,
       responseTargets: normalizedTargets,
       description: String(row?.description || legacy?.description || ''),
       sectionName: String(
@@ -1567,6 +1611,15 @@ function formatBytes(bytes: number) {
               .filter((m) => m.response_path && m.alias)
           }
         : { mode: 'manual' };
+    const outputParametersPayload = (Array.isArray(d.outputParameters) ? d.outputParameters : [])
+      .map((item) => ({
+        id: String(item?.id || uid()),
+        root_path: normalizeTemplatePath(String(item?.rootPath || '')),
+        path: normalizeTemplatePath(String(item?.path || '')),
+        alias: String(item?.alias || '').trim(),
+        value_type: String(item?.valueType || '').trim() || 'Значение'
+      }))
+      .filter((item) => item.alias && (item.root_path || item.path));
 
     return {
       id: d.storeId || undefined,
@@ -1613,6 +1666,7 @@ function formatBytes(bytes: number) {
         exampleRequest: d.exampleRequest,
         response_targets: d.responseTargets,
         picked_paths: d.pickedPaths,
+        output_parameters: outputParametersPayload,
         pagination_parameters: paginationParametersPayload,
         oauth2_flow: oauth2FlowPayload,
         oauth2:
@@ -1656,6 +1710,7 @@ function formatBytes(bytes: number) {
       binding_rules: bindingRulesPayload,
       response_targets: d.responseTargets,
       picked_paths: d.pickedPaths,
+      output_parameters: outputParametersPayload,
       example_request: d.exampleRequest,
       pagination_enabled: d.paginationEnabled,
       pagination_strategy: paginationStrategyLegacy,
@@ -2303,6 +2358,173 @@ function formatBytes(bytes: number) {
         collectScalarResponsePaths(v, next, out);
       });
     }
+  }
+
+  function outputParameterFullPath(item: OutputParameterDefinition) {
+    return fullOutputContractPath(item);
+  }
+
+  function outputParametersOf(d: ApiDraft | null) {
+    return Array.isArray(d?.outputParameters) ? d.outputParameters : [];
+  }
+
+  function outputParametersByRootPath(draft: ApiDraft | null, rootPath: string) {
+    const normalizedRoot = normalizeTemplatePath(rootPath);
+    return outputParametersOf(draft).filter((item) => normalizeTemplatePath(item.rootPath) === normalizedRoot);
+  }
+
+  function outputParameterRows(draft: ApiDraft | null) {
+    return outputParametersOf(draft).map((item) => ({
+      ...item,
+      fullPath: outputParameterFullPath(item)
+    }));
+  }
+
+  function currentOutputParameterAliases(draft: ApiDraft | null, ignoreId = '') {
+    return new Set(
+      outputParametersOf(draft)
+        .filter((item) => item.id !== ignoreId)
+        .map((item) => String(item.alias || '').trim().toLowerCase())
+        .filter(Boolean)
+    );
+  }
+
+  function createUniqueOutputAlias(basePath: string, draft: ApiDraft | null, ignoreId = '') {
+    const used = currentOutputParameterAliases(draft, ignoreId);
+    const base = buildAliasFromPath(basePath);
+    let candidate = base;
+    let idx = 2;
+    while (used.has(candidate.toLowerCase())) {
+      candidate = `${base}_${idx}`;
+      idx += 1;
+    }
+    return candidate;
+  }
+
+  function refreshOutputTreeSource(showMessage = true) {
+    if (!responseIsJson || !responseJson) {
+      outputTreeSource = null;
+      outputTreeSourceJson = false;
+      outputTreeRefreshedAt = Date.now();
+      outputTreeMessage = 'Сначала выполни проверку API, чтобы получить дерево ответа.';
+      if (showMessage) err = 'Сначала выполни проверку API, чтобы получить дерево ответа.';
+      return;
+    }
+    outputTreeSource = deepClone(responseJson);
+    outputTreeSourceJson = true;
+    outputTreeRefreshedAt = Date.now();
+    outputTreeMessage = 'Источник выходного контракта обновлён из текущего тестового результата.';
+    if (showMessage) ok = 'Дерево ответа обновлено для выходного контракта';
+  }
+
+  function updateOutputTreeSourceFromPayload(payload: any, message = '') {
+    outputTreeSource = payload ? deepClone(payload) : null;
+    outputTreeSourceJson = Boolean(payload && typeof payload === 'object');
+    outputTreeRefreshedAt = Date.now();
+    outputTreeMessage = message || 'Источник выходного контракта обновлён.';
+  }
+
+  function ensurePickedRoot(path: string) {
+    const normalized = normalizeTemplatePath(path);
+    if (!normalized) return;
+    mutateSelected((d) => {
+      if (!d.pickedPaths.includes(normalized)) d.pickedPaths = [...d.pickedPaths, normalized];
+    });
+  }
+
+  function removeOutputRoot(path: string) {
+    const normalized = normalizeTemplatePath(path);
+    mutateSelected((d) => {
+      d.pickedPaths = (Array.isArray(d.pickedPaths) ? d.pickedPaths : []).filter((item) => normalizeTemplatePath(item) !== normalized);
+      d.outputParameters = outputParametersOf(d).filter((item) => normalizeTemplatePath(item.rootPath) !== normalized);
+    });
+  }
+
+  function responseNodeByExactPath(rawPath: string) {
+    const path = String(rawPath || '').trim();
+    if (!path || !outputTreeSourceJson) return undefined;
+    return getByPath(outputTreeSource, path);
+  }
+
+  function addOutputGroup(rawPath: string) {
+    const normalized = normalizeTemplatePath(rawPath);
+    if (!normalized) return;
+    ensurePickedRoot(normalized);
+    ok = 'Узел добавлен как группа';
+  }
+
+  function addOutputFields(rawPath: string) {
+    if (!selected) return;
+    const sampleNode = responseNodeByExactPath(rawPath);
+    if (sampleNode === undefined) {
+      err = 'Не удалось прочитать выбранный узел из текущего тестового результата.';
+      return;
+    }
+    const rootPath = normalizeTemplatePath(rawPath);
+    const built = buildOutputFieldsFromNode(sampleNode, rootPath).map((item) => ({
+      ...item,
+      alias: createUniqueOutputAlias(item.path || rootPath, selected)
+    }));
+    mutateSelected((d) => {
+      if (rootPath && !d.pickedPaths.includes(rootPath)) d.pickedPaths = [...d.pickedPaths, rootPath];
+      const existingByPath = new Map(
+        outputParametersOf(d).map((item) => [`${normalizeTemplatePath(item.rootPath)}|${normalizeTemplatePath(item.path)}`, item])
+      );
+      const appended: OutputParameterDefinition[] = [];
+      built.forEach((item) => {
+        const key = `${normalizeTemplatePath(item.rootPath)}|${normalizeTemplatePath(item.path)}`;
+        if (existingByPath.has(key)) return;
+        const alias = createUniqueOutputAlias(item.path || item.rootPath, { ...d, outputParameters: [...outputParametersOf(d), ...appended] } as ApiDraft);
+        appended.push({ ...item, alias });
+      });
+      d.outputParameters = [...outputParametersOf(d), ...appended];
+    });
+    ok = built.length ? `Поля добавлены: ${built.length}` : 'В выбранном узле нет конечных полей';
+  }
+
+  function addSingleOutputField(rawPath: string) {
+    if (!selected) return;
+    const normalized = normalizeTemplatePath(rawPath);
+    if (!normalized) return;
+    const sampleValue = responseNodeByExactPath(rawPath);
+    const rootParts = normalized.split('.');
+    const leaf = rootParts.pop() || normalized;
+    const rootPath = normalizeTemplatePath(rootParts.join('.'));
+    mutateSelected((d) => {
+      if (rootPath && !d.pickedPaths.includes(rootPath)) d.pickedPaths = [...d.pickedPaths, rootPath];
+      const nextPath = rootPath ? leaf : normalized;
+      const exists = outputParametersOf(d).some(
+        (item) => normalizeTemplatePath(item.rootPath) === rootPath && normalizeTemplatePath(item.path) === normalizeTemplatePath(nextPath)
+      );
+      if (exists) return;
+      d.outputParameters = [
+        ...outputParametersOf(d),
+        {
+          id: uid(),
+          rootPath,
+          path: nextPath,
+          alias: createUniqueOutputAlias(nextPath, d),
+          valueType: valueTypeLabel(sampleValue)
+        }
+      ];
+    });
+    ok = 'Поле добавлено в выходной контракт';
+  }
+
+  function updateOutputParameterAlias(id: string, alias: string) {
+    mutateSelected((d) => {
+      d.outputParameters = outputParametersOf(d).map((item) =>
+        item.id === id
+          ? { ...item, alias: String(alias || '').trim() || createUniqueOutputAlias(item.path || item.rootPath, d, id) }
+          : item
+      );
+    });
+  }
+
+  function removeOutputParameter(id: string) {
+    mutateSelected((d) => {
+      d.outputParameters = outputParametersOf(d).filter((item) => item.id !== id);
+    });
   }
 
   function setActivePaginationParameter(id: string) {
@@ -4219,6 +4441,12 @@ function formatBytes(bytes: number) {
 
   function sourceDraftOutputPaths(source: ApiDraft | null): string[] {
     if (!source) return [];
+    const fromContractAliases = uniqueAliasList(
+      outputParametersOf(source)
+        .map((item) => String(item?.alias || '').trim())
+        .filter(Boolean)
+    );
+    if (fromContractAliases.length) return fromContractAliases;
     const fromPicked = uniqueAliasList((Array.isArray(source.pickedPaths) ? source.pickedPaths : []).map((p) => String(p || '').trim()).filter(Boolean));
     const fromCache: string[] = [];
     const cached = apiResponseCache[refOf(source)];
@@ -4805,6 +5033,13 @@ function formatBytes(bytes: number) {
       return apiSystemFieldOptions().map((x) => ({ value: x.key, label: x.label }));
     }
     if (param.sourceType === 'output') {
+      const contract = outputParametersOf(source);
+      if (contract.length) {
+        return contract.map((item) => ({
+          value: item.alias,
+          label: `${item.alias} — ${outputParameterFullPath(item)}`
+        }));
+      }
       return sourceDraftOutputPaths(source).map((path) => ({ value: path, label: path }));
     }
     return sourceDraftInputAliases(source).map((alias) => ({ value: alias, label: alias }));
@@ -5174,10 +5409,15 @@ function formatBytes(bytes: number) {
       if (outputParams.length) {
         const cached = apiResponseCache[sourceRef];
         outputParams.forEach((p) => {
-          const path = String(p.sourceKey || '').trim();
-          const value = path ? getByPath(cached, path) : undefined;
+          const sourceKey = String(p.sourceKey || '').trim();
+          const contractItem = outputParametersOf(source).find(
+            (item) => String(item?.alias || '').trim().toLowerCase() === sourceKey.toLowerCase()
+          );
+          const value = contractItem ? resolveOutputContractValue(cached, contractItem) : sourceKey ? getByPath(cached, sourceKey) : undefined;
           if (value === undefined && !issues[p.alias]) {
-            issues[p.alias] = 'для выходного параметра нет значения (запусти источник API и выбери путь)';
+            issues[p.alias] = contractItem
+              ? 'для выходного параметра нет значения (обнови тестовый ответ и проверь выходной контракт)'
+              : 'для выходного параметра нет значения (запусти источник API и выбери путь)';
           }
           sourceRows.forEach((row) => {
             row[p.alias] = value;
@@ -7784,6 +8024,7 @@ function handleDefinitionInput(value: string) {
               : undefined
           };
         responseText = JSON.stringify(groupedResponsePayload, null, 2);
+        updateOutputTreeSourceFromPayload(groupedResponsePayload, 'Источник выходного контракта обновлён после проверки API.');
         apiResponseCache = { ...apiResponseCache, [refOf(s)]: groupedResponsePayload };
         ok = execution.failed
           ? `Проверка завершена: успех ${execution.success}, ошибок ${execution.failed}`
@@ -7860,6 +8101,7 @@ function handleDefinitionInput(value: string) {
               : undefined
           };
         responseText = JSON.stringify(rowResponsePayload, null, 2);
+        updateOutputTreeSourceFromPayload(rowResponsePayload, 'Источник выходного контракта обновлён после проверки API.');
         apiResponseCache = { ...apiResponseCache, [refOf(s)]: rowResponsePayload };
         ok = execution.failed
           ? `Проверка завершена: успех ${execution.success}, ошибок ${execution.failed}`
@@ -8039,6 +8281,7 @@ function handleDefinitionInput(value: string) {
             : undefined
         };
       responseText = JSON.stringify(singleResponsePayload, null, 2);
+      updateOutputTreeSourceFromPayload(singleResponsePayload, 'Источник выходного контракта обновлён после проверки API.');
       apiResponseCache = { ...apiResponseCache, [refOf(s)]: singleResponsePayload };
       responsePagesCount = pagePayloads.length;
       responsePayloadCount = execution.totalItems;
@@ -8167,12 +8410,20 @@ function handleDefinitionInput(value: string) {
       response_log_picker_open = false;
       response_log_pick_value = responseLogQualifiedTable(selected);
       activeResponseFieldRef = '';
+      outputTreeSource = null;
+      outputTreeSourceJson = false;
+      outputTreeRefreshedAt = 0;
+      outputTreeMessage = '';
       datasetPreviewRows = [];
       datasetPreviewColumns = [];
       datasetPreviewHasMore = false;
       datasetPreviewError = '';
     } else {
       selectedBaselineSignature = '';
+      outputTreeSource = null;
+      outputTreeSourceJson = false;
+      outputTreeRefreshedAt = 0;
+      outputTreeMessage = '';
     }
   }
   $: {
@@ -8222,6 +8473,12 @@ function handleDefinitionInput(value: string) {
     if (!responsePathOptions.includes(responsePathPick)) {
       responsePathPick = responsePathOptions[0] || '';
     }
+  }
+  $: if (responseIsJson && responseJson && !outputTreeSourceJson) {
+    outputTreeSource = deepClone(responseJson);
+    outputTreeSourceJson = true;
+    outputTreeRefreshedAt = Date.now();
+    outputTreeMessage = 'Источник выходного контракта загружен из последнего тестового результата.';
   }
   $: {
     const scalar = new Set<string>();
@@ -8580,7 +8837,7 @@ function syncParameterEditorsHeight() {
         </div>
       {#if responseIsJson && responseViewMode === 'tree'}
         <div class="response-tree-wrap">
-          <JsonTreeView node={responseJson} name="response" level={0} pickEnabled={true} on:pickpath={(e) => applyPickedResponsePath(e.detail.path)} />
+          <JsonTreeView node={responseJson} name="response" level={0} />
         </div>
         {:else}
           <textarea bind:this={responsePreviewEl} readonly value={responseText}></textarea>
@@ -9968,88 +10225,86 @@ function syncParameterEditorsHeight() {
 
         <div class="targets-wrap">
           <div class="targets-head">
-            <div class="targets-title">Выходные параметры</div>
-          </div>
-          <div class="crumbs-panel">
-            <div class="crumbs-title-row">
-              <div class="crumbs-title">Витрина</div>
-              <button class="icon-btn plus-dark" type="button" title="Добавить путь из ответа" on:click={() => (responsePathPickerOpen = !responsePathPickerOpen)}>+</button>
+            <div>
+              <div class="targets-title">Выходные параметры</div>
+              <div class="hint">Здесь формируется универсальный выходной контракт шаблона на основе текущего тестового результата, а не буквального пути одного тестового ответа.</div>
             </div>
-            {#if responsePathPickerOpen}
-              <div class="crumbs-picker">
-                <select bind:value={responsePathPick}>
-                  {#each responsePathOptions as opt}
-                    <option value={opt}>{opt}</option>
-                  {/each}
-                </select>
-                <button class="icon-btn plus-green" type="button" title="Добавить путь" on:click={addPickedPathFromPicker} disabled={!responsePathPick}>+</button>
-              </div>
-            {/if}
-            {#if !(selected?.pickedPaths?.length)}
-              <p class="hint">Отметь узлы в дереве ответа, они появятся здесь.</p>
-            {:else}
-              <div class="crumbs-list">
-                {#each selected?.pickedPaths || [] as pth (pth)}
-                  <div class="crumb-chip" draggable="true" on:dragstart={(e) => onPathChipDragStart(e, pth)}>
-                    <button type="button" class="chip-path" title="Подставить в активное поле" on:click={() => applyPickedResponsePath(pth)}>{pth}</button>
-                    <button type="button" class="chip-remove" title="Убрать из витрины" on:click={() => removePickedPath(pth)}>x</button>
-                  </div>
-                {/each}
-              </div>
-            {/if}
+            <button class="view-toggle template-action-btn" type="button" on:click={() => refreshOutputTreeSource()} disabled={!responseIsJson}>
+              Обновить
+            </button>
           </div>
+          <div class="targets-layout">
+            <div class="crumbs-panel output-tree-panel">
+              <div class="crumbs-title-row">
+                <div class="crumbs-title">Дерево результата</div>
+                <small>Источник: текущий тестовый ответ</small>
+              </div>
+              {#if outputTreeMessage}
+                <p class="hint">{outputTreeMessage}</p>
+              {/if}
+              {#if outputTreeRefreshedAt}
+                <p class="hint small-hint">Обновлено: {new Date(outputTreeRefreshedAt).toLocaleString('ru-RU')}</p>
+              {/if}
+              {#if outputTreeSourceJson && outputTreeSource}
+                <div class="response-tree-wrap output-contract-tree">
+                  <JsonTreeView
+                    node={outputTreeSource}
+                    name="response"
+                    level={0}
+                    pickEnabled={true}
+                    on:pickgroup={(e) => addOutputGroup(e.detail.path)}
+                    on:pickfields={(e) => addOutputFields(e.detail.path)}
+                    on:pickfield={(e) => addSingleOutputField(e.detail.path)}
+                  />
+                </div>
+              {:else}
+                <div class="empty-box">Сначала выполни проверку API, затем нажми «Обновить», чтобы получить дерево результата для выходного контракта.</div>
+              {/if}
+            </div>
 
-          <div class="mapping-panel">
-            <div class="mapping-head">
-              <span>Сопоставление</span>
-              <span class="mapping-head-right">Ответ API | Таблица | Поле таблицы</span>
-            </div>
-            {#if !mappingRowsOf(selected).length}
-              <p class="hint">Добавь сопоставление и укажи куда писать данные.</p>
-            {:else}
-              <div class="mapping-list">
-                {#each mappingRowsOf(selected) as m (`${m.targetId}:${m.fieldId}`)}
-                  <div class="map-row" class:active-map={isActiveResponseField(m.targetId, m.fieldId)}>
-                    <select
-                      value={m.responsePath}
-                      on:focus={() => setActiveResponseField(m.targetId, m.fieldId)}
-                      on:click={() => setActiveResponseField(m.targetId, m.fieldId)}
-                      on:dragover|preventDefault
-                      on:drop={(e) => dropPathToMapping(e, m.targetId, m.fieldId)}
-                      on:change={(e) => setMappingRowResponsePath(m.targetId, m.fieldId, e.currentTarget.value)}
-                    >
-                      <option value="">Ответ API</option>
-                      {#each responsePathOptionsFor(m.responsePath) as pathOpt}
-                        <option value={pathOpt}>{pathOpt}</option>
-                      {/each}
-                    </select>
-                    <select
-                      value={formatQualifiedTable(m.schema, m.table)}
-                      on:change={(e) => setMappingRowTable(m.targetId, e.currentTarget.value)}
-                    >
-                      <option value="">Таблица</option>
-                      {#each existingTables as et}
-                        <option value={`${et.schema_name}.${et.table_name}`}>{et.schema_name}.{et.table_name}</option>
-                      {/each}
-                    </select>
-                    <select
-                      value={m.targetField}
-                      on:focus={() => setActiveResponseField(m.targetId, m.fieldId)}
-                      on:click={() => setActiveResponseField(m.targetId, m.fieldId)}
-                      on:change={(e) => setMappingRowColumn(m.targetId, m.fieldId, e.currentTarget.value)}
-                    >
-                      <option value="">Поле таблицы</option>
-                      {#each tableFieldOptionsFor(m.schema, m.table, m.targetField) as col}
-                        <option value={col}>{col}</option>
-                      {/each}
-                    </select>
-                    <button class="icon-btn danger" type="button" on:click={() => removeMappingRow(m.targetId, m.fieldId)} title="Удалить сопоставление">x</button>
-                  </div>
-                {/each}
+            <div class="mapping-panel output-contract-panel">
+              <div class="mapping-head">
+                <span>Контракт результата</span>
+                <span class="mapping-head-right">Путь | Алиас | Тип</span>
               </div>
-            {/if}
-            <div class="mapping-actions">
-              <button class="icon-btn plus-dark" type="button" title="Добавить сопоставление" on:click={addMappingRow}>+</button>
+
+              <div class="selected-roots-wrap">
+                <div class="crumbs-title-row">
+                  <div class="crumbs-title">Выбранные узлы</div>
+                  <small>Это рабочие корневые узлы шаблона</small>
+                </div>
+                {#if !(selected?.pickedPaths?.length)}
+                  <p class="hint">Выбери в дереве узел и добавь его как группу или как поля.</p>
+                {:else}
+                  <div class="crumbs-list">
+                    {#each selected?.pickedPaths || [] as pth (pth)}
+                      <div class="crumb-chip">
+                        <button type="button" class="chip-path" title="Рабочий узел" on:click={() => null}>{pth}</button>
+                        <button type="button" class="chip-remove" title="Убрать группу и связанные поля" on:click={() => removeOutputRoot(pth)}>x</button>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+
+              {#if !outputParameterRows(selected).length}
+                <p class="hint">Чтобы не заводить поля руками, выбери узел в дереве и нажми «Добавить как поля».</p>
+              {:else}
+                <div class="mapping-list output-contract-list">
+                  {#each outputParameterRows(selected) as item (item.id)}
+                    <div class="map-row output-contract-row">
+                      <div class="output-path-cell" title={item.fullPath}>{item.fullPath}</div>
+                      <input
+                        value={item.alias}
+                        placeholder="Алиас"
+                        on:input={(e) => updateOutputParameterAlias(item.id, e.currentTarget.value)}
+                      />
+                      <div class="output-type-chip">{item.valueType || 'Значение'}</div>
+                      <button class="icon-btn danger" type="button" on:click={() => removeOutputParameter(item.id)} title="Удалить параметр">x</button>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
             </div>
           </div>
         </div>
@@ -10327,8 +10582,9 @@ function syncParameterEditorsHeight() {
   .connect-actions { display:flex; gap:8px; align-items:center; justify-content:flex-end; }
   .connect-actions .primary { min-width:130px; }
   .targets-wrap { margin-top:10px; border:1px solid #e6eaf2; border-radius:12px; padding:10px; background:transparent; }
-  .targets-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+  .targets-head { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; margin-bottom:8px; }
   .targets-title { font-size:13px; font-weight:700; color:#0f172a; }
+  .targets-layout { display:grid; grid-template-columns:minmax(0, 1.1fr) minmax(0, 1fr); gap:10px; align-items:start; }
   .crumbs-panel { border:1px dashed #dbe3ef; border-radius:12px; padding:8px; background:#fff; margin-bottom:10px; }
   .crumbs-title-row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
   .crumbs-title { font-size:12px; font-weight:600; color:#334155; margin-bottom:0; }
@@ -10344,6 +10600,34 @@ function syncParameterEditorsHeight() {
   .map-row { display:grid; grid-template-columns: 1.2fr 1fr 1fr auto; gap:8px; align-items:center; border:1px solid #eef2f7; border-radius:10px; padding:6px; background:transparent; }
   .map-row.active-map { border-color:#cbd5e1; background:#f8fafc; }
   .mapping-actions { margin-top:8px; display:flex; justify-content:flex-end; }
+  .output-tree-panel,
+  .output-contract-panel { margin-bottom:0; }
+  .output-contract-tree { max-height:420px; overflow:auto; }
+  .selected-roots-wrap { margin-bottom:10px; }
+  .output-contract-list { max-height:420px; overflow:auto; }
+  .output-contract-row { grid-template-columns:minmax(0, 1.3fr) minmax(140px, 1fr) 120px auto; }
+  .output-path-cell {
+    min-width:0;
+    font-size:12px;
+    color:#0f172a;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .output-type-chip {
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    min-height:32px;
+    border:1px solid #dbe3ef;
+    border-radius:999px;
+    background:#f8fafc;
+    color:#334155;
+    padding:0 10px;
+    font-size:11px;
+    font-weight:600;
+    white-space:nowrap;
+  }
   .desc { width:100%; box-sizing:border-box; margin-top:8px; min-height:56px; resize:vertical; }
   .raw-grid { display:grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap:10px; margin-top:8px; }
   .field-param-showcase { margin:8px 0; display:flex; flex-wrap:wrap; gap:6px; }

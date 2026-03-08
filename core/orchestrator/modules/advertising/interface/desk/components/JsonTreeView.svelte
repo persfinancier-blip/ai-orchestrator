@@ -7,7 +7,12 @@
   export let path = '';
   export let pickEnabled = false;
 
-  const dispatch = createEventDispatcher<{ pickpath: { path: string } }>();
+  const dispatch = createEventDispatcher<{
+    pickpath: { path: string };
+    pickgroup: { path: string };
+    pickfields: { path: string };
+    pickfield: { path: string };
+  }>();
 
   function isObject(v: any) {
     return v && typeof v === 'object' && !Array.isArray(v);
@@ -39,8 +44,35 @@
     dispatch('pickpath', { path });
   }
 
+  function pickCurrentGroup() {
+    if (!path) return;
+    dispatch('pickgroup', { path });
+  }
+
+  function pickCurrentFields() {
+    if (!path) return;
+    dispatch('pickfields', { path });
+  }
+
+  function pickCurrentField() {
+    if (!path) return;
+    dispatch('pickfield', { path });
+  }
+
   function forwardPickPath(e: CustomEvent<{ path: string }>) {
     dispatch('pickpath', e.detail);
+  }
+
+  function forwardPickGroup(e: CustomEvent<{ path: string }>) {
+    dispatch('pickgroup', e.detail);
+  }
+
+  function forwardPickFields(e: CustomEvent<{ path: string }>) {
+    dispatch('pickfields', e.detail);
+  }
+
+  function forwardPickField(e: CustomEvent<{ path: string }>) {
+    dispatch('pickfield', e.detail);
   }
 </script>
 
@@ -48,14 +80,27 @@
   <details class="json-node" open={level < 1}>
     <summary>
       <span class="key">{name || 'root'}</span>
-      <span class="meta">object ({Object.keys(node).length})</span>
+      <span class="meta">объект ({Object.keys(node).length})</span>
       {#if pickEnabled && path}
-        <button class="pick-btn" type="button" aria-label="Add to response field" on:click|preventDefault|stopPropagation={pickCurrentPath}>+</button>
+        <div class="pick-actions">
+          <button class="pick-btn pick-group-btn" type="button" aria-label="Добавить как группу" on:click|preventDefault|stopPropagation={pickCurrentGroup}>Группа +</button>
+          <button class="pick-btn pick-field-btn" type="button" aria-label="Добавить как поля" on:click|preventDefault|stopPropagation={pickCurrentFields}>Поля +</button>
+        </div>
       {/if}
     </summary>
     <div class="children">
       {#each Object.entries(node) as [k, v]}
-        <svelte:self node={v} name={k} level={level + 1} path={objectChildPath(k)} pickEnabled={pickEnabled} on:pickpath={forwardPickPath} />
+        <svelte:self
+          node={v}
+          name={k}
+          level={level + 1}
+          path={objectChildPath(k)}
+          pickEnabled={pickEnabled}
+          on:pickpath={forwardPickPath}
+          on:pickgroup={forwardPickGroup}
+          on:pickfields={forwardPickFields}
+          on:pickfield={forwardPickField}
+        />
       {/each}
     </div>
   </details>
@@ -63,14 +108,27 @@
   <details class="json-node" open={level < 1}>
     <summary>
       <span class="key">{name || 'root'}</span>
-      <span class="meta">array [{node.length}]</span>
+      <span class="meta">массив [{node.length}]</span>
       {#if pickEnabled && path}
-        <button class="pick-btn" type="button" aria-label="Add to response field" on:click|preventDefault|stopPropagation={pickCurrentPath}>+</button>
+        <div class="pick-actions">
+          <button class="pick-btn pick-group-btn" type="button" aria-label="Добавить как группу" on:click|preventDefault|stopPropagation={pickCurrentGroup}>Группа +</button>
+          <button class="pick-btn pick-field-btn" type="button" aria-label="Добавить как поля" on:click|preventDefault|stopPropagation={pickCurrentFields}>Поля +</button>
+        </div>
       {/if}
     </summary>
     <div class="children">
       {#each node as v, i}
-        <svelte:self node={v} name={`[${i}]`} level={level + 1} path={arrayChildPath(i)} pickEnabled={pickEnabled} on:pickpath={forwardPickPath} />
+        <svelte:self
+          node={v}
+          name={`[${i}]`}
+          level={level + 1}
+          path={arrayChildPath(i)}
+          pickEnabled={pickEnabled}
+          on:pickpath={forwardPickPath}
+          on:pickgroup={forwardPickGroup}
+          on:pickfields={forwardPickFields}
+          on:pickfield={forwardPickField}
+        />
       {/each}
     </div>
   </details>
@@ -80,7 +138,7 @@
     <span class="sep">:</span>
     <span class={`val ${valueClass(node)}`}>{valueText(node)}</span>
     {#if pickEnabled && path}
-      <button class="pick-btn" type="button" aria-label="Add to response field" on:click|stopPropagation={pickCurrentPath}>+</button>
+      <button class="pick-btn pick-field-btn" type="button" aria-label="Добавить поле" on:click|stopPropagation={pickCurrentField}>Поле +</button>
     {/if}
   </div>
 {/if}
@@ -138,15 +196,32 @@
   }
 
   .pick-btn {
-    border: 0;
-    background: transparent;
-    color: #16a34a;
+    border: 1px solid #d7deea;
+    background: #fff;
+    color: #0f172a;
     border-radius: 999px;
-    font-size: 14px;
-    font-weight: 700;
-    line-height: 1;
-    padding: 0 4px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.2;
+    padding: 3px 8px;
     cursor: pointer;
+  }
+
+  .pick-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .pick-group-btn {
+    color: #0f172a;
+  }
+
+  .pick-field-btn {
+    color: #166534;
+    border-color: #bbf7d0;
+    background: #f0fdf4;
   }
 
   .key {
@@ -164,20 +239,20 @@
     font-size: 11px;
   }
 
-  .val.string {
-    color: #0f766e;
-    word-break: break-word;
+  .val.null {
+    color: #94a3b8;
   }
 
   .val.number {
-    color: #1d4ed8;
+    color: #2563eb;
   }
 
   .val.boolean {
     color: #7c3aed;
   }
 
-  .val.null {
-    color: #b91c1c;
+  .val.string {
+    color: #166534;
+    word-break: break-word;
   }
 </style>
