@@ -543,6 +543,50 @@
   );
   $: processCodeConflicts = findProcessCodeConflicts(nodes);
   $: ensureStartProcessCodes();
+  $: enabledPublishedProcesses = publishedProcesses.filter((p) => Boolean(p?.is_enabled));
+  $: enabledAutomaticProcesses = enabledPublishedProcesses.filter((p) => String(p?.trigger_type || '').trim() !== 'manual');
+  $: deskExecutionState = (() => {
+    if (!deskId) {
+      return {
+        mode: 'idle',
+        label: 'Рабочий стол ещё не создан',
+        hint: 'Сначала сохрани рабочий стол, чтобы сервер мог работать с его процессами.'
+      };
+    }
+    if (!publishedDeskReady) {
+      return {
+        mode: 'idle',
+        label: 'Не выполняется: рабочий стол не опубликован',
+        hint: 'Пока рабочий стол не опубликован, сервер не запускает его процессы автоматически.'
+      };
+    }
+    if (!enabledPublishedProcesses.length) {
+      return {
+        mode: 'idle',
+        label: 'Не выполняется: нет включённых процессов',
+        hint: 'Опубликовать недостаточно. Нужен хотя бы один включённый старт-процесс.'
+      };
+    }
+    if (!enabledAutomaticProcesses.length) {
+      return {
+        mode: 'manual',
+        label: 'Автоматически не выполняется: только ручной запуск',
+        hint: 'Сейчас все включённые процессы запускаются только кнопкой "Ручной запуск".'
+      };
+    }
+    if (!schedulerView.enabled) {
+      return {
+        mode: 'blocked',
+        label: 'Не выполняется: планировщик выключен',
+        hint: 'Процессы готовы к запуску, но серверный планировщик сейчас выключен.'
+      };
+    }
+    return {
+      mode: 'active',
+      label: 'Выполняется на сервере',
+      hint: `Автоматически работают ${enabledAutomaticProcesses.length} включённ${enabledAutomaticProcesses.length === 1 ? 'ый процесс' : enabledAutomaticProcesses.length < 5 ? 'ых процесса' : 'ых процессов'}.`
+    };
+  })();
 
   function prettyJson(value: any) {
     try {
@@ -4579,6 +4623,9 @@
       <span>ID: {deskId || '-'}</span>
       <span>Ревизия: {deskRevision || '-'}</span>
       <span class={deskDirty ? 'dirty-flag' : 'clean-flag'}>{deskDirty ? 'Есть несохраненные изменения' : 'Синхронизировано'}</span>
+      <span class={`desk-run-state desk-run-state-${deskExecutionState.mode}`} title={deskExecutionState.hint}>
+        {deskExecutionState.label}
+      </span>
     </div>
     <div class="desk-actions">
       <label>
@@ -5430,6 +5477,33 @@
   }
   .dirty-flag { color: #b45309; font-weight: 600; }
   .clean-flag { color: #166534; font-weight: 600; }
+  .desk-run-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    border: 1px solid #dbe4f0;
+    background: #f8fafc;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .desk-run-state-active {
+    color: #166534;
+    border-color: #bbf7d0;
+    background: #f0fdf4;
+  }
+  .desk-run-state-idle,
+  .desk-run-state-blocked {
+    color: #92400e;
+    border-color: #fde68a;
+    background: #fffbeb;
+  }
+  .desk-run-state-manual {
+    color: #1d4ed8;
+    border-color: #bfdbfe;
+    background: #eff6ff;
+  }
   .desk-actions {
     display: grid;
     grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr) auto auto auto auto minmax(170px, 1fr);
