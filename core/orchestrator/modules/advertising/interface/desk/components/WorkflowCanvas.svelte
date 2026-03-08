@@ -460,7 +460,7 @@
   const toolCfg = (n: WorkflowNode) => n.config as { name: string; toolType: ToolType; settings: Record<string, string> };
   const apiCfg = (n: WorkflowNode) => n.config as SourceItem & { apiRequest?: ApiNodeRequest };
   const supportedToolTypeSet = new Set<ToolType>(['start_process', 'api_request', 'table_parser', 'db_write', 'end_process']);
-  const toolCategoryOrder = ['Старт', 'Работа с данными', 'Запросы', 'Запись', 'Завершение'];
+  const toolCategoryOrder = ['Старт', 'Запросы', 'Работа с данными', 'Запись', 'Завершение'];
   const toolUiDictionary: Record<
     string,
     { name: string; description: string; category: string; helper?: string }
@@ -6069,6 +6069,7 @@
     }
   }
 </style>
+
 
 
 
