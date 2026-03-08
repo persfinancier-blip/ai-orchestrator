@@ -1,5 +1,6 @@
 export type SourceGroup = 'api_requests' | 'data_tables' | 'math_calculations';
 export type ToolType = 'start_process' | 'schedule_process' | 'api_request' | 'table_parser' | 'db_write' | 'end_process';
+
 export type ApiRequestTemplate = {
   method: string;
   url: string;
@@ -162,9 +163,9 @@ export const tools: ToolItem[] = [
   },
   {
     id: 'tool_parser',
-    name: 'Парсер данных таблицы',
+    name: 'Парсер данных',
     toolType: 'table_parser',
-    description: 'Парсинг/нормализация и подготовка строк'
+    description: 'Парсинг, нормализация и подготовка строк для следующей ноды'
   },
   {
     id: 'tool_db_write',

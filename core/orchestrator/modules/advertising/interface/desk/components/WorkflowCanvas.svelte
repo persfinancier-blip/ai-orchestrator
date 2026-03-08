@@ -1,6 +1,7 @@
 ﻿<script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
   import ApiBuilderTab from '../tabs/ApiBuilderTab.svelte';
+  import ParserBuilderTab from '../tabs/ParserBuilderTab.svelte';
   import {
     tools,
     toolPorts,
@@ -467,8 +468,8 @@
       category: 'Запросы'
     },
     table_parser: {
-      name: 'Обработка данных',
-      description: 'Читает, фильтрует и преобразует строки из входа или таблицы.',
+      name: 'Парсер данных',
+      description: 'Разбирает входные данные, выделяет строки и подготавливает результат для следующей ноды.',
       category: 'Работа с данными'
     },
     db_write: {
@@ -2100,6 +2101,14 @@
     return Boolean(n && n.type === 'tool' && toolCfg(n).toolType === 'api_request');
   }
 
+  function isParserToolNode(n: WorkflowNode | null | undefined) {
+    return Boolean(n && n.type === 'tool' && toolCfg(n).toolType === 'table_parser');
+  }
+
+  function isWideSettingsNode(n: WorkflowNode | null | undefined) {
+    return Boolean(n && (isApiNode(n) || isApiToolNode(n) || isParserToolNode(n)));
+  }
+
   function getApiRequestForNode(n: WorkflowNode | null | undefined): ApiNodeRequest {
     if (!n) return normalizeApiRequest(undefined);
     if (isApiNode(n)) return apiCfg(n).apiRequest || normalizeApiRequest(undefined);
@@ -3018,18 +3027,41 @@
       };
     if (toolType === 'table_parser')
       return {
+        templateId: '',
+        templateStoreId: '',
         sourceMode: 'input',
+        sourceFormat: 'auto',
         sourceSchema: '',
         sourceTable: '',
-        channel: '',
-        limit: '1000',
+        sourceColumn: '',
         inputPath: '',
         recordPath: '',
+        fileUrl: '',
+        fileUrlPath: '',
+        archiveEntry: '',
+        archiveFormat: 'auto',
+        csvDelimiter: ',',
+        textMode: 'lines',
+        batchSize: '200',
+        previewLimit: '20',
+        maxJsonBytes: '20971520',
         selectFields: '',
         renameMap: '{}',
+        defaultValues: '{}',
+        typeMap: '{}',
         filterField: '',
         filterOperator: '',
         filterValue: '',
+        sampleInput: '',
+        lookupEnabled: 'false',
+        lookupSchema: '',
+        lookupTable: '',
+        lookupSourceField: '',
+        lookupTargetField: '',
+        lookupFields: '',
+        lookupPrefix: '',
+        channel: '',
+        limit: '1000',
         parserMultiplier: '1'
       };
     if (toolType === 'db_write')
@@ -3319,7 +3351,7 @@
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return;
     const isStartTool = node.type === 'tool' && toolCfg(node).toolType === 'start_process';
-    if (!isStartTool && !isApiNode(node) && !isApiToolNode(node)) {
+    if (!isStartTool && !isApiNode(node) && !isApiToolNode(node) && !isParserToolNode(node)) {
       banner = 'Для этого узла пока нет отдельной настройки по двойному клику';
       return;
     }
@@ -3776,6 +3808,29 @@
 
   function updateSetting(nodeId: string, key: string, value: string) {
     nodes = nodes.map((n) => (n.id === nodeId && n.type === 'tool' ? { ...n, config: { ...toolCfg(n), settings: { ...toolCfg(n).settings, [key]: value } } } : n));
+  }
+
+  function replaceToolSettings(nodeId: string, settingsPatch: Record<string, any>) {
+    nodes = nodes.map((n) => {
+      if (n.id !== nodeId || n.type !== 'tool') return n;
+      const current = toolCfg(n);
+      const nextSettings: Record<string, string> = {};
+      const src = settingsPatch && typeof settingsPatch === 'object' ? settingsPatch : {};
+      for (const [key, value] of Object.entries(src)) {
+        if (value === undefined || value === null) continue;
+        nextSettings[key] = typeof value === 'string' ? value : JSON.stringify(value);
+      }
+      return {
+        ...n,
+        config: {
+          ...current,
+          settings: {
+            ...(current.settings || {}),
+            ...nextSettings
+          }
+        }
+      };
+    });
   }
 
   function updateToolName(nodeId: string, value: string) {
@@ -4694,29 +4749,9 @@
             <div class="issue warn">Эта нода относится к старой версии конструктора и больше не используется в новых схемах.</div>
           {/if}
           {#if toolCfg(selectedNode).toolType === 'table_parser'}
-            <label>
-              Источник
-              <select
-                value={toolCfg(selectedNode).settings.sourceMode || 'input'}
-                on:change={(e) => updateSetting(selectedNode.id, 'sourceMode', selectValue(e))}
-              >
-                <option value="input">Вход от предыдущей ноды</option>
-                <option value="table">Таблица</option>
-                <option value="process_bus">Шина событий процесса</option>
-              </select>
-            </label>
-            <label>Схема<input value={toolCfg(selectedNode).settings.sourceSchema || ''} on:input={(e) => onSettingInput(selectedNode.id, 'sourceSchema', e)} /></label>
-            <label>Таблица<input value={toolCfg(selectedNode).settings.sourceTable || ''} on:input={(e) => onSettingInput(selectedNode.id, 'sourceTable', e)} /></label>
-            <label>Канал шины<input value={toolCfg(selectedNode).settings.channel || ''} on:input={(e) => onSettingInput(selectedNode.id, 'channel', e)} /></label>
-            <label>Лимит<input value={toolCfg(selectedNode).settings.limit || ''} on:input={(e) => onSettingInput(selectedNode.id, 'limit', e)} /></label>
-            <label>Путь во входе<input value={toolCfg(selectedNode).settings.inputPath || ''} on:input={(e) => onSettingInput(selectedNode.id, 'inputPath', e)} /></label>
-            <label>Путь записи<input value={toolCfg(selectedNode).settings.recordPath || ''} on:input={(e) => onSettingInput(selectedNode.id, 'recordPath', e)} /></label>
-            <label>Поля (через запятую)<input value={toolCfg(selectedNode).settings.selectFields || ''} on:input={(e) => onSettingInput(selectedNode.id, 'selectFields', e)} /></label>
-            <label>Переименовать JSON<input value={toolCfg(selectedNode).settings.renameMap || ''} on:input={(e) => onSettingInput(selectedNode.id, 'renameMap', e)} /></label>
-            <label>Фильтр: поле<input value={toolCfg(selectedNode).settings.filterField || ''} on:input={(e) => onSettingInput(selectedNode.id, 'filterField', e)} /></label>
-            <label>Фильтр: оператор<input value={toolCfg(selectedNode).settings.filterOperator || ''} on:input={(e) => onSettingInput(selectedNode.id, 'filterOperator', e)} /></label>
-            <label>Фильтр: значение<input value={toolCfg(selectedNode).settings.filterValue || ''} on:input={(e) => onSettingInput(selectedNode.id, 'filterValue', e)} /></label>
-            <label>Множитель парсинга<input value={toolCfg(selectedNode).settings.parserMultiplier || ''} on:input={(e) => onSettingInput(selectedNode.id, 'parserMultiplier', e)} /></label>
+            <div class="empty">
+              Полная настройка parser-ноды открывается по двойному клику по карточке или через модалку настройки узла.
+            </div>
           {/if}
           {#if toolCfg(selectedNode).toolType === 'db_write'}
             <label>Схема<input value={toolCfg(selectedNode).settings.targetSchema || ''} on:input={(e) => onSettingInput(selectedNode.id, 'targetSchema', e)} /></label>
@@ -4768,22 +4803,22 @@
 
   {#if settingsModalOpen && settingsNode}
     <div class="node-modal-backdrop" on:click={closeSettingsModal}></div>
-    <div
-      bind:this={nodeModalEl}
-      class="node-modal"
-      class:node-modal-wide={isApiNode(settingsNode) || isApiToolNode(settingsNode)}
-      class:node-modal-fullscreen={nodeModalFullscreen}
-      class:node-modal-manual={Boolean(nodeModalRect) && !nodeModalFullscreen}
-      class:node-modal-resizable={(isApiNode(settingsNode) || isApiToolNode(settingsNode)) && !nodeModalFullscreen}
-      style={nodeModalInlineStyle()}
-      on:mousedown={onNodeModalMouseDownForResize}
-      on:mousemove={onNodeModalMouseMoveForResize}
+      <div
+        bind:this={nodeModalEl}
+        class="node-modal"
+        class:node-modal-wide={isWideSettingsNode(settingsNode)}
+        class:node-modal-fullscreen={nodeModalFullscreen}
+        class:node-modal-manual={Boolean(nodeModalRect) && !nodeModalFullscreen}
+        class:node-modal-resizable={isWideSettingsNode(settingsNode) && !nodeModalFullscreen}
+        style={nodeModalInlineStyle()}
+        on:mousedown={onNodeModalMouseDownForResize}
+        on:mousemove={onNodeModalMouseMoveForResize}
       on:mouseleave={onNodeModalMouseLeaveForResize}
     >
       <div class="node-modal-head">
         <h4>Настройка узла: {settingsNode.config.name}</h4>
         <div class="node-modal-actions">
-          {#if isApiNode(settingsNode) || isApiToolNode(settingsNode)}
+          {#if isWideSettingsNode(settingsNode)}
             <button
               class="window-btn"
               title={nodeModalFullscreen ? 'Вернуть обычный размер' : 'Развернуть на весь экран'}
@@ -5098,7 +5133,22 @@
           {/if}
         </div>
       {/if}
-      {#if (isApiNode(settingsNode) || isApiToolNode(settingsNode)) && !nodeModalFullscreen}
+      {#if isParserToolNode(settingsNode)}
+        <div class="node-modal-body node-modal-body-api">
+          {#key `${settingsNode.id}:${toolCfg(settingsNode).settings.templateStoreId || 0}:${toolCfg(settingsNode).settings.templateId || ''}`}
+            <ParserBuilderTab
+              apiBase={API_BASE}
+              apiJson={workflowApiJson}
+              headers={workflowApiHeaders}
+              existingTables={apiBuilderExistingTables}
+              initialSettings={toolCfg(settingsNode).settings || {}}
+              embeddedMode={false}
+              on:configChange={(event) => replaceToolSettings(settingsNode.id, event.detail?.settings || {})}
+            />
+          {/key}
+        </div>
+      {/if}
+      {#if isWideSettingsNode(settingsNode) && !nodeModalFullscreen}
         <button type="button" class="modal-resize-handle modal-resize-n" aria-label="Изменить высоту сверху" on:mousedown={(e) => startNodeModalResize(e, 'n')}></button>
         <button type="button" class="modal-resize-handle modal-resize-s" aria-label="Изменить высоту снизу" on:mousedown={(e) => startNodeModalResize(e, 's')}></button>
         <button type="button" class="modal-resize-handle modal-resize-e" aria-label="Изменить ширину справа" on:mousedown={(e) => startNodeModalResize(e, 'e')}></button>
