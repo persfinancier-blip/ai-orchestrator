@@ -873,7 +873,7 @@ async function ensureParserConfigsTable(client, config) {
   `);
   await client.query(`ALTER TABLE ${qn} ALTER COLUMN id SET NOT NULL`);
   await client.query(`
-    DO $
+    DO $$
     BEGIN
       IF NOT EXISTS (
         SELECT 1
@@ -884,7 +884,7 @@ async function ensureParserConfigsTable(client, config) {
         ALTER TABLE ${qn}
           ADD CONSTRAINT ${qi(`${table}_pkey`)} PRIMARY KEY (id);
       END IF;
-    END $;
+    END $$;
   `);
   await ensureSystemContractColumns(client, qn);
   return qn;
