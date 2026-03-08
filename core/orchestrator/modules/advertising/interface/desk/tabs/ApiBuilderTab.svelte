@@ -7947,14 +7947,14 @@ function handleDefinitionInput(value: string) {
     responsePayloadCount = 0;
     responsePagesCount = 0;
     responsePayloadSize = 0;
-    if (!selected) {
+    const s = byRef(selectedRef) || selected;
+    if (!s) {
       err = 'Выбери API';
       return;
     }
     checking = true;
     try {
       applyUrlInput(requestInput);
-      const s = byRef(selectedRef) || selected;
       if (isGroupedDispatchEnabled(s)) {
         const groupedPlan = await buildGroupedRequestPlan(s);
         if (!groupedPlan.allRequests.length) {
@@ -8902,7 +8902,7 @@ function syncParameterEditorsHeight() {
             placeholder="Строка подключения (URL или curl)"
           />
           <div class="connect-actions">
-            <button class="primary" on:click={checkApiNow} disabled={checking}>{checking ? 'Проверка...' : 'Проверить'}</button>
+            <button class="primary" on:click={checkApiNow} disabled={checking || loading || !selectedRef}>{checking ? 'Проверка...' : 'Проверить'}</button>
           </div>
         </div>
 
