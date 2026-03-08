@@ -18,11 +18,22 @@
     column_count: number;
     columns: string[];
     sample_rows: Array<Record<string, any>>;
+    raw_row_count: number;
+    raw_column_count: number;
+    raw_columns: string[];
+    raw_sample_rows: Array<Record<string, any>>;
     source_type: string;
     source_ref: string;
     source_format: string;
     batch: Record<string, any>;
     stats: Record<string, any>;
+  };
+  type SourceNodeTemplate = {
+    ref: string;
+    templateType: 'api_request' | 'table_parser';
+    storeId: number;
+    name: string;
+    description: string;
   };
 
   export let apiBase: string;
@@ -39,7 +50,11 @@
   const DEFAULT_SETTINGS: ParserSettings = {
     templateId: '',
     templateStoreId: '',
-    sourceMode: 'input',
+    sourceMode: 'node',
+    sourceNodeTemplateRef: '',
+    sourceNodeTemplateType: '',
+    sourceNodeTemplateStoreId: '',
+    sourceNodeTemplateName: '',
     sourceFormat: 'auto',
     sourceSchema: '',
     sourceTable: '',
@@ -81,7 +96,20 @@
       if (value === undefined || value === null) continue;
       next[key] = typeof value === 'string' ? value : JSON.stringify(value);
     }
-    next.sourceMode = String(src.sourceMode || src.source_mode || next.sourceMode || 'input').trim() || 'input';
+    const rawSourceMode = String(src.sourceMode || src.source_mode || next.sourceMode || 'node').trim().toLowerCase();
+    next.sourceMode = rawSourceMode === 'table' || rawSourceMode === 'file_url' ? rawSourceMode : 'node';
+    next.sourceNodeTemplateRef = String(
+      src.sourceNodeTemplateRef || src.source_node_template_ref || next.sourceNodeTemplateRef || ''
+    ).trim();
+    next.sourceNodeTemplateType = String(
+      src.sourceNodeTemplateType || src.source_node_template_type || next.sourceNodeTemplateType || ''
+    ).trim();
+    next.sourceNodeTemplateStoreId = String(
+      src.sourceNodeTemplateStoreId || src.source_node_template_store_id || next.sourceNodeTemplateStoreId || ''
+    ).trim();
+    next.sourceNodeTemplateName = String(
+      src.sourceNodeTemplateName || src.source_node_template_name || next.sourceNodeTemplateName || ''
+    ).trim();
     next.sourceFormat = String(src.sourceFormat || src.source_format || next.sourceFormat || 'auto').trim() || 'auto';
     next.sourceSchema = String(src.sourceSchema || src.source_schema || next.sourceSchema || '').trim();
     next.sourceTable = String(src.sourceTable || src.source_table || next.sourceTable || '').trim();
@@ -170,6 +198,10 @@
   function buildTemplatePayload(settingsValue: ParserSettings) {
     const cfg: Record<string, any> = {
       sourceMode: settingsValue.sourceMode,
+      sourceNodeTemplateRef: settingsValue.sourceNodeTemplateRef,
+      sourceNodeTemplateType: settingsValue.sourceNodeTemplateType,
+      sourceNodeTemplateStoreId: settingsValue.sourceNodeTemplateStoreId,
+      sourceNodeTemplateName: settingsValue.sourceNodeTemplateName,
       sourceFormat: settingsValue.sourceFormat,
       sourceSchema: settingsValue.sourceSchema,
       sourceTable: settingsValue.sourceTable,
@@ -209,6 +241,9 @@
   let templatesLoading = false;
   let templatesError = '';
   let drafts: ParserDraft[] = [];
+  let sourceTemplatesLoading = false;
+  let sourceTemplatesError = '';
+  let sourceTemplates: SourceNodeTemplate[] = [];
   let selectedDraftId = 0;
   let templateNameInput = '';
   let templateDescriptionInput = '';
@@ -241,6 +276,10 @@
   $: currentTemplate = drafts.find((item) => Number(item.id || 0) === currentTemplateStoreId) || null;
   $: selectedIsCurrent = Boolean(selectedDraft && currentTemplate && Number(selectedDraft.id) === Number(currentTemplate.id));
   $: canSwitchTemplate = Boolean(selectedDraft && !selectedIsCurrent);
+  $: currentSourceTemplate =
+    sourceTemplates.find((item) => item.ref === String(settings.sourceNodeTemplateRef || '').trim()) ||
+    sourceTemplates.find((item) => String(item.storeId || 0) === String(settings.sourceNodeTemplateStoreId || '').trim()) ||
+    null;
   $: if (!selectedDraft && currentTemplate) {
     templateNameInput = templateNameInput || currentTemplate.name;
     templateDescriptionInput = templateDescriptionInput || currentTemplate.description;
@@ -253,6 +292,31 @@
   function patchSetting(key: string, value: string) {
     const next = cloneSettings(settings);
     next[key] = value;
+    dispatchSettings(next);
+  }
+
+  function sourceTemplateRef(kind: 'api_request' | 'table_parser', storeId: number) {
+    return `${kind}:${Math.trunc(Number(storeId || 0))}`;
+  }
+
+  function sourceTemplateLabel(item: SourceNodeTemplate) {
+    return `${item.templateType === 'api_request' ? 'Запросы' : 'Работа с данными'} / ${item.name}`;
+  }
+
+  function applySourceNodeTemplateRef(ref: string) {
+    const next = cloneSettings(settings);
+    const selected = sourceTemplates.find((item) => item.ref === String(ref || '').trim()) || null;
+    if (!selected) {
+      next.sourceNodeTemplateRef = '';
+      next.sourceNodeTemplateType = '';
+      next.sourceNodeTemplateStoreId = '';
+      next.sourceNodeTemplateName = '';
+    } else {
+      next.sourceNodeTemplateRef = selected.ref;
+      next.sourceNodeTemplateType = selected.templateType;
+      next.sourceNodeTemplateStoreId = String(selected.storeId);
+      next.sourceNodeTemplateName = selected.name;
+    }
     dispatchSettings(next);
   }
 
@@ -298,6 +362,47 @@
     }
   }
 
+  async function loadSourceTemplates() {
+    sourceTemplatesLoading = true;
+    sourceTemplatesError = '';
+    try {
+      const [apiPayload, parserPayload] = await Promise.all([
+        apiJson<{ api_configs?: any[] }>(`${apiBase}/api-configs`, {
+          method: 'GET',
+          headers: { Accept: 'application/json', ...headers() }
+        }),
+        apiJson<{ parser_configs?: ParserDraft[] }>(`${apiBase}/parser-configs`, {
+          method: 'GET',
+          headers: { Accept: 'application/json', ...headers() }
+        })
+      ]);
+      const apiTemplates: SourceNodeTemplate[] = (Array.isArray(apiPayload?.api_configs) ? apiPayload.api_configs : [])
+        .map((item) => ({
+          ref: sourceTemplateRef('api_request', Number(item?.id || 0)),
+          templateType: 'api_request' as const,
+          storeId: Number(item?.id || 0),
+          name: String(item?.api_name || item?.name || '').trim(),
+          description: String(item?.description || '').trim()
+        }))
+        .filter((item) => item.storeId > 0 && item.name);
+      const parserTemplates: SourceNodeTemplate[] = (Array.isArray(parserPayload?.parser_configs) ? parserPayload.parser_configs : [])
+        .map((item) => ({
+          ref: sourceTemplateRef('table_parser', Number(item?.id || 0)),
+          templateType: 'table_parser' as const,
+          storeId: Number(item?.id || 0),
+          name: String(item?.parser_name || item?.name || '').trim(),
+          description: String(item?.description || '').trim()
+        }))
+        .filter((item) => item.storeId > 0 && item.name);
+      sourceTemplates = [...apiTemplates, ...parserTemplates];
+    } catch (e: any) {
+      sourceTemplatesError = String(e?.message || e || 'Не удалось загрузить шаблоны нод');
+      sourceTemplates = [];
+    } finally {
+      sourceTemplatesLoading = false;
+    }
+  }
+
   async function saveTemplate() {
     const parser_name = String(templateNameInput || '').trim();
     if (!parser_name) {
@@ -320,6 +425,7 @@
       });
       const savedId = Number(payload?.id || 0);
       await loadDrafts(savedId);
+      await loadSourceTemplates();
       const savedDraft = drafts.find((item) => Number(item.id) === savedId);
       if (savedDraft) {
         patchFromDraft(savedDraft);
@@ -359,6 +465,7 @@
       templateNameInput = '';
       templateDescriptionInput = '';
       await loadDrafts();
+      await loadSourceTemplates();
     } catch (e: any) {
       templatesError = String(e?.message || e || 'Не удалось удалить шаблон');
     } finally {
@@ -433,6 +540,7 @@
 
   onMount(() => {
     void loadDrafts(storeIdFromSettings(initialSettings));
+    void loadSourceTemplates();
     void previewNow();
   });
 </script>
@@ -443,106 +551,60 @@
       <div class="parser-card">
         <div class="parser-card-head">
           <div>
-            <h3>Результат парсинга</h3>
-            <p>Предпросмотр результата, который parser отдаст дальше в workflow.</p>
+            <h3>Источник данных</h3>
+            <p>Выбери, откуда брать вход: от шаблона ноды, из таблицы или из файла/ссылки. Здесь же видно preview входа.</p>
           </div>
           <button type="button" class="primary-btn" on:click={previewNow} disabled={previewLoading}>
             {previewLoading ? 'Обновление...' : 'Обновить preview'}
           </button>
         </div>
 
-        {#if previewError}
-          <div class="inline-error">{previewError}</div>
-        {/if}
-
-        <div class="preview-metrics">
-          <span>Строк: {previewData?.row_count ?? '-'}</span>
-          <span>Колонок: {previewData?.column_count ?? '-'}</span>
-          <span>Формат: {previewData?.source_format || '-'}</span>
-          <span>Источник: {previewData?.source_type || '-'}</span>
-        </div>
-
-        <div class="preview-meta">
-          <span>Пакет: {previewData?.batch?.returned_rows ?? 0} / {previewData?.batch?.batch_size ?? '-'}</span>
-          <span>Есть ещё данные: {previewData?.batch?.has_more ? 'да' : 'нет'}</span>
-          <span>Обновлено: {previewUpdatedAt ? new Date(previewUpdatedAt).toLocaleString('ru-RU') : '-'}</span>
-        </div>
-
-        {#if previewData?.columns?.length}
-          <div class="preview-columns">
-            {#each previewData.columns as column}
-              <span>{column}</span>
-            {/each}
-          </div>
-        {/if}
-        {#if previewData?.sample_rows?.length}
-          <div class="preview-table-wrap">
-            <table class="preview-table">
-              <thead>
-                <tr>
-                  {#each previewData.columns as column}
-                    <th>{column}</th>
-                  {/each}
-                </tr>
-              </thead>
-              <tbody>
-                {#each previewData.sample_rows as row}
-                  <tr>
-                    {#each previewData.columns as column}
-                      <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
-                    {/each}
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
-        {:else}
-          <div class="empty-box">Нет результата preview. Обнови preview после изменения настроек или примера входных данных.</div>
-        {/if}
-
-        {#if previewRaw}
-          <details class="preview-raw">
-            <summary>Показать raw результат parser runtime</summary>
-            <pre>{JSON.stringify(previewRaw, null, 2)}</pre>
-          </details>
-        {/if}
-      </div>
-    </section>
-
-    <section class="parser-column parser-column-settings">
-      <div class="parser-card">
-        <div class="parser-card-head">
-          <div>
-            <h3>Настройка parser-ноды</h3>
-            <p>Выбери источник, формат, путь до записей, маппинг, lookup и безопасный размер пакета.</p>
-          </div>
-        </div>
-
-        <div class="form-grid form-grid-3">
+        <div class="form-grid form-grid-1">
           <label>
             Тип источника
             <select value={settings.sourceMode} on:change={(e) => patchSetting('sourceMode', selectValue(e))}>
-              <option value="input">Вход от предыдущей ноды</option>
+              <option value="node">Нода</option>
               <option value="table">Таблица</option>
-              <option value="file_url">Файл / ссылка на файл</option>
+              <option value="file_url">Файл / ссылка</option>
             </select>
-          </label>
-          <label>
-            Формат
-            <select value={settings.sourceFormat} on:change={(e) => patchSetting('sourceFormat', selectValue(e))}>
-              <option value="auto">Определять автоматически</option>
-              <option value="json">JSON</option>
-              <option value="csv">CSV</option>
-              <option value="ndjson">NDJSON</option>
-              <option value="text">Текст</option>
-              <option value="zip">ZIP</option>
-            </select>
-          </label>
-          <label>
-            Размер пакета
-            <input type="number" min="1" max="5000" value={settings.batchSize} on:input={(e) => patchSetting('batchSize', inputValue(e))} />
           </label>
         </div>
+
+        {#if settings.sourceMode === 'node'}
+          <label>
+            Шаблон ноды-источника
+            <select value={settings.sourceNodeTemplateRef} on:change={(e) => applySourceNodeTemplateRef(selectValue(e))}>
+              <option value="">Выбери шаблон ноды</option>
+              {#each sourceTemplates as item (item.ref)}
+                <option value={item.ref}>{sourceTemplateLabel(item)}</option>
+              {/each}
+            </select>
+            <span class="hint">Для нод источник задаётся через шаблон ноды, а не через конкретный экземпляр на canvas.</span>
+          </label>
+          {#if sourceTemplatesError}
+            <div class="inline-error">{sourceTemplatesError}</div>
+          {:else if sourceTemplatesLoading}
+            <div class="inline-hint">Загрузка шаблонов нод...</div>
+          {:else if currentSourceTemplate}
+            <div class="selected-source-box">
+              <div><strong>{sourceTemplateLabel(currentSourceTemplate)}</strong></div>
+              <div class="hint">{currentSourceTemplate.description || 'Описание шаблона не заполнено.'}</div>
+            </div>
+          {:else}
+            <div class="inline-hint">Выбери шаблон API-ноды или другой ноды “Работа с данными”, чтобы зафиксировать ожидаемый тип входа.</div>
+          {/if}
+
+          <label>
+            Пример входных данных для preview
+            <textarea
+              rows="10"
+              value={settings.sampleInput}
+              on:input={(e) => patchSetting('sampleInput', textareaValue(e))}
+              placeholder="Вставь пример JSON, CSV, NDJSON или текст, который приходит от выбранного шаблона ноды"
+            ></textarea>
+            <span class="hint">Этот пример нужен только для preview. В runtime parser читает реальный output предыдущей ноды пакетно.</span>
+          </label>
+        {/if}
 
         {#if settings.sourceMode === 'table'}
           <div class="form-grid form-grid-3">
@@ -575,33 +637,94 @@
         {#if settings.sourceMode === 'file_url'}
           <div class="form-grid form-grid-2">
             <label>
-              URL файла
-              <input value={settings.fileUrl} on:input={(e) => patchSetting('fileUrl', inputValue(e))} placeholder="https://..." />
+              URL / путь к файлу
+              <input value={settings.fileUrl} on:input={(e) => patchSetting('fileUrl', inputValue(e))} placeholder="https://... или /path/to/file" />
             </label>
             <label>
               Путь до URL во входе
               <input value={settings.fileUrlPath} on:input={(e) => patchSetting('fileUrlPath', inputValue(e))} placeholder="response.download_url" />
             </label>
           </div>
-          {#if settings.sourceFormat === 'zip'}
-            <div class="form-grid form-grid-2">
-              <label>
-                Файл внутри ZIP
-                <input value={settings.archiveEntry} on:input={(e) => patchSetting('archiveEntry', inputValue(e))} placeholder="export/data.csv" />
-              </label>
-              <label>
-                Формат файла внутри ZIP
-                <select value={settings.archiveFormat} on:change={(e) => patchSetting('archiveFormat', selectValue(e))}>
-                  <option value="auto">Определять автоматически</option>
-                  <option value="csv">CSV</option>
-                  <option value="json">JSON</option>
-                  <option value="ndjson">NDJSON</option>
-                  <option value="text">Текст</option>
-                </select>
-              </label>
-            </div>
-          {/if}
         {/if}
+
+        {#if previewError}
+          <div class="inline-error">{previewError}</div>
+        {/if}
+
+        <div class="preview-metrics">
+          <span>Сырых строк: {previewData?.raw_row_count ?? '-'}</span>
+          <span>Сырых колонок: {previewData?.raw_column_count ?? '-'}</span>
+          <span>Формат: {previewData?.source_format || '-'}</span>
+          <span>Источник: {settings.sourceMode === 'node' ? 'Нода' : settings.sourceMode === 'table' ? 'Таблица' : 'Файл / ссылка'}</span>
+        </div>
+
+        <div class="preview-meta">
+          <span>Источник: {previewData?.source_ref || '-'}</span>
+          <span>Пакет: {previewData?.batch?.returned_rows ?? 0} / {previewData?.batch?.batch_size ?? '-'}</span>
+          <span>Есть ещё данные: {previewData?.batch?.has_more ? 'да' : 'нет'}</span>
+          <span>Обновлено: {previewUpdatedAt ? new Date(previewUpdatedAt).toLocaleString('ru-RU') : '-'}</span>
+        </div>
+
+        {#if previewData?.raw_columns?.length}
+          <div class="preview-columns">
+            {#each previewData.raw_columns as column}
+              <span>{column}</span>
+            {/each}
+          </div>
+        {/if}
+        {#if previewData?.raw_sample_rows?.length}
+          <div class="preview-table-wrap">
+            <table class="preview-table">
+              <thead>
+                <tr>
+                  {#each previewData.raw_columns as column}
+                    <th>{column}</th>
+                  {/each}
+                </tr>
+              </thead>
+              <tbody>
+                {#each previewData.raw_sample_rows as row}
+                  <tr>
+                    {#each previewData.raw_columns as column}
+                      <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
+                    {/each}
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {:else}
+          <div class="empty-box">Нет preview входа. Выбери источник и обнови preview.</div>
+        {/if}
+      </div>
+    </section>
+
+    <section class="parser-column parser-column-settings">
+      <div class="parser-card">
+        <div class="parser-card-head">
+          <div>
+            <h3>Настройка обработки</h3>
+            <p>Здесь задаётся формат, путь до записей, mapping, lookup и ограничения для безопасной пакетной обработки.</p>
+          </div>
+        </div>
+
+        <div class="form-grid form-grid-3">
+          <label>
+            Формат
+            <select value={settings.sourceFormat} on:change={(e) => patchSetting('sourceFormat', selectValue(e))}>
+              <option value="auto">Определять автоматически</option>
+              <option value="json">JSON</option>
+              <option value="csv">CSV</option>
+              <option value="ndjson">NDJSON</option>
+              <option value="text">Текст</option>
+              <option value="zip">ZIP</option>
+            </select>
+          </label>
+          <label>
+            Размер пакета
+            <input type="number" min="1" max="5000" value={settings.batchSize} on:input={(e) => patchSetting('batchSize', inputValue(e))} />
+          </label>
+        </div>
 
         <div class="form-grid form-grid-3">
           <label>
@@ -617,6 +740,25 @@
             <input value={settings.csvDelimiter} on:input={(e) => patchSetting('csvDelimiter', inputValue(e))} placeholder="," />
           </label>
         </div>
+
+        {#if settings.sourceFormat === 'zip'}
+          <div class="form-grid form-grid-2">
+            <label>
+              Файл внутри ZIP
+              <input value={settings.archiveEntry} on:input={(e) => patchSetting('archiveEntry', inputValue(e))} placeholder="export/data.csv" />
+            </label>
+            <label>
+              Формат файла внутри ZIP
+              <select value={settings.archiveFormat} on:change={(e) => patchSetting('archiveFormat', selectValue(e))}>
+                <option value="auto">Определять автоматически</option>
+                <option value="csv">CSV</option>
+                <option value="json">JSON</option>
+                <option value="ndjson">NDJSON</option>
+                <option value="text">Текст</option>
+              </select>
+            </label>
+          </div>
+        {/if}
 
         <div class="form-grid form-grid-3">
           <label>
@@ -721,7 +863,7 @@
 
         <div class="subsection">
           <div class="subsection-head">
-            <h4>Безопасность и preview</h4>
+            <h4>Безопасность и runtime</h4>
           </div>
           <div class="form-grid form-grid-3">
             <label>
@@ -737,11 +879,64 @@
               <input type="number" min="1" value={settings.parserMultiplier} on:input={(e) => patchSetting('parserMultiplier', inputValue(e))} />
             </label>
           </div>
-          <label>
-            Пример входных данных для preview
-            <textarea rows="8" value={settings.sampleInput} on:input={(e) => patchSetting('sampleInput', textareaValue(e))} placeholder="JSON, CSV, NDJSON или текст для preview"></textarea>
-            <span class="hint">Используется только для preview. Runtime дальше работает с реальным input/таблицей/файлом пакетно.</span>
-          </label>
+          <div class="inline-hint">В runtime одна и та же нода обрабатывает пакеты по очереди. Пользователь не рисует отдельные ноды под чанки и не обязан знать их количество заранее.</div>
+        </div>
+
+        <div class="subsection">
+          <div class="subsection-head">
+            <h4>Результат обработки</h4>
+            <button type="button" class="mini-btn" on:click={previewNow} disabled={previewLoading}>
+              {previewLoading ? 'Обновление...' : 'Обновить preview'}
+            </button>
+          </div>
+          <div class="preview-metrics">
+            <span>Строк: {previewData?.row_count ?? '-'}</span>
+            <span>Колонок: {previewData?.column_count ?? '-'}</span>
+            <span>Формат: {previewData?.source_format || '-'}</span>
+            <span>Источник: {settings.sourceMode === 'node' ? 'Нода' : settings.sourceMode === 'table' ? 'Таблица' : 'Файл / ссылка'}</span>
+          </div>
+          <div class="preview-meta">
+            <span>Пакет: {previewData?.batch?.returned_rows ?? 0} / {previewData?.batch?.batch_size ?? '-'}</span>
+            <span>Есть ещё данные: {previewData?.batch?.has_more ? 'да' : 'нет'}</span>
+            <span>Обновлено: {previewUpdatedAt ? new Date(previewUpdatedAt).toLocaleString('ru-RU') : '-'}</span>
+          </div>
+          {#if previewData?.columns?.length}
+            <div class="preview-columns">
+              {#each previewData.columns as column}
+                <span>{column}</span>
+              {/each}
+            </div>
+          {/if}
+          {#if previewData?.sample_rows?.length}
+            <div class="preview-table-wrap">
+              <table class="preview-table">
+                <thead>
+                  <tr>
+                    {#each previewData.columns as column}
+                      <th>{column}</th>
+                    {/each}
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each previewData.sample_rows as row}
+                    <tr>
+                      {#each previewData.columns as column}
+                        <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
+                      {/each}
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {:else}
+            <div class="empty-box">Нет результата preview. Обнови preview после изменения настроек обработки.</div>
+          {/if}
+          {#if previewRaw}
+            <details class="preview-raw">
+              <summary>Показать raw результат parser runtime</summary>
+              <pre>{JSON.stringify(previewRaw, null, 2)}</pre>
+            </details>
+          {/if}
         </div>
       </div>
     </section>
@@ -750,8 +945,8 @@
       <div class="parser-card">
         <div class="parser-card-head">
           <div>
-            <h3>Шаблоны parser</h3>
-            <p>Сохранённые настройки парсинга. Нода привязывается к шаблону, но output остаётся обычным node output.</p>
+            <h3>Шаблоны обработки данных</h3>
+            <p>Сохранённые настройки источника и обработки. Нода привязывается к шаблону, а результат всё равно передаётся дальше как обычный output ноды.</p>
           </div>
           <button type="button" class="mini-btn" on:click={() => loadDrafts()} disabled={templatesLoading}>
             Обновить
@@ -998,6 +1193,9 @@
     gap: 10px;
     min-width: 0;
   }
+  .form-grid-1 {
+    grid-template-columns: 1fr;
+  }
   .form-grid-2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1073,6 +1271,7 @@
     gap: 8px;
   }
   .current-template-box,
+  .selected-source-box,
   .template-editor {
     border: 1px solid #e2e8f0;
     border-radius: 12px;
@@ -1080,6 +1279,9 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+  }
+  .selected-source-box {
+    background: #f8fafc;
   }
   .current-template-line {
     display: flex;

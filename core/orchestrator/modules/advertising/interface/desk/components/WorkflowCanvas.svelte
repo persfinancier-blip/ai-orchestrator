@@ -3270,7 +3270,11 @@
       return {
         templateId: '',
         templateStoreId: '',
-        sourceMode: 'input',
+        sourceMode: 'node',
+        sourceNodeTemplateRef: '',
+        sourceNodeTemplateType: '',
+        sourceNodeTemplateStoreId: '',
+        sourceNodeTemplateName: '',
         sourceFormat: 'auto',
         sourceSchema: '',
         sourceTable: '',

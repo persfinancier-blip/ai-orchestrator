@@ -106,6 +106,7 @@ function normalizeParserFormat(value) {
 function normalizeSourceMode(value) {
   const raw = String(value || '').trim().toLowerCase();
   if (raw === 'table' || raw === 'file_url' || raw === 'input') return raw;
+  if (raw === 'node') return 'input';
   return 'input';
 }
 
@@ -693,6 +694,8 @@ export async function executeParserRows(client, rawSettings = {}, options = {}) 
   return {
     rows,
     columns: columnsFromRows(rows),
+    raw_rows: Array.isArray(raw.rows) ? raw.rows.slice(0, cfg.previewLimit) : [],
+    raw_columns: columnsFromRows(raw.rows),
     source_type: raw.source_type,
     source_ref: raw.source_ref,
     source_format: raw.format,
@@ -712,11 +715,16 @@ export async function executeParserRows(client, rawSettings = {}, options = {}) 
 
 export function parserPreviewSummary(result) {
   const rows = Array.isArray(result?.rows) ? result.rows : [];
+  const rawRows = Array.isArray(result?.raw_rows) ? result.raw_rows : [];
   return {
     row_count: rows.length,
     column_count: columnsFromRows(rows).length,
     columns: columnsFromRows(rows),
     sample_rows: rows.slice(0, 10),
+    raw_row_count: rawRows.length,
+    raw_column_count: columnsFromRows(rawRows).length,
+    raw_columns: columnsFromRows(rawRows),
+    raw_sample_rows: rawRows.slice(0, 10),
     source_type: String(result?.source_type || '').trim(),
     source_ref: String(result?.source_ref || '').trim(),
     source_format: String(result?.source_format || '').trim(),

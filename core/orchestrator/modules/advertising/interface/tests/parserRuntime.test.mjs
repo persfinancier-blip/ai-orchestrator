@@ -43,7 +43,7 @@ test('parser runtime: JSON input -> mapped rows -> preview summary', async () =>
   const result = await executeParserRows(
     { query: async () => ({ rows: [] }) },
     {
-      sourceMode: 'input',
+      sourceMode: 'node',
       sourceFormat: 'json',
       recordPath: 'items',
       selectFields: 'id,name',
@@ -73,6 +73,8 @@ test('parser runtime: JSON input -> mapped rows -> preview summary', async () =>
   const preview = parserPreviewSummary(result);
   assert.equal(preview.row_count, 2);
   assert.deepEqual(preview.columns.sort(), ['country', 'id', 'title']);
+  assert.equal(preview.raw_row_count, 3);
+  assert.deepEqual(preview.raw_columns.sort(), ['id', 'name']);
 });
 
 test('parser runtime: CSV input supports batch cursor without loading fake chunks in UI', async () => {
