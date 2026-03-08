@@ -2,6 +2,7 @@
   import { createEventDispatcher, onDestroy, tick } from 'svelte';
   import JsonTreeView from '../components/JsonTreeView.svelte';
   import { shouldRetryStatus, retryDelayMs, groupRowsByAliases } from './apiBuilderRuntimeCore.js';
+  import { buildApiResponsePreviewState, extractApiBusinessPayload } from './apiResponseTreeCore.js';
   import {
     buildAliasFromPath,
     buildOutputFieldsFromNode,
@@ -2417,11 +2418,24 @@ function formatBytes(bytes: number) {
     if (showMessage) ok = 'Дерево ответа обновлено для выходного контракта';
   }
 
+  function applyResponsePreviewPayload(payload: any, fallbackPayload: any, message = '') {
+    const preview = buildApiResponsePreviewState(payload, fallbackPayload);
+    responseText = String(preview.text || '');
+    responseJson = preview.treePayload ? deepClone(preview.treePayload) : null;
+    responseIsJson = Boolean(preview.isJson && responseJson);
+    if (responseIsJson && responseJson) {
+      updateOutputTreeSourceFromPayload(responseJson, message || 'Источник выходного контракта обновлён.');
+      return;
+    }
+    outputTreeSource = null;
+    outputTreeSourceJson = false;
+    outputTreeRefreshedAt = Date.now();
+    outputTreeMessage = 'Тестовый результат не содержит JSON-объект для дерева выходного контракта.';
+  }
+
   async function refreshOutputContractNow() {
     await checkApiNow();
-    await tick();
     if (!responseIsJson || !responseJson) return;
-    refreshOutputTreeSource(false);
     ok = 'Тестовый результат обновлён и дерево ответа перестроено для выходного контракта';
   }
 
@@ -7523,6 +7537,7 @@ function handleDefinitionInput(value: string) {
     issues?: Record<string, string>;
     modeLabel: string;
     responsesDropped: number;
+    treePayload: any;
     auditLog: { written: number; skipped: number; error?: string };
   };
 
@@ -7721,6 +7736,7 @@ function handleDefinitionInput(value: string) {
     let totalSize = 0;
     let lastStatus = 0;
     let responsesDropped = 0;
+    let treePayload: any = undefined;
     let auditWritten = 0;
     let auditSkipped = 0;
     let auditError = '';
@@ -7795,6 +7811,12 @@ function handleDefinitionInput(value: string) {
 
     const absorbEntry = async (reqPlan: any, entry: any, idx: number) => {
       if (!entry || typeof entry !== 'object') return;
+      if (treePayload === undefined) {
+        const extractedPayload = extractApiBusinessPayload(entry?.response);
+        if (extractedPayload !== undefined) {
+          treePayload = deepClone(extractedPayload);
+        }
+      }
       pushResponsePreview(entry);
       const status = Number(entry?.status || 0);
       requestCount += 1;
@@ -7937,6 +7959,7 @@ function handleDefinitionInput(value: string) {
       issues: Object.keys(runIssues).length ? runIssues : undefined,
       modeLabel,
       responsesDropped,
+      treePayload,
       auditLog: {
         written: auditWritten,
         skipped: auditSkipped,
@@ -7951,6 +7974,8 @@ function handleDefinitionInput(value: string) {
     myPreviewApplyMessage = '';
     responseStatus = 0;
     responseText = '';
+    responseJson = null;
+    responseIsJson = false;
     responseTimeMs = 0;
     responsePayloadCount = 0;
     responsePagesCount = 0;
@@ -8031,9 +8056,10 @@ function handleDefinitionInput(value: string) {
                 }
               : undefined
           };
-        responseText = JSON.stringify(groupedResponsePayload, null, 2);
-        updateOutputTreeSourceFromPayload(groupedResponsePayload, 'Источник выходного контракта обновлён после проверки API.');
-        apiResponseCache = { ...apiResponseCache, [refOf(s)]: groupedResponsePayload };
+        const groupedTreePayload =
+          execution.treePayload !== undefined ? execution.treePayload : extractApiBusinessPayload(groupedResponsePayload);
+        applyResponsePreviewPayload(groupedTreePayload, groupedResponsePayload, 'Источник выходного контракта обновлён после проверки API.');
+        apiResponseCache = { ...apiResponseCache, [refOf(s)]: groupedTreePayload ?? null };
         ok = execution.failed
           ? `Проверка завершена: успех ${execution.success}, ошибок ${execution.failed}`
           : `Проверка выполнена, запросов: ${execution.success}`;
@@ -8108,9 +8134,10 @@ function handleDefinitionInput(value: string) {
                 }
               : undefined
           };
-        responseText = JSON.stringify(rowResponsePayload, null, 2);
-        updateOutputTreeSourceFromPayload(rowResponsePayload, 'Источник выходного контракта обновлён после проверки API.');
-        apiResponseCache = { ...apiResponseCache, [refOf(s)]: rowResponsePayload };
+        const rowTreePayload =
+          execution.treePayload !== undefined ? execution.treePayload : extractApiBusinessPayload(rowResponsePayload);
+        applyResponsePreviewPayload(rowTreePayload, rowResponsePayload, 'Источник выходного контракта обновлён после проверки API.');
+        apiResponseCache = { ...apiResponseCache, [refOf(s)]: rowTreePayload ?? null };
         ok = execution.failed
           ? `Проверка завершена: успех ${execution.success}, ошибок ${execution.failed}`
           : `Проверка выполнена, запросов: ${execution.success}`;
@@ -8288,9 +8315,10 @@ function handleDefinitionInput(value: string) {
               }
             : undefined
         };
-      responseText = JSON.stringify(singleResponsePayload, null, 2);
-      updateOutputTreeSourceFromPayload(singleResponsePayload, 'Источник выходного контракта обновлён после проверки API.');
-      apiResponseCache = { ...apiResponseCache, [refOf(s)]: singleResponsePayload };
+      const singleTreePayload =
+        execution.treePayload !== undefined ? execution.treePayload : extractApiBusinessPayload(singleResponsePayload);
+      applyResponsePreviewPayload(singleTreePayload, singleResponsePayload, 'Источник выходного контракта обновлён после проверки API.');
+      apiResponseCache = { ...apiResponseCache, [refOf(s)]: singleTreePayload ?? null };
       responsePagesCount = pagePayloads.length;
       responsePayloadCount = execution.totalItems;
       responsePayloadSize = totalSize;
@@ -8415,6 +8443,9 @@ function handleDefinitionInput(value: string) {
       myPreviewApplyMessage = '';
       myApiPreview = '';
       myApiPreviewDraft = '';
+      responseText = '';
+      responseJson = null;
+      responseIsJson = false;
       response_log_picker_open = false;
       response_log_pick_value = responseLogQualifiedTable(selected);
       activeResponseFieldRef = '';
@@ -8428,6 +8459,9 @@ function handleDefinitionInput(value: string) {
       datasetPreviewError = '';
     } else {
       selectedBaselineSignature = '';
+      responseText = '';
+      responseJson = null;
+      responseIsJson = false;
       outputTreeSource = null;
       outputTreeSourceJson = false;
       outputTreeRefreshedAt = 0;
@@ -8460,33 +8494,12 @@ function handleDefinitionInput(value: string) {
     void refreshResponseLogTableCompatibility();
   }
   $: {
-    const txt = String(responseText || '').trim();
-    if (!txt) {
-      responseIsJson = false;
-      responseJson = null;
-    } else {
-      try {
-        responseJson = JSON.parse(txt);
-        responseIsJson = true;
-      } catch {
-        responseJson = null;
-        responseIsJson = false;
-      }
-    }
-  }
-  $: {
     const out: string[] = [];
     if (responseIsJson) collectResponsePaths(responseJson, '', out);
     responsePathOptions = [...new Set(out)].filter(Boolean);
     if (!responsePathOptions.includes(responsePathPick)) {
       responsePathPick = responsePathOptions[0] || '';
     }
-  }
-  $: if (responseIsJson && responseJson && !outputTreeSourceJson) {
-    outputTreeSource = deepClone(responseJson);
-    outputTreeSourceJson = true;
-    outputTreeRefreshedAt = Date.now();
-    outputTreeMessage = 'Источник выходного контракта загружен из последнего тестового результата.';
   }
   $: {
     const scalar = new Set<string>();
