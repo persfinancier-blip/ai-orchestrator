@@ -799,6 +799,33 @@
     if (window.location.hash !== target) window.location.hash = target;
   }
 
+  function confirmDeskNavigation(message: string) {
+    if (!deskDirty) return true;
+    if (typeof window === 'undefined' || typeof window.confirm !== 'function') return false;
+    return window.confirm(message);
+  }
+
+  function emptyDeskConfig(): WorkflowDeskConfig {
+    return {
+      nodes: [],
+      edges: [],
+      viewport: { panX: 0, panY: 0, zoom: 1 },
+      selectedNodeId: '',
+      settings: {
+        workflow_log: {
+          enabled: false,
+          template_id: WORKFLOW_LOG_TEMPLATE_ID,
+          source_key: ''
+        }
+      }
+    };
+  }
+
+  function defaultNewDeskName() {
+    const iso = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    return `Новый рабочий стол ${iso}`;
+  }
+
   function safeIso(value: any) {
     const txt = String(value || '').trim();
     if (!txt) return '';
@@ -1237,9 +1264,122 @@
   async function selectWorkflowDeskById(nextDeskId: number) {
     if (!Number.isFinite(nextDeskId) || nextDeskId <= 0) return;
     if (deskSaving || deskLoading) return;
+    if (Math.trunc(nextDeskId) === deskId) {
+      workflowDeskPickId = String(nextDeskId);
+      return;
+    }
+    if (
+      !confirmDeskNavigation(
+        'Есть несохраненные изменения. Переключение рабочего стола загрузит другое состояние и несохраненные изменения будут потеряны. Продолжить?'
+      )
+    ) {
+      workflowDeskPickId = deskId > 0 ? String(deskId) : '';
+      return;
+    }
     workflowDeskPickId = String(nextDeskId);
     await loadWorkflowDeskFromServer(Math.trunc(nextDeskId));
     await refreshAutomationContour();
+  }
+
+  async function createNewWorkflowDesk() {
+    if (deskSaving || deskLoading) return;
+    if (
+      !confirmDeskNavigation(
+        'Есть несохраненные изменения. Создание нового рабочего стола откроет пустой стол и несохраненные изменения текущего стола будут потеряны. Продолжить?'
+      )
+    ) {
+      return;
+    }
+    deskSaving = true;
+    deskSaveError = '';
+    try {
+      const response = await fetch(`${API_BASE}/workflow-desks/upsert`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-AO-ROLE': API_ROLE
+        },
+        body: JSON.stringify({
+          desk_name: defaultNewDeskName(),
+          desk_type: 'data',
+          description: '',
+          schema_version: 1,
+          is_active: true,
+          updated_by: API_ROLE,
+          config_json: emptyDeskConfig()
+        })
+      });
+      let payload: any = {};
+      try {
+        payload = await response.json();
+      } catch {
+        payload = {};
+      }
+      if (!response.ok) {
+        const details = String(payload?.details || payload?.error || `${response.status} ${response.statusText}`);
+        throw new Error(details);
+      }
+      const createdDeskId = Number(payload?.id || 0) || 0;
+      if (!(createdDeskId > 0)) throw new Error('Не удалось получить ID нового рабочего стола');
+      await loadWorkflowDeskFromServer(createdDeskId);
+      await refreshAutomationContour();
+      banner = `Создан новый рабочий стол (ID ${createdDeskId})`;
+    } catch (e: any) {
+      const msg = String(e?.message || e || 'Ошибка создания рабочего стола');
+      deskSaveError = msg;
+      banner = msg;
+    } finally {
+      deskSaving = false;
+    }
+  }
+
+  async function deleteCurrentWorkflowDesk() {
+    if (!deskId || deskSaving || deskLoading) return;
+    const deletingDeskId = deskId;
+    const safeDeskName = String(deskName || '').trim() || `ID ${deskId}`;
+    const confirmed =
+      typeof window !== 'undefined' && typeof window.confirm === 'function'
+        ? window.confirm(
+            `Удалить рабочий стол "${safeDeskName}"? Опубликованные процессы этого рабочего стола перестанут планироваться, потому что стол станет неактивным. Уже запущенные jobs могут завершиться отдельно.`
+          )
+        : false;
+    if (!confirmed) return;
+    deskSaving = true;
+    deskSaveError = '';
+    try {
+      const response = await fetch(`${API_BASE}/workflow-desks/delete`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-AO-ROLE': API_ROLE
+        },
+        body: JSON.stringify({
+          id: deletingDeskId,
+          updated_by: API_ROLE
+        })
+      });
+      let payload: any = {};
+      try {
+        payload = await response.json();
+      } catch {
+        payload = {};
+      }
+      if (!response.ok) {
+        const details = String(payload?.details || payload?.error || `${response.status} ${response.statusText}`);
+        throw new Error(details);
+      }
+      await loadWorkflowDeskFromServer();
+      await refreshAutomationContour();
+      banner = `Рабочий стол удален (ID ${deletingDeskId})`;
+    } catch (e: any) {
+      const msg = String(e?.message || e || 'Ошибка удаления рабочего стола');
+      deskSaveError = msg;
+      banner = msg;
+    } finally {
+      deskSaving = false;
+    }
   }
 
   async function refreshSchedulerState() {
@@ -4428,6 +4568,12 @@
           {/each}
         </select>
       </label>
+      <button class="mini" type="button" on:click={createNewWorkflowDesk} disabled={deskSaving || deskLoading}>
+        Новый рабочий стол
+      </button>
+      <button class="mini danger" type="button" on:click={deleteCurrentWorkflowDesk} disabled={!deskId || deskSaving || deskLoading}>
+        Удалить рабочий стол
+      </button>
       <span>Хранятся в таблице:</span>
       <strong>{workflowDeskStorageRef}</strong>
       <span>ID: {deskId || '-'}</span>
@@ -5272,6 +5418,15 @@
     background: #fff;
     padding: 6px 10px;
     color: #0f172a;
+  }
+  .mini.danger {
+    border-color: #fecaca;
+    color: #b91c1c;
+    background: #fff;
+  }
+  .mini.danger:disabled {
+    color: #94a3b8;
+    border-color: #e2e8f0;
   }
   .dirty-flag { color: #b45309; font-weight: 600; }
   .clean-flag { color: #166534; font-weight: 600; }
