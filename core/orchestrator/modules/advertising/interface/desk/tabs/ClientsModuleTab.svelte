@@ -245,6 +245,8 @@
   let listSource: SourceMeta | null = null;
   let detail: ClientDetailPayload | null = null;
   let activeTab: TabKey = 'main_data';
+  let currentTabMeta = TABS[0];
+  let currentTabSource: any = null;
 
   function defaultClientDetail(): ClientDetailPayload {
     return {
@@ -555,10 +557,8 @@
       createLoading = false;
     }
   }
-
-  function activeTabMeta() {
-    return TABS.find((item) => item.key === activeTab) || TABS[0];
-  }
+  $: currentTabMeta = TABS.find((item) => item.key === activeTab) || TABS[0];
+  $: currentTabSource = sourceForSection(currentTabMeta.sourceKey);
 
   function summarySourceList() {
     const src = detail?.sources?.summary;
@@ -660,7 +660,7 @@
           <button class:active={activeTab === tab.key} type="button" on:click={() => (activeTab = tab.key)}>{tab.title}</button>
         {/each}
       </nav>
-      <div class="source-box">{sourceLabel(sourceForSection(activeTabMeta().sourceKey))}</div>
+      <div class="source-box">{sourceLabel(currentTabSource)}</div>
       {#if activeTab === 'main_data'}
         <section class="section-block">
           <div class="section-head">
@@ -692,13 +692,18 @@
         </section>
       {:else}
         <ClientRowsEditor
-          title={activeTabMeta().title}
+          title={currentTabMeta.title}
           rows={sourceRows(activeTab)}
           fields={MULTI_SECTION_FIELDS[activeTab]}
           optionSets={optionSets()}
-          addLabel={`Добавить: ${activeTabMeta().title}`}
+          addLabel={`Добавить: ${currentTabMeta.title}`}
           emptyText="Данные пока не заполнены."
           {busyRowKey}
+          onAddRow={() => addRow(activeTab)}
+          onChangeRow={(index, field, value) => updateMultiSection(activeTab, index, field, value)}
+          onSaveRow={(index) => saveRow(activeTab, index)}
+          onRemoveRow={(index) => removeRow(activeTab, index)}
+          onDuplicateRow={(index) => duplicateRow(activeTab, index)}
           on:add={() => addRow(activeTab)}
           on:change={(event) => updateMultiSection(activeTab, event.detail.index, event.detail.field, event.detail.value)}
           on:save={(event) => saveRow(activeTab, event.detail.index)}

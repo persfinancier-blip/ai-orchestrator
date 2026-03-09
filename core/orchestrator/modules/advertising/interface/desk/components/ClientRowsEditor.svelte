@@ -21,6 +21,11 @@
   export let addLabel = 'Добавить запись';
   export let emptyText = 'Записей пока нет.';
   export let busyRowKey = '';
+  export let onAddRow: (() => void) | null = null;
+  export let onChangeRow: ((index: number, field: string, value: any) => void) | null = null;
+  export let onSaveRow: ((index: number) => void) | null = null;
+  export let onRemoveRow: ((index: number) => void) | null = null;
+  export let onDuplicateRow: ((index: number) => void) | null = null;
 
   const dispatch = createEventDispatcher<{
     add: undefined;
@@ -41,10 +46,12 @@
   }
 
   function onTextChange(index: number, field: string, value: string) {
+    onChangeRow?.(index, field, value);
     dispatch('change', { index, field, value });
   }
 
   function onBoolChange(index: number, field: string, checked: boolean) {
+    onChangeRow?.(index, field, checked);
     dispatch('change', { index, field, value: checked });
   }
 
@@ -57,6 +64,26 @@
     const target = event.currentTarget as HTMLInputElement | null;
     return Boolean(target?.checked);
   }
+
+  function triggerAdd() {
+    onAddRow?.();
+    dispatch('add');
+  }
+
+  function triggerDuplicate(index: number) {
+    onDuplicateRow?.(index);
+    dispatch('duplicate', { index });
+  }
+
+  function triggerSave(index: number) {
+    onSaveRow?.(index);
+    dispatch('save', { index });
+  }
+
+  function triggerRemove(index: number) {
+    onRemoveRow?.(index);
+    dispatch('remove', { index });
+  }
 </script>
 
 <section class="rows-editor">
@@ -65,7 +92,7 @@
       <h3>{title}</h3>
       <p>{emptyText}</p>
     </div>
-    <button class="primary-btn" type="button" on:click={() => dispatch('add')}>{addLabel}</button>
+    <button class="primary-btn" type="button" on:click={triggerAdd}>{addLabel}</button>
   </div>
 
   {#if rows.length === 0}
@@ -80,11 +107,11 @@
               <strong>{row.id ? `Запись #${row.id}` : `Новая запись ${index + 1}`}</strong>
             </div>
             <div class="row-card-actions">
-              <button class="mini-btn" type="button" on:click={() => dispatch('duplicate', { index })}>Дублировать</button>
-              <button class="mini-btn" type="button" on:click={() => dispatch('save', { index })} disabled={busyRowKey === rowKey}>
+              <button class="mini-btn" type="button" on:click={() => triggerDuplicate(index)}>Дублировать</button>
+              <button class="mini-btn" type="button" on:click={() => triggerSave(index)} disabled={busyRowKey === rowKey}>
                 {busyRowKey === rowKey ? 'Сохраняем...' : 'Сохранить'}
               </button>
-              <button class="danger-btn" type="button" on:click={() => dispatch('remove', { index })} disabled={busyRowKey === rowKey}>Удалить</button>
+              <button class="danger-btn" type="button" on:click={() => triggerRemove(index)} disabled={busyRowKey === rowKey}>Удалить</button>
             </div>
           </div>
 
