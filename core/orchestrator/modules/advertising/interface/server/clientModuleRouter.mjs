@@ -353,8 +353,19 @@ function recordMeta(tableKey) {
   return getClientModuleTemplateByKey(tableKey);
 }
 
+function templateColumnSetForTable(schema, table) {
+  const template = (CLIENT_MODULE_TEMPLATES || []).find(
+    (item) => String(item?.schema_name || '') === String(schema || '') && String(item?.table_name || '') === String(table || '')
+  );
+  const cols = Array.isArray(template?.columns) ? template.columns : [];
+  return new Set(cols.map((item) => String(item?.field_name || '').trim()).filter(Boolean));
+}
+
 function prepareSystemRow(schema, table, row, isInsert = false) {
   const now = new Date().toISOString();
+  const columnSet = templateColumnSetForTable(schema, table);
+  const hasCreatedAt = columnSet.has('created_at');
+  const hasUpdatedAt = columnSet.has('updated_at');
   return {
     ...row,
     ao_source: 'clients_module',
@@ -364,8 +375,8 @@ function prepareSystemRow(schema, table, row, isInsert = false) {
     ao_contract_name: defaultContractName(schema, table),
     ao_contract_version: 1,
     ...(isInsert ? { ao_created_at: now } : {}),
-    ...(isInsert && row.created_at === undefined ? { created_at: now } : {}),
-    ...(row.updated_at === undefined ? { updated_at: now } : {})
+    ...(hasCreatedAt && isInsert && row.created_at === undefined ? { created_at: now } : {}),
+    ...(hasUpdatedAt && row.updated_at === undefined ? { updated_at: now } : {})
   };
 }
 
