@@ -71,14 +71,25 @@ jobs:
             npm ci
 
             # Порт фиксируем (как в Apache ProxyPass)
-            sudo /usr/bin/env \
-              PGHOST="${{ secrets.PGHOST }}" \
-              PGPORT="${{ secrets.PGPORT }}" \
-              PGUSER="${{ secrets.PGUSER }}" \
-              PGPASSWORD="${{ secrets.PGPASSWORD }}" \
-              PGDATABASE="${{ secrets.PGDATABASE }}" \
-              SPACE_API_PORT="${{ secrets.AIR_PORT }}" \
-              /usr/local/bin/pm2 startOrReload ecosystem.config.cjs --update-env
+            if sudo /usr/local/bin/pm2 describe ai-orchestrator-adv-api >/dev/null 2>&1; then
+              sudo /usr/bin/env \
+                PGHOST="${{ secrets.PGHOST }}" \
+                PGPORT="${{ secrets.PGPORT }}" \
+                PGUSER="${{ secrets.PGUSER }}" \
+                PGPASSWORD="${{ secrets.PGPASSWORD }}" \
+                PGDATABASE="${{ secrets.PGDATABASE }}" \
+                SPACE_API_PORT="${{ secrets.AIR_PORT }}" \
+                /usr/local/bin/pm2 restart ai-orchestrator-adv-api --update-env
+            else
+              sudo /usr/bin/env \
+                PGHOST="${{ secrets.PGHOST }}" \
+                PGPORT="${{ secrets.PGPORT }}" \
+                PGUSER="${{ secrets.PGUSER }}" \
+                PGPASSWORD="${{ secrets.PGPASSWORD }}" \
+                PGDATABASE="${{ secrets.PGDATABASE }}" \
+                SPACE_API_PORT="${{ secrets.AIR_PORT }}" \
+                /usr/local/bin/pm2 start ecosystem.config.cjs --only ai-orchestrator-adv-api --update-env
+            fi
 
             sudo /usr/local/bin/pm2 save --force
 
