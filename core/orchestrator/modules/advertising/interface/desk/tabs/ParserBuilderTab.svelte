@@ -490,21 +490,6 @@
   };
   $: sourceTableColumnsMeta = columnsCache[tableCacheKey(settings.sourceSchema, settings.sourceTable)] || [];
   $: previewResultRows = Array.isArray(previewData?.sample_rows) ? previewData.sample_rows : [];
-  $: baseComputedFields =
-    selectedFieldRows.length
-      ? selectedFieldRows.map((row) => ({
-          name: row.alias || fallbackFieldName(row.path),
-          type: row.type || inferFieldTypeFromRows(sourcePreviewRows, fallbackFieldName(row.path)) || ''
-        }))
-      : workingFieldCandidates.map((name) => ({
-          name,
-          type:
-            sourceTableColumnsMeta.find((item) => item.name === name)?.type ||
-            inferFieldTypeFromRows(sourcePreviewRows, name) ||
-            inferFieldTypeFromRows(previewResultRows, name) ||
-            ''
-        }));
-  $: baseComputedFieldTypeMap = Object.fromEntries(baseComputedFields.map((field) => [field.name, field.type || '']));
   $: computedFunctionLibrary = COMPUTED_FUNCTION_CATEGORIES.map((category) => ({
     ...category,
     items: COMPUTED_FUNCTIONS.filter((item) => item.category === category.id)
@@ -789,7 +774,7 @@
         type: String(row?.type || '').trim()
       }))
       .filter((row) => row.name);
-    const merged = [...baseComputedFields, ...priorComputed];
+    const merged = [...currentBaseComputedFields(), ...priorComputed];
     const seen = new Set<string>();
     return merged.filter((item) => {
       const key = String(item?.name || '').trim();
@@ -802,6 +787,23 @@
   function computedFieldTypesFor(index: number) {
     const entries = availableComputedFieldsFor(index).map((item) => [item.name, item.type || '']);
     return Object.fromEntries(entries);
+  }
+
+  function currentBaseComputedFields() {
+    if (selectedFieldRows.length) {
+      return selectedFieldRows.map((row) => ({
+        name: row.alias || fallbackFieldName(row.path),
+        type: row.type || inferFieldTypeFromRows(sourcePreviewRows, fallbackFieldName(row.path)) || ''
+      }));
+    }
+    return workingFieldCandidates.map((name) => ({
+      name,
+      type:
+        sourceTableColumnsMeta.find((item) => item.name === name)?.type ||
+        inferFieldTypeFromRows(sourcePreviewRows, name) ||
+        inferFieldTypeFromRows(previewResultRows, name) ||
+        ''
+    }));
   }
 
   function addAggregateRule() {
