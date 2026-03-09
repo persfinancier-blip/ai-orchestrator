@@ -372,6 +372,7 @@
   let previewRaw: any = null;
   let previewUpdatedAt = '';
   let sourceNodePreviewMessage = '';
+  let computedBaseAvailableFields: Array<{ name: string; type?: string }> = [];
 
   $: {
     const next = normalizeSettings(initialSettings);

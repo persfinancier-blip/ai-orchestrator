@@ -29,7 +29,11 @@
   $: functionOptions = functionsByCategory(currentBuilder.category);
   $: expressionPreview = buildExpressionFromBuilder(currentBuilder);
   $: typeWarnings = buildComputedFieldTypeWarnings(currentBuilder, fieldTypes);
-  $: resolvedAvailableFields = (Array.isArray(availableFields) && availableFields.length ? availableFields : fallbackFields)
+  $: resolvedAvailableFields = (Array.isArray(availableFields) && availableFields.length
+    ? availableFields
+    : Array.isArray(fallbackFields)
+    ? fallbackFields
+    : [])
     .map((item: any) => ({
       name: String(item?.name || '').trim(),
       type: String(item?.type || '').trim()
