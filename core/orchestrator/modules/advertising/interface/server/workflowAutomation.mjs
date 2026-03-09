@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import vm from 'node:vm';
 import { pool } from './db.mjs';
 import { executeParserRows, parserRuntimeTestkit } from './parserRuntime.mjs';
+import { executeWriteConfig } from './writeRuntime.mjs';
 import {
   shouldRetryStatus,
   retryDelayMs,
@@ -6490,137 +6491,72 @@ function chunkRows(rows = [], batchSize = 500) {
 
 async function executeDbWriteNode(client, config, processCtx, node, inputValue) {
   const settings = node?.config?.settings && typeof node.config.settings === 'object' ? node.config.settings : {};
-  const targetSchema = String(settings.targetSchema || settings.target_schema || '').trim();
-  const targetTable = String(settings.targetTable || settings.target_table || '').trim();
-  const writeMode = String(settings.writeMode || settings.write_mode || 'insert').trim().toLowerCase() || 'insert';
-  const keyColumns = parseCsvList(settings.keyColumns || settings.key_columns || '');
-  const batchSize = Math.max(1, Math.min(5000, Math.trunc(Number(settings.batchSize || settings.batch_size || 500))));
-  const channel = String(settings.channel || targetTable || processCtx.process_code || '').trim();
-
   const inputEnvelope = normalizeNodeIoEnvelope(inputValue, processCtx);
-  const rows = (Array.isArray(inputEnvelope.rows) ? inputEnvelope.rows : []).map((row) =>
-    row && typeof row === 'object' && !Array.isArray(row) ? row : { value: row }
-  );
-  if (!rows.length) {
-    const emptyOut = composeNodeOutputEnvelope(processCtx, node, [], {
-      target: isIdent(targetSchema) && isIdent(targetTable) ? `${targetSchema}.${targetTable}` : 'process_bus',
-      write_mode: writeMode
-    });
-    return { output: { ...emptyOut, wrote: 0 }, metrics: { wrote: 0, mode: writeMode, target_type: 'none' } };
-  }
-
-  if (isIdent(targetSchema) && isIdent(targetTable)) {
-    const exists = await tableExists(client, targetSchema, targetTable);
-    if (exists) {
-      const cols = await tableColumnNames(client, targetSchema, targetTable);
-      const hasPayloadJson = cols.includes('payload_json');
-      const unionKeys = [...new Set(rows.flatMap((row) => Object.keys(row || {})))].filter((k) => isIdent(k) && cols.includes(k));
-      const qn = `${qi(targetSchema)}.${qi(targetTable)}`;
-      let wrote = 0;
-
-      if (unionKeys.length) {
-        const writeCols = unionKeys;
-        const keys = keyColumns.filter((k) => writeCols.includes(k));
-        const nonKeys = writeCols.filter((k) => !keys.includes(k));
-        const batches = chunkRows(rows, batchSize);
-        for (const batch of batches) {
-          if (!batch.length) continue;
-          if (writeMode === 'update' || writeMode === 'update_by_key') {
-            if (!keys.length || !nonKeys.length) throw new Error('db_write_update_requires_key_and_nonkey_columns');
-            for (const row of batch) {
-              const values = [];
-              const setSql = nonKeys
-                .map((col) => {
-                  values.push(row[col] ?? null);
-                  return `${qi(col)} = $${values.length}`;
-                })
-                .join(', ');
-              const whereSql = keys
-                .map((col) => {
-                  values.push(row[col] ?? null);
-                  return `${qi(col)} = $${values.length}`;
-                })
-                .join(' AND ');
-              const sql = `UPDATE ${qn} SET ${setSql} WHERE ${whereSql}`;
-              const upd = await client.query(sql, values);
-              wrote += Math.max(0, Number(upd.rowCount || 0));
-            }
-            continue;
-          }
-
-          const values = [];
-          const tupleSql = batch
-            .map((row) => {
-              const t = writeCols.map((col) => {
-                values.push(row[col] ?? null);
-                return `$${values.length}`;
-              });
-              return `(${t.join(', ')})`;
-            })
-            .join(', ');
-          const insertSqlBase = `INSERT INTO ${qn} (${writeCols.map((c) => qi(c)).join(', ')}) VALUES ${tupleSql}`;
-          let finalSql = insertSqlBase;
-          if (writeMode === 'upsert') {
-            if (!keys.length) throw new Error('db_write_upsert_requires_key_columns');
-            if (nonKeys.length) {
-              finalSql += ` ON CONFLICT (${keys.map((k) => qi(k)).join(', ')}) DO UPDATE SET ${nonKeys
-                .map((col) => `${qi(col)} = EXCLUDED.${qi(col)}`)
-                .join(', ')}`;
-            } else {
-              finalSql += ` ON CONFLICT (${keys.map((k) => qi(k)).join(', ')}) DO NOTHING`;
-            }
-          }
-          const ins = await client.query(finalSql, values);
-          wrote += Math.max(0, Number(ins.rowCount || 0));
-        }
-      } else if (hasPayloadJson) {
-        const batches = chunkRows(rows, batchSize);
-        for (const batch of batches) {
-          const values = [];
-          const tupleSql = batch
-            .map((row) => {
-              values.push(JSON.stringify(row));
-              return `($${values.length}::jsonb)`;
-            })
-            .join(', ');
-          const ins = await client.query(`INSERT INTO ${qn} (payload_json) VALUES ${tupleSql}`, values);
-          wrote += Math.max(0, Number(ins.rowCount || 0));
-        }
-      } else {
-        throw new Error(`db_write_no_matching_columns:${targetSchema}.${targetTable}`);
-      }
-
-      const envelope = composeNodeOutputEnvelope(processCtx, node, rows, {
-        target: `${targetSchema}.${targetTable}`,
-        write_mode: writeMode,
-        key_columns: keyColumns
-      });
-      return {
-        output: { ...envelope, wrote, target: `${targetSchema}.${targetTable}` },
-        metrics: { wrote, target_type: 'table', mode: writeMode, batches: chunkRows(rows, batchSize).length }
-      };
-    }
-  }
-
-  const id = await writeBusMessage(client, config, {
-    desk_id: processCtx.desk_id,
-    run_uid: processCtx.run_uid,
-    process_code: processCtx.process_code,
-    channel,
-    payload_json: {
-      contract_version: 'node_io_v1',
-      rows,
-      row_count: rows.length
-    }
+  const exec = await executeWriteConfig(client, settings, {
+    inputValue,
+    inputEnvelope
   });
-  const envelope = composeNodeOutputEnvelope(processCtx, node, rows, {
-    target: 'process_bus',
-    channel,
-    write_mode: writeMode
+
+  const writeMode = String(exec?.meta?.write_mode || settings.writeMode || settings.write_mode || 'insert').trim().toLowerCase() || 'insert';
+  const target = String(exec?.meta?.target || '').trim() || 'process_bus';
+
+  if (String(exec?.stats?.target_type || '').trim() === 'process_bus') {
+    const channel = String(exec?.meta?.channel || settings.channel || processCtx.process_code || '').trim();
+    const id = await writeBusMessage(client, config, {
+      desk_id: processCtx.desk_id,
+      run_uid: processCtx.run_uid,
+      process_code: processCtx.process_code,
+      channel,
+      payload_json: {
+        contract_version: 'node_io_v1',
+        rows: Array.isArray(exec?.rows) ? exec.rows : [],
+        row_count: Array.isArray(exec?.rows) ? exec.rows.length : 0
+      }
+    });
+    const envelope = composeNodeOutputEnvelope(processCtx, node, Array.isArray(exec?.rows) ? exec.rows : [], {
+      target: 'process_bus',
+      channel,
+      write_mode: writeMode,
+      key_columns: Array.isArray(exec?.meta?.key_fields) ? exec.meta.key_fields : []
+    });
+    return {
+      output: {
+        ...envelope,
+        wrote: Number(exec?.stats?.wrote || 0),
+        inserted: Number(exec?.stats?.inserted || 0),
+        updated: Number(exec?.stats?.updated || 0),
+        skipped: Number(exec?.stats?.skipped || 0),
+        target: 'process_bus',
+        message_id: id,
+        channel
+      },
+      metrics: {
+        ...((exec && exec.stats) || {}),
+        target_type: 'process_bus',
+        channel,
+        mode: writeMode
+      }
+    };
+  }
+
+  const envelope = composeNodeOutputEnvelope(processCtx, node, Array.isArray(exec?.rows) ? exec.rows : [], {
+    target,
+    write_mode: writeMode,
+    key_columns: Array.isArray(exec?.meta?.key_fields) ? exec.meta.key_fields : []
   });
   return {
-    output: { ...envelope, wrote: rows.length, target: 'process_bus', message_id: id, channel },
-    metrics: { wrote: rows.length, target_type: 'process_bus', channel, mode: writeMode }
+    output: {
+      ...envelope,
+      wrote: Number(exec?.stats?.wrote || 0),
+      inserted: Number(exec?.stats?.inserted || 0),
+      updated: Number(exec?.stats?.updated || 0),
+      skipped: Number(exec?.stats?.skipped || 0),
+      target
+    },
+    metrics: {
+      ...((exec && exec.stats) || {}),
+      mode: writeMode
+    }
   };
 }
 

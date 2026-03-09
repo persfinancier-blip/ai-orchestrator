@@ -2,6 +2,7 @@
   import { onDestroy, onMount, tick } from 'svelte';
   import ApiBuilderTab from '../tabs/ApiBuilderTab.svelte';
   import ParserBuilderTab from '../tabs/ParserBuilderTab.svelte';
+  import WriteBuilderTab from '../tabs/WriteBuilderTab.svelte';
   import {
     tools,
     toolPorts,
@@ -2642,12 +2643,17 @@
     return Boolean(n && n.type === 'tool' && toolCfg(n).toolType === 'table_parser');
   }
 
+  function isWriteToolNode(n: WorkflowNode | null | undefined) {
+    return Boolean(n && n.type === 'tool' && toolCfg(n).toolType === 'db_write');
+  }
+
   function isWideSettingsNode(n: WorkflowNode | null | undefined) {
     return Boolean(
-      n &&
+          n &&
         (isApiNode(n) ||
           (n.type === 'tool' && toolCfg(n).toolType === 'api_request') ||
           isParserToolNode(n) ||
+          isWriteToolNode(n) ||
           toolCfg(n).toolType === 'condition_switch' ||
           toolCfg(n).toolType === 'code_node')
     );
@@ -3656,11 +3662,25 @@
       };
     if (toolType === 'db_write')
       return {
-        targetSchema: 'ao_data',
-        targetTable: 'bronze_result',
+        templateId: '',
+        templateStoreId: '',
+        sourceMode: 'node',
+        sourceNodeTemplateRef: '',
+        sourceNodeTemplateType: '',
+        sourceNodeTemplateStoreId: '',
+        sourceNodeTemplateName: '',
+        sourceSchema: '',
+        sourceTable: '',
+        sourceColumn: '',
+        targetSchema: '',
+        targetTable: '',
         writeMode: 'insert',
-        keyColumns: '',
+        fieldMappingsJson: '[]',
+        keyFields: '',
         batchSize: '500',
+        previewLimit: '20',
+        unmappedMode: 'matched_only',
+        conflictMode: 'input_wins',
         channel: '',
         writeSuccessRate: '98'
       };
@@ -3962,6 +3982,7 @@
       isApiNode(node) ||
       isApiToolNode(node) ||
       isParserToolNode(node) ||
+      isWriteToolNode(node) ||
       ['split_data', 'merge_data', 'condition_if', 'condition_switch', 'code_node'].includes(toolCfg(node).toolType || '');
     if (!canOpenSettings) {
       banner = 'Для этого узла пока нет отдельной настройки по двойному клику';
@@ -5425,23 +5446,9 @@
             </div>
           {/if}
           {#if toolCfg(selectedNode).toolType === 'db_write'}
-            <label>Схема<input value={toolCfg(selectedNode).settings.targetSchema || ''} on:input={(e) => onSettingInput(selectedNode.id, 'targetSchema', e)} /></label>
-            <label>Таблица<input value={toolCfg(selectedNode).settings.targetTable || ''} on:input={(e) => onSettingInput(selectedNode.id, 'targetTable', e)} /></label>
-            <label>
-              Режим записи
-              <select
-                value={toolCfg(selectedNode).settings.writeMode || 'insert'}
-                on:change={(e) => updateSetting(selectedNode.id, 'writeMode', selectValue(e))}
-              >
-                <option value="insert">Только вставка (insert)</option>
-                <option value="upsert">Обновить или вставить (upsert)</option>
-                <option value="update_by_key">Обновить по ключу (update)</option>
-              </select>
-            </label>
-            <label>Ключевые колонки (через запятую)<input value={toolCfg(selectedNode).settings.keyColumns || ''} on:input={(e) => onSettingInput(selectedNode.id, 'keyColumns', e)} /></label>
-            <label>Размер пакета<input value={toolCfg(selectedNode).settings.batchSize || ''} on:input={(e) => onSettingInput(selectedNode.id, 'batchSize', e)} /></label>
-            <label>Резервный канал<input value={toolCfg(selectedNode).settings.channel || ''} on:input={(e) => onSettingInput(selectedNode.id, 'channel', e)} /></label>
-            <label>Успешная запись, %<input value={toolCfg(selectedNode).settings.writeSuccessRate || ''} on:input={(e) => onSettingInput(selectedNode.id, 'writeSuccessRate', e)} /></label>
+            <div class="empty">
+              Полная настройка ноды записи данных открывается по двойному клику по карточке или через модалку настройки узла.
+            </div>
           {/if}
           {#if toolCfg(selectedNode).toolType === 'http_request'}
             <label>
@@ -5901,6 +5908,21 @@
         <div class="node-modal-body node-modal-body-api">
           {#key `${settingsNode.id}:${toolCfg(settingsNode).settings.templateStoreId || 0}:${toolCfg(settingsNode).settings.templateId || ''}`}
             <ParserBuilderTab
+              apiBase={API_BASE}
+              apiJson={workflowApiJson}
+              headers={workflowApiHeaders}
+              existingTables={apiBuilderExistingTables}
+              initialSettings={toolCfg(settingsNode).settings || {}}
+              embeddedMode={false}
+              on:configChange={(event) => replaceToolSettings(settingsNode.id, event.detail?.settings || {})}
+            />
+          {/key}
+        </div>
+      {/if}
+      {#if isWriteToolNode(settingsNode)}
+        <div class="node-modal-body node-modal-body-api">
+          {#key `${settingsNode.id}:${toolCfg(settingsNode).settings.templateStoreId || 0}:${toolCfg(settingsNode).settings.templateId || ''}`}
+            <WriteBuilderTab
               apiBase={API_BASE}
               apiJson={workflowApiJson}
               headers={workflowApiHeaders}

@@ -1,6 +1,7 @@
 ﻿import express from 'express';
 import { pool } from './db.mjs';
 import { executeParserRows, parserPreviewSummary } from './parserRuntime.mjs';
+import { previewWriteConfig } from './writeRuntime.mjs';
 
 export const tableBuilderRouter = express.Router();
 tableBuilderRouter.use(express.json({ limit: '4mb' }));
@@ -68,6 +69,8 @@ const DEFAULT_CONFIG = Object.freeze({
   api_configs_table: 'api_configs_store',
   parser_configs_schema: 'ao_system',
   parser_configs_table: 'parser_configs_store',
+  write_configs_schema: 'ao_system',
+  write_configs_table: 'write_configs_store',
   node_registry_schema: 'ao_system',
   node_registry_table: 'node_registry_store',
   workflow_desks_schema: 'ao_system',
@@ -143,6 +146,17 @@ const API_CONFIGS_REQUIRED_COLUMNS = [
 const PARSER_CONFIGS_REQUIRED_COLUMNS = [
   { name: 'id', types: ['bigint', 'int8', 'bigserial', 'integer', 'int4', 'int'] },
   { name: 'parser_name', types: ['text', 'character varying', 'varchar'] },
+  { name: 'config_json', types: ['jsonb', 'json'] },
+  { name: 'schema_version', types: ['integer', 'int', 'int4'] },
+  { name: 'revision', types: ['integer', 'int', 'int4'] },
+  { name: 'description', types: ['text', 'character varying', 'varchar'] },
+  { name: 'is_active', types: ['boolean'] },
+  { name: 'updated_at', types: ['timestamp with time zone', 'timestamptz', 'timestamp'] },
+  { name: 'updated_by', types: ['text', 'character varying', 'varchar'] }
+];
+const WRITE_CONFIGS_REQUIRED_COLUMNS = [
+  { name: 'id', types: ['bigint', 'int8', 'bigserial', 'integer', 'int4', 'int'] },
+  { name: 'write_name', types: ['text', 'character varying', 'varchar'] },
   { name: 'config_json', types: ['jsonb', 'json'] },
   { name: 'schema_version', types: ['integer', 'int', 'int4'] },
   { name: 'revision', types: ['integer', 'int', 'int4'] },
@@ -453,6 +467,10 @@ function parserConfigsQname(config) {
   return qi(config.parser_configs_schema) + '.' + qi(config.parser_configs_table);
 }
 
+function writeConfigsQname(config) {
+  return qi(config.write_configs_schema) + '.' + qi(config.write_configs_table);
+}
+
 function nodeRegistryQname(config) {
   return `${qi(config.node_registry_schema)}.${qi(config.node_registry_table)}`;
 }
@@ -472,6 +490,11 @@ function syncProtectedSystemTables(config) {
     next.add(`${config.server_writes_schema}.${config.server_writes_table}`);
   } else {
     next.add(`${DEFAULT_CONFIG.server_writes_schema}.${DEFAULT_CONFIG.server_writes_table}`);
+  }
+  if (config?.write_configs_schema && config?.write_configs_table) {
+    next.add(`${config.write_configs_schema}.${config.write_configs_table}`);
+  } else {
+    next.add(`${DEFAULT_CONFIG.write_configs_schema}.${DEFAULT_CONFIG.write_configs_table}`);
   }
   PROTECTED_SYSTEM_TABLES = next;
 }
@@ -631,6 +654,11 @@ async function ensureDefaultSettingsRows(client) {
       description: 'Системное хранилище шаблонов обработки данных'
     },
     {
+      key: 'write_configs_storage',
+      value: { schema: DEFAULT_CONFIG.write_configs_schema, table: DEFAULT_CONFIG.write_configs_table },
+      description: 'Системное хранилище шаблонов ноды записи данных'
+    },
+    {
       key: 'node_registry_storage',
       value: { schema: DEFAULT_CONFIG.node_registry_schema, table: DEFAULT_CONFIG.node_registry_table },
       description: 'Системный реестр нод и разделов интерфейса workflow'
@@ -733,6 +761,20 @@ function applySettingValue(target, key, value) {
   }
   if (key === 'parser_configs_storage_table') {
     target.parser_configs_table = normalizeSettingIdent(value, target.parser_configs_table);
+    return;
+  }
+  if (key === 'write_configs_storage') {
+    const parsed = parseStorageSettingValue(value);
+    target.write_configs_schema = normalizeSettingIdent(parsed.schema, target.write_configs_schema);
+    target.write_configs_table = normalizeSettingIdent(parsed.table, target.write_configs_table);
+    return;
+  }
+  if (key === 'write_configs_storage_schema') {
+    target.write_configs_schema = normalizeSettingIdent(value, target.write_configs_schema);
+    return;
+  }
+  if (key === 'write_configs_storage_table') {
+    target.write_configs_table = normalizeSettingIdent(value, target.write_configs_table);
     return;
   }
   if (key === 'node_registry_storage') {
@@ -841,6 +883,17 @@ async function loadRuntimeConfig(client, { force = false } = {}) {
     next.parser_configs_table = DEFAULT_CONFIG.parser_configs_table;
   }
 
+  const writeConfigsOk = await hasRequiredColumns(
+    client,
+    next.write_configs_schema,
+    next.write_configs_table,
+    WRITE_CONFIGS_REQUIRED_COLUMNS
+  );
+  if (!writeConfigsOk) {
+    next.write_configs_schema = DEFAULT_CONFIG.write_configs_schema;
+    next.write_configs_table = DEFAULT_CONFIG.write_configs_table;
+  }
+
   const nodeRegistryOk = await hasRequiredColumns(
     client,
     next.node_registry_schema,
@@ -867,6 +920,7 @@ async function loadRuntimeConfig(client, { force = false } = {}) {
   const templatesQn = await ensureTemplatesStorageTable(client, next);
   await ensureApiConfigsTable(client, next);
   await ensureParserConfigsTable(client, next);
+  await ensureWriteConfigsTable(client, next);
   await ensureNodeRegistryTable(client, next);
   await ensureWorkflowDesksTable(client, next);
   const serverWritesQn = await ensureServerWritesTable(client, next);
@@ -924,6 +978,15 @@ async function loadRuntimeConfig(client, { force = false } = {}) {
     next.parser_configs_schema,
     next.parser_configs_table,
     'system_bootstrap:parser_configs_storage',
+    'system_bootstrap',
+    next.contracts_schema
+  );
+  await ensureContractVersionForTable(
+    client,
+    contractsQn,
+    next.write_configs_schema,
+    next.write_configs_table,
+    'system_bootstrap:write_configs_storage',
     'system_bootstrap',
     next.contracts_schema
   );
@@ -1176,6 +1239,95 @@ async function ensureParserConfigsTable(client, config) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS ao_parser_configs_store_active_idx
     ON ${qn} (is_active, parser_name)
+  `);
+  await client.query(`
+    ALTER TABLE ${qn}
+      ADD COLUMN IF NOT EXISTS id bigint,
+      ADD COLUMN IF NOT EXISTS config_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      ADD COLUMN IF NOT EXISTS schema_version integer NOT NULL DEFAULT 1,
+      ADD COLUMN IF NOT EXISTS revision integer NOT NULL DEFAULT 1,
+      ADD COLUMN IF NOT EXISTS description text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now(),
+      ADD COLUMN IF NOT EXISTS updated_by text NOT NULL DEFAULT 'system'
+  `);
+  await client.query(`CREATE SEQUENCE IF NOT EXISTS ${seqQn}`);
+  await client.query(`ALTER SEQUENCE ${seqQn} OWNED BY ${qn}.id`);
+  await client.query(`
+    ALTER TABLE ${qn}
+      ALTER COLUMN id SET DEFAULT nextval(${qlit(seqReg)}::regclass)
+  `);
+  await client.query(`
+    WITH dup AS (
+      SELECT ctid, row_number() OVER (PARTITION BY id ORDER BY updated_at DESC NULLS LAST, ctid) AS rn
+      FROM ${qn}
+      WHERE id IS NOT NULL AND id > 0
+    )
+    UPDATE ${qn} t
+    SET id = nextval(${qlit(seqReg)}::regclass)
+    FROM dup
+    WHERE t.ctid = dup.ctid AND dup.rn > 1
+  `);
+  await client.query(`
+    UPDATE ${qn}
+    SET id = nextval(${qlit(seqReg)}::regclass)
+    WHERE id IS NULL OR id <= 0
+  `);
+  await client.query(`
+    SELECT setval(
+      ${qlit(seqReg)}::regclass,
+      GREATEST((SELECT COALESCE(MAX(id), 1) FROM ${qn}), 1),
+      true
+    )
+  `);
+  await client.query(`ALTER TABLE ${qn} ALTER COLUMN id SET NOT NULL`);
+  await client.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint c
+        WHERE c.conrelid = ${qlit(`${schema}.${table}`)}::regclass
+          AND c.contype = 'p'
+      ) THEN
+        ALTER TABLE ${qn}
+          ADD CONSTRAINT ${qi(`${table}_pkey`)} PRIMARY KEY (id);
+      END IF;
+    END $$;
+  `);
+  await ensureSystemContractColumns(client, qn);
+  return qn;
+}
+
+async function ensureWriteConfigsTable(client, config) {
+  const schema = normalizeSettingIdent(config?.write_configs_schema, DEFAULT_CONFIG.write_configs_schema);
+  const table = normalizeSettingIdent(config?.write_configs_table, DEFAULT_CONFIG.write_configs_table);
+  const qn = `${qi(schema)}.${qi(table)}`;
+  const seqName = `${table}_id_seq`;
+  const seqQn = `${qi(schema)}.${qi(seqName)}`;
+  const seqReg = `${schema}.${seqName}`;
+
+  await client.query(`CREATE SCHEMA IF NOT EXISTS ${qi(schema)}`);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ${qn} (
+      id bigserial PRIMARY KEY,
+      write_name text NOT NULL,
+      config_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      schema_version integer NOT NULL DEFAULT 1,
+      revision integer NOT NULL DEFAULT 1,
+      description text NOT NULL DEFAULT '',
+      is_active boolean NOT NULL DEFAULT true,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      updated_by text NOT NULL DEFAULT 'system'
+    )
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_write_configs_store_name_idx
+    ON ${qn} (write_name)
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ao_write_configs_store_active_idx
+    ON ${qn} (is_active, write_name)
   `);
   await client.query(`
     ALTER TABLE ${qn}
@@ -1552,6 +1704,8 @@ async function ensureDefaultServerWriteRules(client, config, serverWritesQn) {
   const apiTable = normalizeSettingIdent(config?.api_configs_table, DEFAULT_CONFIG.api_configs_table);
   const parserSchema = normalizeSettingIdent(config?.parser_configs_schema, DEFAULT_CONFIG.parser_configs_schema);
   const parserTable = normalizeSettingIdent(config?.parser_configs_table, DEFAULT_CONFIG.parser_configs_table);
+  const writeSchema = normalizeSettingIdent(config?.write_configs_schema, DEFAULT_CONFIG.write_configs_schema);
+  const writeTable = normalizeSettingIdent(config?.write_configs_table, DEFAULT_CONFIG.write_configs_table);
   const nodeRegistrySchema = normalizeSettingIdent(config?.node_registry_schema, DEFAULT_CONFIG.node_registry_schema);
   const nodeRegistryTable = normalizeSettingIdent(config?.node_registry_table, DEFAULT_CONFIG.node_registry_table);
   const workflowSchema = normalizeSettingIdent(config?.workflow_desks_schema, DEFAULT_CONFIG.workflow_desks_schema);
@@ -1572,6 +1726,7 @@ async function ensureDefaultServerWriteRules(client, config, serverWritesQn) {
           'templates_storage',
           'api_configs_storage',
           'parser_configs_storage',
+          'write_configs_storage',
           'node_registry_storage',
           'workflow_desks_storage',
           'server_writes_storage'
@@ -1610,6 +1765,14 @@ async function ensureDefaultServerWriteRules(client, config, serverWritesQn) {
       operation: 'upsert_parser_config',
       payload: { trigger: ['parser_add', 'parser_save', 'parser_delete'] },
       description: 'Синхронизация системного хранилища шаблонов ноды «Работа с данными»'
+    },
+    {
+      rule_key: 'write_configs_storage_sync',
+      target_schema: writeSchema,
+      target_table: writeTable,
+      operation: 'upsert_write_config',
+      payload: { trigger: ['write_add', 'write_save', 'write_delete'] },
+      description: 'Синхронизация системного хранилища шаблонов ноды записи данных'
     },
     {
       rule_key: 'node_registry_storage_sync',
@@ -2062,6 +2225,7 @@ tableBuilderRouter.post('/settings/upsert', requireDataAdmin, async (req, res) =
     await ensureTemplatesStorageTable(client, effective);
     await ensureApiConfigsTable(client, effective);
     await ensureParserConfigsTable(client, effective);
+    await ensureWriteConfigsTable(client, effective);
     await ensureServerWritesTable(client, effective);
     return res.json({ ok: true, setting_key, effective });
   } catch (e) {
@@ -2079,6 +2243,7 @@ tableBuilderRouter.post('/settings/reload', requireDataAdmin, async (_req, res) 
     await ensureTemplatesStorageTable(client, effective);
     await ensureApiConfigsTable(client, effective);
     await ensureParserConfigsTable(client, effective);
+    await ensureWriteConfigsTable(client, effective);
     await ensureServerWritesTable(client, effective);
     return res.json({ ok: true, effective });
   } catch (e) {
@@ -2218,6 +2383,29 @@ function materializeParserConfigRow(row) {
     id,
     parser_name: String(row?.parser_name || src?.parser_name || src?.name || '').trim(),
     name: String(row?.parser_name || src?.parser_name || src?.name || '').trim(),
+    description: String(row?.description ?? src?.description ?? '').trim(),
+    is_active: row?.is_active === undefined ? Boolean(src?.is_active ?? true) : Boolean(row?.is_active),
+    updated_at: row?.updated_at || src?.updated_at || null,
+    updated_by: String(row?.updated_by || src?.updated_by || '').trim(),
+    schema_version: Number(row?.schema_version || src?.schema_version || 1) || 1,
+    revision: Number(row?.revision || src?.revision || 1) || 1,
+    config_json: hasCfg ? cfg : {}
+  };
+}
+
+function materializeWriteConfigRow(row) {
+  const cfg = tryObject(row?.config_json);
+  const hasCfg = Object.keys(cfg).length > 0;
+  const src = hasCfg ? cfg : row || {};
+  const id =
+    extractPositiveIntFromObject(row, ['id', 'write_config_id', 'config_id', 'writer_id', 'store_id']) ||
+    extractPositiveIntFromObject(src, ['id', 'write_config_id', 'config_id', 'writer_id', 'store_id']) ||
+    0;
+  return {
+    ...src,
+    id,
+    write_name: String(row?.write_name || src?.write_name || src?.name || '').trim(),
+    name: String(row?.write_name || src?.write_name || src?.name || '').trim(),
     description: String(row?.description ?? src?.description ?? '').trim(),
     is_active: row?.is_active === undefined ? Boolean(src?.is_active ?? true) : Boolean(row?.is_active),
     updated_at: row?.updated_at || src?.updated_at || null,
@@ -2811,6 +2999,220 @@ tableBuilderRouter.post('/parser-configs/preview', requireDataAdmin, async (req,
     return res.json({ ok: true, preview: parserPreviewSummary(result), result });
   } catch (e) {
     return res.status(500).json({ error: 'parser_preview_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+tableBuilderRouter.get('/write-configs', requireDataAdmin, async (_req, res) => {
+  const client = await pool.connect();
+  try {
+    const config = await loadRuntimeConfig(client);
+    const qn = writeConfigsQname(config);
+    await ensureWriteConfigsTable(client, config);
+    const r = await client.query(
+      `
+      SELECT *
+      FROM ${qn}
+      WHERE is_active = true
+      ORDER BY updated_at DESC, id DESC
+      `
+    );
+    return res.json({ write_configs: (r.rows || []).map(materializeWriteConfigRow) });
+  } catch (e) {
+    return res.status(500).json({ error: 'write_configs_list_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+tableBuilderRouter.post('/write-configs/upsert', requireDataAdmin, async (req, res) => {
+  const id = Number(req.body?.id || 0);
+  const write_name = String(req.body?.write_name || req.body?.name || '').trim();
+  const description = String(req.body?.description || '').trim();
+  const is_active = req.body?.is_active === undefined ? true : Boolean(req.body?.is_active);
+  const updated_by = String(req.body?.updated_by || req.header('X-AO-ROLE') || 'ui').trim();
+  const schema_version = Number.isFinite(Number(req.body?.schema_version)) ? Number(req.body?.schema_version) : 1;
+  const expected_revision = Number.isFinite(Number(req.body?.expected_revision))
+    ? Number(req.body?.expected_revision)
+    : Number.isFinite(Number(req.body?.revision))
+    ? Number(req.body?.revision)
+    : 0;
+  const config_json =
+    req.body?.config_json && typeof req.body.config_json === 'object' && !Array.isArray(req.body.config_json)
+      ? req.body.config_json
+      : (() => {
+          const clone = { ...(req.body && typeof req.body === 'object' ? req.body : {}) };
+          delete clone.id;
+          delete clone.write_name;
+          delete clone.name;
+          delete clone.description;
+          delete clone.is_active;
+          delete clone.updated_by;
+          delete clone.schema_version;
+          delete clone.expected_revision;
+          delete clone.revision;
+          return clone;
+        })();
+
+  if (!write_name) return res.status(400).json({ error: 'bad_request', details: 'write_name is required' });
+
+  const client = await pool.connect();
+  try {
+    const config = await loadRuntimeConfig(client);
+    const qn = writeConfigsQname(config);
+    await ensureWriteConfigsTable(client, config);
+    const runId = `write_config_upsert_${Date.now()}`;
+    const contractName = defaultContractName(config.write_configs_schema, config.write_configs_table);
+
+    if (Number.isFinite(id) && id > 0) {
+      const params = [
+        Math.trunc(id),
+        write_name,
+        JSON.stringify(config_json),
+        Math.max(1, Math.trunc(schema_version || 1)),
+        description,
+        is_active,
+        updated_by,
+        runId,
+        config.contracts_schema,
+        contractName
+      ];
+      let whereSql = 'id = $1';
+      if (expected_revision > 0) {
+        params.push(Math.max(1, Math.trunc(expected_revision)));
+        whereSql += ` AND revision = $${params.length}`;
+      }
+      const r = await client.query(
+        `
+        UPDATE ${qn}
+        SET
+          write_name = $2,
+          config_json = $3::jsonb,
+          schema_version = $4,
+          description = $5,
+          is_active = $6,
+          revision = revision + 1,
+          updated_at = now(),
+          updated_by = $7,
+          ao_source = 'write_configs_api',
+          ao_run_id = $8,
+          ao_updated_at = now(),
+          ao_contract_schema = $9,
+          ao_contract_name = $10,
+          ao_contract_version = 1
+        WHERE ${whereSql}
+        RETURNING id, revision
+        `,
+        params
+      );
+      if (!r.rows?.length) {
+        if (expected_revision > 0) {
+          return res.status(409).json({ error: 'revision_conflict', details: 'write config has been changed on server' });
+        }
+        return res.status(404).json({ error: 'not_found', details: 'write_config id not found' });
+      }
+      return res.json({ ok: true, id: Number(r.rows[0].id || 0), revision: Number(r.rows[0].revision || 1), updated: true });
+    }
+
+    const nowIso = new Date().toISOString();
+    const r = await client.query(
+      `
+      INSERT INTO ${qn}
+        (
+          write_name,
+          config_json,
+          schema_version,
+          revision,
+          description,
+          is_active,
+          updated_at,
+          updated_by,
+          ao_source,
+          ao_run_id,
+          ao_created_at,
+          ao_updated_at,
+          ao_contract_schema,
+          ao_contract_name,
+          ao_contract_version
+        )
+      VALUES
+        ($1, $2::jsonb, $3, 1, $4, $5, $6, $7, 'write_configs_api', $8, $9, $10, $11, $12, 1)
+      RETURNING id, revision
+      `,
+      [
+        write_name,
+        JSON.stringify(config_json),
+        Math.max(1, Math.trunc(schema_version || 1)),
+        description,
+        is_active,
+        nowIso,
+        updated_by,
+        runId,
+        nowIso,
+        nowIso,
+        config.contracts_schema,
+        contractName
+      ]
+    );
+    return res.json({
+      ok: true,
+      id: Number(r.rows?.[0]?.id || 0),
+      revision: Number(r.rows?.[0]?.revision || 1),
+      created: true
+    });
+  } catch (e) {
+    return res.status(500).json({ error: 'write_config_upsert_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+tableBuilderRouter.post('/write-configs/delete', requireDataAdmin, async (req, res) => {
+  const id = Number(req.body?.id || 0);
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'bad_request', details: 'invalid id' });
+
+  const client = await pool.connect();
+  try {
+    const config = await loadRuntimeConfig(client);
+    const qn = writeConfigsQname(config);
+    await ensureWriteConfigsTable(client, config);
+    const r = await client.query(
+      `
+      DELETE FROM ${qn}
+      WHERE id = $1
+      RETURNING id
+      `,
+      [Math.trunc(id)]
+    );
+    if (!r.rows?.length) return res.status(404).json({ error: 'not_found', details: 'write_config id not found' });
+    return res.json({ ok: true, id: Number(r.rows[0].id || 0), deleted: true });
+  } catch (e) {
+    return res.status(500).json({ error: 'write_config_delete_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+tableBuilderRouter.post('/write-configs/preview', requireDataAdmin, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const config_json =
+      req.body?.config_json && typeof req.body.config_json === 'object' && !Array.isArray(req.body.config_json)
+        ? req.body.config_json
+        : (req.body && typeof req.body === 'object' ? req.body : {});
+    const input_value = req.body?.input_value ?? req.body?.sample_input ?? '';
+    const input_envelope =
+      req.body?.input_envelope && typeof req.body.input_envelope === 'object' && !Array.isArray(req.body.input_envelope)
+        ? req.body.input_envelope
+        : {};
+    const preview = await previewWriteConfig(client, config_json, {
+      inputValue: input_value,
+      inputEnvelope: input_envelope
+    });
+    return res.json({ ok: true, preview });
+  } catch (e) {
+    return res.status(500).json({ error: 'write_preview_failed', details: String(e?.message || e) });
   } finally {
     client.release();
   }
@@ -4284,6 +4686,7 @@ export async function bootstrapTableBuilder() {
     const templatesQn = await ensureTemplatesStorageTable(client, effective);
     await ensureApiConfigsTable(client, effective);
     await ensureParserConfigsTable(client, effective);
+    await ensureWriteConfigsTable(client, effective);
     await ensureNodeRegistryTable(client, effective);
     await ensureWorkflowDesksTable(client, effective);
     await ensureServerWritesTable(client, effective);
