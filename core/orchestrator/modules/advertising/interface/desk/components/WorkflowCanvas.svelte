@@ -550,8 +550,8 @@
     {
       id: 4,
       node_type_code: 'condition_if',
-      node_name_ru: 'If',
-      description_ru: 'Условная развилка на две ветки: true и false.',
+      node_name_ru: 'Если',
+      description_ru: 'Проверяет условие и направляет поток данных в одну из двух веток.',
       section_code: 'logic',
       section_name_ru: 'Логика',
       section_order: 25,
@@ -559,7 +559,7 @@
       is_enabled: true,
       is_system: true,
       hidden_in_palette: false,
-      node_label_ru: 'If',
+      node_label_ru: 'Если',
       icon_key: 'condition_if',
       visual_preset_key: 'logic',
       editor_type_code: 'condition_if',
@@ -568,8 +568,8 @@
     {
       id: 5,
       node_type_code: 'condition_switch',
-      node_name_ru: 'Switch/Case',
-      description_ru: 'Ветвление по значению поля в несколько исходящих веток.',
+      node_name_ru: 'Переключатель',
+      description_ru: 'Разводит поток данных по нескольким веткам в зависимости от значения выбранного поля.',
       section_code: 'logic',
       section_name_ru: 'Логика',
       section_order: 25,
@@ -577,7 +577,7 @@
       is_enabled: true,
       is_system: true,
       hidden_in_palette: false,
-      node_label_ru: 'Switch',
+      node_label_ru: 'Выбор',
       icon_key: 'condition_switch',
       visual_preset_key: 'logic',
       editor_type_code: 'condition_switch',
@@ -586,16 +586,16 @@
     {
       id: 6,
       node_type_code: 'split_data',
-      node_name_ru: 'Split',
-      description_ru: 'Разделяет поток: дублирует строки или отбирает каждую N-ю.',
+      node_name_ru: 'Разделить данные',
+      description_ru: 'Разделяет или размножает поток строк по правилам обработки данных.',
       section_code: 'data_processing',
       section_name_ru: 'Работа с данными',
       section_order: 30,
-      node_order: 10,
+      node_order: 20,
       is_enabled: true,
       is_system: true,
       hidden_in_palette: false,
-      node_label_ru: 'Split',
+      node_label_ru: 'Разделить',
       icon_key: 'split_data',
       visual_preset_key: 'data',
       editor_type_code: 'split_data',
@@ -604,16 +604,16 @@
     {
       id: 7,
       node_type_code: 'merge_data',
-      node_name_ru: 'Merge',
-      description_ru: 'Объединяет строки потока и удаляет дубликаты по заданным полям.',
+      node_name_ru: 'Объединить данные',
+      description_ru: 'Объединяет потоки строк и подготавливает единый набор данных для следующего шага.',
       section_code: 'data_processing',
       section_name_ru: 'Работа с данными',
       section_order: 30,
-      node_order: 20,
+      node_order: 30,
       is_enabled: true,
       is_system: true,
       hidden_in_palette: false,
-      node_label_ru: 'Merge',
+      node_label_ru: 'Объединить',
       icon_key: 'merge_data',
       visual_preset_key: 'data',
       editor_type_code: 'merge_data',
@@ -627,7 +627,7 @@
       section_code: 'data_processing',
       section_name_ru: 'Работа с данными',
       section_order: 30,
-      node_order: 30,
+      node_order: 10,
       is_enabled: true,
       is_system: true,
       hidden_in_palette: false,
@@ -640,8 +640,8 @@
     {
       id: 9,
       node_type_code: 'code_node',
-      node_name_ru: 'Code',
-      description_ru: 'Выполняет JS-код на серверной стороне в изолированном окружении.',
+      node_name_ru: 'Код',
+      description_ru: 'Выполняет пользовательский код на сервере и передает результат дальше по цепочке.',
       section_code: 'tools',
       section_name_ru: 'Инструменты',
       section_order: 35,
@@ -649,9 +649,9 @@
       is_enabled: true,
       is_system: true,
       hidden_in_palette: false,
-      node_label_ru: 'Code',
+      node_label_ru: 'Код',
       icon_key: 'code_node',
-      visual_preset_key: 'logic',
+      visual_preset_key: 'tools',
       editor_type_code: 'code_node',
       runtime_handler_code: 'code_node'
     },
@@ -3870,7 +3870,9 @@
           settings.apiBody = tpl.bodyText;
         }
       }
-      nodes = [...nodes, { id: uid('node'), type: 'tool', x: p.x, y: p.y, config: { name: item.name, toolType: item.toolType, settings } }];
+      const nodeTitle =
+        toolLabelByType(item.toolType) || String(item.name || '').trim() || String(item.toolType || '').trim() || 'Нода';
+      nodes = [...nodes, { id: uid('node'), type: 'tool', x: p.x, y: p.y, config: { name: nodeTitle, toolType: item.toolType, settings } }];
     }
   }
 

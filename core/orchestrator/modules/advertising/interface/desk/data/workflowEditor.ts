@@ -169,45 +169,45 @@ export const tools: ToolItem[] = [
   },
   {
     id: 'tool_api_request',
-    name: 'API Request',
+    name: 'API-запрос',
     toolType: 'api_request',
-    description: 'HTTP-запрос к внешнему API'
+    description: 'Отправляет запрос во внешний API и передает ответ дальше по цепочке'
   },
   {
     id: 'tool_http_request',
-    name: 'HTTP Request',
+    name: 'HTTP-запрос',
     toolType: 'http_request',
-    description: 'Прямой HTTP-запрос без привязки к шаблону'
+    description: 'Выполняет прямой HTTP-запрос по произвольному адресу'
   },
   {
     id: 'tool_split',
-    name: 'Split',
+    name: 'Разделить данные',
     toolType: 'split_data',
-    description: 'Деление/раздувание потока строк'
+    description: 'Разделяет или размножает поток строк по правилам обработки'
   },
   {
     id: 'tool_merge',
-    name: 'Merge',
+    name: 'Объединить данные',
     toolType: 'merge_data',
-    description: 'Объединение и дедупликация строк'
+    description: 'Объединяет потоки строк и подготавливает единый результат'
   },
   {
     id: 'tool_if',
-    name: 'If',
+    name: 'Если',
     toolType: 'condition_if',
-    description: 'Условная развилка true/false'
+    description: 'Проверяет условие и направляет данные в одну из двух веток'
   },
   {
     id: 'tool_switch',
-    name: 'Switch/Case',
+    name: 'Переключатель',
     toolType: 'condition_switch',
-    description: 'Ветвление по значению поля'
+    description: 'Разводит поток данных по веткам в зависимости от значения поля'
   },
   {
     id: 'tool_code',
-    name: 'Code',
+    name: 'Код',
     toolType: 'code_node',
-    description: 'Выполнение JS кода на сервере'
+    description: 'Выполняет пользовательский код на сервере'
   },
   {
     id: 'tool_parser',
