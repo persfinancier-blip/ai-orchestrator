@@ -372,7 +372,6 @@
   let previewRaw: any = null;
   let previewUpdatedAt = '';
   let sourceNodePreviewMessage = '';
-  let computedBaseAvailableFields: Array<{ name: string; type?: string }> = [];
 
   $: {
     const next = normalizeSettings(initialSettings);
@@ -495,13 +494,6 @@
     ...category,
     items: COMPUTED_FUNCTIONS.filter((item) => item.category === category.id)
   }));
-  $: computedBaseAvailableFields = currentBaseComputedFields(
-    selectedFieldRows,
-    workingFieldCandidates,
-    sourceTableColumnsMeta,
-    sourcePreviewRows,
-    previewResultRows
-  );
   $: if (!selectedDraft && currentTemplate) {
     templateNameInput = templateNameInput || currentTemplate.name;
     templateDescriptionInput = templateDescriptionInput || currentTemplate.description;
@@ -774,15 +766,25 @@
     syncComputedFieldRules(computedFields.filter((_row: any, idx: number) => idx !== index));
   }
 
-  function availableComputedFieldsFor(index: number) {
-    const priorComputed = computedFields
+  function availableComputedFieldsFor(
+    index: number,
+    baseFields: Array<{ name: string; type?: string }> = currentBaseComputedFields(
+      selectedFieldRows,
+      workingFieldCandidates,
+      sourceTableColumnsMeta,
+      sourcePreviewRows,
+      previewResultRows
+    ),
+    allComputedFields: any[] = computedFields
+  ) {
+    const priorComputed = (Array.isArray(allComputedFields) ? allComputedFields : [])
       .slice(0, index)
       .map((row: any) => ({
         name: String(row?.name || '').trim(),
         type: String(row?.type || '').trim()
       }))
       .filter((row) => row.name);
-    const merged = [...computedBaseAvailableFields, ...priorComputed];
+    const merged = [...(Array.isArray(baseFields) ? baseFields : []), ...priorComputed];
     const seen = new Set<string>();
     return merged.filter((item) => {
       const key = String(item?.name || '').trim();
@@ -792,8 +794,18 @@
     });
   }
 
-  function computedFieldTypesFor(index: number) {
-    const entries = availableComputedFieldsFor(index).map((item) => [item.name, item.type || '']);
+  function computedFieldTypesFor(
+    index: number,
+    baseFields: Array<{ name: string; type?: string }> = currentBaseComputedFields(
+      selectedFieldRows,
+      workingFieldCandidates,
+      sourceTableColumnsMeta,
+      sourcePreviewRows,
+      previewResultRows
+    ),
+    allComputedFields: any[] = computedFields
+  ) {
+    const entries = availableComputedFieldsFor(index, baseFields, allComputedFields).map((item) => [item.name, item.type || '']);
     return Object.fromEntries(entries);
   }
 
@@ -1688,7 +1700,7 @@
                     <ComputedExpressionBuilder
                       builder={rule.builder}
                       availableFields={availableComputedFieldsFor(index)}
-                      fallbackFields={computedBaseAvailableFields}
+                      fallbackFields={currentBaseComputedFields(selectedFieldRows, workingFieldCandidates, sourceTableColumnsMeta, sourcePreviewRows, previewResultRows)}
                       fieldTypes={computedFieldTypesFor(index)}
                       on:change={(e) => updateComputedField(index, { builder: e.detail.builder, expression: buildComputedFieldPreview({ ...rule, builder: e.detail.builder, mode: 'builder' }) })}
                     />
