@@ -699,11 +699,11 @@
           addLabel={`Добавить: ${currentTabMeta.title}`}
           emptyText="Данные пока не заполнены."
           {busyRowKey}
-          onAddRow={() => addRow(activeTab)}
-          onChangeRow={(index, field, value) => updateMultiSection(activeTab, index, field, value)}
-          onSaveRow={(index) => saveRow(activeTab, index)}
-          onRemoveRow={(index) => removeRow(activeTab, index)}
-          onDuplicateRow={(index) => duplicateRow(activeTab, index)}
+          addRowHandler={() => addRow(activeTab)}
+          changeRowHandler={(index, field, value) => updateMultiSection(activeTab, index, field, value)}
+          saveRowHandler={(index) => saveRow(activeTab, index)}
+          removeRowHandler={(index) => removeRow(activeTab, index)}
+          duplicateRowHandler={(index) => duplicateRow(activeTab, index)}
           on:add={() => addRow(activeTab)}
           on:change={(event) => updateMultiSection(activeTab, event.detail.index, event.detail.field, event.detail.value)}
           on:save={(event) => saveRow(activeTab, event.detail.index)}

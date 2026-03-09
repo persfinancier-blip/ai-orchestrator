@@ -21,11 +21,11 @@
   export let addLabel = 'Добавить запись';
   export let emptyText = 'Записей пока нет.';
   export let busyRowKey = '';
-  export let onAddRow: (() => void) | null = null;
-  export let onChangeRow: ((index: number, field: string, value: any) => void) | null = null;
-  export let onSaveRow: ((index: number) => void) | null = null;
-  export let onRemoveRow: ((index: number) => void) | null = null;
-  export let onDuplicateRow: ((index: number) => void) | null = null;
+  export let addRowHandler: (() => void) | null = null;
+  export let changeRowHandler: ((index: number, field: string, value: any) => void) | null = null;
+  export let saveRowHandler: ((index: number) => void) | null = null;
+  export let removeRowHandler: ((index: number) => void) | null = null;
+  export let duplicateRowHandler: ((index: number) => void) | null = null;
 
   const dispatch = createEventDispatcher<{
     add: undefined;
@@ -46,12 +46,12 @@
   }
 
   function onTextChange(index: number, field: string, value: string) {
-    onChangeRow?.(index, field, value);
+    changeRowHandler?.(index, field, value);
     dispatch('change', { index, field, value });
   }
 
   function onBoolChange(index: number, field: string, checked: boolean) {
-    onChangeRow?.(index, field, checked);
+    changeRowHandler?.(index, field, checked);
     dispatch('change', { index, field, value: checked });
   }
 
@@ -66,22 +66,22 @@
   }
 
   function triggerAdd() {
-    onAddRow?.();
+    addRowHandler?.();
     dispatch('add');
   }
 
   function triggerDuplicate(index: number) {
-    onDuplicateRow?.(index);
+    duplicateRowHandler?.(index);
     dispatch('duplicate', { index });
   }
 
   function triggerSave(index: number) {
-    onSaveRow?.(index);
+    saveRowHandler?.(index);
     dispatch('save', { index });
   }
 
   function triggerRemove(index: number) {
-    onRemoveRow?.(index);
+    removeRowHandler?.(index);
     dispatch('remove', { index });
   }
 </script>
