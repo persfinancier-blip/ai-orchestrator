@@ -16,6 +16,7 @@
 
   export let builder: any = {};
   export let availableFields: Array<{ name: string; type?: string }> = [];
+  export let fallbackFields: Array<{ name: string; type?: string }> = [];
   export let fieldTypes: Record<string, string> = {};
   export let compact = false;
   export let depth = 0;
@@ -28,6 +29,12 @@
   $: functionOptions = functionsByCategory(currentBuilder.category);
   $: expressionPreview = buildExpressionFromBuilder(currentBuilder);
   $: typeWarnings = buildComputedFieldTypeWarnings(currentBuilder, fieldTypes);
+  $: resolvedAvailableFields = (Array.isArray(availableFields) && availableFields.length ? availableFields : fallbackFields)
+    .map((item: any) => ({
+      name: String(item?.name || '').trim(),
+      type: String(item?.type || '').trim()
+    }))
+    .filter((item: any) => item.name);
 
   function emit(nextBuilder: any) {
     dispatch('change', { builder: normalizeExpressionBuilder(nextBuilder) });
@@ -167,12 +174,12 @@
             {/each}
           </select>
           {#if currentBuilder.condition.left.sourceType === 'field'}
-            <select value={currentBuilder.condition.left.field} on:change={(e) => updateCondition('left', { field: selectValue(e) })}>
-              <option value="">Выбери поле</option>
-              {#each availableFields as field}
-                <option value={field.name}>{fieldLabel(field)}</option>
-              {/each}
-            </select>
+              <select value={currentBuilder.condition.left.field} on:change={(e) => updateCondition('left', { field: selectValue(e) })}>
+                <option value="">Выбери поле</option>
+                {#each resolvedAvailableFields as field}
+                  <option value={field.name}>{fieldLabel(field)}</option>
+                {/each}
+              </select>
           {:else if currentBuilder.condition.left.sourceType === 'number'}
             <input type="number" value={currentBuilder.condition.left.numberValue || ''} on:input={(e) => updateCondition('left', { numberValue: inputValue(e) })} />
           {:else if currentBuilder.condition.left.sourceType === 'text'}
@@ -191,6 +198,7 @@
               maxDepth={maxDepth}
               builder={currentBuilder.condition.left.builder}
               availableFields={availableFields}
+              fallbackFields={resolvedAvailableFields}
               fieldTypes={fieldTypes}
               on:change={(e) => replaceConditionOperand('left', { ...currentBuilder.condition.left, builder: e.detail.builder })}
             />
@@ -218,7 +226,7 @@
             {#if currentBuilder.condition.right.sourceType === 'field'}
               <select value={currentBuilder.condition.right.field} on:change={(e) => updateCondition('right', { field: selectValue(e) })}>
                 <option value="">Выбери поле</option>
-                {#each availableFields as field}
+                {#each resolvedAvailableFields as field}
                   <option value={field.name}>{fieldLabel(field)}</option>
                 {/each}
               </select>
@@ -240,6 +248,7 @@
                 maxDepth={maxDepth}
                 builder={currentBuilder.condition.right.builder}
                 availableFields={availableFields}
+                fallbackFields={resolvedAvailableFields}
                 fieldTypes={fieldTypes}
                 on:change={(e) => replaceConditionOperand('right', { ...currentBuilder.condition.right, builder: e.detail.builder })}
               />
@@ -262,7 +271,7 @@
           {#if currentBuilder.whenTrue.sourceType === 'field'}
             <select value={currentBuilder.whenTrue.field} on:change={(e) => updateBranch('whenTrue', { field: selectValue(e) })}>
               <option value="">Выбери поле</option>
-              {#each availableFields as field}
+              {#each resolvedAvailableFields as field}
                 <option value={field.name}>{fieldLabel(field)}</option>
               {/each}
             </select>
@@ -284,6 +293,7 @@
               maxDepth={maxDepth}
               builder={currentBuilder.whenTrue.builder}
               availableFields={availableFields}
+              fallbackFields={resolvedAvailableFields}
               fieldTypes={fieldTypes}
               on:change={(e) => replaceBranchOperand('whenTrue', { ...currentBuilder.whenTrue, builder: e.detail.builder })}
             />
@@ -302,7 +312,7 @@
           {#if currentBuilder.whenFalse.sourceType === 'field'}
             <select value={currentBuilder.whenFalse.field} on:change={(e) => updateBranch('whenFalse', { field: selectValue(e) })}>
               <option value="">Выбери поле</option>
-              {#each availableFields as field}
+              {#each resolvedAvailableFields as field}
                 <option value={field.name}>{fieldLabel(field)}</option>
               {/each}
             </select>
@@ -324,6 +334,7 @@
               maxDepth={maxDepth}
               builder={currentBuilder.whenFalse.builder}
               availableFields={availableFields}
+              fallbackFields={resolvedAvailableFields}
               fieldTypes={fieldTypes}
               on:change={(e) => replaceBranchOperand('whenFalse', { ...currentBuilder.whenFalse, builder: e.detail.builder })}
             />
@@ -348,7 +359,7 @@
             {#if arg.sourceType === 'field'}
               <select value={arg.field} on:change={(e) => updateArg(index, { field: selectValue(e) })}>
                 <option value="">Выбери поле</option>
-                {#each availableFields as field}
+                {#each resolvedAvailableFields as field}
                   <option value={field.name}>{fieldLabel(field)}</option>
                 {/each}
               </select>
@@ -370,6 +381,7 @@
                 maxDepth={maxDepth}
                 builder={arg.builder}
                 availableFields={availableFields}
+                fallbackFields={resolvedAvailableFields}
                 fieldTypes={fieldTypes}
                 on:change={(e) => replaceArg(index, { ...arg, builder: e.detail.builder })}
               />

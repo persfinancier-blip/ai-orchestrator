@@ -494,6 +494,7 @@
     ...category,
     items: COMPUTED_FUNCTIONS.filter((item) => item.category === category.id)
   }));
+  $: computedBaseAvailableFields = currentBaseComputedFields();
   $: if (!selectedDraft && currentTemplate) {
     templateNameInput = templateNameInput || currentTemplate.name;
     templateDescriptionInput = templateDescriptionInput || currentTemplate.description;
@@ -774,7 +775,7 @@
         type: String(row?.type || '').trim()
       }))
       .filter((row) => row.name);
-    const merged = [...currentBaseComputedFields(), ...priorComputed];
+    const merged = [...computedBaseAvailableFields, ...priorComputed];
     const seen = new Set<string>();
     return merged.filter((item) => {
       const key = String(item?.name || '').trim();
@@ -1669,6 +1670,7 @@
                     <ComputedExpressionBuilder
                       builder={rule.builder}
                       availableFields={availableComputedFieldsFor(index)}
+                      fallbackFields={computedBaseAvailableFields}
                       fieldTypes={computedFieldTypesFor(index)}
                       on:change={(e) => updateComputedField(index, { builder: e.detail.builder, expression: buildComputedFieldPreview({ ...rule, builder: e.detail.builder, mode: 'builder' }) })}
                     />
