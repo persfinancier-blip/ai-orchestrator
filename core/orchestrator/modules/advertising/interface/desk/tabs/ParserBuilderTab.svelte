@@ -3,6 +3,7 @@
   import { buildSourceNodePreviewFromTemplate } from './parserSourcePreviewCore.js';
 
   type ExistingTable = { schema_name: string; table_name: string };
+  type ColumnMeta = { name: string; type?: string };
   type ParserSettings = Record<string, string>;
   type ParserDraft = {
     id: number;
@@ -38,6 +39,10 @@
     config_json?: Record<string, any>;
     output_parameters?: Array<Record<string, any>>;
     picked_paths?: string[];
+  };
+  type LookupJoinRule = {
+    sourceField: string;
+    targetField: string;
   };
 
   export let apiBase: string;
@@ -92,7 +97,10 @@
     lookupTargetField: '',
     lookupFields: '',
     lookupPrefix: '',
-    lookupJoinMode: 'left_join',
+    lookupJoinMode: 'left',
+    lookupConflictMode: 'suffix',
+    lookupSelectedFieldsJson: '[]',
+    lookupJoinRulesJson: '[]',
     dedupeEnabled: 'false',
     dedupeMode: 'full_row',
     dedupeFields: '',
@@ -162,7 +170,10 @@
       ? (src.lookupFields || src.lookup_fields).join(', ')
       : String(src.lookupFields || src.lookup_fields || next.lookupFields || '').trim();
     next.lookupPrefix = String(src.lookupPrefix || src.lookup_prefix || next.lookupPrefix || '').trim();
-    next.lookupJoinMode = String(src.lookupJoinMode || src.lookup_join_mode || next.lookupJoinMode || 'left_join').trim() || 'left_join';
+    next.lookupJoinMode = normalizeLookupJoinMode(src.lookupJoinMode || src.lookup_join_mode || next.lookupJoinMode || 'left');
+    next.lookupConflictMode = String(src.lookupConflictMode || src.lookup_conflict_mode || next.lookupConflictMode || 'suffix').trim() || 'suffix';
+    next.lookupSelectedFieldsJson = stringifyJson(src.lookupSelectedFields || src.lookup_selected_fields, next.lookupSelectedFieldsJson || '[]');
+    next.lookupJoinRulesJson = stringifyJson(src.lookupJoinRules || src.lookup_join_rules, next.lookupJoinRulesJson || '[]');
     next.dedupeEnabled = boolString(src.dedupeEnabled ?? src.dedupe_enabled ?? next.dedupeEnabled);
     next.dedupeMode = String(src.dedupeMode || src.dedupe_mode || next.dedupeMode || 'full_row').trim() || 'full_row';
     next.dedupeFields = Array.isArray(src.dedupeFields || src.dedupe_fields)
@@ -198,6 +209,15 @@
     if (typeof value === 'boolean') return value ? 'true' : 'false';
     const raw = String(value ?? '').trim().toLowerCase();
     return ['1', 'true', 'yes', 'on', 'enabled'].includes(raw) ? 'true' : 'false';
+  }
+
+  function normalizeLookupJoinMode(value: any) {
+    const raw = String(value ?? '').trim().toLowerCase();
+    if (raw === 'left_join' || raw === 'all_matches') return 'left';
+    if (raw === 'only_matches') return 'inner';
+    if (raw === 'first_match') return 'first_match';
+    if (['inner', 'left', 'right', 'full'].includes(raw)) return raw;
+    return 'left';
   }
 
   function parseJsonSafe(raw: string, fallback: any) {
@@ -278,7 +298,10 @@
       lookupTargetField: settingsValue.lookupTargetField,
       lookupFields: settingsValue.lookupFields,
       lookupPrefix: settingsValue.lookupPrefix,
-      lookupJoinMode: settingsValue.lookupJoinMode,
+      lookupJoinMode: normalizeLookupJoinMode(settingsValue.lookupJoinMode),
+      lookupConflictMode: settingsValue.lookupConflictMode,
+      lookupSelectedFields: parseJsonSafe(settingsValue.lookupSelectedFieldsJson, []),
+      lookupJoinRules: parseJsonSafe(settingsValue.lookupJoinRulesJson, []),
       dedupeEnabled: settingsValue.dedupeEnabled === 'true',
       dedupeMode: settingsValue.dedupeMode,
       dedupeFields: settingsValue.dedupeFields,
@@ -298,6 +321,7 @@
   let sourceTemplatesLoading = false;
   let sourceTemplatesError = '';
   let sourceTemplates: SourceNodeTemplate[] = [];
+  let columnsCache: Record<string, ColumnMeta[]> = {};
   let selectedDraftId = 0;
   let templateNameInput = '';
   let templateDescriptionInput = '';
@@ -398,8 +422,26 @@
   $: filterRules = parseJsonSafe(settings.filterRulesJson, []);
   $: computedFields = parseJsonSafe(settings.computedFieldsJson, []);
   $: aggregateRules = parseJsonSafe(settings.aggregateRulesJson, []);
+  $: lookupSelectedFields = parseLookupSelectedFields(settings.lookupSelectedFieldsJson, settings.lookupFields);
+  $: lookupJoinRules = parseLookupJoinRules(settings.lookupJoinRulesJson, settings.lookupSourceField, settings.lookupTargetField);
   $: parserWarnings = Array.isArray(previewData?.stats?.warnings) ? previewData.stats.warnings : [];
   $: parserAppliedSteps = Array.isArray(previewData?.stats?.applied_steps) ? previewData.stats.applied_steps : [];
+  $: bayesInput =
+    previewData?.stats && typeof previewData.stats.bayes_input === 'object' && previewData.stats.bayes_input
+      ? previewData.stats.bayes_input
+      : null;
+  $: bayesJoin =
+    previewData?.stats && typeof previewData.stats.bayes_join === 'object' && previewData.stats.bayes_join
+      ? previewData.stats.bayes_join
+      : null;
+  $: bayesInputAlternativesLabel =
+    Array.isArray(bayesInput?.alternatives) && bayesInput.alternatives.length
+      ? bayesInput.alternatives.map((item: any) => `${item.path_label} (${formatProbability(item.probability)})`).join(' • ')
+      : '';
+  $: lookupSummary =
+    previewData?.stats && typeof previewData.stats.lookup_summary === 'object' && previewData.stats.lookup_summary
+      ? previewData.stats.lookup_summary
+      : null;
   $: autoParseInfo = {
     detectedFormat: String(previewData?.stats?.detected_format || previewData?.source_format || '-'),
     payloadOrigin: String(previewData?.stats?.payload_origin || '-'),
@@ -449,6 +491,141 @@
 
   function patchJsonSetting(key: string, value: any, fallback = '[]') {
     patchSetting(key, toPrettyJson(value, fallback));
+  }
+
+  function tableCacheKey(schema: string, table: string) {
+    return `${String(schema || '').trim()}.${String(table || '').trim()}`;
+  }
+
+  async function ensureColumnsFor(schema: string, table: string) {
+    const s = String(schema || '').trim();
+    const t = String(table || '').trim();
+    if (!s || !t) return;
+    const key = tableCacheKey(s, t);
+    if (Array.isArray(columnsCache[key])) return;
+    try {
+      const payload = await apiJson<{ columns: Array<{ name: string; type?: string }> }>(
+        `${apiBase}/columns?schema=${encodeURIComponent(s)}&table=${encodeURIComponent(t)}`,
+        { headers: headers() }
+      );
+      const cols = Array.isArray(payload?.columns)
+        ? payload.columns
+            .map((item) => ({
+              name: String(item?.name || '').trim(),
+              type: String(item?.type || '').trim().toLowerCase() || undefined
+            }))
+            .filter((item) => item.name)
+        : [];
+      columnsCache = { ...columnsCache, [key]: cols };
+    } catch {
+      columnsCache = { ...columnsCache, [key]: [] };
+    }
+  }
+
+  function columnOptionsFor(schema: string, table: string) {
+    return (columnsCache[tableCacheKey(schema, table)] || []).map((item) => item.name);
+  }
+
+  function parseLookupSelectedFields(raw: string, legacyRaw: string) {
+    const parsed = parseJsonSafe(raw, []);
+    if (Array.isArray(parsed)) return parsed.map((item) => String(item || '').trim()).filter(Boolean);
+    return parseCsvText(legacyRaw);
+  }
+
+  function parseLookupJoinRules(raw: string, legacySourceField: string, legacyTargetField: string): LookupJoinRule[] {
+    const parsed = parseJsonSafe(raw, []);
+    if (Array.isArray(parsed) && parsed.length) {
+      return parsed
+        .map((item) => ({
+          sourceField: String(item?.sourceField || item?.source_field || '').trim(),
+          targetField: String(item?.targetField || item?.target_field || '').trim()
+        }))
+        .filter((item) => item.sourceField || item.targetField);
+    }
+    const sourceField = String(legacySourceField || '').trim();
+    const targetField = String(legacyTargetField || '').trim();
+    return sourceField || targetField ? [{ sourceField, targetField }] : [];
+  }
+
+  function syncLookupSettings(rows: LookupJoinRule[], selectedFields = lookupSelectedFields) {
+    const next = cloneSettings(settings);
+    const cleanRows = rows
+      .map((row) => ({
+        sourceField: String(row?.sourceField || '').trim(),
+        targetField: String(row?.targetField || '').trim()
+      }))
+      .filter((row) => row.sourceField || row.targetField);
+    const cleanFields = (Array.isArray(selectedFields) ? selectedFields : [])
+      .map((item) => String(item || '').trim())
+      .filter(Boolean);
+    next.lookupJoinRulesJson = toPrettyJson(cleanRows, '[]');
+    next.lookupSelectedFieldsJson = toPrettyJson(cleanFields, '[]');
+    next.lookupSourceField = cleanRows[0]?.sourceField || '';
+    next.lookupTargetField = cleanRows[0]?.targetField || '';
+    next.lookupFields = cleanFields.join(', ');
+    dispatchSettings(next);
+  }
+
+  function addLookupJoinRule() {
+    const sourceField = workingFieldCandidates[0] || '';
+    const targetField = lookupColumnOptions[0] || '';
+    syncLookupSettings([...lookupJoinRules, { sourceField, targetField }]);
+  }
+
+  function updateLookupJoinRule(index: number, patch: Partial<LookupJoinRule>) {
+    syncLookupSettings(lookupJoinRules.map((row, idx) => (idx === index ? { ...row, ...patch } : row)));
+  }
+
+  function removeLookupJoinRule(index: number) {
+    syncLookupSettings(lookupJoinRules.filter((_row, idx) => idx !== index));
+  }
+
+  function addLookupField(fieldName: string) {
+    const wanted = String(fieldName || '').trim();
+    if (!wanted) return;
+    if (lookupSelectedFields.includes(wanted)) return;
+    syncLookupSettings(lookupJoinRules, [...lookupSelectedFields, wanted]);
+  }
+
+  function removeLookupField(fieldName: string) {
+    syncLookupSettings(
+      lookupJoinRules,
+      lookupSelectedFields.filter((item) => item !== fieldName)
+    );
+  }
+
+  function setLookupFields(fields: string[]) {
+    syncLookupSettings(lookupJoinRules, fields);
+  }
+
+  function addAllLookupFields() {
+    setLookupFields(lookupColumnOptions);
+  }
+
+  function clearLookupFields() {
+    setLookupFields([]);
+  }
+
+  function formatProbability(value: any) {
+    const num = Number(value || 0);
+    if (!Number.isFinite(num)) return '0%';
+    return `${Math.round(num * 100)}%`;
+  }
+
+  function applyBayesWorkingSet() {
+    const recommendedPath = String(bayesInput?.recommended_candidate?.path || '').trim();
+    patchSetting('recordPath', recommendedPath);
+  }
+
+  function applyBayesJoinRules() {
+    const rules = Array.isArray(bayesJoin?.recommended_rules)
+      ? bayesJoin.recommended_rules.map((item: any) => ({
+          sourceField: String(item?.sourceField || '').trim(),
+          targetField: String(item?.targetField || '').trim()
+        }))
+      : [];
+    if (!rules.length) return;
+    syncLookupSettings(rules);
   }
 
   function rebuildFieldSettings(rows: Array<{ path: string; alias?: string; type?: string; defaultValue?: string }>) {
@@ -761,6 +938,7 @@
     const parts = [];
     if (settings.sourceSchema && settings.sourceTable) parts.push(`${settings.sourceSchema}.${settings.sourceTable}`);
     if (settings.sourceColumn) parts.push(`колонка ${settings.sourceColumn}`);
+    else if (sourceColumnOptions.length) parts.push(`доступно колонок: ${sourceColumnOptions.length}`);
     return parts.join(' / ');
   }
 
@@ -786,6 +964,15 @@
     void loadSourceTemplates();
     void previewNow();
   });
+
+  $: sourceColumnOptions = columnOptionsFor(settings.sourceSchema, settings.sourceTable);
+  $: lookupColumnOptions = columnOptionsFor(settings.lookupSchema, settings.lookupTable);
+  $: if (settings.sourceSchema && settings.sourceTable) {
+    void ensureColumnsFor(settings.sourceSchema, settings.sourceTable);
+  }
+  $: if (settings.lookupSchema && settings.lookupTable) {
+    void ensureColumnsFor(settings.lookupSchema, settings.lookupTable);
+  }
 </script>
 
 <section class="panel" class:panel-embedded={embeddedMode}>
@@ -872,7 +1059,12 @@
             </label>
             <label>
               Колонка с payload
-              <input value={settings.sourceColumn} on:input={(e) => patchSetting('sourceColumn', inputValue(e))} placeholder="payload_json или другая колонка" />
+              <select value={settings.sourceColumn} on:change={(e) => patchSetting('sourceColumn', selectValue(e))}>
+                <option value="">Вся строка таблицы</option>
+                {#each sourceColumnOptions as columnName}
+                  <option value={columnName}>{columnName}</option>
+                {/each}
+              </select>
             </label>
           </div>
           <div class="inline-hint">{currentTableColumnsHint() || 'Выбери таблицу и колонку, если парсить нужно поле с JSON/CSV внутри таблицы.'}</div>
@@ -948,13 +1140,13 @@
         <div class="parser-card-head">
           <div>
             <h3>Настройка обработки</h3>
-            <p>Здесь задаётся формат, путь до записей, mapping, lookup и ограничения для безопасной пакетной обработки.</p>
+            <p>Шаги идут последовательно: разбор входа, приведение полей, присоединение данных из таблицы, фильтры, вычисления, дедупликация, группировка и preview результата.</p>
           </div>
         </div>
 
         <div class="subsection">
           <div class="subsection-head">
-            <h4>Авторазбор входа</h4>
+            <h4>Разбор входа</h4>
           </div>
           <div class="preview-metrics">
             <span>Распознанный формат: {autoParseInfo.detectedFormat}</span>
@@ -965,6 +1157,34 @@
             <span>Путь до входа: {autoParseInfo.sourcePath}</span>
             <span>Рабочий набор: {autoParseInfo.workingSetPath}</span>
           </div>
+          {#if bayesInput?.recommended_candidate}
+            <div class="bayes-box">
+              <div class="bayes-box-head">
+                <div>
+                  <strong>Байесовская рекомендация рабочего набора</strong>
+                  <div class="hint">Используется наивная байесовская модель с априорными вероятностями и условными вероятностями наблюдаемых признаков.</div>
+                </div>
+                <button type="button" class="mini-btn" on:click={applyBayesWorkingSet}>
+                  Применить рекомендацию
+                </button>
+              </div>
+              <div class="preview-metrics">
+                <span>Рекомендованный узел: {bayesInput.recommended_candidate.path_label || '(корень)'}</span>
+                <span>Вероятность: {formatProbability(bayesInput.recommended_candidate.probability)}</span>
+                <span>Гипотеза: {bayesInput.recommended_candidate.top_hypothesis?.name_ru || '-'}</span>
+              </div>
+              {#if Array.isArray(bayesInput.recommended_candidate.reasons) && bayesInput.recommended_candidate.reasons.length}
+                <div class="chip-list">
+                  {#each bayesInput.recommended_candidate.reasons as reason}
+                    <span class="chip-chip">{reason}</span>
+                  {/each}
+                </div>
+              {/if}
+              {#if bayesInputAlternativesLabel}
+                <div class="inline-hint">Альтернативы: {bayesInputAlternativesLabel}</div>
+              {/if}
+            </div>
+          {/if}
           {#if parserWarnings.length}
             <div class="warnings-box">
               {#each parserWarnings as warning}
@@ -974,12 +1194,6 @@
           {:else}
             <div class="inline-hint">Авторазбор сам пытается распознать JSON, JSON в строке, CSV, NDJSON, текст и служебные runtime-обёртки. Если payload большой, preview остаётся ограниченным, но рабочий набор определяется корректно.</div>
           {/if}
-        </div>
-
-        <div class="subsection">
-          <div class="subsection-head">
-            <h4>Рабочий набор данных</h4>
-          </div>
           <div class="form-grid form-grid-3">
             <label>
               Формат
@@ -1033,7 +1247,7 @@
               </label>
             </div>
           {/if}
-          <div class="inline-hint">Рабочий набор — это тот узел или массив строк, над которым потом выполняются выбор полей, формулы, фильтры, обогащение и группировки.</div>
+          <div class="inline-hint">Рабочий набор — это тот узел или массив строк, над которым потом выполняются выбор полей, формулы, фильтры, присоединение и группировки.</div>
         </div>
 
         <div class="subsection">
@@ -1086,9 +1300,9 @@
 
         <div class="subsection">
           <div class="subsection-head">
-            <h4>Обогащение данными из таблиц</h4>
+            <h4>Присоединить данные из таблицы</h4>
             <label class="switch-line">
-              <span>Включить обогащение</span>
+              <span>Включить присоединение</span>
               <select value={settings.lookupEnabled} on:change={(e) => patchSetting('lookupEnabled', selectValue(e))}>
                 <option value="false">Нет</option>
                 <option value="true">Да</option>
@@ -1097,15 +1311,6 @@
           </div>
           {#if settings.lookupEnabled === 'true'}
             <div class="form-grid form-grid-4">
-              <label>
-                Режим соединения
-                <select value={settings.lookupJoinMode} on:change={(e) => patchSetting('lookupJoinMode', selectValue(e))}>
-                  <option value="left_join">Левое соединение</option>
-                  <option value="first_match">Первое совпадение</option>
-                  <option value="only_matches">Только совпавшие</option>
-                  <option value="all_matches">Все совпадения</option>
-                </select>
-              </label>
               <label>
                 Схема таблицы
                 <select value={settings.lookupSchema} on:change={(e) => patchSetting('lookupSchema', selectValue(e))}>
@@ -1125,26 +1330,141 @@
                 </select>
               </label>
               <label>
-                Поля для подтягивания
-                <input value={settings.lookupFields} on:input={(e) => patchSetting('lookupFields', inputValue(e))} placeholder="client_id, token" />
-              </label>
-            </div>
-            <div class="form-grid form-grid-3">
-              <label>
-                Поле источника
-                <input value={settings.lookupSourceField} on:input={(e) => patchSetting('lookupSourceField', inputValue(e))} placeholder="client_id" />
-              </label>
-              <label>
-                Поле поиска
-                <input value={settings.lookupTargetField} on:input={(e) => patchSetting('lookupTargetField', inputValue(e))} placeholder="client_id" />
+                Как объединять наборы
+                <select value={settings.lookupJoinMode} on:change={(e) => patchSetting('lookupJoinMode', selectValue(e))}>
+                  <option value="inner">Только совпавшие строки</option>
+                  <option value="left">Все строки текущих данных</option>
+                  <option value="right">Все строки таблицы</option>
+                  <option value="full">Все строки из обоих наборов</option>
+                </select>
               </label>
               <label>
-                Префикс новых полей
+                Префикс для новых полей
                 <input value={settings.lookupPrefix} on:input={(e) => patchSetting('lookupPrefix', inputValue(e))} placeholder="lookup_" />
               </label>
             </div>
+            <div class="form-grid form-grid-2">
+              <label>
+                Что делать, если имя поля уже занято
+                <select value={settings.lookupConflictMode} on:change={(e) => patchSetting('lookupConflictMode', selectValue(e))}>
+                  <option value="suffix">Добавить суффикс</option>
+                  <option value="overwrite">Перезаписать текущее поле</option>
+                  <option value="skip">Пропустить совпавшее имя</option>
+                </select>
+              </label>
+              <div class="inline-hint inline-hint-box">По умолчанию все условия связи соединяются через И. Сначала выбери таблицу и поля, затем проверь preview результата ниже.</div>
+            </div>
+
+            {#if bayesJoin?.suggestions?.length}
+              <div class="bayes-box">
+                <div class="bayes-box-head">
+                  <div>
+                    <strong>Байесовская рекомендация полей связи</strong>
+                    <div class="hint">Модель оценивает похожесть имён, совместимость типов, заполненность, пересечение значений и риск дублей.</div>
+                  </div>
+                  <button type="button" class="mini-btn" on:click={applyBayesJoinRules} disabled={!bayesJoin.recommended_rules?.length}>
+                    Применить предложенные связи
+                  </button>
+                </div>
+                <div class="rules-grid rules-grid-join-suggestions">
+                  <div class="rules-grid-head">Поле текущих данных</div>
+                  <div class="rules-grid-head">Поле таблицы</div>
+                  <div class="rules-grid-head">Вероятность</div>
+                  <div class="rules-grid-head">Почему</div>
+                  {#each bayesJoin.suggestions.slice(0, 5) as suggestion}
+                    <div>{suggestion.sourceField}</div>
+                    <div>{suggestion.targetField}</div>
+                    <div>{formatProbability(suggestion.probability)}</div>
+                    <div>{Array.isArray(suggestion.reasons) && suggestion.reasons.length ? suggestion.reasons.join(', ') : 'Совместимая пара по наблюдаемым признакам'}</div>
+                  {/each}
+                </div>
+                {#if Array.isArray(bayesJoin.warnings) && bayesJoin.warnings.length}
+                  <div class="warnings-box">
+                    {#each bayesJoin.warnings as warning}
+                      <div class="warning-line">{warning}</div>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/if}
+
+            <div class="sub-block">
+              <div class="subsection-head">
+                <h5>Какие поля подтянуть из таблицы</h5>
+                <div class="subsection-actions">
+                  <button type="button" class="mini-btn" on:click={addAllLookupFields} disabled={!lookupColumnOptions.length}>Взять все поля</button>
+                  <button type="button" class="mini-btn" on:click={clearLookupFields} disabled={!lookupSelectedFields.length}>Очистить</button>
+                </div>
+              </div>
+              {#if lookupColumnOptions.length}
+                <div class="field-picker">
+                  <select on:change={(e) => { addLookupField(selectValue(e)); clearSelectValue(e); }}>
+                    <option value="">Добавить поле из таблицы</option>
+                    {#each lookupColumnOptions.filter((item) => !lookupSelectedFields.includes(item)) as fieldName}
+                      <option value={fieldName}>{fieldName}</option>
+                    {/each}
+                  </select>
+                </div>
+                {#if lookupSelectedFields.length}
+                  <div class="chip-list">
+                    {#each lookupSelectedFields as fieldName}
+                      <button type="button" class="chip-btn" on:click={() => removeLookupField(fieldName)} title="Убрать поле">
+                        <span>{fieldName}</span>
+                        <span aria-hidden="true">×</span>
+                      </button>
+                    {/each}
+                  </div>
+                {:else}
+                  <div class="inline-hint">Сначала можно взять все поля таблицы, а потом убрать лишние.</div>
+                {/if}
+              {:else if settings.lookupSchema && settings.lookupTable}
+                <div class="inline-hint">Колонки выбранной таблицы загружаются...</div>
+              {:else}
+                <div class="inline-hint">Сначала выбери таблицу, чтобы увидеть доступные поля.</div>
+              {/if}
+            </div>
+
+            <div class="sub-block">
+              <div class="subsection-head">
+                <h5>Когда считать строки одинаковыми</h5>
+                <button type="button" class="mini-btn" on:click={addLookupJoinRule}>Условие +</button>
+              </div>
+              {#if lookupJoinRules.length}
+                <div class="rules-grid rules-grid-join">
+                  <div class="rules-grid-head">Поле текущих данных</div>
+                  <div class="rules-grid-head">Равно полю таблицы</div>
+                  <div class="rules-grid-head"></div>
+                  {#each lookupJoinRules as rule, index}
+                    <select value={rule.sourceField} on:change={(e) => updateLookupJoinRule(index, { sourceField: selectValue(e) })}>
+                      <option value="">Выбери поле</option>
+                      {#each workingFieldCandidates as fieldName}
+                        <option value={fieldName}>{fieldName}</option>
+                      {/each}
+                    </select>
+                    <select value={rule.targetField} on:change={(e) => updateLookupJoinRule(index, { targetField: selectValue(e) })}>
+                      <option value="">Выбери поле таблицы</option>
+                      {#each lookupColumnOptions as fieldName}
+                        <option value={fieldName}>{fieldName}</option>
+                      {/each}
+                    </select>
+                    <button type="button" class="icon-btn danger-icon-btn" on:click={() => removeLookupJoinRule(index)}>x</button>
+                  {/each}
+                </div>
+              {:else}
+                <div class="inline-hint">Добавь хотя бы одно условие, чтобы parser понимал, по каким полям связывать текущие строки и выбранную таблицу.</div>
+              {/if}
+            </div>
+
+            {#if lookupSummary}
+              <div class="lookup-summary">
+                <span>Совпало строк: {lookupSummary.matched_source_rows ?? 0}</span>
+                <span>Без совпадения в текущих данных: {lookupSummary.unmatched_source_rows ?? 0}</span>
+                <span>Без совпадения в таблице: {lookupSummary.unmatched_lookup_rows ?? 0}</span>
+                <span>Новых полей: {lookupSummary.added_fields_count ?? 0}</span>
+              </div>
+            {/if}
           {:else}
-            <div class="inline-hint">Этот блок нужен, когда нужно подтянуть дополнительные поля из существующей таблицы и подготовить enriched rows для следующей ноды.</div>
+            <div class="inline-hint">Этот блок нужен, когда к текущему набору строк нужно присоединить дополнительные данные из выбранной таблицы по понятным условиям связи.</div>
           {/if}
         </div>
 
@@ -1671,6 +1991,14 @@
     font-size: 11px;
     line-height: 1.4;
   }
+  .inline-hint-box {
+    display: flex;
+    align-items: center;
+    border: 1px dashed #dbe4f0;
+    border-radius: 10px;
+    padding: 8px 10px;
+    background: #f8fafc;
+  }
   .inline-error {
     border: 1px solid #fecaca;
     background: #fff1f2;
@@ -1702,6 +2030,18 @@
     margin: 0;
     font-size: 14px;
     color: #0f172a;
+  }
+  .subsection-head h5 {
+    margin: 0;
+    font-size: 13px;
+    color: #0f172a;
+  }
+  .sub-block {
+    border-top: 1px dashed #e2e8f0;
+    padding-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
   }
   .warnings-box,
   .applied-steps {
@@ -1744,6 +2084,9 @@
   }
   .rules-grid-filters {
     grid-template-columns: minmax(0, 1fr) minmax(170px, 0.9fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+  }
+  .rules-grid-join {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   }
   .rules-grid-computed {
     grid-template-columns: minmax(170px, 0.8fr) minmax(0, 1.5fr) minmax(150px, 0.6fr) auto;
@@ -1860,6 +2203,62 @@
     font-size: 12px;
     color: #64748b;
   }
+  .chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .chip-chip {
+    border: 1px solid #dbe4f0;
+    background: #fff;
+    border-radius: 999px;
+    padding: 5px 10px;
+    display: inline-flex;
+    align-items: center;
+    font-size: 11px;
+    color: #334155;
+  }
+  .chip-btn {
+    border: 1px solid #dbe4f0;
+    background: #fff;
+    border-radius: 999px;
+    padding: 6px 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #334155;
+    cursor: pointer;
+  }
+  .lookup-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    padding: 10px;
+    border-radius: 10px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    font-size: 11px;
+    color: #334155;
+  }
+  .bayes-box {
+    border: 1px solid #dbe4f0;
+    border-radius: 12px;
+    background: #f8fafc;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .bayes-box-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .rules-grid-join-suggestions {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 120px minmax(0, 2fr);
+  }
   @media (max-width: 1380px) {
     .parser-layout {
       grid-template-columns: minmax(260px, 0.9fr) minmax(420px, 1.25fr) minmax(280px, 0.95fr);
@@ -1871,7 +2270,8 @@
     .rules-grid,
     .rules-grid-filters,
     .rules-grid-computed,
-    .rules-grid-aggregates {
+    .rules-grid-aggregates,
+    .rules-grid-join-suggestions {
       grid-template-columns: 1fr;
     }
   }
@@ -1887,7 +2287,8 @@
     .rules-grid,
     .rules-grid-filters,
     .rules-grid-computed,
-    .rules-grid-aggregates {
+    .rules-grid-aggregates,
+    .rules-grid-join-suggestions {
       grid-template-columns: 1fr;
     }
   }

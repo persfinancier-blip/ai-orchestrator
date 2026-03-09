@@ -1,5 +1,6 @@
-import { Readable } from 'node:stream';
+﻿import { Readable } from 'node:stream';
 import { createRequire } from 'node:module';
+import { analyzeInputCandidatesByBayes, analyzeJoinPairsByBayes } from './parserBayesCore.mjs';
 
 const require = createRequire(import.meta.url);
 const { parse: csvParse } = require('csv-parse');
@@ -136,6 +137,16 @@ function normalizeSourceMode(value) {
   if (raw === 'table' || raw === 'file_url' || raw === 'input') return raw;
   if (raw === 'node') return 'input';
   return 'input';
+}
+
+function normalizeLookupJoinMode(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'left_join') return 'left';
+  if (raw === 'only_matches') return 'inner';
+  if (raw === 'all_matches') return 'left';
+  if (raw === 'first_match') return 'first_match';
+  if (['inner', 'left', 'right', 'full'].includes(raw)) return raw;
+  return 'left';
 }
 
 function detectFormatFromUrl(url) {
@@ -285,16 +296,38 @@ function normalizeParserSettings(raw = {}, overrides = {}) {
   const filterRules = parseJsonArraySafe(overrides.filterRules ?? settings.filterRules ?? settings.filter_rules, []);
   const computedFields = parseJsonArraySafe(overrides.computedFields ?? settings.computedFields ?? settings.computed_fields, []);
   const aggregateRules = parseJsonArraySafe(overrides.aggregateRules ?? settings.aggregateRules ?? settings.aggregate_rules, []);
+  const lookupJoinRules = parseJsonArraySafe(overrides.lookupJoinRules ?? settings.lookupJoinRules ?? settings.lookup_join_rules, []);
+  const lookupSelectedFields = parseJsonArraySafe(
+    overrides.lookupSelectedFields ?? settings.lookupSelectedFields ?? settings.lookup_selected_fields,
+    []
+  );
   const dedupeEnabled = boolFromAny(overrides.dedupeEnabled ?? settings.dedupeEnabled ?? settings.dedupe_enabled, false);
   const groupEnabled = boolFromAny(overrides.groupEnabled ?? settings.groupEnabled ?? settings.group_enabled, false);
   const legacyFilterField = String((overrides.filterField ?? settings.filterField ?? settings.filter_field) || '').trim();
   const legacyFilterOperator = String((overrides.filterOperator ?? settings.filterOperator ?? settings.filter_operator) || '').trim();
   const legacyFilterValue = overrides.filterValue ?? settings.filterValue ?? settings.filter_value ?? '';
+  const legacyLookupSourceField = String((overrides.lookupSourceField ?? settings.lookupSourceField ?? settings.lookup_source_field) || '').trim();
+  const legacyLookupTargetField = String((overrides.lookupTargetField ?? settings.lookupTargetField ?? settings.lookup_target_field) || '').trim();
+  const legacyLookupFields = parseCsvList(overrides.lookupFields ?? settings.lookupFields ?? settings.lookup_fields);
   const normalizedFilterRules = filterRules.length
     ? filterRules
     : legacyFilterField || legacyFilterOperator
     ? [{ field: legacyFilterField, operator: legacyFilterOperator, value: legacyFilterValue }]
     : [];
+  const normalizedLookupJoinRules = (lookupJoinRules.length
+    ? lookupJoinRules
+    : legacyLookupSourceField || legacyLookupTargetField
+    ? [{ sourceField: legacyLookupSourceField, targetField: legacyLookupTargetField }]
+    : []
+  )
+    .map((rule) => ({
+      sourceField: String(rule?.sourceField ?? rule?.source_field ?? '').trim(),
+      targetField: String(rule?.targetField ?? rule?.target_field ?? '').trim()
+    }))
+    .filter((rule) => rule.sourceField && rule.targetField);
+  const normalizedLookupSelectedFields = (lookupSelectedFields.length ? lookupSelectedFields : legacyLookupFields)
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
   return {
     sourceMode: normalizeSourceMode(overrides.sourceMode ?? settings.sourceMode ?? settings.source_mode),
     sourceFormat: normalizeParserFormat(overrides.sourceFormat ?? settings.sourceFormat ?? settings.source_format),
@@ -340,11 +373,14 @@ function normalizeParserSettings(raw = {}, overrides = {}) {
     lookupEnabled: boolFromAny(overrides.lookupEnabled ?? settings.lookupEnabled ?? settings.lookup_enabled, false),
     lookupSchema: String((overrides.lookupSchema ?? settings.lookupSchema ?? settings.lookup_schema) || '').trim(),
     lookupTable: String((overrides.lookupTable ?? settings.lookupTable ?? settings.lookup_table) || '').trim(),
-    lookupSourceField: String((overrides.lookupSourceField ?? settings.lookupSourceField ?? settings.lookup_source_field) || '').trim(),
-    lookupTargetField: String((overrides.lookupTargetField ?? settings.lookupTargetField ?? settings.lookup_target_field) || '').trim(),
-    lookupFields: parseCsvList(overrides.lookupFields ?? settings.lookupFields ?? settings.lookup_fields),
+    lookupSourceField: legacyLookupSourceField,
+    lookupTargetField: legacyLookupTargetField,
+    lookupFields: legacyLookupFields,
+    lookupJoinRules: normalizedLookupJoinRules,
+    lookupSelectedFields: normalizedLookupSelectedFields,
     lookupPrefix: String((overrides.lookupPrefix ?? settings.lookupPrefix ?? settings.lookup_prefix) || '').trim(),
-    lookupJoinMode: String((overrides.lookupJoinMode ?? settings.lookupJoinMode ?? settings.lookup_join_mode) || 'left_join').trim().toLowerCase() || 'left_join',
+    lookupJoinMode: normalizeLookupJoinMode(overrides.lookupJoinMode ?? settings.lookupJoinMode ?? settings.lookup_join_mode),
+    lookupConflictMode: String((overrides.lookupConflictMode ?? settings.lookupConflictMode ?? settings.lookup_conflict_mode) || 'suffix').trim().toLowerCase() || 'suffix',
     dedupeEnabled,
     dedupeMode: String((overrides.dedupeMode ?? settings.dedupeMode ?? settings.dedupe_mode) || 'full_row').trim().toLowerCase() || 'full_row',
     dedupeFields: parseCsvList(overrides.dedupeFields ?? settings.dedupeFields ?? settings.dedupe_fields),
@@ -504,7 +540,24 @@ const COMPUTED_FN_REPLACEMENTS = [
   [/подстрока\s*\(/gi, 'fn._substring('],
   [/верхний_регистр\s*\(/gi, 'fn._upper('],
   [/нижний_регистр\s*\(/gi, 'fn._lower('],
-  [/заменить\s*\(/gi, 'fn._replace(']
+  [/заменить\s*\(/gi, 'fn._replace('],
+  [/РµСЃР»Рё\s*\(/gi, 'fn._if('],
+  [/Рё\s*\(/gi, 'fn._and('],
+  [/РёР»Рё\s*\(/gi, 'fn._or('],
+  [/РЅРµ\s*\(/gi, 'fn._not('],
+  [/РїСѓСЃС‚Рѕ\s*\(/gi, 'fn._empty('],
+  [/СЃРµРіРѕРґРЅСЏ\s*\(/gi, 'fn._today('],
+  [/СЃРµР№С‡Р°СЃ\s*\(/gi, 'fn._now('],
+  [/РіРѕРґ\s*\(/gi, 'fn._year('],
+  [/РјРµСЃСЏС†\s*\(/gi, 'fn._month('],
+  [/РґРµРЅСЊ\s*\(/gi, 'fn._day('],
+  [/РґР°С‚Р°_СЂР°Р·РЅРёС†Р°\s*\(/gi, 'fn._dateDiff('],
+  [/РґР°С‚Р°\s*\(/gi, 'fn._date('],
+  [/РґР»РёРЅР°\s*\(/gi, 'fn._length('],
+  [/РїРѕРґСЃС‚СЂРѕРєР°\s*\(/gi, 'fn._substring('],
+  [/РІРµСЂС…РЅРёР№_СЂРµРіРёСЃС‚СЂ\s*\(/gi, 'fn._upper('],
+  [/РЅРёР¶РЅРёР№_СЂРµРіРёСЃС‚СЂ\s*\(/gi, 'fn._lower('],
+  [/Р·Р°РјРµРЅРёС‚СЊ\s*\(/gi, 'fn._replace(']
 ];
 
 function sanitizeComputedExpression(expression) {
@@ -598,6 +651,47 @@ function columnsFromRows(rows) {
     for (const key of Object.keys(row)) cols.add(String(key));
   }
   return Array.from(cols);
+}
+
+function buildLookupJoinKey(values) {
+  return JSON.stringify(values.map((value) => String(value ?? '').trim()));
+}
+
+function sourceJoinKey(row, joinRules) {
+  return buildLookupJoinKey(joinRules.map((rule) => row?.[rule.sourceField]));
+}
+
+function lookupJoinKey(row, joinRules) {
+  return buildLookupJoinKey(joinRules.map((rule) => row?.[rule.targetField]));
+}
+
+function resolveCollisionKey(baseKey, targetRow, conflictMode) {
+  const initial = String(baseKey || '').trim();
+  if (!initial) return '';
+  const mode = String(conflictMode || 'suffix').trim().toLowerCase();
+  if (!Object.prototype.hasOwnProperty.call(targetRow, initial)) return initial;
+  if (mode === 'overwrite') return initial;
+  if (mode === 'skip') return '';
+  let idx = 2;
+  let candidate = `${initial}_${idx}`;
+  while (Object.prototype.hasOwnProperty.call(targetRow, candidate)) {
+    idx += 1;
+    candidate = `${initial}_${idx}`;
+  }
+  return candidate;
+}
+
+function mergeLookupFieldsIntoRow(baseRow, lookupRow, lookupFields, prefix, conflictMode) {
+  const next = { ...baseRow };
+  let addedCount = 0;
+  for (const col of lookupFields) {
+    const baseKey = prefix ? `${prefix}${col}` : col;
+    const targetKey = resolveCollisionKey(baseKey, next, conflictMode);
+    if (!targetKey) continue;
+    next[targetKey] = lookupRow?.[col];
+    addedCount += 1;
+  }
+  return { row: next, addedCount };
 }
 
 function applyComputedFieldsToRows(rows, cfg, diagnostics) {
@@ -695,54 +789,137 @@ function applyGroupByToRows(rows, cfg) {
 }
 
 async function applyLookupToRows(client, cfg, rows) {
-  if (!cfg.lookupEnabled) return rows;
-  if (!isIdent(cfg.lookupSchema) || !isIdent(cfg.lookupTable) || !isIdent(cfg.lookupTargetField) || !cfg.lookupSourceField) {
-    return rows;
+  if (!cfg.lookupEnabled) return { rows, summary: null };
+  const joinRules = (Array.isArray(cfg.lookupJoinRules) ? cfg.lookupJoinRules : []).filter(
+    (rule) => isIdent(rule?.sourceField) && isIdent(rule?.targetField)
+  );
+  const lookupCols = (Array.isArray(cfg.lookupSelectedFields) ? cfg.lookupSelectedFields : []).filter((field) => isIdent(field));
+  if (!isIdent(cfg.lookupSchema) || !isIdent(cfg.lookupTable) || !joinRules.length || !lookupCols.length) {
+    return {
+      rows,
+      summary: {
+        join_mode: cfg.lookupJoinMode || 'left',
+        matched_source_rows: 0,
+        unmatched_source_rows: Array.isArray(rows) ? rows.length : 0,
+        unmatched_lookup_rows: 0,
+        added_fields_count: lookupCols.length
+      }
+    };
   }
-  const sourceValues = [...new Set(rows.map((row) => String(row?.[cfg.lookupSourceField] ?? '')).filter(Boolean))];
-  if (!sourceValues.length) return rows;
-  const lookupCols = cfg.lookupFields.filter((x) => isIdent(x));
-  if (!lookupCols.length) return rows;
+
   const qn = `${qi(cfg.lookupSchema)}.${qi(cfg.lookupTable)}`;
   const prefix = cfg.lookupPrefix ? String(cfg.lookupPrefix).trim() : '';
-  const selectCols = [
-    `${qi(cfg.lookupTargetField)}::text AS _lookup_key`,
-    ...lookupCols.map((col) => `${qi(col)}`)
-  ];
-  const lookupRes = await client.query(
-    `SELECT ${selectCols.join(', ')} FROM ${qn} WHERE ${qi(cfg.lookupTargetField)}::text = ANY($1::text[])`,
-    [sourceValues]
-  );
-  const map = new Map();
-  for (const row of Array.isArray(lookupRes.rows) ? lookupRes.rows : []) {
-    const key = String(row?._lookup_key || '').trim();
-    if (!key) continue;
-    const bucket = map.get(key) || [];
-    bucket.push(row);
-    map.set(key, bucket);
+  const joinMode = normalizeLookupJoinMode(cfg.lookupJoinMode);
+  const selectFieldSet = new Set([...lookupCols, ...joinRules.map((rule) => rule.targetField)]);
+  const selectCols = Array.from(selectFieldSet).map((col) => `${qi(col)}`);
+  if (!selectCols.length) {
+    return { rows, summary: null };
   }
-  const joinMode = String(cfg.lookupJoinMode || 'left_join').trim().toLowerCase();
-  const keepUnmatched = joinMode === 'left_join' || joinMode === 'all_matches';
-  const useAllMatches = joinMode === 'only_matches' || joinMode === 'all_matches';
+
+  let lookupRows = [];
+  if (joinMode === 'right' || joinMode === 'full') {
+    const lookupRes = await client.query(`SELECT ${selectCols.join(', ')} FROM ${qn}`);
+    lookupRows = Array.isArray(lookupRes.rows) ? lookupRes.rows : [];
+  } else {
+    const sourceValues = [...new Set(rows.map((row) => String(row?.[joinRules[0].sourceField] ?? '').trim()).filter(Boolean))];
+    if (!sourceValues.length) {
+      return {
+        rows: joinMode === 'inner' ? [] : rows,
+        summary: {
+          join_mode: joinMode,
+          matched_source_rows: 0,
+          unmatched_source_rows: Array.isArray(rows) ? rows.length : 0,
+          unmatched_lookup_rows: 0,
+          added_fields_count: lookupCols.length
+        }
+      };
+    }
+    const lookupRes = await client.query(
+      `SELECT ${selectCols.join(', ')} FROM ${qn} WHERE ${qi(joinRules[0].targetField)}::text = ANY($1::text[])`,
+      [sourceValues]
+    );
+    lookupRows = Array.isArray(lookupRes.rows) ? lookupRes.rows : [];
+  }
+
+  const keyedLookupRows = lookupRows
+    .map((row, index) => ({
+      __lookup_row_id: index,
+      __lookup_join_key: lookupJoinKey(row, joinRules),
+      ...row
+    }))
+    .filter((row) => String(row.__lookup_join_key || '').trim() !== '');
+  const lookupMap = new Map();
+  for (const row of keyedLookupRows) {
+    const key = String(row.__lookup_join_key || '').trim();
+    const bucket = lookupMap.get(key) || [];
+    bucket.push(row);
+    lookupMap.set(key, bucket);
+  }
+
   const out = [];
+  const matchedLookupIds = new Set();
+  let matchedSourceRows = 0;
+  let unmatchedSourceRows = 0;
+
   for (const row of rows) {
-    const key = String(row?.[cfg.lookupSourceField] ?? '').trim();
-    const hits = map.get(key) || [];
+    const key = sourceJoinKey(row, joinRules);
+    const hits = lookupMap.get(key) || [];
     if (!hits.length) {
-      if (keepUnmatched) out.push(row);
+      unmatchedSourceRows += 1;
+      if (joinMode === 'left' || joinMode === 'full' || joinMode === 'first_match') out.push(row);
       continue;
     }
-    const selectedHits = useAllMatches ? hits : [hits[0]];
+    matchedSourceRows += 1;
+    const selectedHits = joinMode === 'first_match' ? [hits[0]] : hits;
     for (const hit of selectedHits) {
-      const next = { ...row };
-      for (const col of lookupCols) {
-        const target = prefix ? `${prefix}${col}` : col;
-        next[target] = hit[col];
-      }
-      out.push(next);
+      matchedLookupIds.add(hit.__lookup_row_id);
+      const merged = mergeLookupFieldsIntoRow(row, hit, lookupCols, prefix, cfg.lookupConflictMode);
+      out.push(merged.row);
     }
   }
-  return out;
+
+  let unmatchedLookupRows = 0;
+  if (joinMode === 'right' || joinMode === 'full') {
+    for (const hit of keyedLookupRows) {
+      if (matchedLookupIds.has(hit.__lookup_row_id)) continue;
+      unmatchedLookupRows += 1;
+      const merged = mergeLookupFieldsIntoRow({}, hit, lookupCols, prefix, cfg.lookupConflictMode);
+      out.push(merged.row);
+    }
+  }
+
+  return {
+    rows: out,
+    summary: {
+      join_mode: joinMode,
+      matched_source_rows: matchedSourceRows,
+      unmatched_source_rows: unmatchedSourceRows,
+      unmatched_lookup_rows: unmatchedLookupRows,
+      added_fields_count: lookupCols.length
+    }
+  };
+}
+
+async function buildLookupBayesSummary(client, cfg, rows) {
+  if (!isIdent(cfg.lookupSchema) || !isIdent(cfg.lookupTable) || !Array.isArray(rows) || !rows.length) return null;
+  const qn = `${qi(cfg.lookupSchema)}.${qi(cfg.lookupTable)}`;
+  try {
+    const lookupRes = await client.query(`SELECT * FROM ${qn} LIMIT 50`);
+    const lookupRows = Array.isArray(lookupRes.rows) ? lookupRes.rows : [];
+    if (!lookupRows.length) return null;
+    return analyzeJoinPairsByBayes(rows.slice(0, 50), lookupRows.slice(0, 50));
+  } catch (e) {
+    return {
+      model_code: 'naive_bayes',
+      model_name_ru: 'Наивная байесовская модель подбора полей связи',
+      assumptions: ['Признаки считаются условно независимыми при фиксированной гипотезе.'],
+      hypotheses: [],
+      suggestions: [],
+      recommended_rules: [],
+      warnings: [`Не удалось получить sample таблицы для рекомендаций связи: ${String(e?.message || e)}`],
+      stats: { source_fields: 0, lookup_fields: 0, compared_pairs: 0 }
+    };
+  }
 }
 
 function toNodeReadable(stream) {
@@ -935,15 +1112,34 @@ async function collectFromStreamByFormat(stream, cfg, offset, take) {
   throw new Error(`parser_unsupported_stream_format:${format}`);
 }
 
+function resolveBayesWorkingSetPath(bayesInput, explicitRecordPath = '') {
+  const current = String(explicitRecordPath || '').trim();
+  if (current) return current;
+  const recommended = bayesInput?.recommended_candidate || null;
+  if (!recommended) return '';
+  const probability = Number(recommended.probability || 0);
+  const topHypothesis = String(recommended?.top_hypothesis?.code || '').trim();
+  const path = String(recommended.path || '').trim();
+  if (topHypothesis !== 'working_set') return '';
+  if (probability < 0.65) return '';
+  if (!path || path.endsWith('[]')) return '';
+  return path;
+}
+
 async function collectInputRecords(candidate, cfg, offset, take) {
+  const bayesInput = analyzeInputCandidatesByBayes(candidate);
   const unwrapped = unwrapBusinessPayload(candidate);
   const workingValue = unwrapped.value !== undefined ? unwrapped.value : candidate;
+  const effectiveRecordPath = resolveBayesWorkingSetPath(bayesInput, cfg.recordPath);
   const format = inferFormat(workingValue, cfg.sourceFormat);
   const analysis = {
     payload_origin: unwrapped.origin,
     detected_format: format,
     warnings: Array.isArray(unwrapped.warnings) ? [...unwrapped.warnings] : [],
-    input_kind: Array.isArray(workingValue) ? 'array' : typeof workingValue
+    input_kind: Array.isArray(workingValue) ? 'array' : typeof workingValue,
+    bayes_input: bayesInput,
+    bayes_working_set_path: effectiveRecordPath,
+    bayes_auto_applied: Boolean(!cfg.recordPath && effectiveRecordPath)
   };
   if (typeof workingValue === 'string') {
     if (format === 'csv') {
@@ -984,12 +1180,12 @@ async function collectInputRecords(candidate, cfg, offset, take) {
     }
     if (format === 'json') {
       const parsed = JSON.parse(workingValue);
-      const records = extractRecordsFromJsonValue(parsed, cfg.recordPath);
+      const records = extractRecordsFromJsonValue(parsed, effectiveRecordPath);
       const slice = records.slice(offset, offset + take + 1);
       return { rows: slice.slice(0, take), scanned: records.length, hasMore: slice.length > take, analysis };
     }
   }
-  const records = extractRecordsFromJsonValue(workingValue, cfg.recordPath);
+  const records = extractRecordsFromJsonValue(workingValue, effectiveRecordPath);
   const slice = records.slice(offset, offset + take + 1);
   return { rows: slice.slice(0, take), scanned: records.length, hasMore: slice.length > take, analysis };
 }
@@ -1124,16 +1320,32 @@ export async function executeParserRows(client, rawSettings = {}, options = {}) 
     if (!transformed) continue;
     rows.push(...transformed);
   }
-  diagnostics.steps.push(`Базовое сопоставление полей: ${rows.length} строк`);
+  diagnostics.steps.push(`Приведение данных в порядок: ${rows.length} строк`);
   if (rows.length > limit + 1) rows = rows.slice(0, limit + 1);
   const transformedHasMore = rows.length > limit;
   if (transformedHasMore) rows = rows.slice(0, limit);
-  rows = await applyLookupToRows(client, cfg, rows);
-  if (cfg.lookupEnabled) diagnostics.steps.push(`Обогащение из таблицы: ${rows.length} строк после присоединения`);
-  rows = applyComputedFieldsToRows(rows, cfg, diagnostics);
-  if (cfg.computedFields.length) diagnostics.steps.push(`Вычисляемые поля: ${cfg.computedFields.length}`);
+  const lookupBayes = await buildLookupBayesSummary(client, cfg, rows);
+  if (lookupBayes?.recommended_rules?.length) {
+    diagnostics.steps.push(
+      `Байесовская рекомендация связи: ${lookupBayes.recommended_rules
+        .map((rule) => `${rule.sourceField} = ${rule.targetField}`)
+        .join(', ')}`
+    );
+  } else if (lookupBayes?.warnings?.length) {
+    diagnostics.warnings.push(...lookupBayes.warnings);
+  }
+  const lookupResult = await applyLookupToRows(client, cfg, rows);
+  rows = lookupResult.rows;
+  if (cfg.lookupEnabled) {
+    const summary = lookupResult.summary || {};
+    diagnostics.steps.push(
+      `Присоединение таблицы: совпало ${summary.matched_source_rows ?? 0}, без совпадения в текущих данных ${summary.unmatched_source_rows ?? 0}, без совпадения в таблице ${summary.unmatched_lookup_rows ?? 0}`
+    );
+  }
   rows = applyFilterRulesToRows(rows, cfg);
   if (cfg.filterRules.length) diagnostics.steps.push(`Фильтры: ${cfg.filterRules.length}`);
+  rows = applyComputedFieldsToRows(rows, cfg, diagnostics);
+  if (cfg.computedFields.length) diagnostics.steps.push(`Вычисляемые поля: ${cfg.computedFields.length}`);
   rows = applyDedupeToRows(rows, cfg);
   if (cfg.dedupeEnabled) diagnostics.steps.push(`Удаление дублей: ${cfg.dedupeMode}`);
   rows = applyGroupByToRows(rows, cfg);
@@ -1165,12 +1377,15 @@ export async function executeParserRows(client, rawSettings = {}, options = {}) 
       payload_origin: raw?.analysis?.payload_origin || raw.source_type,
       input_kind: raw?.analysis?.input_kind || raw.source_type,
       content_type: raw?.analysis?.content_type || '',
-      working_set_path: cfg.recordPath || '(корень)',
+      working_set_path: raw?.analysis?.bayes_working_set_path || cfg.recordPath || '(корень)',
       source_path: cfg.inputPath || '(вход целиком)',
+      bayes_input: raw?.analysis?.bayes_input || null,
+      bayes_join: lookupBayes || null,
       warnings: diagnostics.warnings,
       warnings_count: diagnostics.warnings.length,
       applied_steps: diagnostics.steps,
-      applied_steps_count: diagnostics.steps.length
+      applied_steps_count: diagnostics.steps.length,
+      lookup_summary: lookupResult.summary || null
     }
   };
 }

@@ -134,14 +134,14 @@ test('parser runtime: table source parses payload column iteratively', async () 
 
 test('parser runtime: lookup enriches rows from existing table', async () => {
   const lookupRows = [
-    { _lookup_key: 'cab_1', token: 't1', shop_name: 'Shop 1' },
-    { _lookup_key: 'cab_2', token: 't2', shop_name: 'Shop 2' }
+    { client_id: 'cab_1', token: 't1', shop_name: 'Shop 1' },
+    { client_id: 'cab_2', token: 't2', shop_name: 'Shop 2' }
   ];
   const client = {
     query: async (sql, params) => {
       if (String(sql).includes('FROM "ao_data"."client_tokens"')) {
         const wanted = new Set(params?.[0] || []);
-        return { rows: lookupRows.filter((row) => wanted.has(row._lookup_key)) };
+        return { rows: lookupRows.filter((row) => wanted.has(row.client_id)) };
       }
       return { rows: [] };
     }
@@ -177,6 +177,7 @@ test('parser runtime: lookup enriches rows from existing table', async () => {
     lk_token: 't1',
     lk_shop_name: 'Shop 1'
   });
+  assert.equal(result.stats.lookup_summary?.matched_source_rows, 2);
 });
 
 test('parser runtime: file_url reads CSV over HTTP without breaking contract', async () => {
@@ -371,4 +372,85 @@ test('parser runtime: dedupe and grouping aggregate rows without DB-bound flow',
   assert.equal(result.stats.applied_steps_count, 3);
   assert.match(result.stats.applied_steps.join(' | '), /Удаление дублей/);
   assert.match(result.stats.applied_steps.join(' | '), /Группировка по полям/);
+});
+
+
+test('parser runtime: bayes recommends working set path for nested payload without manual recordPath', async () => {
+  const result = await executeParserRows(
+    { query: async () => ({ rows: [] }) },
+    {
+      sourceMode: 'input',
+      sourceFormat: 'auto'
+    },
+    {
+      inputValue: {
+        list: [
+          { id: '1', title: 'Alpha', status: 'active' },
+          { id: '2', title: 'Beta', status: 'paused' }
+        ],
+        total: '2',
+        success: true
+      }
+    }
+  );
+
+  assert.equal(result.rows.length, 2);
+  assert.equal(result.rows[0].id, '1');
+  assert.equal(result.stats.working_set_path, 'list');
+  assert.equal(result.stats.bayes_input.recommended_candidate.path, 'list');
+  assert.ok(result.stats.bayes_input.recommended_candidate.probability > 0.5);
+});
+
+test('parser runtime: structured join model enriches rows and returns join summary and bayes suggestions', async () => {
+  const lookupRows = [
+    { client_id: 'cab_1', token: 't1', shop_name: 'Shop 1', region: 'RU' },
+    { client_id: 'cab_2', token: 't2', shop_name: 'Shop 2', region: 'KZ' }
+  ];
+  const client = {
+    query: async (sql, params) => {
+      if (String(sql).includes('FROM "ao_data"."client_tokens"')) {
+        if (String(sql).includes('LIMIT 50')) return { rows: lookupRows };
+        const wanted = new Set(params?.[0] || []);
+        return { rows: lookupRows.filter((row) => wanted.has(row.client_id)) };
+      }
+      return { rows: [] };
+    }
+  };
+
+  const result = await executeParserRows(
+    client,
+    {
+      sourceMode: 'input',
+      sourceFormat: 'json',
+      recordPath: 'items',
+      lookupEnabled: true,
+      lookupSchema: 'ao_data',
+      lookupTable: 'client_tokens',
+      lookupJoinMode: 'left',
+      lookupConflictMode: 'suffix',
+      lookupJoinRules: [{ sourceField: 'client_id', targetField: 'client_id' }],
+      lookupSelectedFields: ['token', 'shop_name']
+    },
+    {
+      inputValue: {
+        items: [
+          { client_id: 'cab_1', metric: 10 },
+          { client_id: 'cab_3', metric: 20 }
+        ]
+      }
+    }
+  );
+
+  assert.deepEqual(result.rows[0], {
+    client_id: 'cab_1',
+    metric: 10,
+    token: 't1',
+    shop_name: 'Shop 1'
+  });
+  assert.deepEqual(result.rows[1], { client_id: 'cab_3', metric: 20 });
+  assert.equal(result.stats.lookup_summary.matched_source_rows, 1);
+  assert.equal(result.stats.lookup_summary.unmatched_source_rows, 1);
+  assert.ok(Array.isArray(result.stats.bayes_join.suggestions));
+  assert.equal(result.stats.bayes_join.recommended_rules[0].sourceField, 'client_id');
+  assert.equal(result.stats.bayes_join.recommended_rules[0].targetField, 'client_id');
 });
