@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import { createEventDispatcher } from 'svelte';
 
   export type OptionItem = { value: string; label: string };
@@ -18,8 +18,8 @@
   export let rows: Array<Record<string, any>> = [];
   export let fields: ClientFieldConfig[] = [];
   export let optionSets: Record<string, OptionItem[]> = {};
-  export let addLabel = 'Р”РѕР±Р°РІРёС‚СЊ Р·Р°РїРёСЃСЊ';
-  export let emptyText = 'Р—Р°РїРёСЃРµР№ РїРѕРєР° РЅРµС‚.';
+  export let addLabel = 'Добавить запись';
+  export let emptyText = 'Записей пока нет.';
   export let busyRowKey = '';
 
   const dispatch = createEventDispatcher<{
@@ -77,14 +77,14 @@
         <article class="row-card">
           <div class="row-card-head">
             <div class="row-card-title">
-              <strong>{row.id ? `Р—Р°РїРёСЃСЊ #${row.id}` : `РќРѕРІР°СЏ Р·Р°РїРёСЃСЊ ${index + 1}`}</strong>
+              <strong>{row.id ? `Запись #${row.id}` : `Новая запись ${index + 1}`}</strong>
             </div>
             <div class="row-card-actions">
-              <button class="mini-btn" type="button" on:click={() => dispatch('duplicate', { index })}>Р”СѓР±Р»РёСЂРѕРІР°С‚СЊ</button>
+              <button class="mini-btn" type="button" on:click={() => dispatch('duplicate', { index })}>Дублировать</button>
               <button class="mini-btn" type="button" on:click={() => dispatch('save', { index })} disabled={busyRowKey === rowKey}>
-                {busyRowKey === rowKey ? 'РЎРѕС…СЂР°РЅСЏРµРј...' : 'РЎРѕС…СЂР°РЅРёС‚СЊ'}
+                {busyRowKey === rowKey ? 'Сохраняем...' : 'Сохранить'}
               </button>
-              <button class="danger-btn" type="button" on:click={() => dispatch('remove', { index })} disabled={busyRowKey === rowKey}>РЈРґР°Р»РёС‚СЊ</button>
+              <button class="danger-btn" type="button" on:click={() => dispatch('remove', { index })} disabled={busyRowKey === rowKey}>Удалить</button>
             </div>
           </div>
 
@@ -104,7 +104,7 @@
                     value={String(row?.[field.key] ?? '')}
                     on:change={(e) => onTextChange(index, field.key, textValue(e))}
                   >
-                    <option value="">Р’С‹Р±РµСЂРё Р·РЅР°С‡РµРЅРёРµ</option>
+                    <option value="">Выбери значение</option>
                     {#each optionsForField(field) as option}
                       <option value={option.value}>{option.label}</option>
                     {/each}
