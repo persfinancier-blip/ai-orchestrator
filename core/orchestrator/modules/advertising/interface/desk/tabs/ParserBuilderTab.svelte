@@ -495,7 +495,13 @@
     ...category,
     items: COMPUTED_FUNCTIONS.filter((item) => item.category === category.id)
   }));
-  $: computedBaseAvailableFields = currentBaseComputedFields();
+  $: computedBaseAvailableFields = currentBaseComputedFields(
+    selectedFieldRows,
+    workingFieldCandidates,
+    sourceTableColumnsMeta,
+    sourcePreviewRows,
+    previewResultRows
+  );
   $: if (!selectedDraft && currentTemplate) {
     templateNameInput = templateNameInput || currentTemplate.name;
     templateDescriptionInput = templateDescriptionInput || currentTemplate.description;
@@ -791,19 +797,30 @@
     return Object.fromEntries(entries);
   }
 
-  function currentBaseComputedFields() {
-    if (selectedFieldRows.length) {
-      return selectedFieldRows.map((row) => ({
+  function currentBaseComputedFields(
+    selectedRows: Array<{ path: string; alias: string; type: string }> = [],
+    workingCandidates: string[] = [],
+    tableColumns: ColumnMeta[] = [],
+    sourceRows: Array<Record<string, any>> = [],
+    resultRows: Array<Record<string, any>> = []
+  ) {
+    const safeSelectedRows = Array.isArray(selectedRows) ? selectedRows : [];
+    const safeWorkingCandidates = Array.isArray(workingCandidates) ? workingCandidates : [];
+    const safeTableColumns = Array.isArray(tableColumns) ? tableColumns : [];
+    const safeSourceRows = Array.isArray(sourceRows) ? sourceRows : [];
+    const safeResultRows = Array.isArray(resultRows) ? resultRows : [];
+    if (safeSelectedRows.length) {
+      return safeSelectedRows.map((row) => ({
         name: row.alias || fallbackFieldName(row.path),
-        type: row.type || inferFieldTypeFromRows(sourcePreviewRows, fallbackFieldName(row.path)) || ''
+        type: row.type || inferFieldTypeFromRows(safeSourceRows, fallbackFieldName(row.path)) || ''
       }));
     }
-    return workingFieldCandidates.map((name) => ({
+    return safeWorkingCandidates.map((name) => ({
       name,
       type:
-        sourceTableColumnsMeta.find((item) => item.name === name)?.type ||
-        inferFieldTypeFromRows(sourcePreviewRows, name) ||
-        inferFieldTypeFromRows(previewResultRows, name) ||
+        safeTableColumns.find((item) => item.name === name)?.type ||
+        inferFieldTypeFromRows(safeSourceRows, name) ||
+        inferFieldTypeFromRows(safeResultRows, name) ||
         ''
     }));
   }
