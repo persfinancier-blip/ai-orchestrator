@@ -228,7 +228,7 @@
         />
       {/key}
     {:else if pane === 'parser'}
-      {#key `${parserBuilderRenderKey}:${JSON.stringify(standaloneParserSettings)}`}
+      {#key parserBuilderRenderKey}
         <ParserBuilderTab
           apiBase={API_BASE}
           {apiJson}
