@@ -1,6 +1,7 @@
 ﻿<!-- File: core/orchestrator/modules/advertising/interface/desk/tabs/CreateTableTab.svelte -->
 <script lang="ts">
   import { onMount, tick } from 'svelte';
+  import { CLIENT_MODULE_TEMPLATES } from '../../shared/clientModuleTemplates.mjs';
 
   export type Role = 'viewer' | 'operator' | 'data_admin';
   export type ExistingTable = { schema_name: string; table_name: string };
@@ -772,7 +773,23 @@
       apiConfigsSystemTemplate(),
       nodeRegistrySystemTemplate(),
       workflowDesksSystemTemplate(),
-      serverWritesSystemTemplate()
+      serverWritesSystemTemplate(),
+      ...CLIENT_MODULE_TEMPLATES.map((item) => ({
+        id: item.id,
+        name: item.template_name,
+        schema_name: item.schema_name,
+        table_name: item.table_name,
+        table_class: item.table_class,
+        data_level: item.data_level,
+        template_kind: item.template_kind,
+        description: item.description,
+        columns: withRequiredTableFields(item.columns as ColumnDef[]),
+        partition_enabled: Boolean(item.partition_enabled),
+        partition_column: String(item.partition_column || ''),
+        partition_interval: String(item.partition_interval || 'day') === 'month' ? 'month' : 'day',
+        contract_version: 1,
+        contract_mode: 'safe_add_only' as const
+      }))
     ];
   }
 

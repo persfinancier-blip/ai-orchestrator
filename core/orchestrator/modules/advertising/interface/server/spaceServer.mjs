@@ -2,6 +2,7 @@
 
 import express from 'express';
 import { pool } from './db.mjs';
+import { bootstrapClientModule, clientModuleRouter } from './clientModuleRouter.mjs';
 import { bootstrapTableBuilder, tableBuilderRouter } from './tableBuilder.mjs';
 import {
   bootstrapWorkflowAutomation,
@@ -20,6 +21,7 @@ app.use(express.json({ limit: '2mb' }));
 // - GET  /ai-orchestrator/api/preview
 app.use('/ai-orchestrator/api', tableBuilderRouter);
 app.use('/ai-orchestrator/api', workflowAutomationRouter);
+app.use('/ai-orchestrator/api', clientModuleRouter);
 
 /**
  * GOLD витрина Advertising: showcase.advertising
@@ -84,6 +86,15 @@ try {
 } catch (e) {
   // eslint-disable-next-line no-console
   console.error('Workflow scheduler start failed:', e);
+}
+
+try {
+  const boot = await bootstrapClientModule();
+  // eslint-disable-next-line no-console
+  console.log('Client module bootstrap:', boot);
+} catch (e) {
+  // eslint-disable-next-line no-console
+  console.error('Client module bootstrap failed:', e);
 }
 
 app.listen(port, () => {

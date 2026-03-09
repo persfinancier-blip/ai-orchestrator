@@ -2,10 +2,11 @@
   import { onDestroy, onMount } from 'svelte';
   import WorkflowCanvas from './components/WorkflowCanvas.svelte';
   import ApiBuilderTab from './tabs/ApiBuilderTab.svelte';
+  import ClientsModuleTab from './tabs/ClientsModuleTab.svelte';
   import ParserBuilderTab from './tabs/ParserBuilderTab.svelte';
 
   type ExistingTable = { schema_name: string; table_name: string };
-  type Pane = 'workspace' | 'api' | 'parser';
+  type Pane = 'workspace' | 'api' | 'parser' | 'clients';
 
   const API_BASE = '/ai-orchestrator/api';
   const API_ROLE = 'data_admin';
@@ -19,6 +20,7 @@
   let handoffInfo = '';
   let initialApiStoreId: number | null = null;
   let apiBuilderRenderKey = 0;
+  let clientsRenderKey = 0;
   let parserBuilderRenderKey = 0;
   let standaloneParserSettings: Record<string, any> = {};
 
@@ -114,6 +116,11 @@
       params.delete('api_store_id');
       params.delete('from_node');
       handoffInfo = '';
+    } else if (next === 'clients') {
+      params.set('pane', 'clients');
+      params.delete('api_store_id');
+      params.delete('from_node');
+      handoffInfo = '';
     } else {
       params.delete('pane');
       params.delete('api_store_id');
@@ -141,6 +148,8 @@
       ? 'api'
       : paneParam === 'parser'
       ? 'parser'
+      : paneParam === 'clients'
+      ? 'clients'
       : 'workspace';
 
     pane = nextPane;
@@ -156,7 +165,7 @@
         : `Открыт из workflow-узла API. Шаблон ID: ${apiStoreId}`
       : '';
 
-    if (nextPane === 'api' || nextPane === 'parser') {
+    if (nextPane === 'api' || nextPane === 'parser' || nextPane === 'clients') {
       void refreshBuilderTables();
     }
 
@@ -198,6 +207,7 @@
     <button class:active={pane === 'workspace'} on:click={() => setPane('workspace')}>Рабочий стол</button>
     <button class:active={pane === 'api'} on:click={() => setPane('api')}>Запросы</button>
     <button class:active={pane === 'parser'} on:click={() => setPane('parser')}>Работа с данными</button>
+    <button class:active={pane === 'clients'} on:click={() => setPane('clients')}>Клиенты</button>
   </nav>
 
   {#if pane === 'workspace'}
@@ -237,6 +247,15 @@
           initialSettings={standaloneParserSettings}
           embeddedMode={true}
           on:configChange={onParserConfigChange}
+        />
+      {/key}
+    {:else if pane === 'clients'}
+      {#key clientsRenderKey}
+        <ClientsModuleTab
+          apiBase={API_BASE}
+          {apiJson}
+          {headers}
+          {existingTables}
         />
       {/key}
     {/if}
