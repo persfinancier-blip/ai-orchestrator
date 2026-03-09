@@ -472,6 +472,10 @@ function parseDateValue(value) {
 }
 
 function buildExpressionFunctions() {
+  const numericArgs = (args) =>
+    args
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value));
   return {
     _if: (cond, whenTrue, whenFalse) => (cond ? whenTrue : whenFalse),
     _and: (...args) => args.every(Boolean),
@@ -519,11 +523,54 @@ function buildExpressionFunctions() {
     },
     _upper: (value) => String(value ?? '').toUpperCase(),
     _lower: (value) => String(value ?? '').toLowerCase(),
-    _replace: (value, from, to) => String(value ?? '').split(String(from ?? '')).join(String(to ?? ''))
+    _replace: (value, from, to) => String(value ?? '').split(String(from ?? '')).join(String(to ?? '')),
+    _min: (...args) => {
+      const values = numericArgs(args);
+      return values.length ? Math.min(...values) : null;
+    },
+    _max: (...args) => {
+      const values = numericArgs(args);
+      return values.length ? Math.max(...values) : null;
+    },
+    _round: (value, digits = 0) => {
+      const num = Number(value);
+      const scale = Number(digits);
+      if (!Number.isFinite(num)) return null;
+      if (!Number.isFinite(scale)) return num;
+      const factor = 10 ** Math.max(0, Math.trunc(scale));
+      return Math.round(num * factor) / factor;
+    },
+    _concat: (...args) => args.map((value) => String(value ?? '')).join(''),
+    _contains: (value, search) => String(value ?? '').includes(String(search ?? '')),
+    _notContains: (value, search) => !String(value ?? '').includes(String(search ?? ''))
   };
 }
 
 const COMPUTED_FN_REPLACEMENTS = [
+  [/\u0435\u0441\u043b\u0438\s*\(/gi, 'fn._if('],
+  [/\u0438\s*\(/gi, 'fn._and('],
+  [/\u0438\u043b\u0438\s*\(/gi, 'fn._or('],
+  [/\u043d\u0435\s*\(/gi, 'fn._not('],
+  [/\u043f\u0443\u0441\u0442\u043e\s*\(/gi, 'fn._empty('],
+  [/\u0441\u0435\u0433\u043e\u0434\u043d\u044f\s*\(/gi, 'fn._today('],
+  [/\u0441\u0435\u0439\u0447\u0430\u0441\s*\(/gi, 'fn._now('],
+  [/\u0433\u043e\u0434\s*\(/gi, 'fn._year('],
+  [/\u043c\u0435\u0441\u044f\u0446\s*\(/gi, 'fn._month('],
+  [/\u0434\u0435\u043d\u044c\s*\(/gi, 'fn._day('],
+  [/\u0434\u0430\u0442\u0430_\u0440\u0430\u0437\u043d\u0438\u0446\u0430\s*\(/gi, 'fn._dateDiff('],
+  [/\u0434\u0430\u0442\u0430\s*\(/gi, 'fn._date('],
+  [/\u0434\u043b\u0438\u043d\u0430\s*\(/gi, 'fn._length('],
+  [/\u043f\u043e\u0434\u0441\u0442\u0440\u043e\u043a\u0430\s*\(/gi, 'fn._substring('],
+  [/\u0432\u0435\u0440\u0445\u043d\u0438\u0439_\u0440\u0435\u0433\u0438\u0441\u0442\u0440\s*\(/gi, 'fn._upper('],
+  [/\u043d\u0438\u0436\u043d\u0438\u0439_\u0440\u0435\u0433\u0438\u0441\u0442\u0440\s*\(/gi, 'fn._lower('],
+  [/\u0437\u0430\u043c\u0435\u043d\u0438\u0442\u044c\s*\(/gi, 'fn._replace('],
+  [/\u043c\u0438\u043d\u0438\u043c\u0443\u043c\s*\(/gi, 'fn._min('],
+  [/\u043c\u0430\u043a\u0441\u0438\u043c\u0443\u043c\s*\(/gi, 'fn._max('],
+  [/\u043e\u043a\u0440\u0443\u0433\u043b\u0438\u0442\u044c\s*\(/gi, 'fn._round('],
+  [/\u0441\u043a\u043b\u0435\u0438\u0442\u044c\s*\(/gi, 'fn._concat('],
+  [/\u0441\u043e\u0435\u0434\u0438\u043d\u0438\u0442\u044c_\u0441\u0442\u0440\u043e\u043a\u0438\s*\(/gi, 'fn._concat('],
+  [/\u0441\u043e\u0434\u0435\u0440\u0436\u0438\u0442\s*\(/gi, 'fn._contains('],
+  [/\u043d\u0435_\u0441\u043e\u0434\u0435\u0440\u0436\u0438\u0442\s*\(/gi, 'fn._notContains('],
   [/если\s*\(/gi, 'fn._if('],
   [/и\s*\(/gi, 'fn._and('],
   [/или\s*\(/gi, 'fn._or('],
@@ -541,6 +588,13 @@ const COMPUTED_FN_REPLACEMENTS = [
   [/верхний_регистр\s*\(/gi, 'fn._upper('],
   [/нижний_регистр\s*\(/gi, 'fn._lower('],
   [/заменить\s*\(/gi, 'fn._replace('],
+  [/минимум\s*\(/gi, 'fn._min('],
+  [/максимум\s*\(/gi, 'fn._max('],
+  [/округлить\s*\(/gi, 'fn._round('],
+  [/склеить\s*\(/gi, 'fn._concat('],
+  [/соединить_строки\s*\(/gi, 'fn._concat('],
+  [/содержит\s*\(/gi, 'fn._contains('],
+  [/не_содержит\s*\(/gi, 'fn._notContains('],
   [/РµСЃР»Рё\s*\(/gi, 'fn._if('],
   [/Рё\s*\(/gi, 'fn._and('],
   [/РёР»Рё\s*\(/gi, 'fn._or('],
@@ -557,7 +611,14 @@ const COMPUTED_FN_REPLACEMENTS = [
   [/РїРѕРґСЃС‚СЂРѕРєР°\s*\(/gi, 'fn._substring('],
   [/РІРµСЂС…РЅРёР№_СЂРµРіРёСЃС‚СЂ\s*\(/gi, 'fn._upper('],
   [/РЅРёР¶РЅРёР№_СЂРµРіРёСЃС‚СЂ\s*\(/gi, 'fn._lower('],
-  [/Р·Р°РјРµРЅРёС‚СЊ\s*\(/gi, 'fn._replace(']
+  [/Р·Р°РјРµРЅРёС‚СЊ\s*\(/gi, 'fn._replace('],
+  [/РјРёРЅРёРјСѓРј\s*\(/gi, 'fn._min('],
+  [/РјР°РєСЃРёРјСѓРј\s*\(/gi, 'fn._max('],
+  [/РѕРєСЂСѓРіР»РёС‚СЊ\s*\(/gi, 'fn._round('],
+  [/СЃРєР»РµРёС‚СЊ\s*\(/gi, 'fn._concat('],
+  [/СЃРѕРµРґРёРЅРёС‚СЊ_СЃС‚СЂРѕРєРё\s*\(/gi, 'fn._concat('],
+  [/СЃРѕРґРµСЂР¶РёС‚\s*\(/gi, 'fn._contains('],
+  [/РЅРµ_СЃРѕРґРµСЂР¶РёС‚\s*\(/gi, 'fn._notContains(']
 ];
 
 function sanitizeComputedExpression(expression) {

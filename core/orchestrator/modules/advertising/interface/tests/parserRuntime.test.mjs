@@ -334,6 +334,57 @@ test('parser runtime: computed fields and filters transform working rows', async
   assert.match(result.stats.applied_steps.join(' | '), /Фильтры/);
 });
 
+test('parser runtime: computed builder functions min/max/round/concat/contains work on transformed rows', async () => {
+  const result = await executeParserRows(
+    { query: async () => ({ rows: [] }) },
+    {
+      sourceMode: 'input',
+      sourceFormat: 'json',
+      recordPath: 'items',
+      computedFields: [
+        { name: 'best_price', expression: 'минимум({price}, {base_price})', type: 'numeric' },
+        { name: 'price_ceiling', expression: 'максимум({price}, 100)', type: 'numeric' },
+        { name: 'price_ratio', expression: 'округлить({price} / 3, 1)', type: 'numeric' },
+        { name: 'title_full', expression: 'склеить(верхний_регистр({brand}), " / ", {title})', type: 'text' },
+        { name: 'has_sale_tag', expression: 'если(содержит({tags}, "sale"), true, false)', type: 'boolean' }
+      ]
+    },
+    {
+      inputValue: {
+        items: [
+          { brand: 'Acme', title: 'Alpha', price: 120, base_price: 140, tags: 'top,sale' },
+          { brand: 'Acme', title: 'Beta', price: 80, base_price: 75, tags: 'top,new' }
+        ]
+      }
+    }
+  );
+
+  assert.deepEqual(result.rows[0], {
+    brand: 'Acme',
+    title: 'Alpha',
+    price: 120,
+    base_price: 140,
+    tags: 'top,sale',
+    best_price: 120,
+    price_ceiling: 120,
+    price_ratio: 40,
+    title_full: 'ACME / Alpha',
+    has_sale_tag: true
+  });
+  assert.deepEqual(result.rows[1], {
+    brand: 'Acme',
+    title: 'Beta',
+    price: 80,
+    base_price: 75,
+    tags: 'top,new',
+    best_price: 75,
+    price_ceiling: 100,
+    price_ratio: 26.7,
+    title_full: 'ACME / Beta',
+    has_sale_tag: false
+  });
+});
+
 test('parser runtime: dedupe and grouping aggregate rows without DB-bound flow', async () => {
   const result = await executeParserRows(
     { query: async () => ({ rows: [] }) },

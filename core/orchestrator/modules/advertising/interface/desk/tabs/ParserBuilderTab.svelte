@@ -1,5 +1,15 @@
 ﻿<script lang="ts">
   import { createEventDispatcher, onMount } from 'svelte';
+  import ComputedExpressionBuilder from '../components/ComputedExpressionBuilder.svelte';
+  import {
+    COMPUTED_FUNCTION_CATEGORIES,
+    COMPUTED_FUNCTIONS,
+    buildComputedFieldPreview,
+    createComputedFieldRule,
+    duplicateComputedFieldRule,
+    normalizeComputedFieldRule,
+    serializeComputedFieldRule
+  } from './computedFieldBuilderCore.js';
   import { buildSourceNodePreviewFromTemplate } from './parserSourcePreviewCore.js';
 
   type ExistingTable = { schema_name: string; table_name: string };
@@ -237,6 +247,33 @@
       .filter(Boolean);
   }
 
+  function fallbackFieldName(path: string) {
+    return (
+      String(path || '')
+        .split('.')
+        .filter(Boolean)
+        .slice(-1)[0] || String(path || '').trim()
+    );
+  }
+
+  function inferFieldTypeFromRows(rows: Array<Record<string, any>>, fieldName: string) {
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const value = row?.[fieldName];
+      if (value === undefined || value === null || value === '') continue;
+      if (typeof value === 'boolean') return 'boolean';
+      if (typeof value === 'number') return Number.isInteger(value) ? 'integer' : 'numeric';
+      if (typeof value === 'string') {
+        const trimmed = String(value).trim();
+        if (/^\d+$/.test(trimmed)) return 'integer';
+        if (/^\d+\.\d+$/.test(trimmed)) return 'numeric';
+        if (!Number.isNaN(Date.parse(trimmed)) && /[-T:]/.test(trimmed)) return 'timestamp';
+        return 'text';
+      }
+      if (Array.isArray(value) || (value && typeof value === 'object')) return 'json';
+    }
+    return '';
+  }
+
   function toPrettyJson(value: any, fallback = '[]') {
     try {
       return JSON.stringify(value, null, 2);
@@ -289,7 +326,8 @@
       filterOperator: settingsValue.filterOperator,
       filterValue: settingsValue.filterValue,
       filterRules: parseJsonSafe(settingsValue.filterRulesJson, []),
-      computedFields: parseJsonSafe(settingsValue.computedFieldsJson, []),
+      computedFields: (Array.isArray(parseJsonSafe(settingsValue.computedFieldsJson, [])) ? parseJsonSafe(settingsValue.computedFieldsJson, []) : [])
+        .map((row: any) => serializeComputedFieldRule(row)),
       parserMultiplier: settingsValue.parserMultiplier,
       lookupEnabled: settingsValue.lookupEnabled === 'true',
       lookupSchema: settingsValue.lookupSchema,
@@ -406,7 +444,7 @@
   $: typeMapValue = parseJsonSafe(settings.typeMap, {});
   $: selectedFieldPaths = parseCsvText(settings.selectFields);
   $: selectedFieldRows = selectedFieldPaths.map((path) => {
-    const fallbackKey = String(path || '').split('.').filter(Boolean).slice(-1)[0] || String(path || '').trim();
+    const fallbackKey = fallbackFieldName(path);
     return {
       path,
       alias: String(renameMapValue?.[path] || renameMapValue?.[fallbackKey] || fallbackKey).trim(),
@@ -420,7 +458,8 @@
     };
   });
   $: filterRules = parseJsonSafe(settings.filterRulesJson, []);
-  $: computedFields = parseJsonSafe(settings.computedFieldsJson, []);
+  $: computedFields = (Array.isArray(parseJsonSafe(settings.computedFieldsJson, [])) ? parseJsonSafe(settings.computedFieldsJson, []) : [])
+    .map((row: any) => normalizeComputedFieldRule(row));
   $: aggregateRules = parseJsonSafe(settings.aggregateRulesJson, []);
   $: lookupSelectedFields = parseLookupSelectedFields(settings.lookupSelectedFieldsJson, settings.lookupFields);
   $: lookupJoinRules = parseLookupJoinRules(settings.lookupJoinRulesJson, settings.lookupSourceField, settings.lookupTargetField);
@@ -449,6 +488,27 @@
     workingSetPath: String(previewData?.stats?.working_set_path || settings.recordPath || '(корень)'),
     sourcePath: String(previewData?.stats?.source_path || settings.inputPath || '(вход целиком)')
   };
+  $: sourceTableColumnsMeta = columnsCache[tableCacheKey(settings.sourceSchema, settings.sourceTable)] || [];
+  $: previewResultRows = Array.isArray(previewData?.sample_rows) ? previewData.sample_rows : [];
+  $: baseComputedFields =
+    selectedFieldRows.length
+      ? selectedFieldRows.map((row) => ({
+          name: row.alias || fallbackFieldName(row.path),
+          type: row.type || inferFieldTypeFromRows(sourcePreviewRows, fallbackFieldName(row.path)) || ''
+        }))
+      : workingFieldCandidates.map((name) => ({
+          name,
+          type:
+            sourceTableColumnsMeta.find((item) => item.name === name)?.type ||
+            inferFieldTypeFromRows(sourcePreviewRows, name) ||
+            inferFieldTypeFromRows(previewResultRows, name) ||
+            ''
+        }));
+  $: baseComputedFieldTypeMap = Object.fromEntries(baseComputedFields.map((field) => [field.name, field.type || '']));
+  $: computedFunctionLibrary = COMPUTED_FUNCTION_CATEGORIES.map((category) => ({
+    ...category,
+    items: COMPUTED_FUNCTIONS.filter((item) => item.category === category.id)
+  }));
   $: if (!selectedDraft && currentTemplate) {
     templateNameInput = templateNameInput || currentTemplate.name;
     templateDescriptionInput = templateDescriptionInput || currentTemplate.description;
@@ -691,16 +751,57 @@
     updateRulesSetting('filterRulesJson', filterRules.filter((_row: any, idx: number) => idx !== index));
   }
 
+  function syncComputedFieldRules(rows: any[]) {
+    updateRulesSetting(
+      'computedFieldsJson',
+      rows.map((row: any) => serializeComputedFieldRule(row))
+    );
+  }
+
   function addComputedField() {
-    updateRulesSetting('computedFieldsJson', [...computedFields, { name: '', expression: '', type: '' }]);
+    syncComputedFieldRules([...computedFields, createComputedFieldRule()]);
   }
 
   function updateComputedField(index: number, patch: Record<string, any>) {
-    updateRulesSetting('computedFieldsJson', computedFields.map((row: any, idx: number) => (idx === index ? { ...row, ...patch } : row)));
+    syncComputedFieldRules(
+      computedFields.map((row: any, idx: number) =>
+        idx === index ? normalizeComputedFieldRule({ ...row, ...patch }) : normalizeComputedFieldRule(row)
+      )
+    );
+  }
+
+  function duplicateComputedField(index: number) {
+    const target = computedFields[index];
+    if (!target) return;
+    const duplicate = duplicateComputedFieldRule(target);
+    syncComputedFieldRules([...computedFields.slice(0, index + 1), duplicate, ...computedFields.slice(index + 1)]);
   }
 
   function removeComputedField(index: number) {
-    updateRulesSetting('computedFieldsJson', computedFields.filter((_row: any, idx: number) => idx !== index));
+    syncComputedFieldRules(computedFields.filter((_row: any, idx: number) => idx !== index));
+  }
+
+  function availableComputedFieldsFor(index: number) {
+    const priorComputed = computedFields
+      .slice(0, index)
+      .map((row: any) => ({
+        name: String(row?.name || '').trim(),
+        type: String(row?.type || '').trim()
+      }))
+      .filter((row) => row.name);
+    const merged = [...baseComputedFields, ...priorComputed];
+    const seen = new Set<string>();
+    return merged.filter((item) => {
+      const key = String(item?.name || '').trim();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function computedFieldTypesFor(index: number) {
+    const entries = availableComputedFieldsFor(index).map((item) => [item.name, item.type || '']);
+    return Object.fromEntries(entries);
   }
 
   function addAggregateRule() {
@@ -1511,27 +1612,87 @@
             <h4>Вычисляемые поля</h4>
             <button type="button" class="mini-btn" on:click={addComputedField}>Поле +</button>
           </div>
-          <div class="inline-hint">Используй поля в формулах как {"{поле}"}. Поддержаны функции: если, и, или, не, пусто, сегодня, сейчас, год, месяц, день, дата, дата_разница, длина, подстрока, верхний_регистр, нижний_регистр, заменить.</div>
-          {#if computedFields.length}
-            <div class="rules-grid rules-grid-computed">
-              <div class="rules-grid-head">Новое поле</div>
-              <div class="rules-grid-head">Формула</div>
-              <div class="rules-grid-head">Тип</div>
-              <div class="rules-grid-head"></div>
-              {#each computedFields as rule, index}
-                <input value={rule.name || ''} on:input={(e) => updateComputedField(index, { name: inputValue(e) })} placeholder="discount_value" />
-                <input value={rule.expression || ''} on:input={(e) => updateComputedField(index, { expression: inputValue(e) })} placeholder={COMPUTED_EXPRESSION_PLACEHOLDER} />
-                <select value={rule.type || ''} on:change={(e) => updateComputedField(index, { type: selectValue(e) })}>
-                  <option value="">Без приведения</option>
-                  <option value="text">Текст</option>
-                  <option value="integer">Целое число</option>
-                  <option value="numeric">Число</option>
-                  <option value="boolean">Логический</option>
-                  <option value="timestamp">Дата и время</option>
-                </select>
-                <button type="button" class="icon-btn danger-icon-btn" on:click={() => removeComputedField(index)}>x</button>
+          <div class="inline-hint">По умолчанию используется конструктор выражений. Ручной ввод оставлен для сложных случаев, когда удобнее написать формулу текстом.</div>
+          <details class="computed-help">
+            <summary>Справочник функций</summary>
+            <div class="computed-help-grid">
+              {#each computedFunctionLibrary as category}
+                <div class="computed-help-category">
+                  <div class="computed-help-title">{category.label}</div>
+                  {#each category.items as item}
+                    <div class="computed-help-item">
+                      <div class="computed-help-name">{item.label}</div>
+                      <div class="hint">{item.description}</div>
+                      <code>{item.example}</code>
+                    </div>
+                  {/each}
+                </div>
               {/each}
             </div>
+          </details>
+          {#if computedFields.length}
+            <div class="computed-fields-list">
+              {#each computedFields as rule, index}
+                <div class="computed-field-card">
+                  <div class="computed-field-row computed-field-row-main">
+                    <label>
+                      Новое поле
+                      <input value={rule.name || ''} on:input={(e) => updateComputedField(index, { name: inputValue(e) })} placeholder="discount_value" />
+                    </label>
+                    <label>
+                      Режим ввода
+                      <select value={rule.mode || 'builder'} on:change={(e) => updateComputedField(index, { mode: selectValue(e) })}>
+                        <option value="builder">Конструктор</option>
+                        <option value="manual">Ручной ввод</option>
+                      </select>
+                    </label>
+                    <label>
+                      Тип результата
+                      <select value={rule.type || ''} on:change={(e) => updateComputedField(index, { type: selectValue(e) })}>
+                        <option value="">Без приведения</option>
+                        <option value="text">Текст</option>
+                        <option value="integer">Целое число</option>
+                        <option value="numeric">Число</option>
+                        <option value="boolean">Логический</option>
+                        <option value="timestamp">Дата и время</option>
+                      </select>
+                    </label>
+                    <div class="computed-field-actions">
+                      <button type="button" class="mini-btn" on:click={() => duplicateComputedField(index)}>Дублировать</button>
+                      <button type="button" class="icon-btn danger-icon-btn" on:click={() => removeComputedField(index)}>x</button>
+                    </div>
+                  </div>
+
+                  {#if rule.mode === 'builder'}
+                    <ComputedExpressionBuilder
+                      builder={rule.builder}
+                      availableFields={availableComputedFieldsFor(index)}
+                      fieldTypes={computedFieldTypesFor(index)}
+                      on:change={(e) => updateComputedField(index, { builder: e.detail.builder, expression: buildComputedFieldPreview({ ...rule, builder: e.detail.builder, mode: 'builder' }) })}
+                    />
+                  {:else}
+                    <div class="computed-manual-box">
+                      <label>
+                        Формула
+                        <textarea
+                          rows="4"
+                          value={rule.expression || ''}
+                          on:input={(e) => updateComputedField(index, { expression: textareaValue(e) })}
+                          placeholder={COMPUTED_EXPRESSION_PLACEHOLDER}
+                        ></textarea>
+                      </label>
+                      <div class="hint">Ручной режим нужен для продвинутых выражений. Поля используй как {"{поле}"}, функции можно посмотреть в справочнике выше.</div>
+                      <div class="computed-manual-preview">
+                        <div class="computed-manual-preview-label">Предпросмотр выражения</div>
+                        <code>{rule.expression || COMPUTED_EXPRESSION_PLACEHOLDER}</code>
+                      </div>
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <div class="inline-hint">Добавь вычисляемое поле, чтобы собрать выражение через конструктор или перейти в ручной режим.</div>
           {/if}
         </div>
 
@@ -2241,6 +2402,93 @@
     font-size: 11px;
     color: #334155;
   }
+  .computed-help {
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    background: #f8fafc;
+    padding: 10px 12px;
+  }
+  .computed-help-grid {
+    margin-top: 10px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .computed-help-category,
+  .computed-field-card,
+  .computed-manual-box {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .computed-help-category {
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    background: #fff;
+    padding: 10px;
+  }
+  .computed-help-title,
+  .computed-manual-preview-label {
+    font-size: 12px;
+    font-weight: 700;
+    color: #0f172a;
+  }
+  .computed-help-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 8px;
+    border-top: 1px dashed #e2e8f0;
+  }
+  .computed-help-item:first-of-type {
+    border-top: 0;
+    padding-top: 0;
+  }
+  .computed-help-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: #0f172a;
+  }
+  .computed-help-item code,
+  .computed-manual-preview code {
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 12px;
+    color: #334155;
+  }
+  .computed-fields-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .computed-field-card {
+    border: 1px solid #e2e8f0;
+    border-radius: 14px;
+    background: #fff;
+    padding: 12px;
+  }
+  .computed-field-row {
+    display: grid;
+    gap: 10px;
+    align-items: start;
+  }
+  .computed-field-row-main {
+    grid-template-columns: minmax(180px, 1fr) 180px 180px auto;
+  }
+  .computed-field-actions {
+    display: flex;
+    align-items: end;
+    gap: 8px;
+  }
+  .computed-manual-preview {
+    border: 1px solid #dbe4f0;
+    border-radius: 10px;
+    background: #f8fafc;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
   .bayes-box {
     border: 1px solid #dbe4f0;
     border-radius: 12px;
@@ -2274,6 +2522,10 @@
     .rules-grid-join-suggestions {
       grid-template-columns: 1fr;
     }
+    .computed-help-grid,
+    .computed-field-row-main {
+      grid-template-columns: 1fr;
+    }
   }
   @media (max-width: 1120px) {
     .parser-layout {
@@ -2289,6 +2541,10 @@
     .rules-grid-computed,
     .rules-grid-aggregates,
     .rules-grid-join-suggestions {
+      grid-template-columns: 1fr;
+    }
+    .computed-help-grid,
+    .computed-field-row-main {
       grid-template-columns: 1fr;
     }
   }
