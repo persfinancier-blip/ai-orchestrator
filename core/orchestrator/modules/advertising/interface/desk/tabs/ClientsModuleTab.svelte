@@ -247,6 +247,8 @@
   let activeTab: TabKey = 'main_data';
   let currentTabMeta = TABS[0];
   let currentTabSource: any = null;
+  let currentRows: Array<Record<string, any>> = [];
+  let currentOptionSets: Record<string, OptionItem[]> = {};
 
   function defaultClientDetail(): ClientDetailPayload {
     return {
@@ -558,7 +560,42 @@
     }
   }
   $: currentTabMeta = TABS.find((item) => item.key === activeTab) || TABS[0];
-  $: currentTabSource = sourceForSection(currentTabMeta.sourceKey);
+  $: {
+    const dynamic = detail?.sources?.[currentTabMeta.sourceKey];
+    if (Array.isArray(dynamic) || (dynamic && typeof dynamic === 'object')) {
+      currentTabSource = dynamic;
+    } else {
+      const key = (CLIENT_MODULE_SECTION_DEFINITIONS as any)?.[currentTabMeta.sourceKey]?.key || currentTabMeta.sourceKey;
+      currentTabSource = (FALLBACK_SOURCES as any)[key] || null;
+    }
+  }
+  $: {
+    if (!detail) {
+      currentRows = [];
+    } else if (activeTab === 'legal_entities') {
+      currentRows = detail.legalEntities;
+    } else if (activeTab === 'contracts') {
+      currentRows = detail.contracts;
+    } else if (activeTab === 'payment_terms') {
+      currentRows = detail.paymentTerms;
+    } else if (activeTab === 'payment_schedule') {
+      currentRows = detail.paymentSchedule;
+    } else if (activeTab === 'goals') {
+      currentRows = detail.goals;
+    } else if (activeTab === 'kpis') {
+      currentRows = detail.kpis;
+    } else if (activeTab === 'accesses') {
+      currentRows = detail.accesses;
+    } else {
+      currentRows = [];
+    }
+  }
+  $: currentOptionSets = {
+    legalEntities: Array.isArray(detail?.options?.legalEntities) ? detail.options.legalEntities : [],
+    contracts: Array.isArray(detail?.options?.contracts) ? detail.options.contracts : [],
+    paymentTerms: Array.isArray(detail?.options?.paymentTerms) ? detail.options.paymentTerms : [],
+    goals: Array.isArray(detail?.options?.goals) ? detail.options.goals : []
+  };
 
   function summarySourceList() {
     const src = detail?.sources?.summary;
@@ -693,9 +730,9 @@
       {:else}
         <ClientRowsEditor
           title={currentTabMeta.title}
-          rows={sourceRows(activeTab)}
+          rows={currentRows}
           fields={MULTI_SECTION_FIELDS[activeTab]}
-          optionSets={optionSets()}
+          optionSets={currentOptionSets}
           addLabel={`Добавить: ${currentTabMeta.title}`}
           emptyText="Данные пока не заполнены."
           {busyRowKey}
@@ -704,11 +741,6 @@
           saveRowHandler={(index) => saveRow(activeTab, index)}
           removeRowHandler={(index) => removeRow(activeTab, index)}
           duplicateRowHandler={(index) => duplicateRow(activeTab, index)}
-          on:add={() => addRow(activeTab)}
-          on:change={(event) => updateMultiSection(activeTab, event.detail.index, event.detail.field, event.detail.value)}
-          on:save={(event) => saveRow(activeTab, event.detail.index)}
-          on:remove={(event) => removeRow(activeTab, event.detail.index)}
-          on:duplicate={(event) => duplicateRow(activeTab, event.detail.index)}
         />
       {/if}
     {/if}
