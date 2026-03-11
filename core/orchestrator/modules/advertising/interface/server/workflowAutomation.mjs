@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import vm from 'node:vm';
 import { pool } from './db.mjs';
 import { executeParserRows, parserRuntimeTestkit } from './parserRuntime.mjs';
+import { executeTableNodeConfig } from './tableNodeRuntime.mjs';
 import { executeWriteConfig } from './writeRuntime.mjs';
 import {
   shouldRetryStatus,
@@ -3135,6 +3136,7 @@ async function handleProcessNodeJob(client, config, job, payload = {}) {
 
   const toolType = String(node?.config?.toolType || '').trim().toLowerCase();
   const parserBatch = output?.meta?.parser_batch && typeof output.meta.parser_batch === 'object' ? output.meta.parser_batch : null;
+  const tableBatch = output?.meta?.table_batch && typeof output.meta.table_batch === 'object' ? output.meta.table_batch : null;
   const basePriority = Math.max(1, Math.trunc(Number(job?.priority || JOB_DEFAULT_PRIORITY)));
   const graphEdges = Array.isArray(subgraph?.edges) ? subgraph.edges : [];
   const currentNodeId = String(node?.id || '').trim();
@@ -3302,6 +3304,79 @@ async function handleProcessNodeJob(client, config, job, payload = {}) {
 
     if (!spawnedJobIds.length) return { completed: true };
     return { next_job_id: spawnedJobIds[0], spawned_job_ids: spawnedJobIds, parser_batch: parserBatch };
+  }
+
+  if (toolType === 'table_node' && tableBatch) {
+    const tableBatchNo = Math.max(1, Math.trunc(Number(chunkNo || stepOrder)));
+    const outputPort = getOutputPortByNode(node, output, processCtx);
+    const successors = resolveSuccessors(outputPort);
+    const spawnedJobIds = [];
+    if (successors.length) {
+      const downstreamChunkKey = `${chunkKey}:rows_${tableBatchNo}`;
+      const downstreamJobs = await enqueueSuccessors(successors, output, {
+        output_port: outputPort,
+        chunk_no: tableBatchNo,
+        chunk_key_prefix: downstreamChunkKey,
+        dedupe_scope: `table_batch:${tableBatchNo}:${Number(tableBatch.offset || 0)}`,
+        extra_event_payload: { batch_offset: Number(tableBatch.offset || 0) }
+      });
+      spawnedJobIds.push(...downstreamJobs);
+    }
+
+    if (tableBatch.has_more && tableBatch?.next_cursor && typeof tableBatch.next_cursor === 'object') {
+      const nextTableChunkNo = tableBatchNo + 1;
+      const nextTableChunkKey = `node_${nodeIndex}:table_batch_${nextTableChunkNo}`;
+      const nextTableJobId = await enqueueWorkflowJob(client, config, {
+        tenant_id: processCtx.tenant_id,
+        client_id: processCtx.client_id,
+        desk_id: processCtx.desk_id,
+        desk_version_id: processCtx.desk_version_id,
+        start_node_id: processCtx.start_node_id,
+        process_code: processCtx.process_code,
+        scope_type: processCtx.scope_type,
+        scope_ref: processCtx.scope_ref,
+        context_json: processCtx.context_json || {},
+        parent_run_uid: runUid,
+        parent_job_id: Math.trunc(Number(job?.job_id || 0)),
+        job_type: 'process_node',
+        payload_json: {
+          run_uid: runUid,
+          desk_row: payload?.desk_row || {},
+          process,
+          node_index: nodeIndex,
+          node,
+          input_value: payload?.input_value ?? {},
+          table_cursor: tableBatch.next_cursor,
+          chunk_key: nextTableChunkKey,
+          chunk_no: nextTableChunkNo
+        },
+        dedupe_key: `run_node:${runUid}:${nodeIndex}:table:${Number(tableBatch?.next_cursor?.offset || 0)}`,
+        priority: basePriority,
+        max_attempts: JOB_DEFAULT_MAX_ATTEMPTS
+      });
+      if (!nextTableJobId) throw new Error(`table_node_next_batch_job_not_created:${nodeIndex}:${nextTableChunkNo}`);
+      spawnedJobIds.push(nextTableJobId);
+      await emitWorkflowEvent(client, config, {
+        event_type: 'chunk_enqueued',
+        tenant_id: processCtx.tenant_id,
+        client_id: processCtx.client_id,
+        desk_id: processCtx.desk_id,
+        desk_version_id: processCtx.desk_version_id,
+        start_node_id: processCtx.start_node_id,
+        process_code: processCtx.process_code,
+        scope_type: processCtx.scope_type,
+        scope_ref: processCtx.scope_ref,
+        context_json: processCtx.context_json || {},
+        run_uid: runUid,
+        source_run_uid: runUid,
+        chunk_key: nextTableChunkKey,
+        chunk_no: nextTableChunkNo,
+        payload: { job_id: nextTableJobId, node_id: String(node?.id || ''), batch_offset: Number(tableBatch?.next_cursor?.offset || 0) }
+      });
+    }
+
+    if (!spawnedJobIds.length) return { completed: true };
+    return { next_job_id: spawnedJobIds[0], spawned_job_ids: spawnedJobIds, table_batch: tableBatch };
   }
 
   if (toolType === 'end_process') {
@@ -6560,6 +6635,39 @@ async function executeDbWriteNode(client, config, processCtx, node, inputValue) 
   };
 }
 
+async function executeTableNode(client, _config, processCtx, node, inputValue, extra = {}) {
+  const settings = node?.config?.settings && typeof node.config.settings === 'object' ? node.config.settings : {};
+  const inputEnvelope = normalizeNodeIoEnvelope(inputValue, processCtx);
+  const exec = await executeTableNodeConfig(client, settings, {
+    inputValue,
+    inputEnvelope,
+    cursor: extra?.table_cursor || {}
+  });
+  const outputEnvelope = composeNodeOutputEnvelope(
+    processCtx,
+    node,
+    Array.isArray(exec?.rows) ? exec.rows : [],
+    {
+      source_type: 'table_node',
+      source_ref: String(exec?.meta?.source_ref || '').trim(),
+      table_batch: exec?.batch && typeof exec.batch === 'object' ? exec.batch : undefined,
+      output_params: exec?.outputParams && typeof exec.outputParams === 'object' ? exec.outputParams : {}
+    },
+    {
+      input_rows: inputEnvelope.row_count,
+      result_rows: Array.isArray(exec?.rows) ? exec.rows.length : 0
+    }
+  );
+  return {
+    output: outputEnvelope,
+    metrics: {
+      rows: Array.isArray(exec?.rows) ? exec.rows.length : 0,
+      ...(exec?.stats && typeof exec.stats === 'object' ? exec.stats : {}),
+      table_batch: exec?.batch || {}
+    }
+  };
+}
+
 async function executeProcessNode(client, config, processCtx, node, templates, inputValue, execOptions = {}) {
   const toolType = String(node?.config?.toolType || '').trim().toLowerCase();
   if (toolType === 'http_request') {
@@ -6623,6 +6731,18 @@ async function executeProcessNode(client, config, processCtx, node, templates, i
         input_contract: normalizeNodeIoEnvelope(inputValue, processCtx)
       },
       response_payload: parser.output
+    };
+  }
+  if (toolType === 'table_node') {
+    const tableNode = await executeTableNode(client, config, processCtx, node, inputValue, execOptions);
+    return {
+      output: tableNode.output,
+      metrics: tableNode.metrics,
+      request_payload: {
+        mode: 'table_node',
+        input_contract: normalizeNodeIoEnvelope(inputValue, processCtx)
+      },
+      response_payload: tableNode.output
     };
   }
   if (toolType === 'db_write') {
@@ -7927,6 +8047,7 @@ export const workflowAutomationTestkit = {
   compareByOperator,
   parseCsvList,
   executeTableParserNode,
+  executeTableNode,
   executeDbWriteNode,
   _testReserveRunSlotForProcess: reserveRunSlotForProcess,
   _testReleaseRunSlotForProcess: releaseRunSlotForProcess,

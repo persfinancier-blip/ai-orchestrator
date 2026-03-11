@@ -2,6 +2,7 @@
   import { onDestroy, onMount, tick } from 'svelte';
   import ApiBuilderTab from '../tabs/ApiBuilderTab.svelte';
   import ParserBuilderTab from '../tabs/ParserBuilderTab.svelte';
+  import TableNodeBuilderTab from '../tabs/TableNodeBuilderTab.svelte';
   import WriteBuilderTab from '../tabs/WriteBuilderTab.svelte';
   import {
     tools,
@@ -663,6 +664,24 @@
     },
     {
       id: 8,
+      node_type_code: 'table_node',
+      node_name_ru: 'Табличный набор',
+      description_ru: 'Собирает рабочий набор строк из таблиц, входных параметров и вычислений для следующих шагов процесса.',
+      section_code: 'data_processing',
+      section_name_ru: 'Работа с данными',
+      section_order: 30,
+      node_order: 40,
+      is_enabled: true,
+      is_system: true,
+      hidden_in_palette: false,
+      node_label_ru: 'Таблицы',
+      icon_key: 'table_node',
+      visual_preset_key: 'data',
+      editor_type_code: 'table_node',
+      runtime_handler_code: 'table_node'
+    },
+    {
+      id: 9,
       node_type_code: 'table_parser',
       node_name_ru: 'Парсер данных',
       description_ru: 'Разбирает входные данные, выделяет строки и подготавливает результат для следующей ноды.',
@@ -680,25 +699,7 @@
       runtime_handler_code: 'table_parser'
     },
     {
-      id: 81,
-      node_type_code: 'table_node',
-      node_name_ru: 'Таблица',
-      description_ru: 'Принимает данные группы из куба и хранит параметры фильтрации.',
-      section_code: 'data_processing',
-      section_name_ru: 'Работа с данными',
-      section_order: 30,
-      node_order: 35,
-      is_enabled: true,
-      is_system: true,
-      hidden_in_palette: false,
-      node_label_ru: 'Таблица',
-      icon_key: 'table_node',
-      visual_preset_key: 'data',
-      editor_type_code: 'table_node',
-      runtime_handler_code: 'table_node'
-    },
-    {
-      id: 9,
+      id: 10,
       node_type_code: 'code_node',
       node_name_ru: 'Код',
       description_ru: 'Выполняет пользовательский код на сервере и передает результат дальше по цепочке.',
@@ -716,7 +717,7 @@
       runtime_handler_code: 'code_node'
     },
     {
-      id: 10,
+      id: 11,
       node_type_code: 'db_write',
       node_name_ru: 'Запись в БД',
       description_ru: 'Сохраняет результат в таблицу базы данных через insert, upsert или update.',
@@ -734,7 +735,7 @@
       runtime_handler_code: 'db_write'
     },
     {
-      id: 11,
+      id: 12,
       node_type_code: 'end_process',
       node_name_ru: 'Конец процесса',
       description_ru: 'Фиксирует завершение цепочки.',
@@ -2702,6 +2703,10 @@
     return Boolean(n && n.type === 'tool' && toolCfg(n).toolType === 'table_parser');
   }
 
+  function isTableNodeTool(n: WorkflowNode | null | undefined) {
+    return Boolean(n && n.type === 'tool' && toolCfg(n).toolType === 'table_node');
+  }
+
   function isWriteToolNode(n: WorkflowNode | null | undefined) {
     return Boolean(n && n.type === 'tool' && toolCfg(n).toolType === 'db_write');
   }
@@ -2711,6 +2716,7 @@
           n &&
         (isApiNode(n) ||
           (n.type === 'tool' && toolCfg(n).toolType === 'api_request') ||
+          isTableNodeTool(n) ||
           isParserToolNode(n) ||
           isWriteToolNode(n) ||
           toolCfg(n).toolType === 'condition_switch' ||
@@ -3638,17 +3644,26 @@
     }
     if (toolType === 'table_node')
       return {
-        sourceType: 'cube_group',
-        sourcePayload: '{}',
-        sourceLabel: '',
-        sourceField: '',
-        sourceFieldName: '',
-        sourceClusterCount: '1',
-        tableFiltersJson: '[]',
-        filtersConfirmedAt: '',
-        filterDataType: 'number',
-        filterOperator: 'equals',
-        filterValue: ''
+        baseSchema: '',
+        baseTable: '',
+        baseAlias: 'base',
+        joinedSourcesJson: '[]',
+        inputSourcesJson: '[]',
+        selectedFieldsJson: '[]',
+        computedFieldsJson: '[]',
+        filterRulesJson: '[]',
+        filterLogic: 'and',
+        dedupeMode: '',
+        dedupeFields: '',
+        dedupeKeep: 'first',
+        groupByFields: '',
+        aggregateRulesJson: '[]',
+        outputMode: 'rows',
+        outputParamsMappingJson: '[]',
+        previewInputParamsJson: '{}',
+        batchSize: '200',
+        previewLimit: '20',
+        channel: ''
       };
     if (toolType === 'split_data')
       return {
@@ -4092,6 +4107,7 @@
       isStartTool ||
       isApiNode(node) ||
       isApiToolNode(node) ||
+      isTableNodeTool(node) ||
       isParserToolNode(node) ||
       isWriteToolNode(node) ||
       ['table_node', 'split_data', 'merge_data', 'condition_if', 'condition_switch', 'code_node'].includes(toolCfg(node).toolType || '');
@@ -5707,33 +5723,8 @@
             </div>
           {/if}
           {#if toolCfg(selectedNode).toolType === 'table_node'}
-            {#each tableNodeFilters(selectedNode) as filter (filter.id)}
-              <div class="table-filter-row">
-                <select value={filter.dataType} on:change={(e) => onTableNodeFilterDataTypeChange(selectedNode.id, filter.id, e)}>
-                  <option value="text">Текст</option>
-                  <option value="number">Число</option>
-                  <option value="date">Дата</option>
-                  <option value="boolean">Логический</option>
-                </select>
-                <select value={filter.operator} on:change={(e) => onTableNodeFilterOperatorChange(selectedNode.id, filter.id, e)}>
-                  <option value="equals">=</option>
-                  <option value="not_equals">!=</option>
-                  <option value="gt">&gt;</option>
-                  <option value="gte">&gt;=</option>
-                  <option value="lt">&lt;</option>
-                  <option value="lte">&lt;=</option>
-                  <option value="contains">contains</option>
-                  <option value="not_contains">not contains</option>
-                  <option value="is_empty">is empty</option>
-                  <option value="not_empty">not empty</option>
-                </select>
-                <input value={filter.value} placeholder="Значение" on:input={(e) => updateTableNodeFilter(selectedNode.id, filter.id, { value: inputValue(e) })} />
-                <button class="mini" type="button" title="Удалить фильтр" on:click={() => removeTableNodeFilter(selectedNode.id, filter.id)}>x</button>
-              </div>
-            {/each}
-            <div class="table-filter-tools">
-              <button class="mini" type="button" on:click={() => addTableNodeFilter(selectedNode.id)}>+</button>
-              <button class="mini primary" type="button" on:click={() => confirmTableNodeFilters(selectedNode.id)}>Подтвердить</button>
+            <div class="empty">
+              Полная настройка табличного набора открывается по двойному клику по карточке или через модалку настройки узла.
             </div>
           {/if}
           {#if toolCfg(selectedNode).toolType === 'db_write'}
@@ -6210,6 +6201,21 @@
           {/key}
         </div>
       {/if}
+      {#if isTableNodeTool(settingsNode)}
+        <div class="node-modal-body node-modal-body-api">
+          {#key `${settingsNode.id}:${toolCfg(settingsNode).settings.baseSchema || ''}:${toolCfg(settingsNode).settings.baseTable || ''}`}
+            <TableNodeBuilderTab
+              apiBase={API_BASE}
+              apiJson={workflowApiJson}
+              headers={workflowApiHeaders}
+              existingTables={apiBuilderExistingTables}
+              initialSettings={toolCfg(settingsNode).settings || {}}
+              embeddedMode={false}
+              on:configChange={(event) => replaceToolSettings(settingsNode.id, event.detail?.settings || {})}
+            />
+          {/key}
+        </div>
+      {/if}
       {#if isWriteToolNode(settingsNode)}
         <div class="node-modal-body node-modal-body-api">
           {#key `${settingsNode.id}:${toolCfg(settingsNode).settings.templateStoreId || 0}:${toolCfg(settingsNode).settings.templateId || ''}`}
@@ -6225,48 +6231,19 @@
           {/key}
         </div>
       {/if}
-      {#if settingsNode.type === 'tool' && toolCfg(settingsNode).toolType === 'table_node'}
-        <div class="node-modal-body">
-          <div class="help">Нода хранит ссылку на группу из куба и параметры фильтра. Данные внутри ноды явно не показываются.</div>
-          <label>
-            Источник
-            <input value={toolCfg(settingsNode).settings.sourceLabel || 'Группа из куба'} readonly />
-          </label>
-          <label>
-            Поле
-            <input value={toolCfg(settingsNode).settings.sourceFieldName || toolCfg(settingsNode).settings.sourceField || ''} readonly />
-          </label>
-          {#each tableNodeFilters(settingsNode) as filter (filter.id)}
-            <div class="table-filter-row">
-              <select value={filter.dataType} on:change={(e) => onTableNodeFilterDataTypeChange(settingsNode.id, filter.id, e)}>
-                <option value="text">Текст</option>
-                <option value="number">Число</option>
-                <option value="date">Дата</option>
-                <option value="boolean">Логический</option>
-              </select>
-              <select value={filter.operator} on:change={(e) => onTableNodeFilterOperatorChange(settingsNode.id, filter.id, e)}>
-                <option value="equals">=</option>
-                <option value="not_equals">!=</option>
-                <option value="gt">&gt;</option>
-                <option value="gte">&gt;=</option>
-                <option value="lt">&lt;</option>
-                <option value="lte">&lt;=</option>
-                <option value="contains">contains</option>
-                <option value="not_contains">not contains</option>
-                <option value="is_empty">is empty</option>
-                <option value="not_empty">not empty</option>
-              </select>
-              <input value={filter.value} placeholder="Значение" on:input={(e) => updateTableNodeFilter(settingsNode.id, filter.id, { value: inputValue(e) })} />
-              <button class="mini" type="button" title="Удалить фильтр" on:click={() => removeTableNodeFilter(settingsNode.id, filter.id)}>x</button>
-            </div>
-          {/each}
-          <div class="table-filter-tools">
-            <button class="mini" type="button" on:click={() => addTableNodeFilter(settingsNode.id)}>+</button>
-            <button class="mini primary" type="button" on:click={() => confirmTableNodeFilters(settingsNode.id)}>Подтвердить</button>
-          </div>
-          {#if toolCfg(settingsNode).settings.filtersConfirmedAt}
-            <div class="hint">Подтверждено: {toolCfg(settingsNode).settings.filtersConfirmedAt}</div>
-          {/if}
+      {#if isTableNodeTool(settingsNode)}
+        <div class="node-modal-body node-modal-body-api">
+          {#key `${settingsNode.id}:${toolCfg(settingsNode).settings.baseSchema || ''}:${toolCfg(settingsNode).settings.baseTable || ''}`}
+            <TableNodeBuilderTab
+              apiBase={API_BASE}
+              apiJson={workflowApiJson}
+              headers={workflowApiHeaders}
+              existingTables={apiBuilderExistingTables}
+              initialSettings={toolCfg(settingsNode).settings || {}}
+              embeddedMode={false}
+              on:configChange={(event) => replaceToolSettings(settingsNode.id, event.detail?.settings || {})}
+            />
+          {/key}
         </div>
       {/if}
       {#if settingsNode.type === 'tool' && toolCfg(settingsNode).toolType === 'split_data'}

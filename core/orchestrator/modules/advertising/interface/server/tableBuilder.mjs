@@ -1,6 +1,7 @@
 ﻿import express from 'express';
 import { pool } from './db.mjs';
 import { executeParserRows, parserPreviewSummary } from './parserRuntime.mjs';
+import { previewTableNodeConfig } from './tableNodeRuntime.mjs';
 import { previewWriteConfig } from './writeRuntime.mjs';
 
 export const tableBuilderRouter = express.Router();
@@ -358,6 +359,23 @@ export const DEFAULT_NODE_REGISTRY_ROWS = Object.freeze([
     visual_preset_key: 'data',
     editor_type_code: 'merge_data',
     runtime_handler_code: 'merge_data'
+  },
+  {
+    node_type_code: 'table_node',
+    node_name_ru: 'Табличный набор',
+    description_ru: 'Собирает рабочий набор строк из таблиц, входных параметров и вычислений для следующих шагов процесса.',
+    section_code: 'data_processing',
+    section_name_ru: 'Работа с данными',
+    section_order: 30,
+    node_order: 40,
+    is_enabled: true,
+    is_system: true,
+    hidden_in_palette: false,
+    node_label_ru: 'Таблицы',
+    icon_key: 'table_node',
+    visual_preset_key: 'data',
+    editor_type_code: 'table_node',
+    runtime_handler_code: 'table_node'
   },
   {
     node_type_code: 'code_node',
@@ -3213,6 +3231,42 @@ tableBuilderRouter.post('/write-configs/preview', requireDataAdmin, async (req, 
     return res.json({ ok: true, preview });
   } catch (e) {
     return res.status(500).json({ error: 'write_preview_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+tableBuilderRouter.post('/table-node-configs/preview', requireDataAdmin, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const config_json =
+      req.body?.config_json && typeof req.body.config_json === 'object' && !Array.isArray(req.body.config_json)
+        ? req.body.config_json
+        : req.body && typeof req.body === 'object'
+        ? req.body
+        : {};
+    const input_value = req.body?.input_value ?? req.body?.sample_input ?? '';
+    const input_envelope =
+      req.body?.input_envelope && typeof req.body.input_envelope === 'object' && !Array.isArray(req.body.input_envelope)
+        ? req.body.input_envelope
+        : {};
+    const cursor =
+      req.body?.cursor && typeof req.body.cursor === 'object' && !Array.isArray(req.body.cursor)
+        ? req.body.cursor
+        : {};
+    const overrides =
+      req.body?.overrides && typeof req.body.overrides === 'object' && !Array.isArray(req.body.overrides)
+        ? req.body.overrides
+        : {};
+    const preview = await previewTableNodeConfig(client, config_json, {
+      inputValue: input_value,
+      inputEnvelope: input_envelope,
+      cursor,
+      overrides
+    });
+    return res.json({ ok: true, preview });
+  } catch (e) {
+    return res.status(500).json({ error: 'table_node_preview_failed', details: String(e?.message || e) });
   } finally {
     client.release();
   }

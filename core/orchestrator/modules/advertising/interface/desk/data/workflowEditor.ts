@@ -4,8 +4,8 @@ export type ToolType =
   | 'schedule_process'
   | 'api_request'
   | 'http_request'
-  | 'table_parser'
   | 'table_node'
+  | 'table_parser'
   | 'db_write'
   | 'split_data'
   | 'merge_data'
@@ -182,9 +182,10 @@ export const tools: ToolItem[] = [
   },
   {
     id: 'tool_table_node',
-    name: 'Таблица',
+    name: 'Табличный набор',
     toolType: 'table_node',
-    description: 'Принимает данные из пространства и хранит фильтры без явного показа строк'
+    description:
+      'Собирает рабочий набор строк из таблиц, входных параметров и вычислений'
   },
   {
     id: 'tool_split',
@@ -241,8 +242,8 @@ export const toolPorts: Record<ToolType, { inputs: string[]; outputs: string[] }
   schedule_process: { inputs: ['in'], outputs: ['out'] },
   api_request: { inputs: ['in'], outputs: ['out'] },
   http_request: { inputs: ['in'], outputs: ['out'] },
-  table_parser: { inputs: ['in'], outputs: ['out'] },
   table_node: { inputs: ['in'], outputs: ['out'] },
+  table_parser: { inputs: ['in'], outputs: ['out'] },
   db_write: { inputs: ['in'], outputs: ['out'] },
   split_data: { inputs: ['in'], outputs: ['out'] },
   merge_data: { inputs: ['in'], outputs: ['out'] },

@@ -24,6 +24,7 @@ const {
   normalizeNodeIoEnvelope,
   composeNodeOutputEnvelope,
   executeTableParserNode,
+  executeTableNode,
   executeDbWriteNode,
   _testReserveRunSlotForProcess,
   _testReleaseRunSlotForProcess,
@@ -248,6 +249,92 @@ test('first nodes runtime contract: table_parser -> db_write (process_bus fallba
   assert.equal(writeOut.output.wrote, 2);
   assert.equal(writeOut.output.channel, 'writer_channel');
   assert.equal(calls.length > 0, true);
+});
+
+test('first nodes runtime contract: table_node output params propagate to downstream table_node', async () => {
+  const fixtures = {
+    'ao_data.products': {
+      columns: [
+        { name: 'id', type: 'integer' },
+        { name: 'sku', type: 'text' }
+      ],
+      rows: [
+        { id: 1, sku: 'wb-1' },
+        { id: 2, sku: 'wb-2' }
+      ]
+    }
+  };
+  const client = {
+    query: async (sql, params = []) => {
+      const text = String(sql || '').replace(/\s+/g, ' ').trim();
+      if (/information_schema\.columns/i.test(text)) {
+        const [schema, table] = params;
+        const meta = fixtures[`${schema}.${table}`];
+        return {
+          rows: (meta?.columns || []).map((column) => ({
+            column_name: column.name,
+            data_type: column.type
+          }))
+        };
+      }
+      const match = text.match(/FROM\s+"([^"]+)"\."([^"]+)"/i);
+      if (!match) throw new Error(`unexpected_sql:${text}`);
+      const [, schema, table] = match;
+      const meta = fixtures[`${schema}.${table}`];
+      return { rows: Array.isArray(meta?.rows) ? meta.rows.map((row) => ({ ...row })) : [] };
+    }
+  };
+
+  const processCtx = { desk_id: 11, run_uid: 'run_table', process_code: 'proc_table' };
+  const firstNode = {
+    id: 'table_1',
+    type: 'tool',
+    config: {
+      name: 'Table 1',
+      toolType: 'table_node',
+      settings: {
+        baseSchema: 'ao_data',
+        baseTable: 'products',
+        baseAlias: 'base',
+        selectedFieldsJson: JSON.stringify([{ sourceAlias: 'base', fieldName: 'sku', outputName: 'sku' }]),
+        outputMode: 'named_output_params',
+        outputParamsMappingJson: JSON.stringify([{ outputParamName: 'first_sku', sourceField: 'sku', mode: 'scalar' }])
+      }
+    }
+  };
+  const firstOut = await executeTableNode(client, {}, processCtx, firstNode, []);
+  assert.equal(firstOut.output.contract_version, 'node_io_v1');
+  assert.equal(firstOut.output.meta.output_params.first_sku, 'wb-1');
+
+  const secondNode = {
+    id: 'table_2',
+    type: 'tool',
+    config: {
+      name: 'Table 2',
+      toolType: 'table_node',
+      settings: {
+        baseSchema: 'ao_data',
+        baseTable: 'products',
+        baseAlias: 'base',
+        inputSourcesJson: JSON.stringify([
+          {
+            id: 'param_1',
+            parameterName: 'first_sku',
+            bindMode: 'broadcast_fields',
+            fieldMapping: [{ sourceField: 'value', targetField: 'picked_sku' }]
+          }
+        ]),
+        selectedFieldsJson: JSON.stringify([
+          { sourceAlias: 'base', fieldName: 'sku', outputName: 'sku' },
+          { sourceAlias: 'first_sku', fieldName: 'picked_sku', outputName: 'picked_sku' }
+        ])
+      }
+    }
+  };
+  const secondOut = await executeTableNode(client, {}, processCtx, secondNode, firstOut.output);
+  assert.equal(secondOut.output.contract_version, 'node_io_v1');
+  assert.equal(secondOut.output.rows[0].picked_sku, 'wb-1');
+  assert.equal(secondOut.output.trace.input_rows, 2);
 });
 
 test('start settings sync contract: execution scope mode values stay from UI options', () => {
