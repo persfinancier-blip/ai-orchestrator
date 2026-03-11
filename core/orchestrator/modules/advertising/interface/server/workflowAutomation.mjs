@@ -3916,7 +3916,7 @@ const PARAM_CONDITION_OPERATORS = {
   not_equals: '<>'
 };
 
-function conditionClause(cond, params) {
+function conditionClause(cond, params, templateValues = {}) {
   const field = String(cond.field || '').trim();
   if (!isIdent(field)) return null;
   const operatorKey = String(cond.operator || 'equals');
@@ -3933,31 +3933,45 @@ function conditionClause(cond, params) {
     if (op === 'contains' || op === 'starts_with' || op === 'ends_with') return null;
     return `${column} ${op} ${cmpColumn}`;
   }
-  const rawValue = String(cond.compareValue || '').trim();
-  if (!rawValue && op !== 'contains' && op !== 'starts_with' && op !== 'ends_with') return null;
+  const compareValueRaw = cond?.compareValue ?? '';
+  const resolvedValue = applyParametersToValue(compareValueRaw, templateValues);
+  let rawValue = typeof resolvedValue === 'string' ? String(resolvedValue || '').trim() : resolvedValue;
+  if (typeof rawValue === 'string') {
+    const lowered = rawValue.toLowerCase();
+    if (lowered === 'true') rawValue = true;
+    else if (lowered === 'false') rawValue = false;
+  }
+  if (
+    (rawValue === '' || rawValue === null || rawValue === undefined) &&
+    op !== 'contains' &&
+    op !== 'starts_with' &&
+    op !== 'ends_with'
+  ) {
+    return null;
+  }
   if (op === 'contains') {
-    params.push(rawValue);
+    params.push(String(rawValue ?? ''));
     return `${column} ILIKE '%' || $${params.length} || '%'`;
   }
   if (op === 'starts_with') {
-    params.push(rawValue);
+    params.push(String(rawValue ?? ''));
     return `${column} ILIKE $${params.length} || '%'`;
   }
   if (op === 'ends_with') {
-    params.push(rawValue);
+    params.push(String(rawValue ?? ''));
     return `${column} ILIKE '%' || $${params.length}`;
   }
   params.push(rawValue);
   return `${column} ${op} $${params.length}`;
 }
 
-async function queryParameterValue(client, param) {
+async function queryParameterValue(client, param, templateValues = {}) {
   const source = resolveParameterSource(param);
   if (!source) return null;
   if (!isIdent(source.schema) || !isIdent(source.table) || !isIdent(source.field)) return null;
   const conditions = Array.isArray(param?.conditions) ? param.conditions : [];
   const params = [];
-  const clauses = conditions.map((cond) => conditionClause(cond, params)).filter(Boolean);
+  const clauses = conditions.map((cond) => conditionClause(cond, params, templateValues)).filter(Boolean);
   const whereSql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const r = await client.query(
     `SELECT ${qi(source.field)} AS value FROM ${qname(source.schema, source.table)} ${whereSql} LIMIT 1`,
@@ -4185,7 +4199,7 @@ function resolveAliasesFromPaginationFirstValues(template, aliases) {
   return map;
 }
 
-async function resolveAliasesFromParameterDefinitions(client, definitions, aliases) {
+async function resolveAliasesFromParameterDefinitions(client, definitions, aliases, templateValues = {}) {
   const map = {};
   const issues = {};
   const requested = uniqueAliasList(aliases);
@@ -4196,7 +4210,7 @@ async function resolveAliasesFromParameterDefinitions(client, definitions, alias
     );
     if (!param) continue;
     try {
-      const value = await queryParameterValue(client, param);
+      const value = await queryParameterValue(client, param, { ...templateValues, ...map });
       if (value !== undefined && value !== null && String(value) !== '') {
         map[alias] = value;
       } else {
@@ -4376,6 +4390,23 @@ async function executeApiNode(client, node, template, processCtx = {}) {
   collectParameterTokens(baseQueryObj, requestedAliasesSet);
   collectParameterTokens(baseBodyObj, requestedAliasesSet);
   const requestedAliases = Array.from(requestedAliasesSet);
+  const processScopeType = String(processCtx?.scope_type || '').trim();
+  const processScopeRef = String(processCtx?.scope_ref || '').trim();
+  const processTenantId =
+    processCtx?.tenant_id === null || processCtx?.tenant_id === undefined ? '' : String(processCtx?.tenant_id || '').trim();
+  const processClientId = String(processCtx?.client_id || '').trim() || processTenantId;
+  const processScopeContext =
+    processCtx?.context_json && typeof processCtx.context_json === 'object' ? processCtx.context_json : {};
+  const runtimeTemplateValues = {};
+  if (processScopeType) runtimeTemplateValues.scope_type = processScopeType;
+  if (processScopeRef) runtimeTemplateValues.scope_ref = processScopeRef;
+  if (processTenantId) runtimeTemplateValues.tenant_id = processTenantId;
+  if (processClientId) runtimeTemplateValues.client_id = processClientId;
+  Object.entries(processScopeContext).forEach(([k, v]) => {
+    const key = String(k || '').trim();
+    if (!key) return;
+    runtimeTemplateValues[`scope_ctx_${key}`] = v;
+  });
 
   let resolveIssues = {};
   let entityParameterMaps = [{}];
@@ -4396,7 +4427,8 @@ async function executeApiNode(client, node, template, processCtx = {}) {
     const fromDefinitions = await resolveAliasesFromParameterDefinitions(
       client,
       template.parameterDefinitions || [],
-      unresolvedAfterPagination
+      unresolvedAfterPagination,
+      runtimeTemplateValues
     );
     Object.entries(fromDefinitions.issues || {}).forEach(([alias, reason]) => {
       if (!resolveIssues[alias]) resolveIssues[alias] = String(reason || '');
@@ -4420,23 +4452,23 @@ async function executeApiNode(client, node, template, processCtx = {}) {
 
   const nodeOverrides = getNodeParameterOverrides(node);
   const scopeOverrides = {};
-  const scopeType = String(processCtx?.scope_type || '').trim();
-  const scopeRef = String(processCtx?.scope_ref || '').trim();
-  const tenantId = processCtx?.tenant_id === null || processCtx?.tenant_id === undefined ? '' : String(processCtx?.tenant_id || '').trim();
-  if (scopeType) {
-    scopeOverrides.scope_type = scopeType;
-    scopeOverrides.__scope_type = scopeType;
+  if (processScopeType) {
+    scopeOverrides.scope_type = processScopeType;
+    scopeOverrides.__scope_type = processScopeType;
   }
-  if (scopeRef) {
-    scopeOverrides.scope_ref = scopeRef;
-    scopeOverrides.__scope_ref = scopeRef;
+  if (processScopeRef) {
+    scopeOverrides.scope_ref = processScopeRef;
+    scopeOverrides.__scope_ref = processScopeRef;
   }
-  if (tenantId) {
-    scopeOverrides.tenant_id = tenantId;
-    scopeOverrides.__tenant_id = tenantId;
+  if (processTenantId) {
+    scopeOverrides.tenant_id = processTenantId;
+    scopeOverrides.__tenant_id = processTenantId;
   }
-  const scopeContext = processCtx?.context_json && typeof processCtx.context_json === 'object' ? processCtx.context_json : {};
-  Object.entries(scopeContext).forEach(([k, v]) => {
+  if (processClientId) {
+    scopeOverrides.client_id = processClientId;
+    scopeOverrides.__client_id = processClientId;
+  }
+  Object.entries(processScopeContext).forEach(([k, v]) => {
     const key = String(k || '').trim();
     if (!key) return;
     scopeOverrides[`scope_ctx_${key}`] = v;
@@ -4696,6 +4728,164 @@ async function executeApiNode(client, node, template, processCtx = {}) {
       status: lastStatus
     }
   };
+}
+
+const API_LOG_SECRET_KEYS = new Set([
+  'authorization',
+  'token',
+  'access_token',
+  'refresh_token',
+  'api_key',
+  'client_secret',
+  'password',
+  'secret'
+]);
+
+function redactApiLogPayload(value, key = '') {
+  const lowerKey = String(key || '').trim().toLowerCase();
+  if (API_LOG_SECRET_KEYS.has(lowerKey)) return '***';
+  if (Array.isArray(value)) return value.map((item) => redactApiLogPayload(item));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactApiLogPayload(v, k)]));
+  }
+  return value;
+}
+
+function truncateApiLogPayload(value, limitRaw) {
+  const limit = Math.max(0, Math.trunc(Number(limitRaw || 0)));
+  const sanitized = redactApiLogPayload(value);
+  if (limit <= 0) return sanitized;
+  try {
+    const text = JSON.stringify(sanitized);
+    if (text.length <= limit) return sanitized;
+    return {
+      __truncated: true,
+      preview: text.slice(0, limit),
+      total_chars: text.length
+    };
+  } catch {
+    const text = String(sanitized ?? '');
+    if (text.length <= limit) return sanitized;
+    return {
+      __truncated: true,
+      preview: text.slice(0, limit),
+      total_chars: text.length
+    };
+  }
+}
+
+async function writeApiStepLog(client, template, processCtx = {}, exec = {}) {
+  const enabled = Boolean(template?.response_log_enabled);
+  const schema = String(template?.response_log_schema || '').trim();
+  const table = String(template?.response_log_table || '').trim();
+  if (!enabled || !schema || !table) return { written: 0, skipped: 'disabled' };
+  try {
+    const columnNames = await tableColumnNames(client, schema, table);
+    if (!columnNames.length) return { written: 0, skipped: 'table_not_found' };
+    const columnSet = new Set(columnNames.map((name) => String(name || '').trim().toLowerCase()));
+    const requestRows = Array.isArray(exec?.requestPreview?.requests) ? exec.requestPreview.requests : [];
+    const responseRows = Array.isArray(exec?.responsePreview?.responses) ? exec.responsePreview.responses : [];
+    const stopReasonMap = new Map(
+      (Array.isArray(exec?.metrics?.stopReasons) ? exec.metrics.stopReasons : []).map((row) => [
+        `${Math.max(1, Math.trunc(Number(row?.entity_index || 1)))}`,
+        String(row?.stop_reason || '').trim()
+      ])
+    );
+    const writeRequestPayload = template?.response_log_write_request_payload !== false;
+    const writeResponsePayload = template?.response_log_write_response_payload !== false;
+    const writePaginationValues = template?.response_log_write_pagination_values !== false;
+    const onlyErrors = Boolean(template?.response_log_only_errors);
+    const responsePayloadLimit = Number(template?.response_log_response_payload_limit || 120000);
+    const nowIso = new Date().toISOString();
+    const rows = [];
+
+    for (let idx = 0; idx < responseRows.length; idx += 1) {
+      const responseRow = responseRows[idx] && typeof responseRows[idx] === 'object' ? responseRows[idx] : {};
+      const entityIndex = Math.max(1, Math.trunc(Number(responseRow?.entity_index || idx + 1)));
+      const pageNo = Math.max(1, Math.trunc(Number(responseRow?.page || 1)));
+      const requestRow =
+        requestRows.find(
+          (row) =>
+            Math.max(1, Math.trunc(Number(row?.entity_index || 0))) === entityIndex &&
+            Math.max(1, Math.trunc(Number(row?.page || 0))) === pageNo
+        ) || requestRows[idx] || {};
+      const statusCode = Math.max(0, Math.trunc(Number(responseRow?.status || 0)));
+      const stopReason = stopReasonMap.get(String(entityIndex)) || '';
+      const ok = statusCode >= 200 && statusCode < 400;
+      const decision = ok ? (stopReason ? 'stop' : 'continue') : 'fail';
+      if (onlyErrors && ok) continue;
+      const row = {
+        run_id: String(processCtx?.run_uid || '').trim(),
+        api_name: String(template?.api_name || template?.name || '').trim(),
+        execution_mode: String(template?.execution_mode || 'sync').trim() || 'sync',
+        sync_planner: String(template?.sync_planner || '').trim(),
+        dispatch_mode: String(template?.dispatch_mode || 'single').trim() || 'single',
+        entity_key: `${entityIndex}:${pageNo}`,
+        entity_label: `entity_${entityIndex}`,
+        row_index: entityIndex,
+        wave_no: 1,
+        page_no: pageNo,
+        iteration_reason: pageNo > 1 ? 'pagination_updated' : 'initial_request',
+        decision,
+        stop_reason: stopReason,
+        error_message: !ok ? `HTTP ${statusCode || 0}` : '',
+        status_code: statusCode,
+        request_payload: writeRequestPayload ? truncateApiLogPayload(requestRow, responsePayloadLimit) : null,
+        response_payload: writeResponsePayload ? truncateApiLogPayload(responseRow?.response, responsePayloadLimit) : null,
+        pagination_values: writePaginationValues ? { entity_index: entityIndex, page: pageNo } : null,
+        duration_ms: 0,
+        created_at: nowIso,
+        updated_at: nowIso
+      };
+      rows.push(row);
+    }
+    if (!rows.length) return { written: 0, skipped: 'no_rows' };
+
+    const insertableColumns = [
+      'run_id',
+      'api_name',
+      'execution_mode',
+      'sync_planner',
+      'dispatch_mode',
+      'entity_key',
+      'entity_label',
+      'row_index',
+      'wave_no',
+      'page_no',
+      'iteration_reason',
+      'decision',
+      'stop_reason',
+      'error_message',
+      'status_code',
+      'request_payload',
+      'response_payload',
+      'pagination_values',
+      'duration_ms',
+      'created_at',
+      'updated_at'
+    ].filter((column) => columnSet.has(column));
+    if (!insertableColumns.length) return { written: 0, skipped: 'no_matching_columns' };
+
+    let written = 0;
+    for (const batch of chunkRows(rows, 100)) {
+      const values = [];
+      const tuples = batch.map((row) => {
+        const placeholders = insertableColumns.map((column) => {
+          values.push(row[column] ?? null);
+          return column === 'request_payload' || column === 'response_payload' || column === 'pagination_values'
+            ? `$${values.length}::jsonb`
+            : `$${values.length}`;
+        });
+        return `(${placeholders.join(', ')})`;
+      });
+      const sql = `INSERT INTO ${qname(schema, table)} (${insertableColumns.map((column) => qi(column)).join(', ')}) VALUES ${tuples.join(', ')}`;
+      const result = await client.query(sql, values);
+      written += Math.max(0, Number(result?.rowCount || 0));
+    }
+    return { written };
+  } catch (error) {
+    return { written: 0, error: String(error?.message || error || 'api_step_log_failed') };
+  }
 }
 
 function topoSort(nodes, edges) {
@@ -6684,6 +6874,7 @@ async function executeProcessNode(client, config, processCtx, node, templates, i
     const template = templates.find((tpl) => refs.some((ref) => sourceMatchesTemplateRef(tpl, ref)));
     if (!template) throw new Error(`api_template_not_found:${requestSignature(node)}`);
     const exec = await executeApiNode(client, node, template, processCtx || {});
+    const apiLog = await writeApiStepLog(client, template, processCtx || {}, exec);
     const outputEnvelope = composeNodeOutputEnvelope(
       processCtx,
       node,
@@ -6702,7 +6893,11 @@ async function executeProcessNode(client, config, processCtx, node, templates, i
     );
     return {
       output: outputEnvelope,
-      metrics: exec.metrics || {},
+      metrics: {
+        ...(exec.metrics || {}),
+        api_log_written: Math.max(0, Number(apiLog?.written || 0)),
+        ...(apiLog?.error ? { api_log_error: String(apiLog.error || '').trim() } : {})
+      },
       request_payload: exec.requestPreview || {},
       response_payload: exec.responsePreview || {}
     };
@@ -8046,6 +8241,8 @@ export const workflowAutomationTestkit = {
   normalizeNodeIoEnvelope,
   compareByOperator,
   parseCsvList,
+  resolveAliasesFromParameterDefinitions,
+  writeApiStepLog,
   executeTableParserNode,
   executeTableNode,
   executeDbWriteNode,

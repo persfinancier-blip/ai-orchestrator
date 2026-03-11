@@ -23,6 +23,8 @@ const {
   buildRunSummaryFromAggregation,
   normalizeNodeIoEnvelope,
   composeNodeOutputEnvelope,
+  resolveAliasesFromParameterDefinitions,
+  writeApiStepLog,
   executeTableParserNode,
   executeTableNode,
   executeDbWriteNode,
@@ -335,6 +337,128 @@ test('first nodes runtime contract: table_node output params propagate to downst
   assert.equal(secondOut.output.contract_version, 'node_io_v1');
   assert.equal(secondOut.output.rows[0].picked_sku, 'wb-1');
   assert.equal(secondOut.output.trace.input_rows, 2);
+});
+
+test('api runtime contract: parameter definitions resolve client-scoped token alias', async () => {
+  const calls = [];
+  const client = {
+    async query(sql, params = []) {
+      calls.push({ sql: String(sql || ''), params });
+      return { rows: [{ value: 'wb_api_key_for_client_18' }], rowCount: 1 };
+    }
+  };
+
+  const resolved = await resolveAliasesFromParameterDefinitions(
+    client,
+    [
+      {
+        alias: 'token',
+        sourceSchema: 'ao_clients',
+        sourceTable: 'client_accesses',
+        sourceField: 'api_key',
+        conditions: [
+          { field: 'client_id', operator: 'equals', compareValue: '{{client_id}}' },
+          { field: 'platform_code', operator: 'equals', compareValue: 'wildberries' },
+          { field: 'is_active', operator: 'equals', compareValue: 'true' }
+        ]
+      }
+    ],
+    ['token'],
+    { client_id: '18' }
+  );
+
+  assert.equal(resolved.map.token, 'wb_api_key_for_client_18');
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].params, ['18', 'wildberries', true]);
+});
+
+test('api runtime contract: api step log writes redacted request/response rows', async () => {
+  const calls = [];
+  const client = {
+    async query(sql, params = []) {
+      const text = String(sql || '');
+      calls.push({ sql: text, params });
+      if (/information_schema\.columns/i.test(text)) {
+        return {
+          rows: [
+            'run_id',
+            'api_name',
+            'execution_mode',
+            'dispatch_mode',
+            'entity_key',
+            'entity_label',
+            'row_index',
+            'wave_no',
+            'page_no',
+            'iteration_reason',
+            'decision',
+            'stop_reason',
+            'error_message',
+            'status_code',
+            'request_payload',
+            'response_payload',
+            'pagination_values',
+            'duration_ms',
+            'created_at',
+            'updated_at'
+          ].map((column_name) => ({ column_name }))
+        };
+      }
+      if (text.startsWith('INSERT INTO "bronze"."api_step_log"')) {
+        return { rows: [], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    }
+  };
+
+  const out = await writeApiStepLog(
+    client,
+    {
+      api_name: 'WB cards',
+      execution_mode: 'sync',
+      dispatch_mode: 'single',
+      response_log_enabled: true,
+      response_log_schema: 'bronze',
+      response_log_table: 'api_step_log',
+      response_log_write_request_payload: true,
+      response_log_write_response_payload: true,
+      response_log_write_pagination_values: true,
+      response_log_only_errors: false,
+      response_log_response_payload_limit: 1000
+    },
+    { run_uid: 'wf_run_1' },
+    {
+      requestPreview: {
+        requests: [
+          {
+            entity_index: 1,
+            page: 1,
+            headers: { Authorization: 'secret-key' },
+            body: { settings: { cursor: { limit: 5 } } }
+          }
+        ]
+      },
+      responsePreview: {
+        responses: [
+          {
+            entity_index: 1,
+            page: 1,
+            status: 200,
+            response: { cards: [{ nmID: 1, title: 'A' }] }
+          }
+        ]
+      },
+      metrics: {}
+    }
+  );
+
+  assert.equal(out.written, 1);
+  const insertCall = calls.find((call) => call.sql.startsWith('INSERT INTO "bronze"."api_step_log"'));
+  assert.ok(insertCall);
+  const payloadText = JSON.stringify(insertCall.params || []);
+  assert.doesNotMatch(payloadText, /secret-key/);
+  assert.match(payloadText, /\*\*\*/);
+  assert.match(payloadText, /"cards"/);
 });
 
 test('start settings sync contract: execution scope mode values stay from UI options', () => {

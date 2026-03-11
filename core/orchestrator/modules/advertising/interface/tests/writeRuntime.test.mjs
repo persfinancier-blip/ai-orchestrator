@@ -157,3 +157,50 @@ test('write runtime: upsert splits inserted and updated rows by existing key mat
   assert.equal(result.stats.updated, 1);
   assert.deepEqual(result.meta.key_fields, ['id']);
 });
+
+test('write runtime: falls back to payload column for raw bronze rows when mapped fields are absent', async () => {
+  const calls = [];
+  const client = {
+    async query(sql, params = []) {
+      const text = String(sql || '');
+      calls.push({ sql: text, params });
+      if (text.includes('information_schema.tables')) return { rows: [{ '?column?': 1 }], rowCount: 1 };
+      if (text.includes('information_schema.columns')) {
+        return {
+          rows: [
+            { column_name: 'id', data_type: 'bigint' },
+            { column_name: 'payload', data_type: 'jsonb' }
+          ],
+          rowCount: 2
+        };
+      }
+      if (text.startsWith('INSERT INTO "bronze"."wb_cards_raw"')) {
+        return { rows: [], rowCount: 2 };
+      }
+      return { rows: [], rowCount: 0 };
+    }
+  };
+
+  const result = await executeWriteConfig(
+    client,
+    {
+      sourceMode: 'node',
+      targetSchema: 'bronze',
+      targetTable: 'wb_cards_raw',
+      writeMode: 'insert'
+    },
+    {
+      inputValue: {
+        contract_version: 'node_io_v1',
+        rows: [{ nmID: 1, title: 'A' }, { nmID: 2, title: 'B' }]
+      }
+    }
+  );
+
+  assert.equal(result.stats.wrote, 2);
+  const insertCall = calls.find((call) => call.sql.startsWith('INSERT INTO "bronze"."wb_cards_raw"'));
+  assert.ok(insertCall);
+  assert.match(insertCall.sql, /"payload"/);
+  assert.equal(typeof insertCall.params?.[0], 'string');
+  assert.match(String(insertCall.params?.[0] || ''), /"nmID":1/);
+});

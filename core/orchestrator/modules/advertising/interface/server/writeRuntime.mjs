@@ -402,11 +402,18 @@ export async function previewWriteConfig(client, rawSettings, options = {}) {
   const sourceColumns = columnsFromRows(sourceRows);
   const targetColumns = cfg.targetSchema && cfg.targetTable ? await tableColumnsDetailed(client, cfg.targetSchema, cfg.targetTable) : [];
   const mapping = resolveWriteMappings(sourceColumns, targetColumns, cfg.fieldMappings);
-  const mappedRows = sourceRows.map((row) => applyMappingsToRow(row, mapping.rows, cfg.unmappedMode).row);
+  const hasPayloadJson = targetColumns.some((column) => column.name === 'payload_json');
+  const hasPayload = targetColumns.some((column) => column.name === 'payload');
+  const readyRows = [];
+  for (const sourceRow of sourceRows) {
+    const mapped = applyMappingsToRow(sourceRow, mapping.rows, cfg.unmappedMode).row;
+    if (Object.keys(mapped).length) readyRows.push(mapped);
+    else if (hasPayloadJson) readyRows.push({ payload_json: sourceRow });
+    else if (hasPayload) readyRows.push({ payload: sourceRow });
+  }
   const keys = cfg.keyFields.filter((field) => targetColumns.some((column) => column.name === field));
-  const rowsWithKeys = rowsWithCompleteKeys(mappedRows, keys);
+  const rowsWithKeys = rowsWithCompleteKeys(readyRows, keys);
   const matchStats = cfg.targetSchema && cfg.targetTable ? await countExistingMatches(client, cfg.targetSchema, cfg.targetTable, rowsWithKeys.slice(0, cfg.previewLimit), keys) : { matched: 0 };
-  const readyRows = mappedRows.filter((row) => Object.keys(row).length > 0);
   const writeSummary = {
     rows_ready: readyRows.length,
     mapped_fields_count: mapping.matchedRows.length,
@@ -468,12 +475,14 @@ export async function executeWriteConfig(client, rawSettings, options = {}) {
   }
   const targetColumns = await tableColumnsDetailed(client, cfg.targetSchema, cfg.targetTable);
   const hasPayloadJson = targetColumns.some((column) => column.name === 'payload_json');
+  const hasPayload = targetColumns.some((column) => column.name === 'payload');
   const mapping = resolveWriteMappings(columnsFromRows(sourceRows), targetColumns, cfg.fieldMappings);
   const readyRows = [];
   for (const sourceRow of sourceRows) {
     const mapped = applyMappingsToRow(sourceRow, mapping.rows, cfg.unmappedMode).row;
     if (Object.keys(mapped).length) readyRows.push(mapped);
     else if (hasPayloadJson) readyRows.push({ payload_json: sourceRow });
+    else if (hasPayload) readyRows.push({ payload: sourceRow });
   }
   if (!readyRows.length) throw new Error(`db_write_no_matching_columns:${cfg.targetSchema}.${cfg.targetTable}`);
 
@@ -526,9 +535,12 @@ export async function executeWriteConfig(client, rawSettings, options = {}) {
     const tupleSql = batch
       .map((row) => {
         const tuple = writeColumns.map((column) => {
-          const value = column === 'payload_json' ? JSON.stringify(row.payload_json ?? row) : row[column] ?? null;
+          const value =
+            column === 'payload_json' || column === 'payload'
+              ? JSON.stringify(row[column] ?? row)
+              : row[column] ?? null;
           values.push(value);
-          return column === 'payload_json' ? `$${values.length}::jsonb` : `$${values.length}`;
+          return column === 'payload_json' || column === 'payload' ? `$${values.length}::jsonb` : `$${values.length}`;
         });
         return `(${tuple.join(', ')})`;
       })
