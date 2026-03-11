@@ -20,13 +20,14 @@ export type SpaceSceneDeps = {
 export type SpaceSceneCallbacks = {
   onTooltip: (payload: { visible: boolean; x: number; y: number; lines: string[] }) => void;
   onAxisRemove?: (axis: 'x' | 'y' | 'z') => void;
+  onPointContextMenu?: (payload: { x: number; y: number; point: SpacePoint }) => void;
 };
 
 export class SpaceScene {
   private static readonly FIXED_BBOX = {
-    minX: -50, maxX: 50,
-    minY: -50, maxY: 50,
-    minZ: -50, maxZ: 50
+    minX: -60, maxX: 60,
+    minY: -60, maxY: 60,
+    minZ: -60, maxZ: 60
   };
   private deps: SpaceSceneDeps;
   private cb: SpaceSceneCallbacks;
@@ -107,6 +108,7 @@ export class SpaceScene {
     container.appendChild(this.labelRenderer.domElement);
 
     this.renderer.domElement.addEventListener('mousemove', this.onMove3d);
+    this.renderer.domElement.addEventListener('contextmenu', this.onContextMenu3d);
     this.animate();
   }
 
@@ -241,6 +243,7 @@ export class SpaceScene {
     this.disposeCornerFrame();
 
     this.renderer?.domElement?.removeEventListener('mousemove', this.onMove3d);
+    this.renderer?.domElement?.removeEventListener('contextmenu', this.onContextMenu3d);
 
     this.clearMesh(this.pointsMesh);
 
@@ -406,8 +409,8 @@ export class SpaceScene {
     this.edgeLabelGroup.add(...this.axisLabelObjects);
   }
 
-  private onMove3d = (event: MouseEvent): void => {
-    if (!this.renderer || !this.camera) return;
+  private pickPoint(event: MouseEvent): { point: SpacePoint; localX: number; localY: number } | null {
+    if (!this.renderer || !this.camera) return null;
 
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.ndc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
@@ -415,19 +418,30 @@ export class SpaceScene {
     this.raycaster.setFromCamera(this.ndc, this.camera);
 
     const hit = this.pointsMesh ? this.raycaster.intersectObject(this.pointsMesh, true)[0] : undefined;
+    if (!hit || hit.instanceId === undefined) return null;
 
-    if (!hit || hit.instanceId === undefined) {
+    const point = this.renderPoints[hit.instanceId];
+    if (!point) return null;
+
+    return {
+      point,
+      localX: event.clientX - rect.left,
+      localY: event.clientY - rect.top
+    };
+  }
+
+  private onMove3d = (event: MouseEvent): void => {
+    const picked = this.pickPoint(event);
+    if (!picked) {
       this.cb.onTooltip({ visible: false, x: 0, y: 0, lines: [] });
       return;
     }
 
-    const point = this.renderPoints[hit.instanceId];
-    if (!point) return;
-
+    const { point, localX, localY } = picked;
     this.cb.onTooltip({
       visible: true,
-      x: event.clientX - rect.left + 12,
-      y: event.clientY - rect.top + 12,
+      x: localX + 12,
+      y: localY + 12,
       lines: [
         `${point.label}`,
         `Поле: ${this.deps.fieldName(point.sourceField)}`,
@@ -436,5 +450,12 @@ export class SpaceScene {
         `ДРР: ${(point.metrics.drr ?? 0).toFixed(2)}% · ROI: ${(point.metrics.roi ?? 0).toFixed(2)}`
       ]
     });
+  };
+
+  private onContextMenu3d = (event: MouseEvent): void => {
+    event.preventDefault();
+    const picked = this.pickPoint(event);
+    if (!picked) return;
+    this.cb.onPointContextMenu?.({ x: picked.localX, y: picked.localY, point: picked.point });
   };
 }

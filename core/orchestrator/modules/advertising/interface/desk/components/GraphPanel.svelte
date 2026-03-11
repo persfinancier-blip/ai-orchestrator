@@ -76,6 +76,7 @@
   let bboxLabel = '—';
 
   let scene: SpaceScene | null = null;
+  let stageResizeObserver: ResizeObserver | null = null;
 
   let grouping: GroupingConfig = {
     enabled: false,
@@ -92,6 +93,32 @@
 
   let clusterSeed = 0;
   let renderRaf: number | null = null;
+  let pointMenu = { visible: false, x: 0, y: 0, point: null as SpacePoint | null };
+
+  type TableNodeSourcePayload = {
+    source: 'cube';
+    point: {
+      id: string;
+      label: string;
+      sourceField: string;
+      sourceFieldName: string;
+      metrics: Record<string, number>;
+      isCluster: boolean;
+      clusterCount: number;
+      position: { x: number; y: number; z: number };
+    };
+    context: {
+      axisX: string;
+      axisY: string;
+      axisZ: string;
+      axisXName: string;
+      axisYName: string;
+      axisZName: string;
+      groupingPrinciple: GroupingConfig['principle'];
+      detail: number;
+    };
+    createdAt: string;
+  };
 
   function fieldsAll(): ShowcaseField[] {
     return (showcase?.fields ?? []) as ShowcaseField[];
@@ -452,6 +479,7 @@
     showDisplayMenu = false;
     showPickDataMenu = false;
     showGroupingMenu = false;
+    closePointMenu();
   }
 
   function addEntityField(code: string): void {
@@ -556,20 +584,77 @@
     if (axis === 'z') axisZ = '';
   }
 
+  function closePointMenu(): void {
+    pointMenu = { visible: false, x: 0, y: 0, point: null };
+  }
+
+  function onPointContextMenu(payload: { x: number; y: number; point: SpacePoint }): void {
+    if (!container3d) return;
+    closeAllMenus();
+    const w = container3d.clientWidth || 0;
+    const h = container3d.clientHeight || 0;
+    const menuW = 280;
+    const menuH = 72;
+    pointMenu = {
+      visible: true,
+      x: Math.max(8, Math.min(w - menuW - 8, payload.x + 8)),
+      y: Math.max(8, Math.min(h - menuH - 8, payload.y + 8)),
+      point: payload.point
+    };
+    tooltip = { visible: false, x: 0, y: 0, lines: [] };
+  }
+
+  function createTableNodeFromPoint(): void {
+    const point = pointMenu.point;
+    if (!point) return;
+
+    const detail: TableNodeSourcePayload = {
+      source: 'cube',
+      point: {
+        id: String(point.id || ''),
+        label: String(point.label || ''),
+        sourceField: String(point.sourceField || ''),
+        sourceFieldName: fieldName(String(point.sourceField || '')),
+        metrics: { ...(point.metrics || {}) },
+        isCluster: Boolean(point.isCluster),
+        clusterCount: Math.max(1, Number(point.clusterCount || 1)),
+        position: { x: Number(point.x || 0), y: Number(point.y || 0), z: Number(point.z || 0) }
+      },
+      context: {
+        axisX,
+        axisY,
+        axisZ,
+        axisXName: fieldName(axisX || ''),
+        axisYName: fieldName(axisY || ''),
+        axisZName: fieldName(axisZ || ''),
+        groupingPrinciple: grouping.principle,
+        detail: Number(grouping.detail || 0)
+      },
+      createdAt: new Date().toISOString()
+    };
+
+    window.dispatchEvent(new CustomEvent('ao:create-table-node', { detail }));
+    closePointMenu();
+  }
+
   function onGlobalClick(e: MouseEvent): void {
     const t = e.target as Node | null;
     if (!t) return;
 
     const menus = Array.from(document.querySelectorAll('.menu-pop')) as HTMLElement[];
+    const contextMenu = Array.from(document.querySelectorAll('.point-context-menu')) as HTMLElement[];
     const inMenu = menus.some((m) => m.contains(t));
+    const inContextMenu = contextMenu.some((m) => m.contains(t));
     const inBtns = (document.querySelector('.hud')?.contains(t) ?? false);
 
-    if (!inMenu && !inBtns) closeAllMenus();
+    if (!inMenu && !inBtns && !inContextMenu) closeAllMenus();
+    if (!inContextMenu) closePointMenu();
   }
 
   function onKey(e: KeyboardEvent): void {
     if (e.key === 'Escape') {
       closeAllMenus();
+      closePointMenu();
       showSaveVisualModal = false;
       showSaveDatasetModal = false;
     }
@@ -582,7 +667,9 @@
   }
 
   function onResize(): void {
-    scene?.resize(560);
+    if (!container3d) return;
+    const height = Math.max(300, Math.round(container3d.clientHeight || 560));
+    scene?.resize(height);
   }
 
   onMount(async () => {
@@ -591,11 +678,14 @@
 
     scene = new SpaceScene(
       { fieldName, getFields: () => fieldsAll() },
-      { onTooltip: (t) => (tooltip = t), onAxisRemove }
+      { onTooltip: (t) => (tooltip = t), onAxisRemove, onPointContextMenu }
     );
 
-    scene.init(container3d, { height: 560 });
+    scene.init(container3d, { height: Math.max(300, Math.round(container3d.clientHeight || 560)) });
     ensureDefaults();
+
+    stageResizeObserver = new ResizeObserver(() => onResize());
+    stageResizeObserver.observe(container3d);
 
     window.addEventListener('resize', onResize);
     window.addEventListener('keydown', onKey);
@@ -611,6 +701,8 @@
 
   onDestroy(() => {
     unsub();
+    stageResizeObserver?.disconnect();
+    stageResizeObserver = null;
 
     window.removeEventListener('resize', onResize);
     window.removeEventListener('keydown', onKey);
@@ -690,6 +782,12 @@
       <GroupingMenu bind:cfg={grouping} numberFields={groupingNumberFields} textFields={groupingTextFields} onRecompute={recomputeClusters} />
     {/if}
 
+    {#if pointMenu.visible && pointMenu.point}
+      <div class="point-context-menu" style={`left:${pointMenu.x}px;top:${pointMenu.y}px;`}>
+        <button class="menu-action" on:click={createTableNodeFromPoint}>создать ноду таблицы на рабочем столе</button>
+      </div>
+    {/if}
+
     <Tooltip {tooltip} />
   </div>
 
@@ -744,23 +842,31 @@
   }
 
   :global(.graph-root) {
-    width: 1200px;
+    width: 100%;
     display: block;
-    min-width: 1200px;
-    max-width: 1200px;
+    min-width: 0;
+    max-width: 100%;
   }
 
   :global(.stage) {
     position: relative;
-    width: 1200px;
-    height: 560px;
-    min-width: 1200px;
-    min-height: 560px;
-    max-width: 1200px;
-    max-height: 560px;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    min-height: 320px;
+    height: clamp(360px, 46vw, 760px);
+    max-height: calc(100vh - 120px);
     border-radius: 18px;
     overflow: hidden;
     background: #ffffff;
+  }
+
+  @media (max-width: 900px) {
+    :global(.stage) {
+      min-height: 300px;
+      height: clamp(320px, 58vw, 600px);
+      max-height: calc(100vh - 132px);
+    }
   }
 
   :global(.scene) {
@@ -984,5 +1090,28 @@
     border-radius: 12px;
     max-width: 360px;
     z-index: 6;
+  }
+
+  :global(.point-context-menu) {
+    position: absolute;
+    z-index: 2500;
+    background: rgba(255, 255, 255, 0.96);
+    border: 1px solid var(--stroke-mid);
+    border-radius: 12px;
+    padding: 8px;
+    box-shadow: var(--shadow-pop);
+    backdrop-filter: blur(10px);
+  }
+
+  :global(.point-context-menu .menu-action) {
+    border: 0;
+    border-radius: 10px;
+    background: #0f172a;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 8px 10px;
+    cursor: pointer;
+    white-space: nowrap;
   }
 </style>

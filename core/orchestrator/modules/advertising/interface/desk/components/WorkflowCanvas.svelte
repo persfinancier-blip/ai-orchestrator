@@ -275,6 +275,46 @@
     otherNodes: ApiTemplateUsageNodeEntry[];
     processes: ApiTemplateUsageProcessEntry[];
   };
+  type CubeTableNodeSourcePayload = {
+    source: 'cube';
+    point?: {
+      id?: string;
+      label?: string;
+      sourceField?: string;
+      sourceFieldName?: string;
+      metrics?: Record<string, number>;
+      isCluster?: boolean;
+      clusterCount?: number;
+      position?: { x?: number; y?: number; z?: number };
+    };
+    context?: {
+      axisX?: string;
+      axisY?: string;
+      axisZ?: string;
+      axisXName?: string;
+      axisYName?: string;
+      axisZName?: string;
+      groupingPrinciple?: string;
+      detail?: number;
+    };
+    createdAt?: string;
+  };
+  type TableNodeFilter = {
+    id: string;
+    dataType: 'text' | 'number' | 'date' | 'boolean';
+    operator:
+      | 'equals'
+      | 'not_equals'
+      | 'gt'
+      | 'gte'
+      | 'lt'
+      | 'lte'
+      | 'contains'
+      | 'not_contains'
+      | 'is_empty'
+      | 'not_empty';
+    value: string;
+  };
 
   let nodes: WorkflowNode[] = [];
   let edges: WorkflowEdge[] = [];
@@ -485,6 +525,7 @@
     'api_request',
     'http_request',
     'table_parser',
+    'table_node',
     'db_write',
     'split_data',
     'merge_data',
@@ -637,6 +678,24 @@
       visual_preset_key: 'data',
       editor_type_code: 'parser_builder',
       runtime_handler_code: 'table_parser'
+    },
+    {
+      id: 81,
+      node_type_code: 'table_node',
+      node_name_ru: 'Таблица',
+      description_ru: 'Принимает данные группы из куба и хранит параметры фильтрации.',
+      section_code: 'data_processing',
+      section_name_ru: 'Работа с данными',
+      section_order: 30,
+      node_order: 35,
+      is_enabled: true,
+      is_system: true,
+      hidden_in_palette: false,
+      node_label_ru: 'Таблица',
+      icon_key: 'table_node',
+      visual_preset_key: 'data',
+      editor_type_code: 'table_node',
+      runtime_handler_code: 'table_node'
     },
     {
       id: 9,
@@ -3577,6 +3636,20 @@
         apiBody: '{}'
       };
     }
+    if (toolType === 'table_node')
+      return {
+        sourceType: 'cube_group',
+        sourcePayload: '{}',
+        sourceLabel: '',
+        sourceField: '',
+        sourceFieldName: '',
+        sourceClusterCount: '1',
+        tableFiltersJson: '[]',
+        filtersConfirmedAt: '',
+        filterDataType: 'number',
+        filterOperator: 'equals',
+        filterValue: ''
+      };
     if (toolType === 'split_data')
       return {
         splitMode: 'duplicate',
@@ -3843,6 +3916,44 @@
     return { x: (clientX - r.left - panX) / zoom, y: (clientY - r.top - panY) / zoom };
   }
 
+  function createTableNodeFromCube(payload?: CubeTableNodeSourcePayload | null) {
+    if (!canvasEl) return;
+    const cfg = payload && typeof payload === 'object' ? payload : {};
+    const point = cfg.point && typeof cfg.point === 'object' ? cfg.point : {};
+    const rect = canvasEl.getBoundingClientRect();
+    const existing = nodes.filter((n) => n.type === 'tool' && toolCfg(n).toolType === 'table_node').length;
+    const p = dropPoint(rect.left + rect.width * 0.54 + existing * 18, rect.top + rect.height * 0.32 + existing * 14);
+    const settings = defaultSettings('table_node');
+    settings.sourcePayload = JSON.stringify(cfg || {});
+    settings.sourceLabel = String(point.label || '').trim();
+    settings.sourceField = String(point.sourceField || '').trim();
+    settings.sourceFieldName = String(point.sourceFieldName || '').trim();
+    settings.sourceClusterCount = String(Math.max(1, Number(point.clusterCount || 1)));
+    const nodeName = settings.sourceLabel ? `Таблица: ${settings.sourceLabel}` : 'Таблица';
+    const id = uid('node');
+    nodes = [
+      ...nodes,
+      {
+        id,
+        type: 'tool',
+        x: p.x,
+        y: p.y,
+        config: { name: nodeName, toolType: 'table_node' as ToolType, settings }
+      }
+    ];
+    selectedNodeId = id;
+    settingsNodeId = id;
+    settingsModalOpen = true;
+    nodeModalFullscreen = false;
+    nodeModalRect = null;
+    banner = 'Добавлена нода "Таблица" из выбранной точки';
+  }
+
+  function onCreateTableNodeEvent(event: Event) {
+    const custom = event as CustomEvent<CubeTableNodeSourcePayload>;
+    createTableNodeFromCube(custom?.detail || null);
+  }
+
   function onDrop(event: DragEvent) {
     event.preventDefault();
     const p = dropPoint(event.clientX, event.clientY);
@@ -3983,7 +4094,7 @@
       isApiToolNode(node) ||
       isParserToolNode(node) ||
       isWriteToolNode(node) ||
-      ['split_data', 'merge_data', 'condition_if', 'condition_switch', 'code_node'].includes(toolCfg(node).toolType || '');
+      ['table_node', 'split_data', 'merge_data', 'condition_if', 'condition_switch', 'code_node'].includes(toolCfg(node).toolType || '');
     if (!canOpenSettings) {
       banner = 'Для этого узла пока нет отдельной настройки по двойному клику';
       return;
@@ -4254,6 +4365,7 @@
         }
       }
     if (cfg.toolType === 'table_parser') outRows = Math.max(0, Math.round(inRows * Math.max(0.1, Number(cfg.settings.parserMultiplier || 1))));
+    if (cfg.toolType === 'table_node') outRows = inRows;
     if (cfg.toolType === 'db_write') outRows = Math.max(0, Math.round(inRows * Math.max(0, Math.min(100, Number(cfg.settings.writeSuccessRate || 98))) / 100));
     if (cfg.toolType === 'end_process') outRows = 0;
     if (cfg.toolType === 'split_data') {
@@ -4429,6 +4541,7 @@
     if (cfg.toolType === 'schedule_process') outRows = inRows;
     if (cfg.toolType === 'api_request') outRows = inRows > 0 ? inRows : 1;
     if (cfg.toolType === 'table_parser') outRows = Math.max(0, Math.round(inRows * Math.max(0.1, Number(cfg.settings.parserMultiplier || 1))));
+    if (cfg.toolType === 'table_node') outRows = inRows;
     if (cfg.toolType === 'db_write') outRows = Math.max(0, Math.round(inRows * Math.max(0, Math.min(100, Number(cfg.settings.writeSuccessRate || 98))) / 100));
     if (cfg.toolType === 'end_process') outRows = 0;
     if (cfg.toolType === 'split_data') {
@@ -4471,6 +4584,128 @@
 
   function updateSetting(nodeId: string, key: string, value: string) {
     nodes = nodes.map((n) => (n.id === nodeId && n.type === 'tool' ? { ...n, config: { ...toolCfg(n), settings: { ...toolCfg(n).settings, [key]: value } } } : n));
+  }
+
+  function normalizeTableNodeFilter(raw: any, idx: number): TableNodeFilter {
+    const dataType = String(raw?.dataType || '').trim();
+    const operator = String(raw?.operator || '').trim();
+    const nextDataType: TableNodeFilter['dataType'] =
+      dataType === 'text' || dataType === 'date' || dataType === 'boolean' ? dataType : 'number';
+    const nextOperator: TableNodeFilter['operator'] =
+      operator === 'not_equals' ||
+      operator === 'gt' ||
+      operator === 'gte' ||
+      operator === 'lt' ||
+      operator === 'lte' ||
+      operator === 'contains' ||
+      operator === 'not_contains' ||
+      operator === 'is_empty' ||
+      operator === 'not_empty'
+        ? (operator as TableNodeFilter['operator'])
+        : 'equals';
+    const id = String(raw?.id || '').trim() || `flt_${idx + 1}`;
+    return {
+      id,
+      dataType: nextDataType,
+      operator: nextOperator,
+      value: String(raw?.value ?? '').trim()
+    };
+  }
+
+  function newTableNodeFilter(): TableNodeFilter {
+    return { id: uid('flt'), dataType: 'number', operator: 'equals', value: '' };
+  }
+
+  function tableNodeFiltersFromSettings(settings: Record<string, string> | undefined): TableNodeFilter[] {
+    const raw = settings || {};
+    try {
+      const parsed = JSON.parse(String(raw.tableFiltersJson || '[]'));
+      if (Array.isArray(parsed) && parsed.length) {
+        return parsed.map((item, idx) => normalizeTableNodeFilter(item, idx));
+      }
+    } catch {
+      // ignore and fallback to legacy single-filter settings
+    }
+    const legacy = normalizeTableNodeFilter(
+      {
+        id: 'flt_1',
+        dataType: String(raw.filterDataType || 'number'),
+        operator: String(raw.filterOperator || 'equals'),
+        value: String(raw.filterValue || '')
+      },
+      0
+    );
+    return [legacy];
+  }
+
+  function tableNodeFilters(node: WorkflowNode | null | undefined): TableNodeFilter[] {
+    if (!node || node.type !== 'tool' || toolCfg(node).toolType !== 'table_node') return [];
+    return tableNodeFiltersFromSettings(toolCfg(node).settings || {});
+  }
+
+  function replaceTableNodeFilters(nodeId: string, filtersInput: TableNodeFilter[]) {
+    const safe = (Array.isArray(filtersInput) && filtersInput.length ? filtersInput : [newTableNodeFilter()]).map((f, idx) =>
+      normalizeTableNodeFilter(f, idx)
+    );
+    const first = safe[0];
+    nodes = nodes.map((n) => {
+      if (n.id !== nodeId || n.type !== 'tool' || toolCfg(n).toolType !== 'table_node') return n;
+      const cfg = toolCfg(n);
+      return {
+        ...n,
+        config: {
+          ...cfg,
+          settings: {
+            ...(cfg.settings || {}),
+            tableFiltersJson: JSON.stringify(safe),
+            filterDataType: first.dataType,
+            filterOperator: first.operator,
+            filterValue: first.value
+          }
+        }
+      };
+    });
+  }
+
+  function addTableNodeFilter(nodeId: string) {
+    const node = nodes.find((n) => n.id === nodeId);
+    const curr = tableNodeFilters(node);
+    replaceTableNodeFilters(nodeId, [...curr, newTableNodeFilter()]);
+  }
+
+  function removeTableNodeFilter(nodeId: string, filterId: string) {
+    const node = nodes.find((n) => n.id === nodeId);
+    const curr = tableNodeFilters(node);
+    replaceTableNodeFilters(
+      nodeId,
+      curr.filter((f) => f.id !== filterId)
+    );
+  }
+
+  function updateTableNodeFilter(nodeId: string, filterId: string, patch: Partial<TableNodeFilter>) {
+    const node = nodes.find((n) => n.id === nodeId);
+    const curr = tableNodeFilters(node);
+    const next = curr.map((f) => (f.id === filterId ? normalizeTableNodeFilter({ ...f, ...patch, id: f.id }, 0) : f));
+    replaceTableNodeFilters(nodeId, next);
+  }
+
+  function confirmTableNodeFilters(nodeId: string) {
+    const now = new Date().toISOString();
+    nodes = nodes.map((n) => {
+      if (n.id !== nodeId || n.type !== 'tool' || toolCfg(n).toolType !== 'table_node') return n;
+      const cfg = toolCfg(n);
+      return {
+        ...n,
+        config: {
+          ...cfg,
+          settings: {
+            ...(cfg.settings || {}),
+            filtersConfirmedAt: now
+          }
+        }
+      };
+    });
+    banner = 'Фильтры ноды "Таблица" подтверждены';
   }
 
   function replaceToolSettings(nodeId: string, settingsPatch: Record<string, any>) {
@@ -4520,6 +4755,30 @@
   function onSettingInput(nodeId: string, key: string, event: Event) {
     const target = event.currentTarget as HTMLInputElement | null;
     updateSetting(nodeId, key, target?.value ?? '');
+  }
+
+  function onTableNodeFilterDataTypeChange(nodeId: string, filterId: string, event: Event) {
+    const raw = selectValue(event);
+    const dataType: TableNodeFilter['dataType'] =
+      raw === 'text' || raw === 'date' || raw === 'boolean' ? raw : 'number';
+    updateTableNodeFilter(nodeId, filterId, { dataType });
+  }
+
+  function onTableNodeFilterOperatorChange(nodeId: string, filterId: string, event: Event) {
+    const raw = selectValue(event);
+    const operator: TableNodeFilter['operator'] =
+      raw === 'not_equals' ||
+      raw === 'gt' ||
+      raw === 'gte' ||
+      raw === 'lt' ||
+      raw === 'lte' ||
+      raw === 'contains' ||
+      raw === 'not_contains' ||
+      raw === 'is_empty' ||
+      raw === 'not_empty'
+        ? raw
+        : 'equals';
+    updateTableNodeFilter(nodeId, filterId, { operator });
   }
 
   function inputValue(event: Event) {
@@ -5000,6 +5259,7 @@
 
   onMount(async () => {
     resetCanvas();
+    window.addEventListener('ao:create-table-node', onCreateTableNodeEvent as EventListener);
     await loadNodeRegistry();
     await loadDynamicSourceCatalog();
     await loadWorkflowDeskFromServer();
@@ -5009,6 +5269,7 @@
   });
 
   onDestroy(() => {
+    window.removeEventListener('ao:create-table-node', onCreateTableNodeEvent as EventListener);
     stopNodeModalResize();
     clearDeskAutosaveTimer();
   });
@@ -5443,6 +5704,36 @@
           {#if toolCfg(selectedNode).toolType === 'table_parser'}
             <div class="empty">
               Полная настройка parser-ноды открывается по двойному клику по карточке или через модалку настройки узла.
+            </div>
+          {/if}
+          {#if toolCfg(selectedNode).toolType === 'table_node'}
+            {#each tableNodeFilters(selectedNode) as filter (filter.id)}
+              <div class="table-filter-row">
+                <select value={filter.dataType} on:change={(e) => onTableNodeFilterDataTypeChange(selectedNode.id, filter.id, e)}>
+                  <option value="text">Текст</option>
+                  <option value="number">Число</option>
+                  <option value="date">Дата</option>
+                  <option value="boolean">Логический</option>
+                </select>
+                <select value={filter.operator} on:change={(e) => onTableNodeFilterOperatorChange(selectedNode.id, filter.id, e)}>
+                  <option value="equals">=</option>
+                  <option value="not_equals">!=</option>
+                  <option value="gt">&gt;</option>
+                  <option value="gte">&gt;=</option>
+                  <option value="lt">&lt;</option>
+                  <option value="lte">&lt;=</option>
+                  <option value="contains">contains</option>
+                  <option value="not_contains">not contains</option>
+                  <option value="is_empty">is empty</option>
+                  <option value="not_empty">not empty</option>
+                </select>
+                <input value={filter.value} placeholder="Значение" on:input={(e) => updateTableNodeFilter(selectedNode.id, filter.id, { value: inputValue(e) })} />
+                <button class="mini" type="button" title="Удалить фильтр" on:click={() => removeTableNodeFilter(selectedNode.id, filter.id)}>x</button>
+              </div>
+            {/each}
+            <div class="table-filter-tools">
+              <button class="mini" type="button" on:click={() => addTableNodeFilter(selectedNode.id)}>+</button>
+              <button class="mini primary" type="button" on:click={() => confirmTableNodeFilters(selectedNode.id)}>Подтвердить</button>
             </div>
           {/if}
           {#if toolCfg(selectedNode).toolType === 'db_write'}
@@ -5932,6 +6223,50 @@
               on:configChange={(event) => replaceToolSettings(settingsNode.id, event.detail?.settings || {})}
             />
           {/key}
+        </div>
+      {/if}
+      {#if settingsNode.type === 'tool' && toolCfg(settingsNode).toolType === 'table_node'}
+        <div class="node-modal-body">
+          <div class="help">Нода хранит ссылку на группу из куба и параметры фильтра. Данные внутри ноды явно не показываются.</div>
+          <label>
+            Источник
+            <input value={toolCfg(settingsNode).settings.sourceLabel || 'Группа из куба'} readonly />
+          </label>
+          <label>
+            Поле
+            <input value={toolCfg(settingsNode).settings.sourceFieldName || toolCfg(settingsNode).settings.sourceField || ''} readonly />
+          </label>
+          {#each tableNodeFilters(settingsNode) as filter (filter.id)}
+            <div class="table-filter-row">
+              <select value={filter.dataType} on:change={(e) => onTableNodeFilterDataTypeChange(settingsNode.id, filter.id, e)}>
+                <option value="text">Текст</option>
+                <option value="number">Число</option>
+                <option value="date">Дата</option>
+                <option value="boolean">Логический</option>
+              </select>
+              <select value={filter.operator} on:change={(e) => onTableNodeFilterOperatorChange(settingsNode.id, filter.id, e)}>
+                <option value="equals">=</option>
+                <option value="not_equals">!=</option>
+                <option value="gt">&gt;</option>
+                <option value="gte">&gt;=</option>
+                <option value="lt">&lt;</option>
+                <option value="lte">&lt;=</option>
+                <option value="contains">contains</option>
+                <option value="not_contains">not contains</option>
+                <option value="is_empty">is empty</option>
+                <option value="not_empty">not empty</option>
+              </select>
+              <input value={filter.value} placeholder="Значение" on:input={(e) => updateTableNodeFilter(settingsNode.id, filter.id, { value: inputValue(e) })} />
+              <button class="mini" type="button" title="Удалить фильтр" on:click={() => removeTableNodeFilter(settingsNode.id, filter.id)}>x</button>
+            </div>
+          {/each}
+          <div class="table-filter-tools">
+            <button class="mini" type="button" on:click={() => addTableNodeFilter(settingsNode.id)}>+</button>
+            <button class="mini primary" type="button" on:click={() => confirmTableNodeFilters(settingsNode.id)}>Подтвердить</button>
+          </div>
+          {#if toolCfg(settingsNode).settings.filtersConfirmedAt}
+            <div class="hint">Подтверждено: {toolCfg(settingsNode).settings.filtersConfirmedAt}</div>
+          {/if}
         </div>
       {/if}
       {#if settingsNode.type === 'tool' && toolCfg(settingsNode).toolType === 'split_data'}
@@ -6446,6 +6781,19 @@
   .props h5 { margin: 0; font-size: 13px; }
   .props label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
   .props input { border: 1px solid #dbe4f0; border-radius: 7px; padding: 6px; }
+  .props select { border: 1px solid #dbe4f0; border-radius: 7px; padding: 6px; }
+  .table-filter-tools { display: flex; gap: 6px; align-items: center; }
+  .table-filter-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr) auto;
+    gap: 6px;
+    align-items: center;
+  }
+  .table-filter-row input,
+  .table-filter-row select {
+    width: 100%;
+    box-sizing: border-box;
+  }
   .edge-row { border: 1px solid #e2e8f0; border-radius: 7px; background: #fff; padding: 6px; display: flex; justify-content: space-between; gap: 8px; font-size: 11px; }
   .edge-row button { border: 1px solid #dbe4f0; border-radius: 6px; background: #fff; cursor: pointer; }
   .issue { border-radius: 7px; border: 1px solid #e2e8f0; background: #fff; padding: 6px; font-size: 12px; }
@@ -6545,6 +6893,9 @@
   .node-modal-body select,
   .node-modal-body textarea { border: 1px solid #dbe4f0; border-radius: 8px; padding: 7px 8px; font-family: inherit; font-size: 13px; }
   .node-modal-body textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .node-modal-body .table-filter-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.6fr) auto;
+  }
   .node-modal-body-api { padding: 8px; background: #fff; min-height: 0; overflow: auto; }
   .api-template-current-block {
     border: 1px solid #e2e8f0;

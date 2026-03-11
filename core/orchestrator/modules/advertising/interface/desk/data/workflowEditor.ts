@@ -5,6 +5,7 @@ export type ToolType =
   | 'api_request'
   | 'http_request'
   | 'table_parser'
+  | 'table_node'
   | 'db_write'
   | 'split_data'
   | 'merge_data'
@@ -180,6 +181,12 @@ export const tools: ToolItem[] = [
     description: 'Выполняет прямой HTTP-запрос по произвольному адресу'
   },
   {
+    id: 'tool_table_node',
+    name: 'Таблица',
+    toolType: 'table_node',
+    description: 'Принимает данные из пространства и хранит фильтры без явного показа строк'
+  },
+  {
     id: 'tool_split',
     name: 'Разделить данные',
     toolType: 'split_data',
@@ -235,6 +242,7 @@ export const toolPorts: Record<ToolType, { inputs: string[]; outputs: string[] }
   api_request: { inputs: ['in'], outputs: ['out'] },
   http_request: { inputs: ['in'], outputs: ['out'] },
   table_parser: { inputs: ['in'], outputs: ['out'] },
+  table_node: { inputs: ['in'], outputs: ['out'] },
   db_write: { inputs: ['in'], outputs: ['out'] },
   split_data: { inputs: ['in'], outputs: ['out'] },
   merge_data: { inputs: ['in'], outputs: ['out'] },
