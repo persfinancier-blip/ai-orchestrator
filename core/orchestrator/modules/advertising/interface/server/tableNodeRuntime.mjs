@@ -246,6 +246,24 @@ function sanitizeComputedExpression(expression) {
   return jsExpr;
 }
 
+function humanizeComputedExpressionError(error) {
+  const message = String(error?.message || error || '').trim();
+  if (!message) return 'Не удалось разобрать выражение.';
+  if (message === 'table_node_expression_unsafe_chars') {
+    return 'Выражение содержит недопустимые символы.';
+  }
+  if (message === 'table_node_expression_unsafe_identifier') {
+    return 'Выражение использует запрещённый идентификатор.';
+  }
+  if (message === 'table_node_expression_invalid_chars') {
+    return 'Выражение содержит неподдерживаемые символы.';
+  }
+  if (error instanceof SyntaxError || /Unexpected token|missing \)|Unexpected end of input/i.test(message)) {
+    return 'Синтаксическая ошибка в выражении. Проверь функцию, скобки и аргументы.';
+  }
+  return message;
+}
+
 function evaluateComputedExpression(expression, row) {
   const jsExpr = sanitizeComputedExpression(expression);
   if (!jsExpr) return undefined;
@@ -256,7 +274,12 @@ function evaluateComputedExpression(expression, row) {
     return getByPath(row, key);
   };
   const fn = buildExpressionFunctions();
-  const evaluator = new Function('field', 'fn', `"use strict"; return (${jsExpr});`);
+  let evaluator;
+  try {
+    evaluator = new Function('field', 'fn', `"use strict"; return (${jsExpr});`);
+  } catch (e) {
+    throw new Error(humanizeComputedExpressionError(e));
+  }
   return evaluator(field, fn);
 }
 

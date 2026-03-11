@@ -172,7 +172,7 @@ test('table node runtime: preview rejects invalid computed expression with user-
           computedFields: [{ name: 'broken', expression: 'если({qty} > 0,', type: 'integer' }]
         })
       ),
-    /Вычисляемое поле "broken"/i
+    /Вычисляемое поле "broken": Синтаксическая ошибка в выражении/i
   );
 });
 
