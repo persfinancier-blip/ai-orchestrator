@@ -125,9 +125,9 @@
     { value: 'admin', label: 'Полный доступ' }
   ];
   const MAIN_DATA_FIELDS: ClientFieldConfig[] = [
-    { key: 'client_code', label: 'Код клиента', placeholder: 'fresh_market' },
-    { key: 'client_name', label: 'Юридическое имя', placeholder: 'ООО Свежий Рынок' },
-    { key: 'client_display_name', label: 'Отображаемое имя', placeholder: 'Свежий Рынок' },
+    { key: 'client_display_name', label: 'Партнер', placeholder: 'Свежий Рынок' },
+    { key: 'client_name', label: 'Наименование контрагента', placeholder: 'ООО Свежий Рынок' },
+    { key: 'client_code', label: 'ИНН (код клиента)', placeholder: 'fresh_market' },
     { key: 'status', label: 'Статус', type: 'select', options: STATUS_OPTIONS },
     { key: 'comment', label: 'Комментарий', type: 'textarea', rows: 4, placeholder: 'Комментарий по клиенту' }
   ];
