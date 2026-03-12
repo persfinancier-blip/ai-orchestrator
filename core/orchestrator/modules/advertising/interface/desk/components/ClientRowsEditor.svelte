@@ -12,12 +12,17 @@
     min?: string | number;
     step?: string | number;
     rows?: number;
+    colSpan?: number;
+    readOnly?: boolean;
+    disabled?: boolean;
+    selectValueType?: 'boolean';
   };
 
   export let title = '';
   export let rows: Array<Record<string, any>> = [];
   export let fields: ClientFieldConfig[] = [];
   export let optionSets: Record<string, OptionItem[]> = {};
+  export let columns = 2;
   export let addLabel = 'Добавить запись';
   export let emptyText = 'Записей пока нет.';
   export let busyRowKey = '';
@@ -115,9 +120,12 @@
             </div>
           </div>
 
-          <div class="form-grid">
+          <div class="form-grid" style={`--grid-columns: ${columns}`}>
             {#each fields as field}
-              <label class:checkbox-field={field.type === 'checkbox'}>
+              <label
+                class:checkbox-field={field.type === 'checkbox'}
+                style={field.colSpan ? `grid-column: span ${field.colSpan}` : ''}
+              >
                 <span>{field.label}</span>
                 {#if field.type === 'textarea'}
                   <textarea
@@ -128,8 +136,23 @@
                   ></textarea>
                 {:else if field.type === 'select'}
                   <select
-                    value={String(row?.[field.key] ?? '')}
-                    on:change={(e) => onTextChange(index, field.key, textValue(e))}
+                    value={
+                      field.selectValueType === 'boolean'
+                        ? row?.[field.key] === true
+                          ? 'true'
+                          : row?.[field.key] === false
+                          ? 'false'
+                          : ''
+                        : String(row?.[field.key] ?? '')
+                    }
+                    on:change={(e) => {
+                      const nextValue = textValue(e);
+                      if (field.selectValueType === 'boolean') {
+                        onTextChange(index, field.key, nextValue === '' ? null : nextValue === 'true');
+                      } else {
+                        onTextChange(index, field.key, nextValue);
+                      }
+                    }}
                   >
                     <option value="">Выбери значение</option>
                     {#each optionsForField(field) as option}
@@ -149,6 +172,8 @@
                     placeholder={field.placeholder || ''}
                     min={field.min ?? undefined}
                     step={field.step ?? undefined}
+                    readonly={field.readOnly}
+                    disabled={field.disabled}
                     on:input={(e) => onTextChange(index, field.key, textValue(e))}
                   />
                 {/if}
@@ -170,7 +195,7 @@
   .row-card { border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px; background: #fff; display: flex; flex-direction: column; gap: 12px; }
   .row-card-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; }
   .row-card-actions { display: inline-flex; gap: 8px; flex-wrap: wrap; }
-  .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; min-width: 0; }
+  .form-grid { display: grid; grid-template-columns: repeat(var(--grid-columns), minmax(0, 1fr)); gap: 12px; min-width: 0; }
   label { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: 12px; color: #334155; }
   label span { font-weight: 600; }
   input, textarea, select {

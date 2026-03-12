@@ -131,13 +131,21 @@
     { key: 'comment', label: 'Описание', type: 'textarea', rows: 4, placeholder: 'Описание' }
   ];
   const LEGAL_ENTITY_FIELDS: ClientFieldConfig[] = [
-    { key: 'legal_entity_name', label: 'Название юр. лица' },
-    { key: 'legal_entity_code', label: 'Код юр. лица' },
-    { key: 'tax_id', label: 'ИНН / налоговый номер' },
+    { key: 'legal_entity_code', label: 'Код юр. лица', readOnly: true, disabled: true },
+    { key: 'tax_id', label: 'ИНН' },
+    {
+      key: 'is_active',
+      label: 'Статус',
+      type: 'select',
+      selectValueType: 'boolean',
+      options: [
+        { value: 'true', label: 'Активно' },
+        { value: 'false', label: 'Неактивно' }
+      ]
+    },
+    { key: 'legal_entity_name', label: 'Название юр. лица', colSpan: 2 },
     { key: 'country', label: 'Страна' },
-    { key: 'role', label: 'Роль' },
-    { key: 'is_active', label: 'Активно', type: 'checkbox' },
-    { key: 'comment', label: 'Комментарий', type: 'textarea', rows: 3 }
+    { key: 'comment', label: 'Описание', type: 'textarea', rows: 3, colSpan: 3 }
   ];
   const CONTRACT_FIELDS: ClientFieldConfig[] = [
     { key: 'legal_entity_id', label: 'Юр. лицо', type: 'select', optionsKey: 'legalEntities' },
@@ -790,6 +798,7 @@
           addLabel={`Добавить: ${currentTabMeta.title}`}
           emptyText="Данные пока не заполнены."
           {busyRowKey}
+          columns={activeTab === 'legal_entities' ? 3 : 2}
           addRowHandler={() => addRow(activeTab)}
           changeRowHandler={(index, field, value) => updateMultiSection(activeTab, index, field, value)}
           saveRowHandler={(index) => saveRow(activeTab, index)}
