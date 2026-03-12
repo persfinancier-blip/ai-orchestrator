@@ -799,6 +799,7 @@
           emptyText="Данные пока не заполнены."
           {busyRowKey}
           columns={activeTab === 'legal_entities' || activeTab === 'contracts' ? 3 : 2}
+          gridTemplate={activeTab === 'contracts' ? '3fr 1fr 1fr' : ''}
           addRowHandler={() => addRow(activeTab)}
           changeRowHandler={(index, field, value) => updateMultiSection(activeTab, index, field, value)}
           saveRowHandler={(index) => saveRow(activeTab, index)}
