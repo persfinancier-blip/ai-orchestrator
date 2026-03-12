@@ -125,11 +125,10 @@
     { value: 'admin', label: 'Полный доступ' }
   ];
   const MAIN_DATA_FIELDS: ClientFieldConfig[] = [
-    { key: 'client_display_name', label: 'Партнер', placeholder: 'Свежий Рынок' },
-    { key: 'client_name', label: 'Наименование контрагента', placeholder: 'ООО Свежий Рынок' },
-    { key: 'client_code', label: 'ИНН (код клиента)', placeholder: 'fresh_market' },
+    { key: 'client_code', label: 'Код партнера', placeholder: 'fresh_market' },
+    { key: 'client_display_name', label: 'Название партнера', placeholder: 'Свежий Рынок' },
     { key: 'status', label: 'Статус', type: 'select', options: STATUS_OPTIONS },
-    { key: 'comment', label: 'Комментарий', type: 'textarea', rows: 4, placeholder: 'Комментарий по клиенту' }
+    { key: 'comment', label: 'Описание', type: 'textarea', rows: 4, placeholder: 'Описание' }
   ];
   const LEGAL_ENTITY_FIELDS: ClientFieldConfig[] = [
     { key: 'legal_entity_name', label: 'Название юр. лица' },
@@ -756,6 +755,7 @@
           </div>
           <div class="form-grid">
             {#each MAIN_DATA_FIELDS as field}
+              {@const isReadonly = field.key === 'client_code'}
               <label class:wide={field.key === 'comment'}>
                 <span>{field.label}</span>
                 {#if field.type === 'textarea'}
@@ -768,7 +768,14 @@
                     {/each}
                   </select>
                 {:else}
-                  <input type="text" value={String(detail.mainData?.[field.key] ?? '')} placeholder={field.placeholder || ''} on:input={(e) => patchMainField(field.key, elementValue(e))} />
+                  <input
+                    type="text"
+                    value={String(detail.mainData?.[field.key] ?? '')}
+                    placeholder={field.placeholder || ''}
+                    readonly={isReadonly}
+                    disabled={isReadonly}
+                    on:input={(e) => patchMainField(field.key, elementValue(e))}
+                  />
                 {/if}
               </label>
             {/each}
@@ -863,7 +870,7 @@
   .section-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
   .section-head h3 { margin: 0; font-size: 16px; }
   .section-head p { margin: 4px 0 0; color: #64748b; font-size: 12px; }
-  .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
   .form-grid label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: #334155; }
   .form-grid label.wide { grid-column: 1 / -1; }
   .form-grid span { font-weight: 600; }
