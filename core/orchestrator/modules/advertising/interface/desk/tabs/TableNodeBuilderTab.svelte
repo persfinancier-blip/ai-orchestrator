@@ -376,10 +376,24 @@
   <div class="table-node-shell">
     <section class="shell-strip">
       <div class="shell-strip-copy">
-        <h3>Исходящие параметры</h3>
-        <p>Зона для будущего preview выходных параметров. Логика будет добавлена отдельно.</p>
+        <h3>Входящие параметры</h3>
+        <p>{incomingPreviewParams.length ? 'Показаны параметры из блока preview JSON. Реальный upstream envelope в этом UI пока не подгружается.' : 'В текущем UI доступны только тестовые параметры preview. Реальный upstream envelope здесь пока не читается.'}</p>
       </div>
-      <span class="shell-strip-chip">Шаг 1: shell only</span>
+      {#if incomingPreviewParams.length}
+        <div class="shell-param-list">
+          {#each incomingPreviewParams as item}
+            <div class="shell-param-item">
+              <div class="shell-param-main">
+                <strong>{item.name}</strong>
+                <span class="shell-strip-chip">{item.type}</span>
+              </div>
+              <span class="shell-param-meta">{item.summary}</span>
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <span class="shell-strip-note">Источник пока ограничен `previewInputParamsJson`.</span>
+      {/if}
     </section>
 
     <section class="shell-section">
@@ -443,24 +457,10 @@
 
     <section class="shell-strip">
       <div class="shell-strip-copy">
-        <h3>Входящие параметры</h3>
-        <p>{incomingPreviewParams.length ? 'Показаны параметры из блока preview JSON. Реальный upstream envelope в этом UI пока не подгружается.' : 'В текущем UI доступны только тестовые параметры preview. Реальный upstream envelope здесь пока не читается.'}</p>
+        <h3>Исходящие параметры</h3>
+        <p>Зона для будущего preview выходных параметров. Логика будет добавлена отдельно.</p>
       </div>
-      {#if incomingPreviewParams.length}
-        <div class="shell-param-list">
-          {#each incomingPreviewParams as item}
-            <div class="shell-param-item">
-              <div class="shell-param-main">
-                <strong>{item.name}</strong>
-                <span class="shell-strip-chip">{item.type}</span>
-              </div>
-              <span class="shell-param-meta">{item.summary}</span>
-            </div>
-          {/each}
-        </div>
-      {:else}
-        <span class="shell-strip-note">Источник пока ограничен `previewInputParamsJson`.</span>
-      {/if}
+      <span class="shell-strip-chip">Шаг 1: shell only</span>
     </section>
   </div>
 </div>
