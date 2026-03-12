@@ -195,6 +195,8 @@
   let outputParamsPreview = {};
   let inputParamNames = [];
   let incomingPreviewParams = [];
+  let outgoingPreviewParams = [];
+  let outgoingPreviewFields = [];
 
   $: {
     const next = normalizeSettings(initialSettings);
@@ -228,6 +230,14 @@
     previewInputParamsValue && typeof previewInputParamsValue === 'object' && !Array.isArray(previewInputParamsValue)
       ? Object.entries(previewInputParamsValue).map(([name, value]) => ({ name, ...describeParamValue(value) }))
       : [];
+  $: outgoingPreviewParams =
+    outputParamsPreview && typeof outputParamsPreview === 'object' && !Array.isArray(outputParamsPreview)
+      ? Object.entries(outputParamsPreview).map(([name, value]) => ({ name, ...describeParamValue(value) }))
+      : [];
+  $: outgoingPreviewFields = (resultPreviewColumns.length
+    ? resultPreviewColumns.map((name) => ({ name, type: outputFieldOptions().find((item) => item.name === name)?.type || '' }))
+    : outputFieldOptions()
+  ).filter((item) => item?.name);
   $: if (settings.baseSchema && settings.baseTable) void ensureColumnsFor(settings.baseSchema, settings.baseTable);
   $: for (const source of joinedSources) if (source.sourceType === 'table' && source.sourceSchema && source.sourceTable) void ensureColumnsFor(source.sourceSchema, source.sourceTable);
 
@@ -466,9 +476,36 @@
     <section class="shell-strip">
       <div class="shell-strip-copy">
         <h3>Исходящие параметры</h3>
-        <p>Зона для будущего preview выходных параметров. Логика будет добавлена отдельно.</p>
+        <p>Read-only preview того, что TABLE NODE отдаст дальше, без отдельной схемы и без редактирования.</p>
       </div>
-      <span class="shell-strip-chip">Шаг 1: shell only</span>
+      <span class="shell-strip-chip">{settings.outputMode === 'named_output_params' ? 'named params' : settings.outputMode === 'aggregated_values' ? 'aggregated' : 'rows'}</span>
+      {#if outgoingPreviewParams.length}
+        <div class="shell-param-list">
+          {#each outgoingPreviewParams as item}
+            <div class="shell-param-item">
+              <div class="shell-param-main">
+                <strong>{item.name}</strong>
+                <span class="shell-strip-chip">{item.type}</span>
+              </div>
+              <span class="shell-param-meta">{item.summary}</span>
+            </div>
+          {/each}
+        </div>
+      {:else if outgoingPreviewFields.length}
+        <div class="shell-param-list">
+          {#each outgoingPreviewFields as item}
+            <div class="shell-param-item">
+              <div class="shell-param-main">
+                <strong>{item.name}</strong>
+                <span class="shell-strip-chip">{item.type || 'field'}</span>
+              </div>
+              <span class="shell-param-meta">Поле результата</span>
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <span class="shell-strip-note">Derived output preview появится после настройки полей результата и запуска preview.</span>
+      {/if}
     </section>
   </div>
 </div>
