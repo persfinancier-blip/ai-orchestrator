@@ -207,25 +207,18 @@
   const ACCESS_FIELDS: ClientFieldConfig[] = [
     { key: 'platform_code', label: 'Код платформы', type: 'select', options: PLATFORM_OPTIONS },
     { key: 'platform_name', label: 'Название платформы' },
-    { key: 'system_name', label: 'Название в системе' },
-    { key: 'external_id', label: 'Внешний ID' },
     { key: 'cabinet_name', label: 'Кабинет' },
     { key: 'cabinet_id', label: 'ID кабинета' },
     { key: 'auth_type', label: 'Тип авторизации', type: 'select', options: AUTH_TYPE_OPTIONS },
     { key: 'token_value', label: 'Токен / ключ' },
     { key: 'login_value', label: 'Логин' },
     { key: 'password_value', label: 'Пароль' },
-    { key: 'api_key', label: 'API-ключ' },
-    { key: 'access_scope', label: 'Область доступа' },
     { key: 'access_mode', label: 'Режим доступа', type: 'select', options: ACCESS_MODE_OPTIONS },
     { key: 'is_active', label: 'Активен', type: 'checkbox' },
     { key: 'check_status', label: 'Статус проверки' },
     { key: 'last_checked_at', label: 'Последняя проверка', type: 'datetime' },
     { key: 'expires_at', label: 'Истекает', type: 'datetime' },
     { key: 'last_error_text', label: 'Последняя ошибка', type: 'textarea', rows: 3 },
-    { key: 'data_table_ref', label: 'Таблица данных' },
-    { key: 'sync_table_ref', label: 'Таблица синхронизации' },
-    { key: 'log_table_ref', label: 'Таблица логов' },
     { key: 'comment', label: 'Комментарий', type: 'textarea', rows: 3 }
   ];
   const MULTI_SECTION_FIELDS: Record<string, ClientFieldConfig[]> = {
