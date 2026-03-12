@@ -242,6 +242,7 @@
   let search = '';
   let clients: ClientListItem[] = [];
   let selectedClientId = 0;
+  let deletingClientId = 0;
   let listSource: SourceMeta | null = null;
   let detail: ClientDetailPayload | null = null;
   let activeTab: TabKey = 'main_data';
@@ -538,6 +539,43 @@
     }
   }
 
+  async function deleteClient(clientId: number) {
+    if (!(clientId > 0)) return;
+    const source = listSource || FALLBACK_SOURCES.clients;
+    if (!source?.schema_name || !source?.table_name) {
+      error = 'Не удалось определить таблицу списка клиентов для удаления.';
+      return;
+    }
+    deletingClientId = clientId;
+    error = '';
+    info = '';
+    try {
+      const preview = await apiJson<{ rows?: Array<Record<string, any>> }>(
+        `${apiBase}/preview?schema=${encodeURIComponent(source.schema_name)}&table=${encodeURIComponent(source.table_name)}&limit=2000`,
+        { headers: headers() }
+      );
+      const rows = Array.isArray(preview?.rows) ? preview.rows : [];
+      const row = rows.find((item) => Number(item?.id || 0) === clientId);
+      const ctid = row?.__ctid || row?.ctid;
+      if (!ctid) throw new Error('ctid_not_found');
+      await apiJson(`${apiBase}/rows/delete`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ schema: source.schema_name, table: source.table_name, ctid })
+      });
+      if (selectedClientId === clientId) {
+        selectedClientId = 0;
+        detail = null;
+      }
+      await loadClients(true);
+      info = 'Клиент удалён.';
+    } catch (e: any) {
+      error = e?.message || String(e || 'Не удалось удалить клиента.');
+    } finally {
+      deletingClientId = 0;
+    }
+  }
+
   async function createClient() {
     createLoading = true;
     error = '';
@@ -664,7 +702,16 @@
           <button type="button" class:active={client.id === selectedClientId} class="client-card" on:click={() => selectClient(client.id)}>
             <div class="client-card-head">
               <strong>{client.client_display_name || client.client_code || `Клиент #${client.id}`}</strong>
-              <span class="badge">{client.status || '—'}</span>
+              <div class="client-card-actions">
+                <span class="badge">{client.status || '—'}</span>
+                <button
+                  class="danger icon-btn"
+                  type="button"
+                  title="Удалить клиента"
+                  disabled={deletingClientId === client.id}
+                  on:click|stopPropagation={() => deleteClient(client.id)}
+                >x</button>
+              </div>
             </div>
             <div class="client-meta">Код: {client.client_code || '—'}</div>
             <div class="client-meta">{client.platform_summary || 'Платформы пока не заданы'}</div>
@@ -805,6 +852,7 @@
   .client-card { border: 1px solid #dbe4f0; border-radius: 14px; background: #fff; padding: 12px; cursor: pointer; text-align: left; display: flex; flex-direction: column; gap: 8px; }
   .client-card.active { border-color: #0f172a; box-shadow: inset 0 0 0 1px #0f172a; }
   .client-card-head { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+  .client-card-actions { display: inline-flex; align-items: center; gap: 8px; }
   .client-meta { font-size: 12px; color: #475569; }
   .client-stats { display: flex; gap: 8px; flex-wrap: wrap; font-size: 11px; color: #64748b; }
   .badge { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 999px; background: #eef2ff; color: #3730a3; font-size: 11px; white-space: nowrap; }
@@ -830,6 +878,7 @@
   .primary-btn, .mini-btn, .icon-btn { border-radius: 10px; border: 1px solid #dbe4f0; background: #fff; padding: 8px 12px; cursor: pointer; font-size: 12px; }
   .primary-btn { background: #0f172a; color: #fff; border-color: #0f172a; }
   .refresh-btn { color: #16a34a; }
+  .danger.icon-btn { color: #dc2626; border-color: #fecaca; }
   .empty-box, .empty-mini, .alert-box, .ok-box { border-radius: 12px; padding: 12px; font-size: 13px; }
   .empty-box, .empty-mini { border: 1px dashed #cbd5e1; color: #64748b; background: #f8fafc; }
   .alert-box { border: 1px solid #fecaca; background: #fff1f2; color: #b91c1c; }
