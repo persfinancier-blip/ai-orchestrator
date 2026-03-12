@@ -148,15 +148,15 @@
     { key: 'comment', label: 'Описание', type: 'textarea', rows: 3, colSpan: 3 }
   ];
   const CONTRACT_FIELDS: ClientFieldConfig[] = [
-    { key: 'legal_entity_id', label: 'Юр. лицо', type: 'select', optionsKey: 'legalEntities' },
+    { key: 'contract_name', label: 'Название договора', colSpan: 2 },
     { key: 'contract_number', label: 'Номер договора' },
-    { key: 'contract_name', label: 'Название договора' },
+    { key: 'status', label: 'Статус', type: 'select', options: STATUS_OPTIONS },
     { key: 'contract_date', label: 'Дата договора', type: 'date' },
     { key: 'date_start', label: 'Начало действия', type: 'date' },
-    { key: 'date_end', label: 'Окончание действия', type: 'date' },
-    { key: 'status', label: 'Статус', type: 'select', options: STATUS_OPTIONS },
-    { key: 'file_url', label: 'Ссылка на файл' },
-    { key: 'comment', label: 'Комментарий', type: 'textarea', rows: 3 }
+    { key: 'date_end', label: 'Дата окончания', type: 'date' },
+    { key: 'legal_entity_id', label: 'Юр.лицо заказчик', type: 'select', optionsKey: 'legalEntities' },
+    { key: 'file_url', label: 'Ссылка на договор' },
+    { key: 'comment', label: 'Описание', type: 'textarea', rows: 3, colSpan: 3 }
   ];
   const PAYMENT_TERM_FIELDS: ClientFieldConfig[] = [
     { key: 'contract_id', label: 'Договор', type: 'select', optionsKey: 'contracts' },
@@ -798,7 +798,7 @@
           addLabel={`Добавить: ${currentTabMeta.title}`}
           emptyText="Данные пока не заполнены."
           {busyRowKey}
-          columns={activeTab === 'legal_entities' ? 3 : 2}
+          columns={activeTab === 'legal_entities' || activeTab === 'contracts' ? 3 : 2}
           addRowHandler={() => addRow(activeTab)}
           changeRowHandler={(index, field, value) => updateMultiSection(activeTab, index, field, value)}
           saveRowHandler={(index) => saveRow(activeTab, index)}
