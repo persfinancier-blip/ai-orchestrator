@@ -650,7 +650,7 @@
     <div class="source-box">{sourceLabel(listSource || FALLBACK_SOURCES.clients)}</div>
     <div class="search-row">
       <input type="search" bind:value={search} placeholder="Поиск клиентов" on:input={() => loadClients(false)} />
-      <button class="mini-btn" type="button" on:click={() => loadClients(false)} disabled={listLoading}>Обновить</button>
+      <button class="icon-btn refresh-btn" type="button" on:click={() => loadClients(false)} disabled={listLoading} title="Обновить список">↻</button>
     </div>
     {#if error}<div class="alert-box">{error}</div>{/if}
     {#if info}<div class="ok-box">{info}</div>{/if}
@@ -827,8 +827,9 @@
   .metrics-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
   .metric-card { border: 1px solid #edf2f7; border-radius: 10px; padding: 8px 10px; font-size: 12px; color: #334155; }
   .metric-card strong { display: block; margin-bottom: 4px; }
-  .primary-btn, .mini-btn { border-radius: 10px; border: 1px solid #dbe4f0; background: #fff; padding: 8px 12px; cursor: pointer; font-size: 12px; }
+  .primary-btn, .mini-btn, .icon-btn { border-radius: 10px; border: 1px solid #dbe4f0; background: #fff; padding: 8px 12px; cursor: pointer; font-size: 12px; }
   .primary-btn { background: #0f172a; color: #fff; border-color: #0f172a; }
+  .refresh-btn { color: #16a34a; }
   .empty-box, .empty-mini, .alert-box, .ok-box { border-radius: 12px; padding: 12px; font-size: 13px; }
   .empty-box, .empty-mini { border: 1px dashed #cbd5e1; color: #64748b; background: #f8fafc; }
   .alert-box { border: 1px solid #fecaca; background: #fff1f2; color: #b91c1c; }
