@@ -148,7 +148,7 @@
     { key: 'comment', label: 'Описание', type: 'textarea', rows: 3, colSpan: 3 }
   ];
   const CONTRACT_FIELDS: ClientFieldConfig[] = [
-    { key: 'contract_name', label: 'Название договора', colSpan: 2 },
+    { key: 'contract_name', label: 'Название договора' },
     { key: 'contract_number', label: 'Номер договора' },
     { key: 'status', label: 'Статус', type: 'select', options: STATUS_OPTIONS },
     { key: 'contract_date', label: 'Дата договора', type: 'date' },
