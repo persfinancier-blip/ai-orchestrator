@@ -33,8 +33,35 @@
       storeId: number;
       templateId: string;
     };
+    executionPreviewChange: {
+      execution: {
+        startedAt: string;
+        durationMs: number;
+        status: number;
+        ok: boolean;
+        totalRequests: number;
+        payloadCount: number;
+        payloadSize: number;
+        requestPreview: any;
+        responsePreview: any;
+        error?: string;
+      };
+    };
   }>();
   let lastTemplateSelectionPayloadKey = '';
+
+  type ApiExecutionPreview = {
+    startedAt: string;
+    durationMs: number;
+    status: number;
+    ok: boolean;
+    totalRequests: number;
+    payloadCount: number;
+    payloadSize: number;
+    requestPreview: any;
+    responsePreview: any;
+    error?: string;
+  };
 
   type BindingRule = {
     id: string;
@@ -2431,6 +2458,23 @@ function formatBytes(bytes: number) {
     outputTreeSourceJson = false;
     outputTreeRefreshedAt = Date.now();
     outputTreeMessage = 'Тестовый результат не содержит JSON-объект для дерева выходного контракта.';
+  }
+
+  function publishExecutionPreview(execution: ApiExecutionPreview) {
+    dispatch('executionPreviewChange', {
+      execution: {
+        startedAt: String(execution?.startedAt || new Date().toISOString()),
+        durationMs: Math.max(0, Number(execution?.durationMs || 0)),
+        status: Math.max(0, Number(execution?.status || 0)),
+        ok: Boolean(execution?.ok),
+        totalRequests: Math.max(0, Number(execution?.totalRequests || 0)),
+        payloadCount: Math.max(0, Number(execution?.payloadCount || 0)),
+        payloadSize: Math.max(0, Number(execution?.payloadSize || 0)),
+        requestPreview: execution?.requestPreview && typeof execution.requestPreview === 'object' ? deepClone(execution.requestPreview) : execution?.requestPreview,
+        responsePreview: execution?.responsePreview && typeof execution.responsePreview === 'object' ? deepClone(execution.responsePreview) : execution?.responsePreview,
+        error: execution?.error ? String(execution.error) : undefined
+      }
+    });
   }
 
   async function refreshOutputContractNow() {
@@ -7994,9 +8038,9 @@ function handleDefinitionInput(value: string) {
           throw new Error('Не удалось сформировать запросы для отправки');
         }
 
-        const startedAt = Date.now();
-        const execution = await executePlanRequests(s, groupedPlan.allRequests, 'sent_grouped_requests', groupedPlan.issues);
-        const auditLog = execution.auditLog || { written: 0, skipped: 0 };
+      const startedAt = Date.now();
+      const execution = await executePlanRequests(s, groupedPlan.allRequests, 'sent_grouped_requests', groupedPlan.issues);
+      const auditLog = execution.auditLog || { written: 0, skipped: 0 };
 
         myApiPreview = JSON.stringify(
           {
@@ -8068,6 +8112,17 @@ function handleDefinitionInput(value: string) {
         } else if (s.responseLogEnabled) {
           ok += ` | Лог записан: ${auditLog.written}`;
         }
+        publishExecutionPreview({
+          startedAt: new Date(startedAt).toISOString(),
+          durationMs: Date.now() - startedAt,
+          status: execution.lastStatus,
+          ok: execution.failed === 0,
+          totalRequests: execution.requestCount,
+          payloadCount: execution.totalItems,
+          payloadSize: execution.totalSize,
+          requestPreview: sentPreviewPayload,
+          responsePreview: groupedResponsePayload
+        });
         return;
       }
       const rowPlan = await buildUngroupedRowRequestPlan(s);
@@ -8146,6 +8201,27 @@ function handleDefinitionInput(value: string) {
         } else if (s.responseLogEnabled) {
           ok += ` | Лог записан: ${auditLog.written}`;
         }
+        publishExecutionPreview({
+          startedAt: new Date(startedAt).toISOString(),
+          durationMs: Date.now() - startedAt,
+          status: execution.lastStatus,
+          ok: execution.failed === 0,
+          totalRequests: execution.requestCount,
+          payloadCount: execution.totalItems,
+          payloadSize: execution.totalSize,
+          requestPreview: {
+            mode: execution.modeLabel,
+            execution_mode: s.executionMode || 'sync',
+            request_rows: rowPlan.allRequests.length,
+            request_count: execution.requestCount,
+            requests: execution.sentRequests,
+            issues:
+              Object.keys({ ...(rowPlan.issues || {}), ...(execution.issues || {}) }).length
+                ? { ...(rowPlan.issues || {}), ...(execution.issues || {}) }
+                : undefined
+          },
+          responsePreview: rowResponsePayload
+        });
         return;
       }
       const authHdr = parseJsonObjectField('Авторизация', s.authJson);
@@ -8334,8 +8410,31 @@ function handleDefinitionInput(value: string) {
       } else if (s.responseLogEnabled) {
         ok += ` | Лог записан: ${auditLog.written}`;
       }
+      publishExecutionPreview({
+        startedAt: new Date(startTime).toISOString(),
+        durationMs: Date.now() - startTime,
+        status: lastStatus,
+        ok: execution.failed === 0,
+        totalRequests: execution.requestCount,
+        payloadCount: execution.totalItems,
+        payloadSize: totalSize,
+        requestPreview: sentPreviewPayload,
+        responsePreview: singleResponsePayload
+      });
     } catch (e: any) {
       err = toUiErrorMessage(e);
+      publishExecutionPreview({
+        startedAt: new Date().toISOString(),
+        durationMs: 0,
+        status: 0,
+        ok: false,
+        totalRequests: 0,
+        payloadCount: 0,
+        payloadSize: 0,
+        requestPreview: {},
+        responsePreview: {},
+        error: toUiErrorMessage(e)
+      });
     } finally {
       checking = false;
     }

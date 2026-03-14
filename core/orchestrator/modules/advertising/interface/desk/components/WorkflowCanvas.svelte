@@ -5637,6 +5637,28 @@
     window.location.hash = q.toString() ? `#desk/data?${q.toString()}` : '#desk/data?pane=api';
   }
 
+  function onApiBuilderExecutionPreviewChange(event: CustomEvent<any>) {
+    const nodeId = String(settingsNodeId || '').trim();
+    if (!nodeId) return;
+    const execution = event?.detail?.execution;
+    if (!execution || typeof execution !== 'object') return;
+    nodeExecutions = {
+      ...nodeExecutions,
+      [nodeId]: {
+        startedAt: String(execution.startedAt || new Date().toISOString()),
+        durationMs: Math.max(0, Number(execution.durationMs || 0)),
+        status: Math.max(0, Number(execution.status || 0)),
+        ok: Boolean(execution.ok),
+        totalRequests: Math.max(0, Number(execution.totalRequests || 0)),
+        payloadCount: Math.max(0, Number(execution.payloadCount || 0)),
+        payloadSize: Math.max(0, Number(execution.payloadSize || 0)),
+        requestPreview: execution.requestPreview && typeof execution.requestPreview === 'object' ? structuredClone(execution.requestPreview) : execution.requestPreview,
+        responsePreview: execution.responsePreview && typeof execution.responsePreview === 'object' ? structuredClone(execution.responsePreview) : execution.responsePreview,
+        error: execution.error ? String(execution.error) : undefined
+      }
+    };
+  }
+
   function resetCanvas() {
     nodes = [];
     edges = [];
@@ -6532,6 +6554,7 @@
                 initialApiStoreId={settingsApiBuilderStoreId}
                 embeddedMode={false}
                 on:templateSelectionChange={onApiBuilderTemplateSelectionChange}
+                on:executionPreviewChange={onApiBuilderExecutionPreviewChange}
               />
             {/key}
           {/if}
