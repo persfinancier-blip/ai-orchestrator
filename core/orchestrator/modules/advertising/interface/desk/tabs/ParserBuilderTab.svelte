@@ -494,10 +494,10 @@
           : ''
     };
   });
-  $: filterRules = parseJsonSafe(settings.filterRulesJson, []);
+  $: filterRules = Array.isArray(parseJsonSafe(settings.filterRulesJson, [])) ? parseJsonSafe(settings.filterRulesJson, []) : [];
   $: computedFields = (Array.isArray(parseJsonSafe(settings.computedFieldsJson, [])) ? parseJsonSafe(settings.computedFieldsJson, []) : [])
     .map((row: any) => normalizeComputedFieldRule(row));
-  $: aggregateRules = parseJsonSafe(settings.aggregateRulesJson, []);
+  $: aggregateRules = Array.isArray(parseJsonSafe(settings.aggregateRulesJson, [])) ? parseJsonSafe(settings.aggregateRulesJson, []) : [];
   $: lookupSelectedFields = parseLookupSelectedFields(settings.lookupSelectedFieldsJson, settings.lookupFields);
   $: lookupJoinRules = parseLookupJoinRules(settings.lookupJoinRulesJson, settings.lookupSourceField, settings.lookupTargetField);
   $: parserWarnings = Array.isArray(previewData?.stats?.warnings) ? previewData.stats.warnings : [];
@@ -560,7 +560,7 @@
   }
 
   function sourceTemplateLabel(item: SourceNodeTemplate) {
-    return `${item.templateType === 'api_request' ? 'Запросы' : 'Работа с данными'} / ${item.name}`;
+    return `${item.templateType === 'api_request' ? 'Запросы' : 'Legacy parser'} / ${item.name}`;
   }
 
   function applySourceNodeTemplateRef(ref: string) {
@@ -1156,6 +1156,10 @@
 
   function buildDerivedOutputFields(): ParserDerivedOutputField[] {
     const previewColumns = Array.isArray(previewData?.columns) ? previewData.columns.map((item: any) => String(item || '').trim()).filter(Boolean) : [];
+    const safeSelectedFieldRows = Array.isArray(selectedFieldRows) ? selectedFieldRows : [];
+    const safeComputedFields = Array.isArray(computedFields) ? computedFields : [];
+    const safeAggregateRules = Array.isArray(aggregateRules) ? aggregateRules : [];
+    const safePreviewResultRows = Array.isArray(previewResultRows) ? previewResultRows : [];
     const out: ParserDerivedOutputField[] = [];
     const seen = new Set<string>();
     const pushField = (field: ParserDerivedOutputField | null | undefined) => {
@@ -1175,16 +1179,16 @@
 
     if (previewColumns.length) {
       previewColumns.forEach((column) => {
-        const selected = selectedFieldRows.find((row) => String(row?.alias || fallbackFieldName(row?.path || '')).trim() === column);
-        const computed = computedFields.find((row: any) => String(row?.name || '').trim() === column);
-        const aggregate = aggregateRules.find((row: any) => String(row?.as || `${row?.op || 'count'}_${row?.field || 'rows'}`).trim() === column);
+        const selected = safeSelectedFieldRows.find((row) => String(row?.alias || fallbackFieldName(row?.path || '')).trim() === column);
+        const computed = safeComputedFields.find((row: any) => String(row?.name || '').trim() === column);
+        const aggregate = safeAggregateRules.find((row: any) => String(row?.as || `${row?.op || 'count'}_${row?.field || 'rows'}`).trim() === column);
         pushField({
           name: column,
           alias: selected?.alias || computed?.name || aggregate?.as || undefined,
           type:
             String(selected?.type || computed?.type || '').trim() ||
             outputFieldTypeFromSettings(column) ||
-            inferFieldTypeFromRows(previewResultRows, column),
+            inferFieldTypeFromRows(safePreviewResultRows, column),
           path: selected?.path || undefined,
           source: 'preview'
         });
@@ -1192,7 +1196,7 @@
       return out;
     }
 
-    selectedFieldRows.forEach((row) => {
+    safeSelectedFieldRows.forEach((row) => {
       pushField({
         name: String(row?.alias || fallbackFieldName(row?.path || '')).trim(),
         alias: String(row?.alias || '').trim(),
@@ -1201,7 +1205,7 @@
         source: 'settings'
       });
     });
-    computedFields.forEach((row: any) => {
+    safeComputedFields.forEach((row: any) => {
       const name = String(row?.name || '').trim();
       if (!name) return;
       pushField({
@@ -1211,7 +1215,7 @@
         source: 'settings'
       });
     });
-    aggregateRules.forEach((row: any) => {
+    safeAggregateRules.forEach((row: any) => {
       const name = String(row?.as || `${row?.op || 'count'}_${row?.field || 'rows'}`).trim();
       if (!name) return;
       pushField({
@@ -1347,14 +1351,14 @@
 
         {#if settings.sourceMode === 'node'}
           <label>
-            Шаблон ноды-источника
+            Legacy-шаблон ноды-источника для preview
             <select value={settings.sourceNodeTemplateRef} on:change={(e) => applySourceNodeTemplateRef(selectValue(e))}>
               <option value="">Выбери шаблон ноды</option>
               {#each sourceTemplates as item (item.ref)}
                 <option value={item.ref}>{sourceTemplateLabel(item)}</option>
               {/each}
             </select>
-            <span class="hint">Для нод источник пока задаётся через шаблон ноды, а не через конкретный экземпляр на canvas.</span>
+            <span class="hint">Этот legacy-выбор нужен только для preview входа. Рабочая настройка parser остаётся в текущей ноде рабочего стола.</span>
           </label>
           {#if sourceTemplatesError}
             <div class="inline-error">{sourceTemplatesError}</div>
@@ -1366,18 +1370,18 @@
               <div class="hint">{currentSourceTemplate.description || 'Описание шаблона не заполнено.'}</div>
             </div>
           {:else}
-            <div class="inline-hint">Выбери шаблон API-ноды или другой ноды “Работа с данными”, чтобы зафиксировать ожидаемый тип входа.</div>
+            <div class="inline-hint">Если для preview нужен пример входа, выбери legacy-шаблон upstream-ноды. Для обычной работы parser отдельный режим больше не нужен.</div>
           {/if}
 
           <label>
-            Пример входных данных для preview
+            Legacy preview входа
             {#if currentSourceTemplate && sourceNodePreviewJson}
               <textarea rows="10" readonly value={sourceNodePreviewJson}></textarea>
               <span class="hint">{sourceNodePreviewMessage}</span>
             {:else if currentSourceTemplate}
               <div class="inline-hint">{sourceNodePreviewMessage}</div>
             {:else}
-              <div class="inline-hint">Выбери шаблон ноды-источника, чтобы автоматически увидеть ожидаемый вход.</div>
+              <div class="inline-hint">Выбери legacy-шаблон ноды-источника, только если нужен fallback preview входа.</div>
             {/if}
           </label>
         {/if}
@@ -2032,7 +2036,7 @@
               <input type="number" min="1" max="5000" value={settings.batchSize} on:input={(e) => patchSetting('batchSize', inputValue(e))} />
             </label>
           </div>
-          <div class="inline-hint">Одна нода «Работа с данными» обрабатывает пакеты по очереди. Пользователь не рисует отдельные ноды под чанки. Preview ограничен, а основной runtime остаётся пакетным.</div>
+          <div class="inline-hint">Parser обрабатывает данные пакетно внутри одной ноды. Preview ограничен, а основной runtime остаётся пакетным.</div>
         </div>
 
         <div class="subsection">
@@ -2099,11 +2103,12 @@
           {/if}
         </div>
 
-        <div class="parser-card">
+        <details class="parser-legacy-panel">
+          <summary class="parser-legacy-summary">Legacy: библиотека шаблонов parser</summary>
+          <div class="parser-legacy-body">
           <div class="parser-card-head">
             <div>
-              <h3>Шаблоны обработки данных</h3>
-              <p>Legacy-библиотека шаблонов parser пока остаётся доступной, но рабочая конфигурация ноды уже живёт в settings текущего desk.</p>
+              <p>Совместимость со старыми desks сохранена, но основной сценарий теперь идёт через node editor текущего рабочего стола.</p>
             </div>
             <button type="button" class="mini-btn" on:click={() => loadDrafts()} disabled={templatesLoading}>
               Обновить
@@ -2192,7 +2197,8 @@
               <div class="empty-box">Шаблоны parser пока не найдены.</div>
             {/if}
           </div>
-        </div>
+          </div>
+        </details>
       </div>
     </section>
 
@@ -2384,6 +2390,29 @@
     font-size: 11px;
     line-height: 1.45;
     color: #64748b;
+  }
+  .parser-legacy-panel {
+    border: 1px dashed #dbe4f0;
+    border-radius: 12px;
+    background: #f8fafc;
+    padding: 0;
+  }
+  .parser-legacy-summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 12px 14px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #334155;
+  }
+  .parser-legacy-summary::-webkit-details-marker {
+    display: none;
+  }
+  .parser-legacy-body {
+    padding: 0 14px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
   }
   .primary-btn,
   .secondary-btn,
