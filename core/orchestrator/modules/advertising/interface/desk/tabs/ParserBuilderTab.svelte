@@ -83,6 +83,7 @@
     | 'unknown';
   type ParserPipelineSourceBasis = 'contract-only' | 'sample-based' | 'preview-derived' | 'mixed' | 'insufficient-data';
   type ParserPipelineStepMode = 'auto' | 'manual' | 'partial' | 'unknown';
+  type ParserDetectStatus = 'auto' | 'partial' | 'unknown';
   type ParserPipelineStrategy =
     | 'direct read'
     | 'unwrap envelope'
@@ -414,12 +415,12 @@
       },
       payloadCandidate: {
         candidateSource: '-',
-        candidatePath: '(вход целиком)',
+        candidatePath: '-',
         mode: 'unknown',
         hasPayloadSample: false
       },
       workingSetCandidate: {
-        candidateRecordPath: '(корень)',
+        candidateRecordPath: '-',
         rowsDetected: null,
         sampleRowsAvailable: 0,
         mode: 'unknown',
@@ -512,6 +513,7 @@
   let sourceTemplatesLoading = false;
   let sourceTemplatesError = '';
   let sourceTemplates: SourceNodeTemplate[] = [];
+  let sourceTemplatesRequested = false;
   let columnsCache: Record<string, ColumnMeta[]> = {};
   let previewLoading = false;
   let previewError = '';
@@ -522,6 +524,8 @@
   let parserPipelineModel: ParserPipelineViewModel = emptyParserPipelineModel();
   let activeStep: ParserEditorStep = 'fields';
   let detectOverrideOpen = false;
+  let payloadManualInputOpen = false;
+  let workingSetManualInputOpen = false;
 
   $: {
     const next = normalizeSettings(initialSettings);
@@ -655,8 +659,8 @@
     detectedFormat: String(previewData?.stats?.detected_format || previewData?.source_format || '-'),
     payloadOrigin: String(previewData?.stats?.payload_origin || '-'),
     inputKind: String(previewData?.stats?.input_kind || '-'),
-    workingSetPath: String(previewData?.stats?.working_set_path || settings.recordPath || '(корень)'),
-    sourcePath: String(previewData?.stats?.source_path || settings.inputPath || '(вход целиком)')
+    workingSetPath: String(previewData?.stats?.working_set_path || '-'),
+    sourcePath: String(previewData?.stats?.source_path || '-')
   };
   $: sourceTableColumnsMeta = columnsCache[tableCacheKey(settings.sourceSchema, settings.sourceTable)] || [];
   $: previewResultRows = Array.isArray(previewData?.sample_rows) ? previewData.sample_rows : [];
@@ -672,16 +676,12 @@
   $: parserPipelineModel = buildParserPipelineViewModel();
   $: detectedInputLabel = humanizeDetectedInput(parserPipelineModel.inputProfile.inputKind, autoParseInfo.detectedFormat, settings.sourceMode);
   $: detectedReadLabel = humanizeReadMode(parserPipelineModel.parseStrategy.strategy, autoParseInfo.detectedFormat, settings.sourceMode);
-  $: payloadCandidateLabel = normalizeAutoPathLabel(parserPipelineModel.payloadCandidate.candidatePath, '(вход целиком)', 'Корень входа');
-  $: workingSetCandidateLabel = normalizeAutoPathLabel(parserPipelineModel.workingSetCandidate.candidateRecordPath, '(корень)', 'Корень данных');
-  $: payloadPathOptions = uniqueStringList([
+  $: payloadAutoPathOptions = uniqueStringList([
     String(autoParseInfo.sourcePath || ''),
-    String(settings.inputPath || ''),
     ...incomingNodes.map((item) => String(incomingSampleMeta(item)?.payloadPath || ''))
   ]).filter((item) => item && !['-', '(вход целиком)'].includes(item));
-  $: workingSetPathOptions = uniqueStringList([
+  $: workingSetAutoPathOptions = uniqueStringList([
     String(autoParseInfo.workingSetPath || ''),
-    String(settings.recordPath || ''),
     String(bayesInput?.recommended_candidate?.path || ''),
     ...(Array.isArray(bayesInput?.alternatives) ? bayesInput.alternatives.map((item: any) => String(item?.path || '')) : [])
   ]).filter((item) => item && !['-', '(корень)'].includes(item));
@@ -707,6 +707,62 @@
       : selectedFieldPaths.length
       ? 'settings'
       : 'unknown';
+  $: detectStatus = (() => {
+    const states = [
+      parserPipelineModel.autoManualState.strategy,
+      parserPipelineModel.autoManualState.payload,
+      parserPipelineModel.autoManualState.workingSet
+    ];
+    if (states.every((item) => item === 'auto')) return 'auto' as ParserDetectStatus;
+    if (states.every((item) => item === 'unknown')) return 'unknown' as ParserDetectStatus;
+    return 'partial' as ParserDetectStatus;
+  })();
+  $: detectStatusLabel =
+    detectStatus === 'auto' ? 'Определено автоматически' : detectStatus === 'partial' ? 'Определено частично' : 'Не определено';
+  $: readModeLabel =
+    parserPipelineModel.parseStrategy.manualOverride && settings.sourceFormat !== 'auto'
+      ? `Ручной override: ${String(settings.sourceFormat || '').toUpperCase()}`
+      : parserPipelineModel.parseStrategy.strategy !== 'unknown'
+      ? `Определено автоматически: ${detectedReadLabel}`
+      : 'Не определено автоматически';
+  $: payloadManualValue = String(settings.inputPath || '').trim();
+  $: workingSetManualValue = String(settings.recordPath || '').trim();
+  $: payloadUsesSavedOverride = Boolean(payloadManualValue) && !payloadAutoPathOptions.includes(payloadManualValue);
+  $: workingSetUsesSavedOverride = Boolean(workingSetManualValue) && !workingSetAutoPathOptions.includes(workingSetManualValue);
+  $: payloadHasAutoCandidate =
+    hasResolvedAutoPath(parserPipelineModel.payloadCandidate.candidatePath, '(вход целиком)') ||
+    payloadAutoPathOptions.length > 0;
+  $: workingSetHasAutoCandidate =
+    hasResolvedAutoPath(parserPipelineModel.workingSetCandidate.candidateRecordPath, '(корень)') ||
+    workingSetAutoPathOptions.length > 0;
+  $: payloadResolutionLabel =
+    payloadUsesSavedOverride
+      ? `Ручной override: ${payloadManualValue}`
+      : payloadHasAutoCandidate
+      ? `Найден candidate: ${normalizeAutoPathLabel(parserPipelineModel.payloadCandidate.candidatePath, '(вход целиком)', 'Корень входа')}`
+      : 'Не определено автоматически';
+  $: workingSetResolutionLabel =
+    workingSetUsesSavedOverride
+      ? `Ручной override: ${workingSetManualValue}`
+      : workingSetHasAutoCandidate
+      ? `Найден candidate: ${normalizeAutoPathLabel(parserPipelineModel.workingSetCandidate.candidateRecordPath, '(корень)', 'Корень данных')}`
+      : 'Не определено автоматически';
+  $: payloadCandidateLabel =
+    payloadUsesSavedOverride
+      ? `Ручной override: ${payloadManualValue}`
+      : payloadHasAutoCandidate
+      ? normalizeAutoPathLabel(parserPipelineModel.payloadCandidate.candidatePath, '(вход целиком)', 'Корень входа')
+      : 'Не определено';
+  $: workingSetCandidateLabel =
+    workingSetUsesSavedOverride
+      ? `Ручной override: ${workingSetManualValue}`
+      : workingSetHasAutoCandidate
+      ? normalizeAutoPathLabel(parserPipelineModel.workingSetCandidate.candidateRecordPath, '(корень)', 'Корень данных')
+      : 'Не определено';
+  $: payloadSelectedCandidateValue = payloadAutoPathOptions.includes(payloadManualValue) ? payloadManualValue : '';
+  $: workingSetSelectedCandidateValue = workingSetAutoPathOptions.includes(workingSetManualValue) ? workingSetManualValue : '';
+  $: showPayloadManualInput = showDetectOverride && (payloadManualInputOpen || payloadUsesSavedOverride || !payloadAutoPathOptions.length);
+  $: showWorkingSetManualInput = showDetectOverride && (workingSetManualInputOpen || workingSetUsesSavedOverride || !workingSetAutoPathOptions.length);
   $: shouldShowCsvOverride = showDetectOverride && (settings.sourceFormat === 'csv' || String(autoParseInfo.detectedFormat || '').trim().toLowerCase() === 'csv');
   $: shouldShowZipOverride = showDetectOverride && (settings.sourceFormat === 'zip' || String(autoParseInfo.detectedFormat || '').trim().toLowerCase() === 'zip');
   $: computedFunctionLibrary = COMPUTED_FUNCTION_CATEGORIES.map((category) => ({
@@ -1065,6 +1121,7 @@
   }
 
   async function loadSourceTemplates() {
+    sourceTemplatesRequested = true;
     sourceTemplatesLoading = true;
     sourceTemplatesError = '';
     try {
@@ -1109,7 +1166,7 @@
     }
   }
 
-  async function previewNow() {
+  async function previewNow(options: { silentMissingInput?: boolean } = {}) {
     previewLoading = true;
     previewError = '';
     try {
@@ -1122,7 +1179,9 @@
         } else if (currentSourceTemplate && sourceNodePreviewJson) {
           inputValue = sourceNodePreviewJson;
         } else {
-          previewError = 'Upstream источник уже определён, но sample snapshot для preview пока недоступен. Legacy fallback нужен только если требуется ручной пример входа.';
+          if (!options.silentMissingInput) {
+            previewError = 'Upstream источник уже определён, но sample snapshot для preview пока недоступен. Для preview нужны sample-данные или явный ручной override.';
+          }
           previewData = null;
           previewRaw = null;
           return;
@@ -1285,8 +1344,14 @@
 
   function normalizeAutoPathLabel(value: string, autoRootToken: string, rootLabel: string) {
     const txt = String(value || '').trim();
-    if (!txt || txt === '-' || txt === autoRootToken) return rootLabel;
+    if (!txt || txt === '-') return 'Не определено';
+    if (txt === autoRootToken) return rootLabel;
     return txt;
+  }
+
+  function hasResolvedAutoPath(value: string, autoRootToken: string) {
+    const txt = String(value || '').trim();
+    return Boolean(txt && txt !== '-' && (txt === autoRootToken || txt.length));
   }
 
   function humanizeDetectedInput(inputKind: ParserPipelineInputKind, detectedFormat: string, sourceMode: string) {
@@ -1363,7 +1428,7 @@
       const safePreviewData = previewData && typeof previewData === 'object' ? previewData : null;
       const safeAutoParseInfo = autoParseInfo && typeof autoParseInfo === 'object'
         ? autoParseInfo
-        : { detectedFormat: '-', payloadOrigin: '-', inputKind: '-', workingSetPath: '(корень)', sourcePath: '(вход целиком)' };
+        : { detectedFormat: '-', payloadOrigin: '-', inputKind: '-', workingSetPath: '-', sourcePath: '-' };
       const safeRenameMap = renameMapValue && typeof renameMapValue === 'object' && !Array.isArray(renameMapValue) ? renameMapValue : {};
       const safeTypeMap = typeMapValue && typeof typeMapValue === 'object' && !Array.isArray(typeMapValue) ? typeMapValue : {};
       const safeDefaultValues = defaultValuesValue && typeof defaultValuesValue === 'object' && !Array.isArray(defaultValuesValue) ? defaultValuesValue : {};
@@ -1401,9 +1466,11 @@
           settings.textMode !== 'lines' ||
           settings.csvDelimiter !== ','
       );
+      const autoPayloadPath = String(safeAutoParseInfo.sourcePath || incomingSampleMeta(sampleNode || {})?.payloadPath || '').trim();
+      const autoWorkingSetPath = String(safeAutoParseInfo.workingSetPath || '').trim();
       const payloadMode: ParserPipelineStepMode = String(settings.inputPath || '').trim()
         ? 'manual'
-        : hasSamplePayload || String(safeAutoParseInfo.payloadOrigin || '').trim() !== '-'
+        : hasSamplePayload || (String(safeAutoParseInfo.payloadOrigin || '').trim() && String(safeAutoParseInfo.payloadOrigin || '').trim() !== '-') || autoPayloadPath
         ? 'auto'
         : 'unknown';
       const rawRowCount = Number(safePreviewData?.raw_row_count);
@@ -1412,7 +1479,7 @@
       const hasTabularSet = Boolean(sampleRowsAvailable > 0 || safeSourcePreviewColumns.length);
       const workingSetMode: ParserPipelineStepMode = String(settings.recordPath || '').trim()
         ? 'manual'
-        : String(safeAutoParseInfo.workingSetPath || '').trim() && String(safeAutoParseInfo.workingSetPath || '').trim() !== '-'
+        : autoWorkingSetPath && autoWorkingSetPath !== '-'
         ? 'auto'
         : hasTabularSet
         ? 'partial'
@@ -1468,12 +1535,12 @@
         },
         payloadCandidate: {
           candidateSource: String(safeAutoParseInfo.payloadOrigin || incomingSampleMeta(sampleNode || {})?.source || settings.sourceMode || '-'),
-          candidatePath: String(safeAutoParseInfo.sourcePath || settings.inputPath || '(вход целиком)'),
+          candidatePath: autoPayloadPath || '-',
           mode: payloadMode,
           hasPayloadSample: hasSamplePayload
         },
         workingSetCandidate: {
-          candidateRecordPath: String(safeAutoParseInfo.workingSetPath || settings.recordPath || '(корень)'),
+          candidateRecordPath: autoWorkingSetPath || '-',
           rowsDetected,
           sampleRowsAvailable,
           mode: workingSetMode,
@@ -1614,9 +1681,18 @@
   }
 
   onMount(() => {
-    void loadSourceTemplates();
-    void previewNow();
+    if (settings.sourceNodeTemplateRef) {
+      void loadSourceTemplates();
+    }
+    void previewNow({ silentMissingInput: true });
   });
+
+  $: if (!settings.sourceNodeTemplateRef) {
+    sourceTemplatesRequested = false;
+  }
+  $: if (settings.sourceNodeTemplateRef && !sourceTemplates.length && !sourceTemplatesLoading && !sourceTemplatesRequested) {
+    void loadSourceTemplates();
+  }
 
   $: sourceColumnOptions = columnOptionsFor(settings.sourceSchema, settings.sourceTable);
   $: lookupColumnOptions = columnOptionsFor(settings.lookupSchema, settings.lookupTable);
@@ -1868,7 +1944,7 @@
           </div>
         </details>
 
-        {#if settings.sourceMode === 'node' && (!incomingSamplePreview.rows.length || settings.sourceNodeTemplateRef)}
+        {#if settings.sourceMode === 'node' && settings.sourceNodeTemplateRef}
           <details class="parser-legacy-panel">
             <summary class="parser-legacy-summary">Legacy / миграция: fallback preview из шаблона ноды-источника</summary>
             <div class="parser-legacy-body">
@@ -1929,6 +2005,13 @@
             </div>
             <div class="inline-hint inline-hint-box">Parser сначала сам пытается понять вход: что пришло, как это читать, где лежат полезные данные, где лежат рабочие строки и сколько полей уже видно.</div>
 
+            <div class="parser-shell-summary">
+              <span class="chip-chip readonly-chip">{detectStatusLabel}</span>
+              {#if hasDetectManualOverrides}
+                <span class="chip-chip readonly-chip">Есть ручной override</span>
+              {/if}
+            </div>
+
             <div class="detect-summary-grid">
               <div class="detect-summary-card">
                 <span class="detect-summary-label">Что пришло</span>
@@ -1943,12 +2026,24 @@
               <div class="detect-summary-card">
                 <span class="detect-summary-label">Где нашли данные</span>
                 <strong>{payloadCandidateLabel}</strong>
-                <span class="hint">Источник: {parserPipelineModel.payloadCandidate.candidateSource}</span>
+                <span class="hint">
+                  {payloadManualValue
+                    ? 'Сохранённое ручное значение'
+                    : payloadHasAutoCandidate
+                    ? `Источник: ${parserPipelineModel.payloadCandidate.candidateSource}`
+                    : 'Auto path пока не найден'}
+                </span>
               </div>
               <div class="detect-summary-card">
                 <span class="detect-summary-label">Где нашли строки</span>
                 <strong>{workingSetCandidateLabel}</strong>
-                <span class="hint">Preview строк: {parserPipelineModel.workingSetCandidate.sampleRowsAvailable}</span>
+                <span class="hint">
+                  {workingSetManualValue
+                    ? 'Сохранённое ручное значение'
+                    : workingSetHasAutoCandidate
+                    ? `Preview строк: ${parserPipelineModel.workingSetCandidate.sampleRowsAvailable}`
+                    : 'Auto path пока не найден'}
+                </span>
               </div>
               <div class="detect-summary-card">
                 <span class="detect-summary-label">Какие поля видим</span>
@@ -1977,9 +2072,10 @@
                   <div class="subsection-head">
                     <h5>Как читать вход</h5>
                   </div>
+                  <div class="inline-hint">{readModeLabel}</div>
                   <div class="form-grid form-grid-2">
                     <label>
-                      Режим чтения
+                      Переопределить режим чтения
                       <select value={settings.sourceFormat} on:change={(e) => patchSetting('sourceFormat', selectValue(e))}>
                         <option value="auto">Auto</option>
                         <option value="json">JSON</option>
@@ -2038,30 +2134,51 @@
                   <div class="subsection-head">
                     <h5>Где лежат данные</h5>
                   </div>
-                  <div class="inline-hint">Найдено автоматически: {payloadCandidateLabel}. Если candidate не подходит, выбери один из найденных путей или введи свой.</div>
-                  <div class="form-grid form-grid-2">
-                    <label>
-                      Выбрать найденный путь до данных
-                      <select value={settings.inputPath} on:change={(e) => patchSetting('inputPath', selectValue(e))}>
-                        <option value="">Оставить auto: {payloadCandidateLabel}</option>
-                        {#each payloadPathOptions as path}
-                          <option value={path}>{path}</option>
-                        {/each}
-                      </select>
-                    </label>
-                    <label>
-                      Ручной путь до данных
-                      <input value={settings.inputPath} on:input={(e) => patchSetting('inputPath', inputValue(e))} placeholder="response.data" />
-                      <span class="hint">Используй это поле только как fallback, если готовые candidate paths не подходят.</span>
-                    </label>
-                  </div>
+                  <div class="inline-hint">{payloadResolutionLabel}</div>
+                  {#if payloadAutoPathOptions.length}
+                    <div class="form-grid form-grid-2">
+                      <label>
+                        Выбрать найденный путь до данных
+                        <select value={payloadSelectedCandidateValue} on:change={(e) => patchSetting('inputPath', selectValue(e))}>
+                          <option value="">Оставить auto: {payloadCandidateLabel}</option>
+                          {#each payloadAutoPathOptions as path}
+                            <option value={path}>{path}</option>
+                          {/each}
+                        </select>
+                        <span class="hint">Это candidate paths, которые parser уже смог найти автоматически.</span>
+                      </label>
+                      <div class="inline-hint inline-hint-box">
+                        {#if payloadUsesSavedOverride}
+                          Сейчас сохранён ручной override: <code>{payloadManualValue}</code>
+                        {:else}
+                          Если ни один из найденных candidate paths не подходит, открой ручной ввод ниже.
+                        {/if}
+                        <div class="subsection-actions">
+                          <button type="button" class="mini-btn" on:click={() => (payloadManualInputOpen = !payloadManualInputOpen)}>
+                            {showPayloadManualInput ? 'Скрыть ручной ввод' : 'Ввести вручную'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  {:else}
+                    <div class="inline-hint inline-hint-box">Parser пока не смог автоматически определить путь до полезных данных. Здесь нужен ручной override.</div>
+                  {/if}
+                  {#if showPayloadManualInput}
+                    <div class="form-grid form-grid-1">
+                      <label>
+                        Ручной путь до данных
+                        <input value={settings.inputPath} on:input={(e) => patchSetting('inputPath', inputValue(e))} placeholder="response.data" />
+                        <span class="hint">Используй это поле только как fallback, если auto path не найден или найден неправильно.</span>
+                      </label>
+                    </div>
+                  {/if}
                 </div>
 
                 <div class="sub-block">
                   <div class="subsection-head">
                     <h5>Где лежат строки</h5>
                   </div>
-                  <div class="inline-hint">Найдено автоматически: {workingSetCandidateLabel}. Если рабочие строки лежат глубже, скорректируй путь вручную.</div>
+                  <div class="inline-hint">{workingSetResolutionLabel}</div>
                   {#if bayesInput?.recommended_candidate}
                     <div class="bayes-box">
                       <div class="bayes-box-head">
@@ -2080,27 +2197,56 @@
                       </div>
                     </div>
                   {/if}
-                  <div class="form-grid form-grid-3">
-                    <label>
-                      Выбрать найденный путь до строк
-                      <select value={settings.recordPath} on:change={(e) => patchSetting('recordPath', selectValue(e))}>
-                        <option value="">Оставить auto: {workingSetCandidateLabel}</option>
-                        {#each workingSetPathOptions as path}
-                          <option value={path}>{path}</option>
-                        {/each}
-                      </select>
-                    </label>
-                    <label>
-                      Ручной путь до строк
-                      <input value={settings.recordPath} on:input={(e) => patchSetting('recordPath', inputValue(e))} placeholder="items.rows" />
-                      <span class="hint">Нужен только если рабочие строки лежат глубже найденных данных.</span>
-                    </label>
-                    <label>
-                      Размер пакета
-                      <input type="number" min="1" max="5000" value={settings.batchSize} on:input={(e) => patchSetting('batchSize', inputValue(e))} />
-                      <span class="hint">Влияет на объём данных в одном проходе preview/runtime.</span>
-                    </label>
-                  </div>
+                  {#if workingSetAutoPathOptions.length}
+                    <div class="form-grid form-grid-2">
+                      <label>
+                        Выбрать найденный путь до строк
+                        <select value={workingSetSelectedCandidateValue} on:change={(e) => patchSetting('recordPath', selectValue(e))}>
+                          <option value="">Оставить auto: {workingSetCandidateLabel}</option>
+                          {#each workingSetAutoPathOptions as path}
+                            <option value={path}>{path}</option>
+                          {/each}
+                        </select>
+                        <span class="hint">Это candidate paths, которые parser уже считает вероятным рабочим набором.</span>
+                      </label>
+                      <div class="inline-hint inline-hint-box">
+                        {#if workingSetUsesSavedOverride}
+                          Сейчас сохранён ручной override: <code>{workingSetManualValue}</code>
+                        {:else}
+                          Если рабочие строки лежат глубже найденных данных, открой ручной ввод ниже.
+                        {/if}
+                        <div class="subsection-actions">
+                          <button type="button" class="mini-btn" on:click={() => (workingSetManualInputOpen = !workingSetManualInputOpen)}>
+                            {showWorkingSetManualInput ? 'Скрыть ручной ввод' : 'Ввести вручную'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  {:else}
+                    <div class="inline-hint inline-hint-box">Parser пока не смог автоматически определить путь до рабочего набора строк. Здесь нужен ручной override.</div>
+                  {/if}
+                  {#if showWorkingSetManualInput}
+                    <div class="form-grid form-grid-2">
+                      <label>
+                        Ручной путь до строк
+                        <input value={settings.recordPath} on:input={(e) => patchSetting('recordPath', inputValue(e))} placeholder="items.rows" />
+                        <span class="hint">Нужен только если рабочие строки лежат глубже найденных данных.</span>
+                      </label>
+                      <label>
+                        Размер пакета
+                        <input type="number" min="1" max="5000" value={settings.batchSize} on:input={(e) => patchSetting('batchSize', inputValue(e))} />
+                        <span class="hint">Влияет на объём данных в одном проходе preview/runtime.</span>
+                      </label>
+                    </div>
+                  {:else}
+                    <div class="form-grid form-grid-1">
+                      <label>
+                        Размер пакета
+                        <input type="number" min="1" max="5000" value={settings.batchSize} on:input={(e) => patchSetting('batchSize', inputValue(e))} />
+                        <span class="hint">Влияет на объём данных в одном проходе preview/runtime.</span>
+                      </label>
+                    </div>
+                  {/if}
                   <div class="form-grid form-grid-1">
                     <label>
                       Множитель парсинга
