@@ -9,6 +9,11 @@
     normalizeComputedFieldRule,
     serializeComputedFieldRule
   } from './computedFieldBuilderCore.js';
+  import {
+    descriptorFieldKey,
+    descriptorFields,
+    descriptorOutputKindLabel
+  } from '../data/nodeDescriptorFlow';
 
   export let apiBase;
   export let apiJson;
@@ -16,6 +21,8 @@
   export let existingTables = [];
   export let initialSettings = {};
   export let embeddedMode = false;
+  export let incomingDescriptor = null;
+  export let outputDescriptor = null;
 
   const dispatch = createEventDispatcher();
   const DEFAULT_SETTINGS = {
@@ -197,6 +204,26 @@
   let incomingPreviewParams = [];
   let outgoingPreviewParams = [];
   let outgoingPreviewFields = [];
+  let incomingDescriptors = [];
+  let incomingDescriptorFields = [];
+  let descriptorOutputFields = [];
+
+  function uniqueDescriptorFieldList(items) {
+    const seen = new Set();
+    return (Array.isArray(items) ? items : []).filter((item) => {
+      const key = descriptorFieldKey(item);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function descriptorFieldSummary(field) {
+    const parts = [];
+    if (field?.path) parts.push(`Path: ${field.path}`);
+    if (field?.origin) parts.push(`Origin: ${field.origin}`);
+    return parts.join(' · ') || 'Поле из upstream descriptor';
+  }
 
   $: {
     const next = normalizeSettings(initialSettings);
@@ -225,6 +252,9 @@
   $: previewSteps = Array.isArray(previewData?.stats?.applied_steps) ? previewData.stats.applied_steps : [];
   $: joinSummaries = Array.isArray(previewData?.join_summaries) ? previewData.join_summaries : [];
   $: outputParamsPreview = previewData?.output_params && typeof previewData.output_params === 'object' ? previewData.output_params : {};
+  $: incomingDescriptors = Array.isArray(incomingDescriptor?.upstreamDescriptors) ? incomingDescriptor.upstreamDescriptors : [];
+  $: incomingDescriptorFields = uniqueDescriptorFieldList(incomingDescriptors.flatMap((item) => descriptorFields(item)));
+  $: descriptorOutputFields = uniqueDescriptorFieldList(descriptorFields(outputDescriptor));
   $: inputParamNames = Array.from(new Set([...Object.keys(previewInputParamsValue || {}), ...joinedSources.filter((item) => item.sourceType === 'input_param').map((item) => item.parameterName), ...inputSources.map((item) => item.parameterName)].filter(Boolean)));
   $: incomingPreviewParams =
     previewInputParamsValue && typeof previewInputParamsValue === 'object' && !Array.isArray(previewInputParamsValue)
@@ -393,9 +423,23 @@
     <section class="shell-strip">
       <div class="shell-strip-copy">
         <h3>Входящие параметры</h3>
-        <p>{incomingPreviewParams.length ? 'Показаны параметры из блока preview JSON. Реальный upstream envelope в этом UI пока не подгружается.' : 'В текущем UI доступны только тестовые параметры preview. Реальный upstream envelope здесь пока не читается.'}</p>
+        <p>{incomingDescriptorFields.length ? 'Показан normalized upstream descriptor предыдущей ноды. Это тот же контракт, который публикуется в её выходной секции.' : incomingPreviewParams.length ? 'Показаны fallback-параметры из блока preview JSON. Upstream descriptor пока не дал контракт полей.' : 'Upstream descriptor ещё не дал входной контракт. В fallback доступны только тестовые preview-параметры.'}</p>
       </div>
-      {#if incomingPreviewParams.length}
+      {#if incomingDescriptorFields.length}
+        <div class="shell-param-list">
+          {#each incomingDescriptorFields as field}
+            <div class="shell-param-item">
+              <div class="shell-param-main">
+                <strong>{field.alias || field.name || field.path}</strong>
+                <div class="shell-param-toolbar">
+                  <span class="shell-strip-chip">{field.type || 'field'}</span>
+                </div>
+              </div>
+              <span class="shell-param-meta">{descriptorFieldSummary(field)}</span>
+            </div>
+          {/each}
+        </div>
+      {:else if incomingPreviewParams.length}
         <div class="shell-param-list">
           {#each incomingPreviewParams as item}
             <div class="shell-param-item">
@@ -413,7 +457,7 @@
           {/each}
         </div>
       {:else}
-        <span class="shell-strip-note">Источник пока ограничен `previewInputParamsJson`.</span>
+        <span class="shell-strip-note">Descriptor входа пока неизвестен. Fallback ограничен `previewInputParamsJson`.</span>
       {/if}
     </section>
 
@@ -476,10 +520,22 @@
     <section class="shell-strip">
       <div class="shell-strip-copy">
         <h3>Исходящие параметры</h3>
-        <p>Read-only preview того, что TABLE NODE отдаст дальше, без отдельной схемы и без редактирования.</p>
+        <p>Read-only normalized output descriptor, который downstream-ноды читают как входной descriptor.</p>
       </div>
-      <span class="shell-strip-chip">{settings.outputMode === 'named_output_params' ? 'named params' : settings.outputMode === 'aggregated_values' ? 'aggregated' : 'rows'}</span>
-      {#if outgoingPreviewParams.length}
+      <span class="shell-strip-chip">{descriptorOutputFields.length ? descriptorOutputKindLabel(outputDescriptor?.outputKind || 'unknown') : settings.outputMode === 'named_output_params' ? 'named params' : settings.outputMode === 'aggregated_values' ? 'aggregated' : 'rows'}</span>
+      {#if descriptorOutputFields.length}
+        <div class="shell-param-list">
+          {#each descriptorOutputFields as field}
+            <div class="shell-param-item">
+              <div class="shell-param-main">
+                <strong>{field.alias || field.name || field.path}</strong>
+                <span class="shell-strip-chip">{field.type || 'field'}</span>
+              </div>
+              <span class="shell-param-meta">{descriptorFieldSummary(field)}</span>
+            </div>
+          {/each}
+        </div>
+      {:else if outgoingPreviewParams.length}
         <div class="shell-param-list">
           {#each outgoingPreviewParams as item}
             <div class="shell-param-item">

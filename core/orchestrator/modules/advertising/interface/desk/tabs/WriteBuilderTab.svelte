@@ -1,6 +1,13 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from 'svelte';
   import { buildSourceNodePreviewFromTemplate } from './parserSourcePreviewCore.js';
+  import {
+    descriptorFields,
+    descriptorSampleColumns,
+    descriptorSampleRows,
+    type NodeDescriptor,
+    type NodeDescriptorFlow
+  } from '../data/nodeDescriptorFlow';
 
   type ExistingTable = { schema_name: string; table_name: string };
   type ColumnMeta = { name: string; type?: string };
@@ -66,6 +73,8 @@
   export let existingTables: ExistingTable[] = [];
   export let initialSettings: Record<string, any> = {};
   export let embeddedMode = false;
+  export let incomingDescriptor: NodeDescriptorFlow | null = null;
+  export let outputDescriptor: NodeDescriptor | null = null;
 
   const dispatch = createEventDispatcher<{ configChange: { settings: WriteSettings } }>();
 
@@ -280,36 +289,64 @@
     sourceTemplates.find((item) => item.ref === String(settings.sourceNodeTemplateRef || '').trim()) ||
     sourceTemplates.find((item) => String(item.storeId || 0) === String(settings.sourceNodeTemplateStoreId || '').trim()) ||
     null;
+  $: incomingDescriptors = Array.isArray(incomingDescriptor?.upstreamDescriptors) ? incomingDescriptor.upstreamDescriptors : [];
+  $: primaryIncomingDescriptor = incomingDescriptors.length ? incomingDescriptors[0] : null;
+  $: incomingDescriptorFields = descriptorFields(primaryIncomingDescriptor);
+  $: incomingDescriptorRows = descriptorSampleRows(primaryIncomingDescriptor);
+  $: incomingDescriptorColumns = descriptorSampleColumns(primaryIncomingDescriptor);
   $: sourceNodePreview = settings.sourceMode === 'node' ? buildSourceNodePreviewFromTemplate(currentSourceTemplate) : { rows: [], columns: [], message: '' };
   $: sourceNodePreviewJson = sourceNodePreview.rows.length ? JSON.stringify(sourceNodePreview.rows, null, 2) : '';
   $: sourcePreviewColumns =
     settings.sourceMode === 'node'
-      ? sourceNodePreview.columns
+      ? incomingDescriptorColumns.length
+        ? incomingDescriptorColumns
+        : incomingDescriptorFields.length
+        ? incomingDescriptorFields.map((field) => String(field.alias || field.name || field.path || '').trim()).filter(Boolean)
+        : sourceNodePreview.columns
       : Array.isArray(previewData?.source_columns)
       ? previewData.source_columns
       : [];
   $: sourcePreviewRows =
     settings.sourceMode === 'node'
-      ? sourceNodePreview.rows
+      ? incomingDescriptorRows.length
+        ? incomingDescriptorRows
+        : sourceNodePreview.rows
       : Array.isArray(previewData?.source_sample_rows)
       ? previewData.source_sample_rows
       : [];
-  $: sourcePreviewMessage = settings.sourceMode === 'node' ? sourceNodePreview.message || '' : previewError || '';
+  $: sourcePreviewMessage =
+    settings.sourceMode === 'node'
+      ? incomingDescriptorFields.length
+        ? incomingDescriptorRows.length
+          ? 'Источник взят из upstream descriptor предыдущей ноды.'
+          : 'Upstream descriptor определён, но sample snapshot пока не доступен.'
+        : sourceNodePreview.message || ''
+      : previewError || '';
   $: sourcePreviewRowCount =
     settings.sourceMode === 'node'
-      ? currentSourceTemplate
+      ? incomingDescriptorRows.length
+        ? incomingDescriptorRows.length
+        : incomingDescriptorFields.length
+        ? '-'
+        : currentSourceTemplate
         ? sourceNodePreview.rows.length
         : '-'
       : (previewData?.source_row_count ?? '-');
   $: sourcePreviewColumnCount =
     settings.sourceMode === 'node'
-      ? currentSourceTemplate
+      ? incomingDescriptorColumns.length
+        ? incomingDescriptorColumns.length
+        : incomingDescriptorFields.length
+        ? incomingDescriptorFields.length
+        : currentSourceTemplate
         ? sourceNodePreview.columns.length
         : '-'
       : (previewData?.source_column_count ?? '-');
   $: sourcePreviewSourceRef =
     settings.sourceMode === 'node'
-      ? currentSourceTemplate
+      ? primaryIncomingDescriptor
+        ? `${primaryIncomingDescriptor.sourceNodeName} · descriptor`
+        : currentSourceTemplate
         ? sourceTemplateLabel(currentSourceTemplate)
         : '-'
       : previewData?.source_ref || '-';
@@ -323,6 +360,7 @@
   $: mappedRowsSummary = previewData?.mapping_summary || null;
   $: writePreviewColumns = Array.isArray(previewData?.result_columns) ? previewData.result_columns : [];
   $: writePreviewRows = Array.isArray(previewData?.result_sample_rows) ? previewData.result_sample_rows : [];
+  $: outputDescriptorFields = descriptorFields(outputDescriptor);
 
   $: if (settings.sourceSchema && settings.sourceTable) {
     void ensureColumnsFor(settings.sourceSchema, settings.sourceTable);
@@ -656,17 +694,25 @@
     try {
       let inputValue: any = undefined;
       if (settings.sourceMode === 'node') {
-        if (!currentSourceTemplate) {
-          previewError = 'Сначала выбери шаблон ноды-источника.';
+        if (incomingDescriptorRows.length) {
+          inputValue = JSON.stringify(incomingDescriptorRows, null, 2);
+        } else if (primaryIncomingDescriptor?.sample?.samplePayload !== undefined) {
+          inputValue =
+            typeof primaryIncomingDescriptor.sample.samplePayload === 'string'
+              ? primaryIncomingDescriptor.sample.samplePayload
+              : JSON.stringify(primaryIncomingDescriptor.sample.samplePayload, null, 2);
+        } else if (primaryIncomingDescriptor?.sample?.sampleRaw !== undefined) {
+          inputValue =
+            typeof primaryIncomingDescriptor.sample.sampleRaw === 'string'
+              ? primaryIncomingDescriptor.sample.sampleRaw
+              : JSON.stringify(primaryIncomingDescriptor.sample.sampleRaw, null, 2);
+        } else if (currentSourceTemplate && sourceNodePreviewJson) {
+          inputValue = sourceNodePreviewJson;
+        } else {
+          previewError = sourcePreviewMessage || 'Upstream descriptor определён, но sample snapshot для preview записи пока недоступен.';
           previewData = null;
           return;
         }
-        if (!sourceNodePreviewJson) {
-          previewError = sourcePreviewMessage || 'У выбранного шаблона ноды ещё не настроен выходной контракт.';
-          previewData = null;
-          return;
-        }
-        inputValue = sourceNodePreviewJson;
       } else if (!settings.sourceSchema || !settings.sourceTable) {
         previewError = 'Сначала выбери таблицу-источник.';
         previewData = null;
@@ -1019,6 +1065,12 @@
             <div class="preview-columns">
               {#each writePreviewColumns as column}
                 <span>{column}</span>
+              {/each}
+            </div>
+          {:else if outputDescriptorFields.length}
+            <div class="preview-columns">
+              {#each outputDescriptorFields as field}
+                <span>{field.alias || field.name || field.path}</span>
               {/each}
             </div>
           {/if}

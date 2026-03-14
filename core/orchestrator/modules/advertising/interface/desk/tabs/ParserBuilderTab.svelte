@@ -11,6 +11,15 @@
     serializeComputedFieldRule
   } from './computedFieldBuilderCore.js';
   import { buildSourceNodePreviewFromTemplate } from './parserSourcePreviewCore.js';
+  import {
+    descriptorFieldKey,
+    descriptorFields,
+    descriptorSampleColumns,
+    descriptorSampleRows,
+    type NodeDescriptor,
+    type NodeDescriptorField,
+    type NodeDescriptorFlow
+  } from '../data/nodeDescriptorFlow';
 
   type ExistingTable = { schema_name: string; table_name: string };
   type ColumnMeta = { name: string; type?: string };
@@ -40,39 +49,12 @@
     output_parameters?: Array<Record<string, any>>;
     picked_paths?: string[];
   };
-  type ParserIncomingContractField = {
-    name: string;
-    alias?: string;
-    type?: string;
-    path?: string;
-  };
-  type ParserIncomingSampleMeta = {
-    source: 'node_execution';
-    status?: number;
-    responsesCount?: number;
-    payloadPath?: string;
-    startedAt?: string;
-  };
   type ParserDerivedOutputField = {
     name: string;
     alias?: string;
     type?: string;
     path?: string;
     source: 'preview' | 'settings';
-  };
-  type ParserIncomingDescriptor = {
-    nodeId?: string;
-    upstreamNodes?: Array<{
-      nodeId: string;
-      nodeName: string;
-      nodeType: string;
-      fromPort: string;
-      contractFields?: ParserIncomingContractField[];
-      sampleRaw?: any;
-      samplePayload?: any;
-      sampleRows?: Array<Record<string, any>>;
-      sampleMeta?: ParserIncomingSampleMeta;
-    }>;
   };
   type ParserPipelineInputKind =
     | 'structured payload'
@@ -156,7 +138,8 @@
   export let existingTables: ExistingTable[] = [];
   export let initialSettings: Record<string, any> = {};
   export let embeddedMode = false;
-  export let incomingDescriptor: ParserIncomingDescriptor | null = null;
+  export let incomingDescriptor: NodeDescriptorFlow | null = null;
+  export let outputDescriptor: NodeDescriptor | null = null;
 
   const dispatch = createEventDispatcher<{
     configChange: { settings: ParserSettings };
@@ -655,16 +638,18 @@
     previewData?.stats && typeof previewData.stats.lookup_summary === 'object' && previewData.stats.lookup_summary
       ? previewData.stats.lookup_summary
       : null;
+  $: primaryIncomingDescriptor = Array.isArray(incomingNodes) && incomingNodes.length ? incomingNodes[0] : null;
+  $: incomingDetection = primaryIncomingDescriptor?.detection && typeof primaryIncomingDescriptor.detection === 'object' ? primaryIncomingDescriptor.detection : {};
   $: autoParseInfo = {
-    detectedFormat: String(previewData?.stats?.detected_format || previewData?.source_format || '-'),
-    payloadOrigin: String(previewData?.stats?.payload_origin || '-'),
-    inputKind: String(previewData?.stats?.input_kind || '-'),
-    workingSetPath: String(previewData?.stats?.working_set_path || '-'),
-    sourcePath: String(previewData?.stats?.source_path || '-')
+    detectedFormat: String(previewData?.stats?.detected_format || previewData?.source_format || incomingDetection?.detectedFormat || '-'),
+    payloadOrigin: String(previewData?.stats?.payload_origin || incomingDetection?.readMode || '-'),
+    inputKind: String(previewData?.stats?.input_kind || primaryIncomingDescriptor?.outputKind || '-'),
+    workingSetPath: String(previewData?.stats?.working_set_path || incomingDetection?.recordPath || '-'),
+    sourcePath: String(previewData?.stats?.source_path || incomingDetection?.payloadPath || '-')
   };
   $: sourceTableColumnsMeta = columnsCache[tableCacheKey(settings.sourceSchema, settings.sourceTable)] || [];
   $: previewResultRows = Array.isArray(previewData?.sample_rows) ? previewData.sample_rows : [];
-  $: incomingNodes = Array.isArray(incomingDescriptor?.upstreamNodes) ? incomingDescriptor.upstreamNodes : [];
+  $: incomingNodes = Array.isArray(incomingDescriptor?.upstreamDescriptors) ? incomingDescriptor.upstreamDescriptors : [];
   $: incomingDescriptorNodeId = String(incomingDescriptor?.nodeId || '').trim();
   $: derivedOutputFields = buildDerivedOutputFields();
   $: derivedOutputSourceLabel =
@@ -1229,22 +1214,29 @@
     return INCOMING_NODE_TYPE_LABELS[key] || key || 'Неизвестный источник';
   }
 
-  function incomingNodeDescription(item: { nodeType?: string; fromPort?: string }) {
-    const nodeType = incomingNodeTypeLabel(String(item?.nodeType || '').trim());
-    const port = String(item?.fromPort || 'out').trim() || 'out';
+  function incomingNodeDescription(item: { sourceNodeType?: string; sourcePort?: string }) {
+    const nodeType = incomingNodeTypeLabel(String(item?.sourceNodeType || '').trim());
+    const port = String(item?.sourcePort || 'out').trim() || 'out';
     return `Источник приходит из desk graph от ноды типа «${nodeType}» через порт «${port}».`;
   }
 
-  function incomingContractFields(item: { contractFields?: ParserIncomingContractField[] }) {
-    return Array.isArray(item?.contractFields) ? item.contractFields.filter(Boolean) : [];
+  function incomingContractFields(item: NodeDescriptor | null | undefined) {
+    return descriptorFields(item);
   }
 
-  function incomingSampleMeta(item: { sampleMeta?: ParserIncomingSampleMeta | null }) {
-    return item?.sampleMeta && typeof item.sampleMeta === 'object' ? item.sampleMeta : null;
+  function incomingSampleMeta(item: NodeDescriptor | null | undefined) {
+    return item?.sample?.sampleMeta && typeof item.sample.sampleMeta === 'object' ? item.sample.sampleMeta : null;
   }
 
   function incomingSampleNode() {
-    return incomingNodes.find((item) => item?.sampleRaw !== undefined || item?.samplePayload !== undefined || (Array.isArray(item?.sampleRows) && item.sampleRows.length)) || null;
+    return (
+      incomingNodes.find(
+        (item) =>
+          item?.sample?.sampleRaw !== undefined ||
+          item?.sample?.samplePayload !== undefined ||
+          (Array.isArray(item?.sample?.sampleRows) && item.sample.sampleRows.length)
+      ) || null
+    );
   }
 
   function previewRowsFromValue(value: any) {
@@ -1269,20 +1261,21 @@
     );
   }
 
-  function inputValueFromIncomingSample(item: ParserIncomingDescriptor['upstreamNodes'][number] | null | undefined) {
-    const value = item?.samplePayload ?? item?.sampleRaw ?? (Array.isArray(item?.sampleRows) ? item.sampleRows : null);
+  function inputValueFromIncomingSample(item: NodeDescriptor | null | undefined) {
+    const value =
+      item?.sample?.samplePayload ?? item?.sample?.sampleRaw ?? (Array.isArray(item?.sample?.sampleRows) ? item.sample.sampleRows : null);
     if (value === undefined || value === null) return '';
     return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
   }
 
-  function buildIncomingSamplePreview(descriptor: ParserIncomingDescriptor | null | undefined) {
+  function buildIncomingSamplePreview(descriptor: NodeDescriptorFlow | null | undefined) {
     const node =
-      Array.isArray(descriptor?.upstreamNodes)
-        ? descriptor.upstreamNodes.find(
+      Array.isArray(descriptor?.upstreamDescriptors)
+        ? descriptor.upstreamDescriptors.find(
             (item) =>
-              item?.sampleRaw !== undefined ||
-              item?.samplePayload !== undefined ||
-              (Array.isArray(item?.sampleRows) && item.sampleRows.length)
+              item?.sample?.sampleRaw !== undefined ||
+              item?.sample?.samplePayload !== undefined ||
+              (Array.isArray(item?.sample?.sampleRows) && item.sample.sampleRows.length)
           ) || null
         : null;
     if (!node) {
@@ -1295,33 +1288,29 @@
         emptyMessage: 'Upstream источник определён, но sample snapshot для preview пока недоступен.'
       };
     }
-    const sampleRows = Array.isArray(node.sampleRows) ? node.sampleRows.filter((item) => item && typeof item === 'object') : [];
+    const sampleRows = descriptorSampleRows(node).filter((item) => item && typeof item === 'object');
     const rows =
       sampleRows.length
         ? sampleRows.slice(0, 10)
-        : previewRowsFromValue(node.samplePayload !== undefined ? node.samplePayload : node.sampleRaw);
-    const columns = previewColumnsFromRows(rows);
+        : previewRowsFromValue(node?.sample?.samplePayload !== undefined ? node.sample.samplePayload : node?.sample?.sampleRaw);
+    const columns = descriptorSampleColumns(node).length ? descriptorSampleColumns(node) : previewColumnsFromRows(rows);
     return {
       rows,
       columns,
       rowCount: rows.length,
       columnCount: columns.length,
-      sourceRef: `Sample snapshot · ${node.nodeName}`,
+      sourceRef: `Sample snapshot · ${node.sourceNodeName}`,
       emptyMessage: 'Sample snapshot у upstream есть, но он не содержит табличного фрагмента для preview.'
     };
   }
 
-  function incomingFieldKey(field: ParserIncomingContractField | null | undefined) {
-    return String(field?.path || field?.alias || field?.name || '').trim();
-  }
-
-  function incomingFieldSelected(field: ParserIncomingContractField | null | undefined) {
-    const key = incomingFieldKey(field);
+  function incomingFieldSelected(field: NodeDescriptorField | null | undefined) {
+    const key = descriptorFieldKey(field);
     return key ? selectedFieldPaths.includes(key) : false;
   }
 
-  function useIncomingField(field: ParserIncomingContractField | null | undefined) {
-    const key = incomingFieldKey(field);
+  function useIncomingField(field: NodeDescriptorField | null | undefined) {
+    const key = descriptorFieldKey(field);
     activeStep = 'fields';
     if (!key) return;
     addSelectedField(key);
@@ -1433,10 +1422,16 @@
       const safeTypeMap = typeMapValue && typeof typeMapValue === 'object' && !Array.isArray(typeMapValue) ? typeMapValue : {};
       const safeDefaultValues = defaultValuesValue && typeof defaultValuesValue === 'object' && !Array.isArray(defaultValuesValue) ? defaultValuesValue : {};
       const safeBayesAlternatives = Array.isArray(bayesInput?.alternatives) ? bayesInput.alternatives : [];
-      const sampleNode = safeIncomingNodes.find((item) => item?.sampleRaw !== undefined || item?.samplePayload !== undefined || (Array.isArray(item?.sampleRows) && item.sampleRows.length)) || null;
-      const firstSampleRaw = sampleNode?.sampleRaw;
-      const firstSamplePayload = sampleNode?.samplePayload;
-      const firstSampleRows = Array.isArray(sampleNode?.sampleRows) ? sampleNode.sampleRows : [];
+      const sampleNode =
+        safeIncomingNodes.find(
+          (item) =>
+            item?.sample?.sampleRaw !== undefined ||
+            item?.sample?.samplePayload !== undefined ||
+            (Array.isArray(item?.sample?.sampleRows) && item.sample.sampleRows.length)
+        ) || null;
+      const firstSampleRaw = sampleNode?.sample?.sampleRaw;
+      const firstSamplePayload = sampleNode?.sample?.samplePayload;
+      const firstSampleRows = Array.isArray(sampleNode?.sample?.sampleRows) ? sampleNode.sample.sampleRows : [];
       const totalContractFields = safeIncomingNodes.reduce((acc, item) => acc + incomingContractFields(item).length, 0);
       const hasSampleRaw = firstSampleRaw !== undefined;
       const hasSamplePayload = firstSamplePayload !== undefined;
@@ -1517,7 +1512,7 @@
         inputProfile: {
           upstreamSummary: safeIncomingNodes.length
             ? safeIncomingNodes.length === 1
-              ? `${safeIncomingNodes[0].nodeName} / ${incomingNodeTypeLabel(safeIncomingNodes[0].nodeType)}`
+              ? `${safeIncomingNodes[0].sourceNodeName} / ${incomingNodeTypeLabel(safeIncomingNodes[0].sourceNodeType)}`
               : `${safeIncomingNodes.length} upstream-источника`
             : 'Источник не определён',
           upstreamCount: safeIncomingNodes.length,
@@ -1594,6 +1589,7 @@
 
   function buildDerivedOutputFields(): ParserDerivedOutputField[] {
     const previewColumns = Array.isArray(previewData?.columns) ? previewData.columns.map((item: any) => String(item || '').trim()).filter(Boolean) : [];
+    const descriptorOutputFields = descriptorFields(outputDescriptor);
     const safeSelectedFieldRows = Array.isArray(selectedFieldRows) ? selectedFieldRows : [];
     const safeComputedFields = Array.isArray(computedFields) ? computedFields : [];
     const safeAggregateRules = Array.isArray(aggregateRules) ? aggregateRules : [];
@@ -1629,6 +1625,19 @@
             inferFieldTypeFromRows(safePreviewResultRows, column),
           path: selected?.path || undefined,
           source: 'preview'
+        });
+      });
+      return out;
+    }
+
+    if (descriptorOutputFields.length) {
+      descriptorOutputFields.forEach((field) => {
+        pushField({
+          name: String(field.alias || field.name || field.path || '').trim(),
+          alias: String(field.alias || '').trim() || undefined,
+          type: String(field.type || '').trim() || undefined,
+          path: String(field.path || '').trim() || undefined,
+          source: 'settings'
         });
       });
       return out;
@@ -1724,10 +1733,10 @@
           <div class="parser-shell-list">
             {#each incomingNodes as item}
               <div class="parser-shell-item">
-                <strong>{item.nodeName}</strong>
+                <strong>{item.sourceNodeName}</strong>
                 <div class="parser-shell-meta">
-                  <span>{incomingNodeTypeLabel(item.nodeType)}</span>
-                  <span>Порт: {item.fromPort || 'out'}</span>
+                  <span>{incomingNodeTypeLabel(item.sourceNodeType)}</span>
+                  <span>Порт: {item.sourcePort || 'out'}</span>
                 </div>
                 <div class="parser-shell-description">{incomingNodeDescription(item)}</div>
                 {#if incomingSampleMeta(item)}

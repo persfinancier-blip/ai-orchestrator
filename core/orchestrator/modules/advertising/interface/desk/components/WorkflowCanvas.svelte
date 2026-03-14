@@ -14,6 +14,15 @@
     type ToolItem,
     type ToolType
   } from '../data/workflowEditor';
+  import {
+    emptyNodeDescriptor,
+    normalizeDescriptorField,
+    uniqueDescriptorFields,
+    type NodeDescriptor,
+    type NodeDescriptorField,
+    type NodeDescriptorFlow,
+    type NodeDescriptorOutputKind
+  } from '../data/nodeDescriptorFlow';
 
   type WorkflowNode = {
     id: string;
@@ -253,29 +262,9 @@
     created_at?: string;
     updated_at?: string;
   };
-  type ParserIncomingContractField = {
-    name: string;
-    alias?: string;
-    type?: string;
-    path?: string;
-  };
-  type ParserIncomingSampleMeta = {
-    source: 'node_execution';
-    status?: number;
-    responsesCount?: number;
-    payloadPath?: string;
-    startedAt?: string;
-  };
-  type ParserIncomingUpstreamNode = {
-    nodeId: string;
-    nodeName: string;
-    nodeType: string;
-    fromPort: string;
-    contractFields?: ParserIncomingContractField[];
-    sampleRaw?: any;
-    samplePayload?: any;
-    sampleRows?: Array<Record<string, any>>;
-    sampleMeta?: ParserIncomingSampleMeta;
+  type NodeDescriptorContext = {
+    sourcePort?: string;
+    upstreamDescriptors?: NodeDescriptor[];
   };
 
   type ApiTemplateSelectionChangePayload = {
@@ -2741,7 +2730,7 @@
     }
   }
 
-  function parserIncomingContractPath(raw: any, fallbackPath = '') {
+  function descriptorContractPath(raw: any, fallbackPath = '') {
     const rootPath = normalizeTemplatePath(String(raw?.rootPath || raw?.root_path || ''));
     const directPath = normalizeTemplatePath(
       String(raw?.path || raw?.response_path || raw?.sourcePath || raw?.source_path || fallbackPath || '')
@@ -2752,46 +2741,34 @@
     return directPath || rootPath;
   }
 
-  function parserIncomingContractField(
-    raw: any,
-    index: number,
-    fallbackPath = ''
-  ): ParserIncomingContractField | null {
-    const path = parserIncomingContractPath(raw, fallbackPath);
-    const alias =
-      String(raw?.alias || raw?.outputName || raw?.output_name || raw?.name || '').trim() ||
-      (path ? buildAliasFromPath(path) : '');
-    const name =
-      String(raw?.name || raw?.fieldName || raw?.field_name || raw?.outputName || raw?.output_name || '').trim() ||
-      alias ||
-      (path
-        ? String(path)
-            .split('.')
-            .map((part) => part.trim())
-            .filter(Boolean)
-            .slice(-1)[0]
-        : `field_${index + 1}`);
-    const type = String(raw?.valueType || raw?.value_type || raw?.type || '').trim();
-    if (!(name || alias || path)) return null;
-    return {
-      name: name || alias || path,
-      alias: alias || undefined,
-      type: type || undefined,
-      path: path || undefined
-    };
+  function descriptorContractField(raw: any, index: number, fallbackPath = '', origin = ''): NodeDescriptorField | null {
+    const path = descriptorContractPath(raw, fallbackPath);
+    return normalizeDescriptorField(
+      {
+        ...raw,
+        path,
+        alias: String(raw?.alias || raw?.outputName || raw?.output_name || raw?.name || '').trim() || (path ? buildAliasFromPath(path) : ''),
+        origin: origin || raw?.origin || raw?.source || ''
+      },
+      index,
+      path
+    );
   }
 
-  function uniqueParserIncomingContractFields(fields: ParserIncomingContractField[]) {
-    const seen = new Set<string>();
-    return fields.filter((field) => {
-      const key = `${String(field.alias || '').trim().toLowerCase()}::${String(field.path || '').trim().toLowerCase()}::${String(field.name || '').trim().toLowerCase()}`;
-      if (!key || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+  function descriptorRegistryForNode(node: WorkflowNode | null | undefined) {
+    if (!node) return null;
+    if (node.type === 'tool') return toolMetaByType(String(toolCfg(node).toolType || '').trim());
+    if (isApiNode(node)) return toolMetaByType('api_request');
+    return null;
   }
 
-  function parserIncomingContractFromApiNode(node: WorkflowNode): ParserIncomingContractField[] {
+  function descriptorOutputKindFromFields(fields: NodeDescriptorField[], fallback: NodeDescriptorOutputKind = 'unknown'): NodeDescriptorOutputKind {
+    const safeFields = Array.isArray(fields) ? fields : [];
+    if (!safeFields.length) return fallback;
+    return safeFields.some((field) => String(field.path || '').trim()) ? 'row set' : 'tabular contract';
+  }
+
+  function descriptorFieldsFromApiNode(node: WorkflowNode): NodeDescriptorField[] {
     const source = resolveTemplateSourceForNode(node, getApiRequestForNode(node));
     const row = source?.rawRow && typeof source.rawRow === 'object' ? source.rawRow : {};
     const config = tryObj(row?.config_json);
@@ -2804,9 +2781,9 @@
       ? config.output_parameters
       : [];
     const directFields = outputParametersRaw
-      .map((item: any, index: number) => parserIncomingContractField(item, index))
-      .filter((item: ParserIncomingContractField | null): item is ParserIncomingContractField => Boolean(item));
-    if (directFields.length) return uniqueParserIncomingContractFields(directFields);
+      .map((item: any, index: number) => descriptorContractField(item, index, '', 'api_output_contract'))
+      .filter((item: NodeDescriptorField | null): item is NodeDescriptorField => Boolean(item));
+    if (directFields.length) return uniqueDescriptorFields(directFields);
 
     const pickedPathsRaw = Array.isArray(row?.picked_paths)
       ? row.picked_paths
@@ -2816,12 +2793,12 @@
       ? config.picked_paths
       : [];
     const pickedFields = pickedPathsRaw
-      .map((item: any, index: number) => parserIncomingContractField({}, index, String(item || '')))
-      .filter((entry: ParserIncomingContractField | null): entry is ParserIncomingContractField => Boolean(entry));
-    return uniqueParserIncomingContractFields(pickedFields);
+      .map((item: any, index: number) => descriptorContractField({}, index, String(item || ''), 'api_picked_path'))
+      .filter((entry: NodeDescriptorField | null): entry is NodeDescriptorField => Boolean(entry));
+    return uniqueDescriptorFields(pickedFields);
   }
 
-  function parserIncomingContractFromParserNode(node: WorkflowNode): ParserIncomingContractField[] {
+  function descriptorFieldsFromParserNode(node: WorkflowNode): NodeDescriptorField[] {
     const settings = toolCfg(node).settings || {};
     const rawFields = Array.isArray(settings.selectFields || settings.select_fields)
       ? settings.selectFields || settings.select_fields
@@ -2832,7 +2809,7 @@
     const selectFields = uniqueAliasList(rawFields.map((item) => String(item || '').trim()).filter(Boolean));
     const renameMap = tryObj(settings.renameMap || settings.rename_map || '{}');
     const typeMap = tryObj(settings.typeMap || settings.type_map || '{}');
-    return uniqueParserIncomingContractFields(
+    return uniqueDescriptorFields(
       selectFields
         .map((path, index) => {
           const leaf =
@@ -2841,64 +2818,121 @@
               .map((part) => part.trim())
               .filter(Boolean)
               .slice(-1)[0] || '';
-          return parserIncomingContractField(
+          return descriptorContractField(
             {
               path,
               alias: String(renameMap[path] || renameMap[leaf] || '').trim(),
               type: String(typeMap[path] || typeMap[leaf] || '').trim(),
-              name: leaf
+              name: leaf,
+              origin: 'parser_settings'
             },
-            index
+            index,
+            path,
+            'parser_settings'
           );
         })
-        .filter((item: ParserIncomingContractField | null): item is ParserIncomingContractField => Boolean(item))
+        .filter((item: NodeDescriptorField | null): item is NodeDescriptorField => Boolean(item))
     );
   }
 
-  function parserIncomingContractFromTableNode(node: WorkflowNode): ParserIncomingContractField[] {
+  function descriptorFieldsFromTableNode(node: WorkflowNode): NodeDescriptorField[] {
     const settings = toolCfg(node).settings || {};
     const selectedFields = tryList(settings.selectedFieldsJson || settings.selectedFields || settings.selected_fields);
-    const fields = selectedFields
+    const selectedContractFields = selectedFields
       .map((item: any, index: number) =>
-        parserIncomingContractField(
+        descriptorContractField(
           {
             name: String(item?.outputName || item?.output_name || item?.fieldName || item?.field_name || '').trim(),
             alias: String(item?.outputName || item?.output_name || '').trim(),
             type: '',
             path: String(item?.sourceAlias || item?.source_alias || '').trim() && String(item?.fieldName || item?.field_name || '').trim()
               ? `${String(item?.sourceAlias || item?.source_alias || '').trim()}.${String(item?.fieldName || item?.field_name || '').trim()}`
-              : String(item?.fieldName || item?.field_name || '').trim()
+              : String(item?.fieldName || item?.field_name || '').trim(),
+            origin: 'table_settings'
+          },
+          index,
+          '',
+          'table_settings'
+        )
+      )
+      .filter((item: NodeDescriptorField | null): item is NodeDescriptorField => Boolean(item));
+    const outputMode = String(settings.outputMode || settings.output_mode || 'rows').trim().toLowerCase();
+    const outputMappings = tryList(settings.outputParamsMappingJson || settings.outputParamsMapping || settings.output_params_mapping);
+    const mappedOutputFields = outputMappings
+      .map((item: any, index: number) =>
+        normalizeDescriptorField(
+          {
+            name: String(item?.outputParamName || item?.output_param_name || '').trim(),
+            alias: String(item?.outputParamName || item?.output_param_name || '').trim(),
+            path: String(item?.sourceField || item?.source_field || item?.expression || '').trim(),
+            origin: 'table_output_mapping'
           },
           index
         )
       )
-      .filter((item: ParserIncomingContractField | null): item is ParserIncomingContractField => Boolean(item));
-    return uniqueParserIncomingContractFields(fields);
+      .filter((item: NodeDescriptorField | null): item is NodeDescriptorField => Boolean(item));
+    return uniqueDescriptorFields(outputMode === 'named_output_params' ? mappedOutputFields : selectedContractFields);
   }
 
-  function parserIncomingContractFieldsForNode(node: WorkflowNode): ParserIncomingContractField[] {
-    if (isApiNode(node) || isApiToolNode(node)) return parserIncomingContractFromApiNode(node);
-    if (isParserToolNode(node)) return parserIncomingContractFromParserNode(node);
-    if (isTableNodeTool(node)) return parserIncomingContractFromTableNode(node);
+  function descriptorFieldsFromWriteNode(node: WorkflowNode): NodeDescriptorField[] {
+    const settings = toolCfg(node).settings || {};
+    const fieldMappings = tryList(settings.fieldMappingsJson || settings.fieldMappings || settings.field_mappings);
+    const targetColumns = uniqueDescriptorFields(
+      fieldMappings
+        .map((item: any, index: number) =>
+          normalizeDescriptorField(
+            {
+              name: String(item?.targetField || item?.target_field || '').trim(),
+              alias: String(item?.targetField || item?.target_field || '').trim(),
+              path: String(item?.targetField || item?.target_field || '').trim(),
+              origin: 'write_mapping'
+            },
+            index
+          )
+        )
+        .filter((item: NodeDescriptorField | null): item is NodeDescriptorField => Boolean(item))
+    );
+    return targetColumns;
+  }
+
+  function nodeDescriptorFieldsForNode(node: WorkflowNode): NodeDescriptorField[] {
+    if (isApiNode(node) || isApiToolNode(node)) return descriptorFieldsFromApiNode(node);
+    if (isParserToolNode(node)) return descriptorFieldsFromParserNode(node);
+    if (isTableNodeTool(node)) return descriptorFieldsFromTableNode(node);
+    if (isWriteToolNode(node)) return descriptorFieldsFromWriteNode(node);
     return [];
   }
 
-  function parserIncomingSampleForNode(node: WorkflowNode) {
-    if (!(isApiNode(node) || isApiToolNode(node))) return {};
+  function nodeDescriptorSampleForApiNode(node: WorkflowNode) {
+    if (!(isApiNode(node) || isApiToolNode(node))) return undefined;
     const exec = nodeExecutions[String(node.id || '').trim()];
     const responsePreview = exec?.responsePreview && typeof exec.responsePreview === 'object' ? exec.responsePreview : null;
     const responses = Array.isArray(responsePreview?.responses) ? responsePreview.responses : [];
     const firstResponse = responses[0]?.response;
-    if (firstResponse === undefined) return {};
+    if (firstResponse === undefined) return undefined;
     const pagination = getPaginationForNode(node);
     const payloadPath = String(pagination?.dataPath || '').trim();
     const samplePayload = payloadPath
       ? getByPath({ response: firstResponse, value: firstResponse, input: firstResponse }, payloadPath)
       : undefined;
+    const sampleRows = Array.isArray(samplePayload)
+      ? samplePayload.slice(0, 5)
+      : samplePayload && typeof samplePayload === 'object' && !Array.isArray(samplePayload)
+      ? [samplePayload]
+      : [];
+    const sampleColumns = Array.from(
+      new Set(
+        sampleRows
+          .flatMap((row) => (row && typeof row === 'object' ? Object.keys(row) : []))
+          .map((item) => String(item || '').trim())
+          .filter(Boolean)
+      )
+    );
     return {
       sampleRaw: firstResponse,
       samplePayload: samplePayload === undefined ? undefined : samplePayload,
-      sampleRows: Array.isArray(samplePayload) ? samplePayload.slice(0, 5) : undefined,
+      sampleRows: sampleRows.length ? sampleRows : undefined,
+      sampleColumns: sampleColumns.length ? sampleColumns : undefined,
       sampleMeta: {
         source: 'node_execution' as const,
         status: Number.isFinite(Number(exec?.status)) ? Number(exec?.status) : undefined,
@@ -2909,27 +2943,146 @@
     };
   }
 
-  function parserIncomingDescriptor(n: WorkflowNode | null | undefined) {
+  function descriptorDetectionFromApiNode(node: WorkflowNode) {
+    const pagination = getPaginationForNode(node);
+    const exec = nodeExecutions[String(node.id || '').trim()];
+    const responsePreview = exec?.responsePreview && typeof exec.responsePreview === 'object' ? exec.responsePreview : null;
+    const warnings = Array.isArray(responsePreview?.warnings) ? responsePreview.warnings.map((item: any) => String(item || '').trim()).filter(Boolean) : [];
+    return {
+      detectedFormat: 'json',
+      readMode: 'api_response',
+      parseMode: 'api_result_contract',
+      payloadPath: String(pagination?.dataPath || '').trim() || undefined,
+      recordPath: String(pagination?.dataPath || '').trim() || undefined,
+      warnings,
+      appliedSteps: ['api_template_contract']
+    };
+  }
+
+  function descriptorDetectionFromParserNode(node: WorkflowNode) {
+    const settings = toolCfg(node).settings || {};
+    const warnings: string[] = [];
+    if (!String(settings.selectFields || '').trim()) warnings.push('parser_result_fields_not_fixed');
+    return {
+      detectedFormat: String(settings.sourceFormat || settings.source_format || 'auto').trim() || undefined,
+      readMode: 'parser',
+      parseMode: 'parser_pipeline',
+      payloadPath: String(settings.inputPath || settings.input_path || '').trim() || undefined,
+      recordPath: String(settings.recordPath || settings.record_path || '').trim() || undefined,
+      warnings,
+      appliedSteps: ['parser_settings']
+    };
+  }
+
+  function descriptorDetectionFromTableNode(node: WorkflowNode) {
+    const settings = toolCfg(node).settings || {};
+    const warnings: string[] = [];
+    if (!String(settings.selectedFieldsJson || settings.selectedFields || '').trim()) warnings.push('table_selected_fields_not_fixed');
+    return {
+      readMode: 'table_node',
+      parseMode: String(settings.outputMode || settings.output_mode || 'rows').trim() || undefined,
+      warnings,
+      appliedSteps: ['table_settings']
+    };
+  }
+
+  function descriptorDetectionFromWriteNode(node: WorkflowNode) {
+    const settings = toolCfg(node).settings || {};
+    return {
+      readMode: 'db_write',
+      parseMode: String(settings.writeMode || settings.write_mode || 'insert').trim() || undefined,
+      warnings: [],
+      appliedSteps: ['write_mapping']
+    };
+  }
+
+  function nodeDescriptorDetectionForNode(node: WorkflowNode) {
+    if (isApiNode(node) || isApiToolNode(node)) return descriptorDetectionFromApiNode(node);
+    if (isParserToolNode(node)) return descriptorDetectionFromParserNode(node);
+    if (isTableNodeTool(node)) return descriptorDetectionFromTableNode(node);
+    if (isWriteToolNode(node)) return descriptorDetectionFromWriteNode(node);
+    return undefined;
+  }
+
+  function nodeDescriptorOutputKindForNode(node: WorkflowNode, fields: NodeDescriptorField[], sample: any, upstreamDescriptors: NodeDescriptor[]): NodeDescriptorOutputKind {
+    if (isParserToolNode(node)) return 'row set';
+    if (isTableNodeTool(node)) {
+      const mode = String(toolCfg(node).settings?.outputMode || toolCfg(node).settings?.output_mode || 'rows').trim().toLowerCase();
+      if (mode === 'named_output_params' || mode === 'aggregated_values') return 'structured object';
+      return 'row set';
+    }
+    if (isWriteToolNode(node)) return fields.length ? 'row set' : 'unknown';
+    if (isApiNode(node) || isApiToolNode(node)) {
+      if (Array.isArray(sample?.sampleRows) && sample.sampleRows.length) return 'row set';
+      return descriptorOutputKindFromFields(fields, 'structured object');
+    }
+    if (fields.length) return descriptorOutputKindFromFields(fields, 'tabular contract');
+    const inherited = Array.isArray(upstreamDescriptors) && upstreamDescriptors.length === 1 ? upstreamDescriptors[0]?.outputKind : 'unknown';
+    return (inherited || 'unknown') as NodeDescriptorOutputKind;
+  }
+
+  function buildNodeOutputDescriptor(node: WorkflowNode | null | undefined, context: NodeDescriptorContext = {}): NodeDescriptor | null {
+    if (!node) return null;
+    const sourcePort = String(context.sourcePort || 'out').trim() || 'out';
+    const upstreamDescriptors = Array.isArray(context.upstreamDescriptors) ? context.upstreamDescriptors : [];
+    const fields = nodeDescriptorFieldsForNode(node);
+    const sample = nodeDescriptorSampleForApiNode(node);
+    const registry = descriptorRegistryForNode(node);
+    if (!fields.length && upstreamDescriptors.length === 1 && !(isApiNode(node) || isApiToolNode(node) || isParserToolNode(node) || isTableNodeTool(node) || isWriteToolNode(node))) {
+      const inherited = upstreamDescriptors[0] || emptyNodeDescriptor(String(node.id || '').trim(), sourcePort);
+      return {
+        ...inherited,
+        sourceNodeId: String(node.id || '').trim(),
+        sourceNodeName: String(node.config?.name || node.id || '').trim() || String(node.id || '').trim(),
+        sourceNodeType:
+          node.type === 'tool'
+            ? String(toolCfg(node).toolType || node.type).trim()
+            : String(node.config?.group || node.type || '').trim() || node.type,
+        sourcePort,
+        editorType: String(registry?.editor_type_code || inherited.editorType || '').trim() || undefined,
+        runtimeHandler: String(registry?.runtime_handler_code || inherited.runtimeHandler || '').trim() || undefined
+      };
+    }
+    return {
+      descriptorVersion: 'node_descriptor_v1',
+      sourceNodeId: String(node.id || '').trim(),
+      sourceNodeName: String(node.config?.name || node.id || '').trim() || String(node.id || '').trim(),
+      sourceNodeType:
+        node.type === 'tool'
+          ? String(toolCfg(node).toolType || node.type).trim()
+          : String(node.config?.group || node.type || '').trim() || node.type,
+      sourcePort,
+      editorType: String(registry?.editor_type_code || '').trim() || undefined,
+      runtimeHandler: String(registry?.runtime_handler_code || '').trim() || undefined,
+      outputKind: nodeDescriptorOutputKindForNode(node, fields, sample, upstreamDescriptors),
+      fields: uniqueDescriptorFields(fields),
+      detection: nodeDescriptorDetectionForNode(node),
+      sample
+    };
+  }
+
+  function incomingDescriptorForNode(n: WorkflowNode | null | undefined): NodeDescriptorFlow | null {
     if (!n) return null;
-    const upstreamNodes = edges
+    const upstreamDescriptors = edges
       .filter((edge) => edge.to === n.id)
-      .reduce<ParserIncomingUpstreamNode[]>((acc, edge) => {
+      .reduce<NodeDescriptor[]>((acc, edge) => {
         const src = nodes.find((candidate) => candidate.id === edge.from);
         if (!src) return acc;
-        acc.push({
-          nodeId: src.id,
-          nodeName: String(src.config?.name || src.id || '').trim() || src.id,
-            nodeType:
-              src.type === 'tool'
-                ? String(toolCfg(src).toolType || src.type).trim()
-                : String(src.config?.group || src.type || '').trim() || src.type,
-            fromPort: String(edge.fromPort || 'out').trim() || 'out',
-            contractFields: parserIncomingContractFieldsForNode(src),
-            ...parserIncomingSampleForNode(src)
-          });
+        const srcUpstream = edges
+          .filter((candidate) => candidate.to === src.id)
+          .map((candidate) => {
+            const upstreamNode = nodes.find((item) => item.id === candidate.from);
+            return buildNodeOutputDescriptor(upstreamNode, { sourcePort: String(candidate.fromPort || 'out').trim() || 'out' });
+          })
+          .filter((item: NodeDescriptor | null): item is NodeDescriptor => Boolean(item));
+        const descriptor = buildNodeOutputDescriptor(src, {
+          sourcePort: String(edge.fromPort || 'out').trim() || 'out',
+          upstreamDescriptors: srcUpstream
+        });
+        if (descriptor) acc.push(descriptor);
         return acc;
       }, []);
-    return { nodeId: n.id, upstreamNodes };
+    return { nodeId: n.id, upstreamDescriptors };
   }
 
   function isTableNodeTool(n: WorkflowNode | null | undefined) {
@@ -6424,7 +6577,11 @@
               headers={workflowApiHeaders}
               existingTables={apiBuilderExistingTables}
               initialSettings={toolCfg(settingsNode).settings || {}}
-              incomingDescriptor={parserIncomingDescriptor(settingsNode)}
+              incomingDescriptor={incomingDescriptorForNode(settingsNode)}
+              outputDescriptor={buildNodeOutputDescriptor(settingsNode, {
+                sourcePort: 'out',
+                upstreamDescriptors: incomingDescriptorForNode(settingsNode)?.upstreamDescriptors || []
+              })}
               embeddedMode={false}
               on:configChange={(event) => replaceToolSettings(settingsNode.id, event.detail?.settings || {})}
             />
@@ -6440,6 +6597,11 @@
               headers={workflowApiHeaders}
               existingTables={apiBuilderExistingTables}
               initialSettings={toolCfg(settingsNode).settings || {}}
+              incomingDescriptor={incomingDescriptorForNode(settingsNode)}
+              outputDescriptor={buildNodeOutputDescriptor(settingsNode, {
+                sourcePort: 'out',
+                upstreamDescriptors: incomingDescriptorForNode(settingsNode)?.upstreamDescriptors || []
+              })}
               embeddedMode={false}
               on:configChange={(event) => replaceToolSettings(settingsNode.id, event.detail?.settings || {})}
             />
@@ -6455,21 +6617,11 @@
               headers={workflowApiHeaders}
               existingTables={apiBuilderExistingTables}
               initialSettings={toolCfg(settingsNode).settings || {}}
-              embeddedMode={false}
-              on:configChange={(event) => replaceToolSettings(settingsNode.id, event.detail?.settings || {})}
-            />
-          {/key}
-        </div>
-      {/if}
-      {#if isTableNodeTool(settingsNode)}
-        <div class="node-modal-body node-modal-body-api">
-          {#key `${settingsNode.id}:${toolCfg(settingsNode).settings.baseSchema || ''}:${toolCfg(settingsNode).settings.baseTable || ''}`}
-            <TableNodeBuilderTab
-              apiBase={API_BASE}
-              apiJson={workflowApiJson}
-              headers={workflowApiHeaders}
-              existingTables={apiBuilderExistingTables}
-              initialSettings={toolCfg(settingsNode).settings || {}}
+              incomingDescriptor={incomingDescriptorForNode(settingsNode)}
+              outputDescriptor={buildNodeOutputDescriptor(settingsNode, {
+                sourcePort: 'out',
+                upstreamDescriptors: incomingDescriptorForNode(settingsNode)?.upstreamDescriptors || []
+              })}
               embeddedMode={false}
               on:configChange={(event) => replaceToolSettings(settingsNode.id, event.detail?.settings || {})}
             />
