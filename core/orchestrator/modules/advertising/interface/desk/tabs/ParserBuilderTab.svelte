@@ -130,6 +130,19 @@
     aggregateRulesJson: '[]'
   };
   const COMPUTED_EXPRESSION_PLACEHOLDER = 'если({price} > 0, {price} * 0.9, 0)';
+  const INCOMING_NODE_TYPE_LABELS: Record<string, string> = {
+    api_request: 'API-запрос',
+    http_request: 'HTTP-запрос',
+    table_node: 'Табличный набор',
+    table_parser: 'Парсер данных',
+    db_write: 'Запись в БД',
+    split_data: 'Разделение данных',
+    merge_data: 'Объединение данных',
+    condition_if: 'Условие',
+    condition_switch: 'Переключатель',
+    code_node: 'Код',
+    start_process: 'Старт процесса'
+  };
 
   function normalizeSettings(raw: Record<string, any> | null | undefined): ParserSettings {
     const next: ParserSettings = { ...DEFAULT_SETTINGS };
@@ -501,6 +514,7 @@
   $: sourceTableColumnsMeta = columnsCache[tableCacheKey(settings.sourceSchema, settings.sourceTable)] || [];
   $: previewResultRows = Array.isArray(previewData?.sample_rows) ? previewData.sample_rows : [];
   $: incomingNodes = Array.isArray(incomingDescriptor?.upstreamNodes) ? incomingDescriptor.upstreamNodes : [];
+  $: incomingDescriptorNodeId = String(incomingDescriptor?.nodeId || '').trim();
   $: computedFunctionLibrary = COMPUTED_FUNCTION_CATEGORIES.map((category) => ({
     ...category,
     items: COMPUTED_FUNCTIONS.filter((item) => item.category === category.id)
@@ -1091,6 +1105,17 @@
     return (event.currentTarget as HTMLInputElement | null)?.value ?? '';
   }
 
+  function incomingNodeTypeLabel(value: string) {
+    const key = String(value || '').trim();
+    return INCOMING_NODE_TYPE_LABELS[key] || key || 'Неизвестный источник';
+  }
+
+  function incomingNodeDescription(item: { nodeType?: string; fromPort?: string }) {
+    const nodeType = incomingNodeTypeLabel(String(item?.nodeType || '').trim());
+    const port = String(item?.fromPort || 'out').trim() || 'out';
+    return `Источник приходит из desk graph от ноды типа «${nodeType}» через порт «${port}».`;
+  }
+
   function selectValue(event: Event) {
     return (event.currentTarget as HTMLSelectElement | null)?.value ?? '';
   }
@@ -1127,20 +1152,30 @@
         <div class="parser-card-head">
           <div>
             <h3>Входящие параметры</h3>
-            <p>Честный upstream descriptor из текущего desk graph. На этом шаге секция остаётся read-only.</p>
+            <p>Read-only описание реального upstream из текущего desk graph. Эта секция не подменяется template preview и не даёт настройки.</p>
           </div>
         </div>
         {#if incomingNodes.length}
+          <div class="parser-shell-summary">
+            <span class="chip-chip readonly-chip">{incomingNodes.length} {incomingNodes.length === 1 ? 'источник' : 'источника'}</span>
+            {#if incomingDescriptorNodeId}
+              <span class="inline-hint">Для ноды: {incomingDescriptorNodeId}</span>
+            {/if}
+          </div>
           <div class="parser-shell-list">
             {#each incomingNodes as item}
               <div class="parser-shell-item">
                 <strong>{item.nodeName}</strong>
-                <span>{item.nodeType} · {item.fromPort}</span>
+                <div class="parser-shell-meta">
+                  <span>{incomingNodeTypeLabel(item.nodeType)}</span>
+                  <span>Порт: {item.fromPort || 'out'}</span>
+                </div>
+                <div class="parser-shell-description">{incomingNodeDescription(item)}</div>
               </div>
             {/each}
           </div>
         {:else}
-          <div class="inline-hint">В текущем desk graph upstream descriptor пуст или ещё не определён. Следующий шаг заполнит секцию содержимым.</div>
+          <div class="inline-hint">В текущем desk graph для parser пока нет входящего соединения или upstream descriptor ещё не определён. Секция остаётся пустой, потому что fake input здесь не используется.</div>
         {/if}
       </div>
     </section>
@@ -2098,6 +2133,12 @@
     flex-direction: column;
     gap: 8px;
   }
+  .parser-shell-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
   .parser-shell-item {
     display: flex;
     flex-direction: column;
@@ -2114,6 +2155,16 @@
   .parser-shell-item span {
     font-size: 11px;
     color: #64748b;
+  }
+  .parser-shell-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .parser-shell-description {
+    font-size: 11px;
+    line-height: 1.45;
+    color: #475569;
   }
   .primary-btn,
   .secondary-btn,
