@@ -56,6 +56,13 @@
     type?: string;
     path?: string;
   };
+  type ParserDerivedOutputField = {
+    name: string;
+    alias?: string;
+    type?: string;
+    path?: string;
+    source: 'preview' | 'settings';
+  };
   type ParserIncomingDescriptor = {
     nodeId?: string;
     upstreamNodes?: Array<{
@@ -522,6 +529,13 @@
   $: previewResultRows = Array.isArray(previewData?.sample_rows) ? previewData.sample_rows : [];
   $: incomingNodes = Array.isArray(incomingDescriptor?.upstreamNodes) ? incomingDescriptor.upstreamNodes : [];
   $: incomingDescriptorNodeId = String(incomingDescriptor?.nodeId || '').trim();
+  $: derivedOutputFields = buildDerivedOutputFields();
+  $: derivedOutputSourceLabel =
+    Array.isArray(previewData?.columns) && previewData.columns.length
+      ? 'По результату preview'
+      : derivedOutputFields.length
+      ? 'По текущим settings parser'
+      : '';
   $: computedFunctionLibrary = COMPUTED_FUNCTION_CATEGORIES.map((category) => ({
     ...category,
     items: COMPUTED_FUNCTIONS.filter((item) => item.category === category.id)
@@ -1125,6 +1139,90 @@
 
   function incomingContractFields(item: { contractFields?: ParserIncomingContractField[] }) {
     return Array.isArray(item?.contractFields) ? item.contractFields.filter(Boolean) : [];
+  }
+
+  function outputFieldTypeFromSettings(fieldName: string) {
+    const wanted = String(fieldName || '').trim();
+    if (!wanted) return '';
+    const selected = selectedFieldRows.find((row) => String(row?.alias || fallbackFieldName(row?.path || '')).trim() === wanted);
+    if (selected?.type) return String(selected.type).trim();
+    const computed = computedFields.find((row: any) => String(row?.name || '').trim() === wanted);
+    if (computed?.type) return String(computed.type).trim();
+    const aggregate = aggregateRules.find((row: any) => String(row?.as || `${row?.op || 'count'}_${row?.field || 'rows'}`).trim() === wanted);
+    if (aggregate) return 'numeric';
+    const fallback = String(typeMapValue?.[wanted] || '').trim();
+    return fallback;
+  }
+
+  function buildDerivedOutputFields(): ParserDerivedOutputField[] {
+    const previewColumns = Array.isArray(previewData?.columns) ? previewData.columns.map((item: any) => String(item || '').trim()).filter(Boolean) : [];
+    const out: ParserDerivedOutputField[] = [];
+    const seen = new Set<string>();
+    const pushField = (field: ParserDerivedOutputField | null | undefined) => {
+      const name = String(field?.name || '').trim();
+      if (!name) return;
+      const key = name.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({
+        name,
+        alias: String(field?.alias || '').trim() || undefined,
+        type: String(field?.type || '').trim() || undefined,
+        path: String(field?.path || '').trim() || undefined,
+        source: field?.source === 'settings' ? 'settings' : 'preview'
+      });
+    };
+
+    if (previewColumns.length) {
+      previewColumns.forEach((column) => {
+        const selected = selectedFieldRows.find((row) => String(row?.alias || fallbackFieldName(row?.path || '')).trim() === column);
+        const computed = computedFields.find((row: any) => String(row?.name || '').trim() === column);
+        const aggregate = aggregateRules.find((row: any) => String(row?.as || `${row?.op || 'count'}_${row?.field || 'rows'}`).trim() === column);
+        pushField({
+          name: column,
+          alias: selected?.alias || computed?.name || aggregate?.as || undefined,
+          type:
+            String(selected?.type || computed?.type || '').trim() ||
+            outputFieldTypeFromSettings(column) ||
+            inferFieldTypeFromRows(previewResultRows, column),
+          path: selected?.path || undefined,
+          source: 'preview'
+        });
+      });
+      return out;
+    }
+
+    selectedFieldRows.forEach((row) => {
+      pushField({
+        name: String(row?.alias || fallbackFieldName(row?.path || '')).trim(),
+        alias: String(row?.alias || '').trim(),
+        type: String(row?.type || '').trim(),
+        path: String(row?.path || '').trim(),
+        source: 'settings'
+      });
+    });
+    computedFields.forEach((row: any) => {
+      const name = String(row?.name || '').trim();
+      if (!name) return;
+      pushField({
+        name,
+        alias: name,
+        type: String(row?.type || '').trim(),
+        source: 'settings'
+      });
+    });
+    aggregateRules.forEach((row: any) => {
+      const name = String(row?.as || `${row?.op || 'count'}_${row?.field || 'rows'}`).trim();
+      if (!name) return;
+      pushField({
+        name,
+        alias: name,
+        type: 'numeric',
+        path: String(row?.field || '').trim() || undefined,
+        source: 'settings'
+      });
+    });
+    return out;
   }
 
   function selectValue(event: Event) {
@@ -2103,10 +2201,38 @@
         <div class="parser-card-head">
           <div>
             <h3>Исходящие параметры</h3>
-            <p>Read-only зона результата для следующей ноды. На этом шаге отдельный output preview ещё не вводится.</p>
+            <p>Read-only derived preview результата для следующей ноды. Правая колонка не вводит новую schema и не даёт редактирование.</p>
           </div>
         </div>
-        <div class="inline-hint">Правая колонка подготовлена под derived output/result. На текущем шаге она остаётся честным placeholder без новой схемы и без редактирования.</div>
+        {#if derivedOutputFields.length}
+          <div class="parser-shell-summary">
+            <span class="chip-chip readonly-chip">{derivedOutputFields.length} {derivedOutputFields.length === 1 ? 'поле' : derivedOutputFields.length < 5 ? 'поля' : 'полей'}</span>
+            {#if derivedOutputSourceLabel}
+              <span class="inline-hint">{derivedOutputSourceLabel}</span>
+            {/if}
+          </div>
+          <div class="parser-contract-list">
+            {#each derivedOutputFields as field}
+              <div class="parser-contract-item">
+                <div class="parser-contract-name">{field.name}</div>
+                <div class="parser-contract-meta">
+                  {#if field.alias}
+                    <span>Alias: {field.alias}</span>
+                  {/if}
+                  {#if field.type}
+                    <span>Тип: {field.type}</span>
+                  {/if}
+                  {#if field.path}
+                    <span>Path: {field.path}</span>
+                  {/if}
+                  <span>Источник: {field.source === 'preview' ? 'preview результата' : 'settings parser'}</span>
+                </div>
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <div class="inline-hint">Derived output preview пока недоступен: parser ещё не зафиксировал поля результата и preview не вернул итоговые колонки.</div>
+        {/if}
       </div>
     </section>
   </div>
