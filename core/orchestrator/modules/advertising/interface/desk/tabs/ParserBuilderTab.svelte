@@ -84,6 +84,75 @@
       sampleMeta?: ParserIncomingSampleMeta;
     }>;
   };
+  type ParserPipelineInputKind =
+    | 'structured payload'
+    | 'text/string payload'
+    | 'tabular text'
+    | 'archive/container'
+    | 'link/reference/locator'
+    | 'unknown';
+  type ParserPipelineSourceBasis = 'contract-only' | 'sample-based' | 'preview-derived' | 'mixed' | 'insufficient-data';
+  type ParserPipelineStepMode = 'auto' | 'manual' | 'partial' | 'unknown';
+  type ParserPipelineStrategy =
+    | 'direct read'
+    | 'unwrap envelope'
+    | 'parse JSON string'
+    | 'parse CSV/TSV'
+    | 'extract archive entry'
+    | 'dereference link/reference'
+    | 'path-based extraction'
+    | 'multi-step extraction'
+    | 'unknown';
+  type ParserPipelineViewModel = {
+    inputProfile: {
+      upstreamSummary: string;
+      upstreamCount: number;
+      contractFieldsCount: number;
+      hasSampleRaw: boolean;
+      hasSamplePayload: boolean;
+      hasSampleRows: boolean;
+      inputKind: ParserPipelineInputKind;
+      sourceBasis: ParserPipelineSourceBasis;
+    };
+    parseStrategy: {
+      detectedFormat: string;
+      strategy: ParserPipelineStrategy;
+      manualOverride: boolean;
+    };
+    payloadCandidate: {
+      candidateSource: string;
+      candidatePath: string;
+      mode: ParserPipelineStepMode;
+      hasPayloadSample: boolean;
+    };
+    workingSetCandidate: {
+      candidateRecordPath: string;
+      rowsDetected: number | null;
+      sampleRowsAvailable: number;
+      mode: ParserPipelineStepMode;
+      hasTabularSet: boolean;
+    };
+    resultSummary: {
+      fieldsCount: number;
+      source: 'preview' | 'settings' | 'mixed' | 'insufficient-data';
+      hasDerivedOutputPreview: boolean;
+    };
+    warningsSummary: {
+      ambiguity: boolean;
+      missingSample: boolean;
+      legacyFallbackInUse: boolean;
+      insufficientData: boolean;
+      parserWarnings: string[];
+      total: number;
+    };
+    autoManualState: {
+      input: ParserPipelineStepMode;
+      strategy: ParserPipelineStepMode;
+      payload: ParserPipelineStepMode;
+      workingSet: ParserPipelineStepMode;
+      result: ParserPipelineStepMode;
+    };
+  };
   type LookupJoinRule = {
     sourceField: string;
     targetField: string;
@@ -420,6 +489,56 @@
   let previewRaw: any = null;
   let previewUpdatedAt = '';
   let sourceNodePreviewMessage = '';
+  let parserPipelineModel: ParserPipelineViewModel = {
+    inputProfile: {
+      upstreamSummary: 'Источник не определён',
+      upstreamCount: 0,
+      contractFieldsCount: 0,
+      hasSampleRaw: false,
+      hasSamplePayload: false,
+      hasSampleRows: false,
+      inputKind: 'unknown',
+      sourceBasis: 'insufficient-data'
+    },
+    parseStrategy: {
+      detectedFormat: '-',
+      strategy: 'unknown',
+      manualOverride: false
+    },
+    payloadCandidate: {
+      candidateSource: '-',
+      candidatePath: '(вход целиком)',
+      mode: 'unknown',
+      hasPayloadSample: false
+    },
+    workingSetCandidate: {
+      candidateRecordPath: '(корень)',
+      rowsDetected: null,
+      sampleRowsAvailable: 0,
+      mode: 'unknown',
+      hasTabularSet: false
+    },
+    resultSummary: {
+      fieldsCount: 0,
+      source: 'insufficient-data',
+      hasDerivedOutputPreview: false
+    },
+    warningsSummary: {
+      ambiguity: false,
+      missingSample: true,
+      legacyFallbackInUse: false,
+      insufficientData: true,
+      parserWarnings: [],
+      total: 0
+    },
+    autoManualState: {
+      input: 'unknown',
+      strategy: 'unknown',
+      payload: 'unknown',
+      workingSet: 'unknown',
+      result: 'unknown'
+    }
+  };
 
   $: {
     const next = normalizeSettings(initialSettings);
@@ -547,6 +666,7 @@
       : derivedOutputFields.length
       ? 'По текущим settings parser'
       : '';
+  $: parserPipelineModel = buildParserPipelineViewModel();
   $: computedFunctionLibrary = COMPUTED_FUNCTION_CATEGORIES.map((category) => ({
     ...category,
     items: COMPUTED_FUNCTIONS.filter((item) => item.category === category.id)
@@ -1156,6 +1276,185 @@
     return item?.sampleMeta && typeof item.sampleMeta === 'object' ? item.sampleMeta : null;
   }
 
+  function incomingSampleNode() {
+    return incomingNodes.find((item) => item?.sampleRaw !== undefined || item?.samplePayload !== undefined || (Array.isArray(item?.sampleRows) && item.sampleRows.length)) || null;
+  }
+
+  function pipelineInputKindFromCandidate(candidate: any, formatHint: string, contractFieldsCount: number): ParserPipelineInputKind {
+    const detectedFormat = String(formatHint || '').trim().toLowerCase();
+    if (settings.sourceMode === 'file_url') return 'link/reference/locator';
+    if (settings.archiveEntry || settings.archiveFormat === 'zip' || detectedFormat === 'zip') return 'archive/container';
+    if (Array.isArray(candidate) || (candidate && typeof candidate === 'object')) return 'structured payload';
+    if (typeof candidate === 'string') {
+      const txt = String(candidate || '').trim();
+      if (!txt) return contractFieldsCount > 0 ? 'structured payload' : 'unknown';
+      if (/^(https?:\/\/|ftp:\/\/)/i.test(txt) || /^[a-z]:\\/i.test(txt) || txt.startsWith('/')) return 'link/reference/locator';
+      if (detectedFormat === 'csv' || detectedFormat === 'tsv' || /^[^\n]+\t[^\n]+/.test(txt) || /^[^\n]+,[^\n]+/.test(txt)) return 'tabular text';
+      return 'text/string payload';
+    }
+    if (detectedFormat === 'csv' || detectedFormat === 'tsv') return 'tabular text';
+    if (detectedFormat === 'json' || detectedFormat === 'ndjson' || contractFieldsCount > 0) return 'structured payload';
+    return 'unknown';
+  }
+
+  function pipelineStrategyFromSignals(inputKind: ParserPipelineInputKind, detectedFormat: string): ParserPipelineStrategy {
+    const format = String(detectedFormat || '').trim().toLowerCase();
+    const payloadOrigin = String(autoParseInfo.payloadOrigin || '').trim().toLowerCase();
+    const hasInputPath = Boolean(String(settings.inputPath || '').trim());
+    const hasRecordPath = Boolean(String(settings.recordPath || '').trim());
+    if (settings.sourceMode === 'file_url') return 'dereference link/reference';
+    if (settings.archiveEntry || settings.archiveFormat === 'zip' || format === 'zip') return 'extract archive entry';
+    if (hasInputPath && hasRecordPath) return 'multi-step extraction';
+    if (hasInputPath || hasRecordPath) return 'path-based extraction';
+    if (payloadOrigin && !['-', 'input', 'input_value', 'value', 'row'].includes(payloadOrigin)) return 'unwrap envelope';
+    if (inputKind === 'text/string payload' && format === 'json') return 'parse JSON string';
+    if (format === 'csv' || format === 'tsv') return 'parse CSV/TSV';
+    if (inputKind === 'structured payload') return 'direct read';
+    return 'unknown';
+  }
+
+  function buildParserPipelineViewModel(): ParserPipelineViewModel {
+    const sampleNode = incomingSampleNode();
+    const firstSampleRaw = sampleNode?.sampleRaw;
+    const firstSamplePayload = sampleNode?.samplePayload;
+    const firstSampleRows = Array.isArray(sampleNode?.sampleRows) ? sampleNode.sampleRows : [];
+    const totalContractFields = incomingNodes.reduce((acc, item) => acc + incomingContractFields(item).length, 0);
+    const hasSampleRaw = firstSampleRaw !== undefined;
+    const hasSamplePayload = firstSamplePayload !== undefined;
+    const hasSampleRows = firstSampleRows.length > 0;
+    const hasPreviewSignals =
+      Boolean(previewData?.stats) ||
+      Boolean(Array.isArray(previewData?.raw_columns) && previewData.raw_columns.length) ||
+      Boolean(Array.isArray(previewData?.columns) && previewData.columns.length);
+    const sourcesCount = [totalContractFields > 0, hasSampleRaw || hasSamplePayload || hasSampleRows, hasPreviewSignals].filter(Boolean).length;
+    const sourceBasis: ParserPipelineSourceBasis =
+      sourcesCount > 1
+        ? 'mixed'
+        : hasSampleRaw || hasSamplePayload || hasSampleRows
+        ? 'sample-based'
+        : hasPreviewSignals
+        ? 'preview-derived'
+        : totalContractFields > 0
+        ? 'contract-only'
+        : 'insufficient-data';
+    const sampleCandidate = hasSamplePayload ? firstSamplePayload : hasSampleRaw ? firstSampleRaw : null;
+    const inputKind = pipelineInputKindFromCandidate(sampleCandidate, autoParseInfo.detectedFormat, totalContractFields);
+    const strategy = pipelineStrategyFromSignals(inputKind, autoParseInfo.detectedFormat);
+    const strategyManualOverride = Boolean(
+      settings.sourceFormat !== 'auto' ||
+        settings.archiveFormat !== 'auto' ||
+        String(settings.archiveEntry || '').trim() ||
+        settings.textMode !== 'lines' ||
+        settings.csvDelimiter !== ','
+    );
+    const payloadMode: ParserPipelineStepMode = String(settings.inputPath || '').trim()
+      ? 'manual'
+      : hasSamplePayload || String(autoParseInfo.payloadOrigin || '').trim() !== '-'
+      ? 'auto'
+      : 'unknown';
+    const rawRowCount = Number(previewData?.raw_row_count);
+    const rowsDetected = Number.isFinite(rawRowCount) ? rawRowCount : null;
+    const sampleRowsAvailable = hasSampleRows ? firstSampleRows.length : Array.isArray(sourcePreviewRows) ? sourcePreviewRows.length : 0;
+    const hasTabularSet = Boolean(sampleRowsAvailable > 0 || (Array.isArray(sourcePreviewColumns) && sourcePreviewColumns.length));
+    const workingSetMode: ParserPipelineStepMode = String(settings.recordPath || '').trim()
+      ? 'manual'
+      : String(autoParseInfo.workingSetPath || '').trim() && String(autoParseInfo.workingSetPath || '').trim() !== '-'
+      ? 'auto'
+      : hasTabularSet
+      ? 'partial'
+      : 'unknown';
+    const hasResultSettings = Boolean(
+      selectedFieldRows.length ||
+        computedFields.length ||
+        aggregateRules.length ||
+        parseCsvText(settings.selectFields).length ||
+        Object.keys(renameMapValue || {}).length ||
+        Object.keys(typeMapValue || {}).length ||
+        Object.keys(defaultValuesValue || {}).length
+    );
+    const resultSource: ParserPipelineViewModel['resultSummary']['source'] =
+      Array.isArray(previewData?.columns) && previewData.columns.length && hasResultSettings
+        ? 'mixed'
+        : Array.isArray(previewData?.columns) && previewData.columns.length
+        ? 'preview'
+        : derivedOutputFields.length
+        ? 'settings'
+        : 'insufficient-data';
+    const ambiguity = Boolean((Array.isArray(bayesInput?.alternatives) && bayesInput.alternatives.length > 1) || incomingNodes.length > 1);
+    const missingSample = !(hasSampleRaw || hasSamplePayload || hasSampleRows);
+    const legacyFallbackInUse = settings.sourceMode === 'node' && Boolean(String(settings.sourceNodeTemplateRef || '').trim());
+    const insufficientData = !totalContractFields && missingSample && !hasPreviewSignals;
+    const parserWarningsList = Array.isArray(parserWarnings) ? parserWarnings.map((item) => String(item || '').trim()).filter(Boolean) : [];
+    const warningsTotal =
+      parserWarningsList.length +
+      (ambiguity ? 1 : 0) +
+      (missingSample ? 1 : 0) +
+      (legacyFallbackInUse ? 1 : 0) +
+      (insufficientData ? 1 : 0);
+
+    return {
+      inputProfile: {
+        upstreamSummary: incomingNodes.length
+          ? incomingNodes.length === 1
+            ? `${incomingNodes[0].nodeName} / ${incomingNodeTypeLabel(incomingNodes[0].nodeType)}`
+            : `${incomingNodes.length} upstream-источника`
+          : 'Источник не определён',
+        upstreamCount: incomingNodes.length,
+        contractFieldsCount: totalContractFields,
+        hasSampleRaw,
+        hasSamplePayload,
+        hasSampleRows,
+        inputKind,
+        sourceBasis
+      },
+      parseStrategy: {
+        detectedFormat: String(autoParseInfo.detectedFormat || settings.sourceFormat || '-'),
+        strategy,
+        manualOverride: strategyManualOverride
+      },
+      payloadCandidate: {
+        candidateSource: String(autoParseInfo.payloadOrigin || incomingSampleMeta(sampleNode || {})?.source || settings.sourceMode || '-'),
+        candidatePath: String(autoParseInfo.sourcePath || settings.inputPath || '(вход целиком)'),
+        mode: payloadMode,
+        hasPayloadSample: hasSamplePayload
+      },
+      workingSetCandidate: {
+        candidateRecordPath: String(autoParseInfo.workingSetPath || settings.recordPath || '(корень)'),
+        rowsDetected,
+        sampleRowsAvailable,
+        mode: workingSetMode,
+        hasTabularSet
+      },
+      resultSummary: {
+        fieldsCount: derivedOutputFields.length,
+        source: resultSource,
+        hasDerivedOutputPreview: derivedOutputFields.length > 0 || (Array.isArray(previewData?.sample_rows) && previewData.sample_rows.length > 0)
+      },
+      warningsSummary: {
+        ambiguity,
+        missingSample,
+        legacyFallbackInUse,
+        insufficientData,
+        parserWarnings: parserWarningsList,
+        total: warningsTotal
+      },
+      autoManualState: {
+        input: settings.sourceMode === 'node' ? (incomingNodes.length ? 'auto' : 'unknown') : 'manual',
+        strategy: strategyManualOverride ? 'manual' : strategy !== 'unknown' ? 'auto' : 'unknown',
+        payload: payloadMode,
+        workingSet: workingSetMode,
+        result:
+          resultSource === 'mixed'
+            ? 'partial'
+            : hasResultSettings
+            ? 'manual'
+            : derivedOutputFields.length || (Array.isArray(previewData?.sample_rows) && previewData.sample_rows.length > 0)
+            ? 'auto'
+            : 'unknown'
+      }
+    };
+  }
+
   function outputFieldTypeFromSettings(fieldName: string) {
     const wanted = String(fieldName || '').trim();
     if (!wanted) return '';
@@ -1354,6 +1653,20 @@
           <button type="button" class="primary-btn" on:click={previewNow} disabled={previewLoading}>
             {previewLoading ? 'Обновление...' : 'Обновить preview'}
           </button>
+        </div>
+
+        <div class="parser-pipeline-summary-box">
+          <div class="parser-shell-summary">
+            <span class="chip-chip readonly-chip">Вход: {parserPipelineModel.inputProfile.inputKind}</span>
+            <span class="chip-chip readonly-chip">Основа: {parserPipelineModel.inputProfile.sourceBasis}</span>
+            <span class="chip-chip readonly-chip">Разбор: {parserPipelineModel.parseStrategy.strategy}</span>
+          </div>
+          <div class="preview-meta">
+            <span>Payload: {parserPipelineModel.payloadCandidate.candidatePath}</span>
+            <span>Набор: {parserPipelineModel.workingSetCandidate.candidateRecordPath}</span>
+            <span>Результат: {parserPipelineModel.resultSummary.fieldsCount}</span>
+            <span>Warnings: {parserPipelineModel.warningsSummary.total}</span>
+          </div>
         </div>
 
         <div class="form-grid form-grid-1">
@@ -2351,6 +2664,16 @@
     flex-wrap: wrap;
     gap: 8px;
     align-items: center;
+  }
+  .parser-pipeline-summary-box {
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    background: #f8fafc;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
   }
   .parser-shell-item {
     display: flex;
