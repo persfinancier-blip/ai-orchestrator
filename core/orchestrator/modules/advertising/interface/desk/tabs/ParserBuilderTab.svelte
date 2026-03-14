@@ -157,6 +157,7 @@
     sourceField: string;
     targetField: string;
   };
+  type ParserEditorStep = 'input' | 'parse' | 'payload' | 'workingSet' | 'fields' | 'processing' | 'result';
 
   export let apiBase: string;
   export let apiJson: <T = any>(url: string, init?: RequestInit) => Promise<T>;
@@ -237,6 +238,15 @@
     code_node: 'Код',
     start_process: 'Старт процесса'
   };
+  const PARSER_EDITOR_STEPS: Array<{ id: ParserEditorStep; label: string; order: string }> = [
+    { id: 'input', label: 'Вход', order: '1' },
+    { id: 'parse', label: 'Разбор', order: '2' },
+    { id: 'payload', label: 'Payload', order: '3' },
+    { id: 'workingSet', label: 'Набор', order: '4' },
+    { id: 'fields', label: 'Поля', order: '5' },
+    { id: 'processing', label: 'Обработка', order: '6' },
+    { id: 'result', label: 'Результат', order: '7' }
+  ];
 
   function normalizeSettings(raw: Record<string, any> | null | undefined): ParserSettings {
     const next: ParserSettings = { ...DEFAULT_SETTINGS };
@@ -543,6 +553,7 @@
   let previewUpdatedAt = '';
   let sourceNodePreviewMessage = '';
   let parserPipelineModel: ParserPipelineViewModel = emptyParserPipelineModel();
+  let activeStep: ParserEditorStep = 'fields';
 
   $: {
     const next = normalizeSettings(initialSettings);
@@ -1284,6 +1295,27 @@
     return incomingNodes.find((item) => item?.sampleRaw !== undefined || item?.samplePayload !== undefined || (Array.isArray(item?.sampleRows) && item.sampleRows.length)) || null;
   }
 
+  function incomingFieldKey(field: ParserIncomingContractField | null | undefined) {
+    return String(field?.path || field?.alias || field?.name || '').trim();
+  }
+
+  function incomingFieldSelected(field: ParserIncomingContractField | null | undefined) {
+    const key = incomingFieldKey(field);
+    return key ? selectedFieldPaths.includes(key) : false;
+  }
+
+  function useIncomingField(field: ParserIncomingContractField | null | undefined) {
+    const key = incomingFieldKey(field);
+    activeStep = 'fields';
+    if (!key) return;
+    addSelectedField(key);
+  }
+
+  function fieldOptionsForRow(row: { path?: string }) {
+    const current = String(row?.path || '').trim();
+    return Array.from(new Set([current, ...(Array.isArray(workingFieldCandidates) ? workingFieldCandidates : [])].filter(Boolean)));
+  }
+
   function pipelineInputKindFromCandidate(candidate: any, formatHint: string, contractFieldsCount: number): ParserPipelineInputKind {
     const detectedFormat = String(formatHint || '').trim().toLowerCase();
     if (settings.sourceMode === 'file_url') return 'link/reference/locator';
@@ -1603,7 +1635,7 @@
         <div class="parser-card-head">
           <div>
             <h3>Входящие параметры</h3>
-            <p>Read-only описание реального upstream из текущего desk graph. Эта секция не подменяется template preview и не даёт настройки.</p>
+            <p>Реальный upstream из текущего desk graph. Поля ниже можно быстро добавить в результат parser без отдельного legacy-flow.</p>
           </div>
         </div>
         {#if incomingNodes.length}
@@ -1633,7 +1665,7 @@
                   {#if incomingContractFields(item).length}
                     <div class="parser-contract-list">
                       {#each incomingContractFields(item) as field}
-                        <div class="parser-contract-item">
+                        <div class="parser-contract-item" class:is-selected={incomingFieldSelected(field)}>
                           <div class="parser-contract-name">{field.alias || field.name || field.path || 'Поле'}</div>
                           <div class="parser-contract-meta">
                             {#if field.name && field.alias && field.name !== field.alias}
@@ -1648,6 +1680,11 @@
                             {#if field.path}
                               <span>Path: {field.path}</span>
                             {/if}
+                          </div>
+                          <div class="parser-contract-actions">
+                            <button type="button" class="mini-btn parser-contract-add-btn" on:click={() => useIncomingField(field)}>
+                              {incomingFieldSelected(field) ? 'Открыть в полях' : 'В результат'}
+                            </button>
                           </div>
                         </div>
                       {/each}
@@ -1668,6 +1705,21 @@
     </section>
 
     <section class="parser-column parser-column-settings">
+      <div class="parser-steps-bar" aria-label="Шаги parser pipeline">
+        {#each PARSER_EDITOR_STEPS as step}
+          <button
+            type="button"
+            class="parser-step-btn"
+            class:is-active={activeStep === step.id}
+            aria-pressed={activeStep === step.id}
+            on:click={() => (activeStep = step.id)}
+          >
+            <span class="parser-step-index">{step.order}</span>
+            <span>{step.label}</span>
+          </button>
+        {/each}
+      </div>
+
       <div class="parser-card">
         <div class="parser-card-head">
           <div>
@@ -1693,158 +1745,167 @@
           </div>
         </div>
 
-        <div class="form-grid form-grid-1">
-          <label>
-            Тип источника
-            <select value={settings.sourceMode} on:change={(e) => patchSetting('sourceMode', selectValue(e))}>
-              <option value="node">Нода</option>
-              <option value="table">Таблица</option>
-              <option value="file_url">Файл / ссылка</option>
-            </select>
-          </label>
-        </div>
-
-        {#if settings.sourceMode === 'node'}
-          <div class="selected-source-box">
-            <div><strong>Основной сценарий: вход из upstream node</strong></div>
-            <div class="hint">Слева уже показан источник и его контракт. Legacy-шаблон источника ниже нужен только как fallback, если для preview требуется пример входа без живого upstream payload.</div>
+        {#if activeStep === 'input'}
+          <div class="form-grid form-grid-1">
+            <label>
+              Тип источника
+              <select value={settings.sourceMode} on:change={(e) => patchSetting('sourceMode', selectValue(e))}>
+                <option value="node">Нода</option>
+                <option value="table">Таблица</option>
+                <option value="file_url">Файл / ссылка</option>
+              </select>
+            </label>
           </div>
 
-          <details class="parser-legacy-panel">
-            <summary class="parser-legacy-summary">Legacy fallback: шаблон ноды-источника для preview</summary>
-            <div class="parser-legacy-body">
+          {#if settings.sourceMode === 'node'}
+            <div class="selected-source-box">
+              <div><strong>Основной сценарий: вход из upstream node</strong></div>
+              <div class="hint">Слева уже показан источник и его контракт. Legacy-шаблон источника ниже нужен только как fallback, если для preview требуется пример входа без живого upstream payload.</div>
+            </div>
+
+            <details class="parser-legacy-panel">
+              <summary class="parser-legacy-summary">Legacy fallback: шаблон ноды-источника для preview</summary>
+              <div class="parser-legacy-body">
+                <label>
+                  Legacy-шаблон ноды-источника
+                  <select value={settings.sourceNodeTemplateRef} on:change={(e) => applySourceNodeTemplateRef(selectValue(e))}>
+                    <option value="">Выбери шаблон ноды</option>
+                    {#each sourceTemplates as item (item.ref)}
+                      <option value={item.ref}>{sourceTemplateLabel(item)}</option>
+                    {/each}
+                  </select>
+                  <span class="hint">Этот выбор не определяет основной parser flow. Он нужен только для fallback preview входа.</span>
+                </label>
+                {#if sourceTemplatesError}
+                  <div class="inline-error">{sourceTemplatesError}</div>
+                {:else if sourceTemplatesLoading}
+                  <div class="inline-hint">Загрузка шаблонов нод...</div>
+                {:else if currentSourceTemplate}
+                  <div class="selected-source-box">
+                    <div><strong>{sourceTemplateLabel(currentSourceTemplate)}</strong></div>
+                    <div class="hint">{currentSourceTemplate.description || 'Описание шаблона не заполнено.'}</div>
+                  </div>
+                {:else}
+                  <div class="inline-hint">Оставь блок пустым, если preview можно строить без legacy fallback-источника.</div>
+                {/if}
+
+                <label>
+                  Legacy preview входа
+                  {#if currentSourceTemplate && sourceNodePreviewJson}
+                    <textarea rows="10" readonly value={sourceNodePreviewJson}></textarea>
+                    <span class="hint">{sourceNodePreviewMessage}</span>
+                  {:else if currentSourceTemplate}
+                    <div class="inline-hint">{sourceNodePreviewMessage}</div>
+                  {:else}
+                    <div class="inline-hint">Выбери legacy-шаблон ноды-источника только если нужен fallback preview входа.</div>
+                  {/if}
+                </label>
+              </div>
+            </details>
+          {/if}
+
+          {#if settings.sourceMode === 'table'}
+            <div class="form-grid form-grid-3">
               <label>
-                Legacy-шаблон ноды-источника
-                <select value={settings.sourceNodeTemplateRef} on:change={(e) => applySourceNodeTemplateRef(selectValue(e))}>
-                  <option value="">Выбери шаблон ноды</option>
-                  {#each sourceTemplates as item (item.ref)}
-                    <option value={item.ref}>{sourceTemplateLabel(item)}</option>
+                Схема
+                <select value={settings.sourceSchema} on:change={(e) => patchSetting('sourceSchema', selectValue(e))}>
+                  <option value="">Выбери схему</option>
+                  {#each Array.from(new Set(sourceTableOptions().map((item) => item.schema_name))) as schemaName}
+                    <option value={schemaName}>{schemaName}</option>
                   {/each}
                 </select>
-                <span class="hint">Этот выбор не определяет основной parser flow. Он нужен только для fallback preview входа.</span>
               </label>
-              {#if sourceTemplatesError}
-                <div class="inline-error">{sourceTemplatesError}</div>
-              {:else if sourceTemplatesLoading}
-                <div class="inline-hint">Загрузка шаблонов нод...</div>
-              {:else if currentSourceTemplate}
-                <div class="selected-source-box">
-                  <div><strong>{sourceTemplateLabel(currentSourceTemplate)}</strong></div>
-                  <div class="hint">{currentSourceTemplate.description || 'Описание шаблона не заполнено.'}</div>
-                </div>
-              {:else}
-                <div class="inline-hint">Оставь блок пустым, если preview можно строить без legacy fallback-источника.</div>
-              {/if}
-
               <label>
-                Legacy preview входа
-                {#if currentSourceTemplate && sourceNodePreviewJson}
-                  <textarea rows="10" readonly value={sourceNodePreviewJson}></textarea>
-                  <span class="hint">{sourceNodePreviewMessage}</span>
-                {:else if currentSourceTemplate}
-                  <div class="inline-hint">{sourceNodePreviewMessage}</div>
-                {:else}
-                  <div class="inline-hint">Выбери legacy-шаблон ноды-источника только если нужен fallback preview входа.</div>
-                {/if}
+                Таблица
+                <select value={settings.sourceTable} on:change={(e) => patchSetting('sourceTable', selectValue(e))}>
+                  <option value="">Выбери таблицу</option>
+                  {#each sourceTableOptions().filter((item) => !settings.sourceSchema || item.schema_name === settings.sourceSchema) as item}
+                    <option value={item.table_name}>{item.table_name}</option>
+                  {/each}
+                </select>
+              </label>
+              <label>
+                Колонка с payload
+                <select value={settings.sourceColumn} on:change={(e) => patchSetting('sourceColumn', selectValue(e))}>
+                  <option value="">Вся строка таблицы</option>
+                  {#each sourceColumnOptions as columnName}
+                    <option value={columnName}>{columnName}</option>
+                  {/each}
+                </select>
               </label>
             </div>
-          </details>
-        {/if}
+            <div class="inline-hint">{currentTableColumnsHint() || 'Выбери таблицу и колонку, если парсить нужно поле с JSON/CSV внутри таблицы.'}</div>
+          {/if}
 
-        {#if settings.sourceMode === 'table'}
-          <div class="form-grid form-grid-3">
-            <label>
-              Схема
-              <select value={settings.sourceSchema} on:change={(e) => patchSetting('sourceSchema', selectValue(e))}>
-                <option value="">Выбери схему</option>
-                {#each Array.from(new Set(sourceTableOptions().map((item) => item.schema_name))) as schemaName}
-                  <option value={schemaName}>{schemaName}</option>
-                {/each}
-              </select>
-            </label>
-            <label>
-              Таблица
-              <select value={settings.sourceTable} on:change={(e) => patchSetting('sourceTable', selectValue(e))}>
-                <option value="">Выбери таблицу</option>
-                {#each sourceTableOptions().filter((item) => !settings.sourceSchema || item.schema_name === settings.sourceSchema) as item}
-                  <option value={item.table_name}>{item.table_name}</option>
-                {/each}
-              </select>
-            </label>
-            <label>
-              Колонка с payload
-              <select value={settings.sourceColumn} on:change={(e) => patchSetting('sourceColumn', selectValue(e))}>
-                <option value="">Вся строка таблицы</option>
-                {#each sourceColumnOptions as columnName}
-                  <option value={columnName}>{columnName}</option>
-                {/each}
-              </select>
-            </label>
+          {#if settings.sourceMode === 'file_url'}
+            <div class="form-grid form-grid-2">
+              <label>
+                URL / путь к файлу
+                <input value={settings.fileUrl} on:input={(e) => patchSetting('fileUrl', inputValue(e))} placeholder="https://... или /path/to/file" />
+              </label>
+              <label>
+                Путь до URL во входе
+                <input value={settings.fileUrlPath} on:input={(e) => patchSetting('fileUrlPath', inputValue(e))} placeholder="response.download_url" />
+              </label>
+            </div>
+          {/if}
+
+          {#if previewError}
+            <div class="inline-error">{previewError}</div>
+          {/if}
+
+          <div class="preview-metrics">
+            <span>Сырых строк: {sourcePreviewRowCount}</span>
+            <span>Сырых колонок: {sourcePreviewColumnCount}</span>
+            <span>Формат: {previewData?.source_format || '-'}</span>
+            <span>Источник: {settings.sourceMode === 'node' ? 'Нода' : settings.sourceMode === 'table' ? 'Таблица' : 'Файл / ссылка'}</span>
           </div>
-          <div class="inline-hint">{currentTableColumnsHint() || 'Выбери таблицу и колонку, если парсить нужно поле с JSON/CSV внутри таблицы.'}</div>
-        {/if}
 
-        {#if settings.sourceMode === 'file_url'}
-          <div class="form-grid form-grid-2">
-            <label>
-              URL / путь к файлу
-              <input value={settings.fileUrl} on:input={(e) => patchSetting('fileUrl', inputValue(e))} placeholder="https://... или /path/to/file" />
-            </label>
-            <label>
-              Путь до URL во входе
-              <input value={settings.fileUrlPath} on:input={(e) => patchSetting('fileUrlPath', inputValue(e))} placeholder="response.download_url" />
-            </label>
+          <div class="preview-meta">
+            <span>Источник: {sourcePreviewSourceRef}</span>
+            <span>Пакет: {previewData?.batch?.returned_rows ?? 0} / {previewData?.batch?.batch_size ?? '-'}</span>
+            <span>Есть ещё данные: {previewData?.batch?.has_more ? 'да' : 'нет'}</span>
+            <span>Обновлено: {previewUpdatedAt ? new Date(previewUpdatedAt).toLocaleString('ru-RU') : '-'}</span>
           </div>
-        {/if}
 
-        {#if previewError}
-          <div class="inline-error">{previewError}</div>
-        {/if}
-
-        <div class="preview-metrics">
-          <span>Сырых строк: {sourcePreviewRowCount}</span>
-          <span>Сырых колонок: {sourcePreviewColumnCount}</span>
-          <span>Формат: {previewData?.source_format || '-'}</span>
-          <span>Источник: {settings.sourceMode === 'node' ? 'Нода' : settings.sourceMode === 'table' ? 'Таблица' : 'Файл / ссылка'}</span>
-        </div>
-
-        <div class="preview-meta">
-          <span>Источник: {sourcePreviewSourceRef}</span>
-          <span>Пакет: {previewData?.batch?.returned_rows ?? 0} / {previewData?.batch?.batch_size ?? '-'}</span>
-          <span>Есть ещё данные: {previewData?.batch?.has_more ? 'да' : 'нет'}</span>
-          <span>Обновлено: {previewUpdatedAt ? new Date(previewUpdatedAt).toLocaleString('ru-RU') : '-'}</span>
-        </div>
-
-        {#if sourcePreviewColumns.length}
-          <div class="preview-columns">
-            {#each sourcePreviewColumns as column}
-              <span>{column}</span>
-            {/each}
-          </div>
-        {/if}
-        {#if sourcePreviewRows.length}
-          <div class="preview-table-wrap">
-            <table class="preview-table">
-              <thead>
-                <tr>
-                  {#each sourcePreviewColumns as column}
-                    <th>{column}</th>
-                  {/each}
-                </tr>
-              </thead>
-              <tbody>
-                {#each sourcePreviewRows as row}
+          {#if sourcePreviewColumns.length}
+            <div class="preview-columns">
+              {#each sourcePreviewColumns as column}
+                <span>{column}</span>
+              {/each}
+            </div>
+          {/if}
+          {#if sourcePreviewRows.length}
+            <div class="preview-table-wrap">
+              <table class="preview-table">
+                <thead>
                   <tr>
                     {#each sourcePreviewColumns as column}
-                      <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
+                      <th>{column}</th>
                     {/each}
                   </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {#each sourcePreviewRows as row}
+                    <tr>
+                      {#each sourcePreviewColumns as column}
+                        <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
+                      {/each}
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {:else}
+            <div class="empty-box">{settings.sourceMode === 'node' && sourceNodePreviewMessage ? sourceNodePreviewMessage : 'Нет preview входа. Выбери источник и обнови preview.'}</div>
+          {/if}
         {:else}
-          <div class="empty-box">{settings.sourceMode === 'node' && sourceNodePreviewMessage ? sourceNodePreviewMessage : 'Нет preview входа. Выбери источник и обнови preview.'}</div>
+          <div class="parser-step-context-strip">
+            <span class="chip-chip readonly-chip">Текущий шаг: {PARSER_EDITOR_STEPS.find((item) => item.id === activeStep)?.label || '—'}</span>
+            <span>Источник: {settings.sourceMode === 'node' ? 'upstream node' : settings.sourceMode === 'table' ? 'таблица' : 'файл / ссылка'}</span>
+            <span>Preview входа: {sourcePreviewRows.length ? `${sourcePreviewRows.length} строк` : 'без данных'}</span>
+            <button type="button" class="mini-btn" on:click={() => (activeStep = 'input')}>Открыть шаг «Вход»</button>
+          </div>
         {/if}
       </div>
 
@@ -1856,170 +1917,230 @@
           </div>
         </div>
 
-        <div class="subsection">
-          <div class="subsection-head">
-            <h4>Разбор входа</h4>
-          </div>
-          <div class="inline-hint inline-hint-box">Parser читает payload из входного контракта слева и затем выделяет рабочий набор записей. Если вход уже приходит в нужном виде, пути ниже можно оставить пустыми.</div>
-          <div class="preview-metrics">
-            <span>Распознанный формат: {autoParseInfo.detectedFormat}</span>
-            <span>Источник payload: {autoParseInfo.payloadOrigin}</span>
-            <span>Тип входа: {autoParseInfo.inputKind}</span>
-          </div>
-          <div class="preview-meta">
-            <span>Путь до входа: {autoParseInfo.sourcePath}</span>
-            <span>Рабочий набор: {autoParseInfo.workingSetPath}</span>
-          </div>
-          {#if bayesInput?.recommended_candidate}
-            <div class="bayes-box">
-              <div class="bayes-box-head">
-                <div>
-                  <strong>Байесовская рекомендация рабочего набора</strong>
-                  <div class="hint">Используется наивная байесовская модель с априорными вероятностями и условными вероятностями наблюдаемых признаков.</div>
-                </div>
-                <button type="button" class="mini-btn" on:click={applyBayesWorkingSet}>
-                  Применить рекомендацию
-                </button>
-              </div>
-              <div class="preview-metrics">
-                <span>Рекомендованный узел: {bayesInput.recommended_candidate.path_label || '(корень)'}</span>
-                <span>Вероятность: {formatProbability(bayesInput.recommended_candidate.probability)}</span>
-                <span>Гипотеза: {bayesInput.recommended_candidate.top_hypothesis?.name_ru || '-'}</span>
-              </div>
-              {#if Array.isArray(bayesInput.recommended_candidate.reasons) && bayesInput.recommended_candidate.reasons.length}
-                <div class="chip-list">
-                  {#each bayesInput.recommended_candidate.reasons as reason}
-                    <span class="chip-chip">{reason}</span>
-                  {/each}
-                </div>
-              {/if}
-              {#if bayesInputAlternativesLabel}
-                <div class="inline-hint">Альтернативы: {bayesInputAlternativesLabel}</div>
-              {/if}
+        {#if activeStep === 'input'}
+          <div class="subsection parser-step-panel">
+            <div class="subsection-head">
+              <h4>Вход</h4>
             </div>
-          {/if}
-          {#if parserWarnings.length}
-            <div class="warnings-box">
-              {#each parserWarnings as warning}
-                <div class="warning-line">{warning}</div>
-              {/each}
+            <div class="inline-hint inline-hint-box">Parser получает вход из upstream node слева. Здесь показано, насколько хватает текущих contract/sample/preview данных для автоматического старта.</div>
+            <div class="preview-metrics">
+              <span>Тип входа: {parserPipelineModel.inputProfile.inputKind}</span>
+              <span>Основа: {parserPipelineModel.inputProfile.sourceBasis}</span>
+              <span>Источников: {parserPipelineModel.inputProfile.upstreamCount}</span>
+              <span>Полей контракта: {parserPipelineModel.inputProfile.contractFieldsCount}</span>
             </div>
-          {:else}
-            <div class="inline-hint">Авторазбор сам пытается распознать JSON, JSON в строке, CSV, NDJSON, текст и служебные runtime-обёртки. Если payload большой, preview остаётся ограниченным, но рабочий набор определяется корректно.</div>
-          {/if}
-          <div class="form-grid form-grid-3">
-            <label>
-              Формат
-              <select value={settings.sourceFormat} on:change={(e) => patchSetting('sourceFormat', selectValue(e))}>
-                <option value="auto">Определять автоматически</option>
-                <option value="json">JSON</option>
-                <option value="csv">CSV</option>
-                <option value="ndjson">NDJSON</option>
-                <option value="text">Текст</option>
-                <option value="zip">ZIP</option>
-              </select>
-              <span class="hint">Оставь автоопределение, если parser сам корректно распознаёт payload. Явный формат нужен только когда авторазбор даёт неверный результат.</span>
-            </label>
-            <label>
-              Путь до payload во входе
-              <input value={settings.inputPath} on:input={(e) => patchSetting('inputPath', inputValue(e))} placeholder="response.data" />
-              <span class="hint">Нужен, если полезные данные лежат глубже входного контракта слева. Оставь пустым, чтобы parser читал вход целиком.</span>
-            </label>
-            <label>
-              Путь до массива записей
-              <input value={settings.recordPath} on:input={(e) => patchSetting('recordPath', inputValue(e))} placeholder="items.rows" />
-              <span class="hint">Нужен, если внутри payload записи лежат в массиве. Оставь пустым, если рабочий набор уже находится в корне.</span>
-            </label>
+            <div class="preview-meta">
+              <span>Sample raw: {parserPipelineModel.inputProfile.hasSampleRaw ? 'есть' : 'нет'}</span>
+              <span>Sample payload: {parserPipelineModel.inputProfile.hasSamplePayload ? 'есть' : 'нет'}</span>
+              <span>Sample rows: {parserPipelineModel.inputProfile.hasSampleRows ? 'есть' : 'нет'}</span>
+              <span>Вход: {parserPipelineModel.inputProfile.upstreamSummary}</span>
+            </div>
+            {#if parserPipelineModel.warningsSummary.total}
+              <div class="warnings-box">
+                {#each parserPipelineModel.warningsSummary.parserWarnings as warning}
+                  <div class="warning-line">{warning}</div>
+                {/each}
+                {#if parserPipelineModel.warningsSummary.insufficientData}
+                  <div class="warning-line">Для полной автодетекции пока не хватает sample/preview данных. Parser использует доступный contract и текущие settings.</div>
+                {/if}
+              </div>
+            {:else}
+              <div class="inline-hint">Если upstream описан хорошо, шаги ниже можно почти не трогать: parser сам распознает формат, payload и рабочий набор.</div>
+            {/if}
           </div>
-          <div class="form-grid form-grid-3">
-            <label>
-              Делимитер CSV
-              <input value={settings.csvDelimiter} on:input={(e) => patchSetting('csvDelimiter', inputValue(e))} placeholder="," />
-              <span class="hint">Используется только для CSV-источников. Для JSON, NDJSON и текста это поле можно не трогать.</span>
-            </label>
-            <label>
-              Размер пакета
-              <input type="number" min="1" max="5000" value={settings.batchSize} on:input={(e) => patchSetting('batchSize', inputValue(e))} />
-              <span class="hint">Сколько записей parser берёт за один проход preview/runtime. Меняй только если нужен другой баланс между скоростью и объёмом памяти.</span>
-            </label>
-            <label>
-              Множитель парсинга
-              <input type="number" min="1" value={settings.parserMultiplier} on:input={(e) => patchSetting('parserMultiplier', inputValue(e))} />
-              <span class="hint">Редкий advanced-параметр. Используй его только если один входной элемент должен разворачиваться в несколько выходных строк.</span>
-            </label>
-          </div>
-          {#if settings.sourceFormat === 'zip'}
+        {/if}
+
+        {#if activeStep === 'parse'}
+          <div class="subsection parser-step-panel">
+            <div class="subsection-head">
+              <h4>Разбор</h4>
+            </div>
+            <div class="inline-hint inline-hint-box">Шаг отвечает за то, как parser будет читать вход. Оставь автоопределение, если формат уже распознан корректно.</div>
+            <div class="preview-metrics">
+              <span>Распознанный формат: {autoParseInfo.detectedFormat}</span>
+              <span>Стратегия: {parserPipelineModel.parseStrategy.strategy}</span>
+              <span>Режим: {parserPipelineModel.autoManualState.strategy}</span>
+            </div>
+            {#if parserWarnings.length}
+              <div class="warnings-box">
+                {#each parserWarnings as warning}
+                  <div class="warning-line">{warning}</div>
+                {/each}
+              </div>
+            {:else}
+              <div class="inline-hint">Авторазбор умеет распознавать JSON, JSON в строке, CSV, NDJSON, текст и runtime-обёртки. Явное переопределение нужно только когда результат не совпадает с ожиданием.</div>
+            {/if}
             <div class="form-grid form-grid-2">
               <label>
-                Файл внутри ZIP
-                <input value={settings.archiveEntry} on:input={(e) => patchSetting('archiveEntry', inputValue(e))} placeholder="export/data.csv" />
-              </label>
-              <label>
-                Формат файла внутри ZIP
-                <select value={settings.archiveFormat} on:change={(e) => patchSetting('archiveFormat', selectValue(e))}>
+                Формат
+                <select value={settings.sourceFormat} on:change={(e) => patchSetting('sourceFormat', selectValue(e))}>
                   <option value="auto">Определять автоматически</option>
-                  <option value="csv">CSV</option>
                   <option value="json">JSON</option>
+                  <option value="csv">CSV</option>
                   <option value="ndjson">NDJSON</option>
                   <option value="text">Текст</option>
+                  <option value="zip">ZIP</option>
                 </select>
+                <span class="hint">Явный формат включает manual override для чтения входа.</span>
+              </label>
+              <label>
+                Делимитер CSV
+                <input value={settings.csvDelimiter} on:input={(e) => patchSetting('csvDelimiter', inputValue(e))} placeholder="," />
+                <span class="hint">Используется только для CSV/TSV-подобного входа.</span>
               </label>
             </div>
-          {/if}
-          <div class="inline-hint">Рабочий набор — это тот узел или массив строк, над которым потом выполняются выбор полей, формулы, фильтры, присоединение и группировки.</div>
-        </div>
+            {#if settings.sourceFormat === 'zip'}
+              <div class="form-grid form-grid-2">
+                <label>
+                  Файл внутри ZIP
+                  <input value={settings.archiveEntry} on:input={(e) => patchSetting('archiveEntry', inputValue(e))} placeholder="export/data.csv" />
+                </label>
+                <label>
+                  Формат файла внутри ZIP
+                  <select value={settings.archiveFormat} on:change={(e) => patchSetting('archiveFormat', selectValue(e))}>
+                    <option value="auto">Определять автоматически</option>
+                    <option value="csv">CSV</option>
+                    <option value="json">JSON</option>
+                    <option value="ndjson">NDJSON</option>
+                    <option value="text">Текст</option>
+                  </select>
+                </label>
+              </div>
+            {/if}
+          </div>
+        {/if}
 
-        <div class="subsection">
-          <div class="subsection-head">
-            <h4>Поля результата</h4>
-            <div class="subsection-actions">
-              <button type="button" class="mini-btn" on:click={addAllDetectedFields} disabled={!workingFieldCandidates.length}>Взять всё из рабочего набора</button>
-              <button type="button" class="mini-btn" on:click={() => rebuildFieldSettings([])} disabled={!selectedFieldRows.length}>Очистить</button>
+        {#if activeStep === 'payload'}
+          <div class="subsection parser-step-panel">
+            <div class="subsection-head">
+              <h4>Payload</h4>
+            </div>
+            <div class="inline-hint inline-hint-box">На этом шаге parser определяет, где внутри входа лежат полезные данные. Если payload уже в корне, поле можно оставить пустым.</div>
+            <div class="preview-metrics">
+              <span>Источник payload: {autoParseInfo.payloadOrigin}</span>
+              <span>Candidate path: {parserPipelineModel.payloadCandidate.candidatePath}</span>
+              <span>Режим: {parserPipelineModel.autoManualState.payload}</span>
+            </div>
+            <div class="form-grid form-grid-1">
+              <label>
+                Путь до payload во входе
+                <input value={settings.inputPath} on:input={(e) => patchSetting('inputPath', inputValue(e))} placeholder="response.data" />
+                <span class="hint">Нужен, если полезный payload лежит глубже входного контракта слева. Пустое значение означает чтение входа целиком.</span>
+              </label>
             </div>
           </div>
-          <div class="inline-hint">Рабочий набор формируется после разбора входа. Здесь ты фиксируешь, какие поля parser отдаст дальше, под какими именами и с каким приведением типов.</div>
-          <div class="field-picker">
-            <select on:change={(e) => { addSelectedField(selectValue(e)); clearSelectValue(e); }}>
-              <option value="">Добавить поле в результат</option>
-              {#each workingFieldCandidates.filter((item) => !selectedFieldPaths.includes(item)) as fieldName}
-                <option value={fieldName}>{fieldName}</option>
-              {/each}
-            </select>
-          </div>
-          <div class="inline-hint">Список берётся из текущего рабочего набора: preview результата, уже выбранных полей и зафиксированных путей parser.</div>
-          {#if selectedFieldRows.length}
-            <div class="rules-grid">
-              <div class="rules-grid-head">Поле из рабочего набора</div>
-              <div class="rules-grid-head">Имя в результате</div>
-              <div class="rules-grid-head">Тип</div>
-              <div class="rules-grid-head">Значение по умолчанию</div>
-              <div class="rules-grid-head"></div>
-              {#each selectedFieldRows as row, index}
-                <select value={row.path} on:change={(e) => updateSelectedFieldRow(index, { path: selectValue(e) })}>
-                  {#each workingFieldCandidates as fieldName}
-                    <option value={fieldName}>{fieldName}</option>
-                  {/each}
-                </select>
-                <input value={row.alias} on:input={(e) => updateSelectedFieldRow(index, { alias: inputValue(e) })} placeholder="alias" />
-                <select value={row.type} on:change={(e) => updateSelectedFieldRow(index, { type: selectValue(e) })}>
-                  <option value="">Без приведения</option>
-                  <option value="text">Текст</option>
-                  <option value="integer">Целое число</option>
-                  <option value="numeric">Число</option>
-                  <option value="boolean">Логический</option>
-                  <option value="json">JSON</option>
-                  <option value="timestamp">Дата и время</option>
-                </select>
-                <input value={row.defaultValue} on:input={(e) => updateSelectedFieldRow(index, { defaultValue: inputValue(e) })} placeholder="по умолчанию" />
-                <button type="button" class="icon-btn danger-icon-btn" on:click={() => removeSelectedField(index)}>x</button>
-              {/each}
-            </div>
-          {:else}
-            <div class="inline-hint">Если оставить блок пустым, parser попытается отдать весь рабочий набор. Нажми «Взять всё из рабочего набора», чтобы явно зафиксировать поля результата и потом убрать лишнее.</div>
-          {/if}
-        </div>
+        {/if}
 
-        <div class="subsection">
+        {#if activeStep === 'workingSet'}
+          <div class="subsection parser-step-panel">
+            <div class="subsection-head">
+              <h4>Набор</h4>
+            </div>
+            <div class="inline-hint inline-hint-box">Здесь parser определяет рабочий набор строк, над которым дальше выполняются поля, формулы, фильтры, join и агрегаты.</div>
+            <div class="preview-metrics">
+              <span>Working set path: {autoParseInfo.workingSetPath}</span>
+              <span>Режим: {parserPipelineModel.autoManualState.workingSet}</span>
+              <span>Preview строк: {parserPipelineModel.workingSetCandidate.sampleRowsAvailable}</span>
+            </div>
+            {#if bayesInput?.recommended_candidate}
+              <div class="bayes-box">
+                <div class="bayes-box-head">
+                  <div>
+                    <strong>Байесовская рекомендация рабочего набора</strong>
+                    <div class="hint">Это quickest path, если parser нашёл лучший candidate и нужен один клик для фиксации.</div>
+                  </div>
+                  <button type="button" class="mini-btn" on:click={applyBayesWorkingSet}>
+                    Применить рекомендацию
+                  </button>
+                </div>
+                <div class="preview-metrics">
+                  <span>Рекомендованный узел: {bayesInput.recommended_candidate.path_label || '(корень)'}</span>
+                  <span>Вероятность: {formatProbability(bayesInput.recommended_candidate.probability)}</span>
+                  <span>Гипотеза: {bayesInput.recommended_candidate.top_hypothesis?.name_ru || '-'}</span>
+                </div>
+                {#if Array.isArray(bayesInput.recommended_candidate.reasons) && bayesInput.recommended_candidate.reasons.length}
+                  <div class="chip-list">
+                    {#each bayesInput.recommended_candidate.reasons as reason}
+                      <span class="chip-chip">{reason}</span>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/if}
+            <div class="form-grid form-grid-3">
+              <label>
+                Путь до массива записей
+                <input value={settings.recordPath} on:input={(e) => patchSetting('recordPath', inputValue(e))} placeholder="items.rows" />
+                <span class="hint">Укажи путь только если внутри payload записи лежат глубже корня.</span>
+              </label>
+              <label>
+                Размер пакета
+                <input type="number" min="1" max="5000" value={settings.batchSize} on:input={(e) => patchSetting('batchSize', inputValue(e))} />
+                <span class="hint">Влияет на объём данных в одном проходе preview/runtime.</span>
+              </label>
+              <label>
+                Множитель парсинга
+                <input type="number" min="1" value={settings.parserMultiplier} on:input={(e) => patchSetting('parserMultiplier', inputValue(e))} />
+                <span class="hint">Нужен только если один входной элемент разворачивается в несколько строк результата.</span>
+              </label>
+            </div>
+          </div>
+        {/if}
+
+        {#if activeStep === 'fields'}
+          <div class="subsection parser-step-panel">
+            <div class="subsection-head">
+              <h4>Поля результата</h4>
+              <div class="subsection-actions">
+                <button type="button" class="mini-btn" on:click={addAllDetectedFields} disabled={!workingFieldCandidates.length}>Взять всё из рабочего набора</button>
+                <button type="button" class="mini-btn" on:click={() => rebuildFieldSettings([])} disabled={!selectedFieldRows.length}>Очистить</button>
+              </div>
+            </div>
+            <div class="inline-hint">Здесь фиксируется итоговый набор полей parser. Поле можно добавить прямо из левой колонки или выбрать вручную из текущего рабочего набора.</div>
+            <div class="field-picker">
+              <select on:change={(e) => { addSelectedField(selectValue(e)); clearSelectValue(e); }}>
+                <option value="">Добавить поле в результат</option>
+                {#each workingFieldCandidates.filter((item) => !selectedFieldPaths.includes(item)) as fieldName}
+                  <option value={fieldName}>{fieldName}</option>
+                {/each}
+              </select>
+            </div>
+            <div class="inline-hint">Список берётся из preview результата, уже выбранных полей и зафиксированных путей parser. Клик по полю слева тоже приводит сюда.</div>
+            {#if selectedFieldRows.length}
+              <div class="rules-grid">
+                <div class="rules-grid-head">Поле из рабочего набора</div>
+                <div class="rules-grid-head">Имя в результате</div>
+                <div class="rules-grid-head">Тип</div>
+                <div class="rules-grid-head">Значение по умолчанию</div>
+                <div class="rules-grid-head"></div>
+                {#each selectedFieldRows as row, index}
+                  <select value={row.path} on:change={(e) => updateSelectedFieldRow(index, { path: selectValue(e) })}>
+                    {#each fieldOptionsForRow(row) as fieldName}
+                      <option value={fieldName}>{fieldName}</option>
+                    {/each}
+                  </select>
+                  <input value={row.alias} on:input={(e) => updateSelectedFieldRow(index, { alias: inputValue(e) })} placeholder="alias" />
+                  <select value={row.type} on:change={(e) => updateSelectedFieldRow(index, { type: selectValue(e) })}>
+                    <option value="">Без приведения</option>
+                    <option value="text">Текст</option>
+                    <option value="integer">Целое число</option>
+                    <option value="numeric">Число</option>
+                    <option value="boolean">Логический</option>
+                    <option value="json">JSON</option>
+                    <option value="timestamp">Дата и время</option>
+                  </select>
+                  <input value={row.defaultValue} on:input={(e) => updateSelectedFieldRow(index, { defaultValue: inputValue(e) })} placeholder="по умолчанию" />
+                  <button type="button" class="icon-btn danger-icon-btn" on:click={() => removeSelectedField(index)}>x</button>
+                {/each}
+              </div>
+            {:else}
+              <div class="inline-hint">Если оставить блок пустым, parser попытается отдать весь рабочий набор. Нажми «Взять всё из рабочего набора» или добавь поле из левой колонки, чтобы явно зафиксировать результат.</div>
+            {/if}
+          </div>
+        {/if}
+
+        {#if activeStep === 'processing'}
+        <div class="subsection parser-step-panel">
           <div class="subsection-head">
             <h4>Присоединить данные из таблицы</h4>
             <label class="switch-line">
@@ -2189,7 +2310,7 @@
           {/if}
         </div>
 
-        <div class="subsection">
+        <div class="subsection parser-step-panel">
           <div class="subsection-head">
             <h4>Фильтры</h4>
             <button type="button" class="mini-btn" on:click={addFilterRule}>Фильтр +</button>
@@ -2227,7 +2348,7 @@
           {/if}
         </div>
 
-        <div class="subsection">
+        <div class="subsection parser-step-panel">
           <div class="subsection-head">
             <h4>Вычисляемые поля</h4>
             <button type="button" class="mini-btn" on:click={addComputedField}>Поле +</button>
@@ -2317,7 +2438,7 @@
           {/if}
         </div>
 
-        <div class="subsection">
+        <div class="subsection parser-step-panel">
           <div class="subsection-head">
             <h4>Удаление дублей</h4>
           </div>
@@ -2350,7 +2471,7 @@
           </div>
         </div>
 
-        <div class="subsection">
+        <div class="subsection parser-step-panel">
           <div class="subsection-head">
             <h4>Группировки и агрегаты</h4>
             <button type="button" class="mini-btn" on:click={addAggregateRule}>Агрегат +</button>
@@ -2392,7 +2513,7 @@
           {/if}
         </div>
 
-        <div class="subsection">
+        <div class="subsection parser-step-panel">
           <div class="subsection-head">
             <h4>Безопасность и runtime</h4>
           </div>
@@ -2412,8 +2533,30 @@
           </div>
           <div class="inline-hint">Parser обрабатывает данные пакетно внутри одной ноды. Preview ограничен, а основной runtime остаётся пакетным.</div>
         </div>
+        {/if}
 
-        <div class="subsection">
+        {#if activeStep === 'result'}
+        <div class="subsection parser-step-panel">
+          <div class="subsection-head">
+            <h4>Итог результата</h4>
+          </div>
+          <div class="preview-metrics">
+            <span>Поля: {parserPipelineModel.resultSummary.fieldsCount}</span>
+            <span>Источник summary: {parserPipelineModel.resultSummary.source}</span>
+            <span>Derived preview: {parserPipelineModel.resultSummary.hasDerivedOutputPreview ? 'есть' : 'нет'}</span>
+          </div>
+          {#if derivedOutputFields.length}
+            <div class="preview-columns">
+              {#each derivedOutputFields as field}
+                <span>{field.name}</span>
+              {/each}
+            </div>
+          {:else}
+            <div class="inline-hint">Итоговый output строится из текущих settings parser и preview результата. Если данных мало, справа и здесь остаётся только partial summary.</div>
+          {/if}
+        </div>
+
+        <div class="subsection parser-step-panel">
           <div class="subsection-head">
             <h4>Результат обработки</h4>
             <button type="button" class="mini-btn" on:click={previewNow} disabled={previewLoading}>
@@ -2469,13 +2612,14 @@
           {:else}
             <div class="empty-box">Нет результата preview. Обнови preview после изменения настроек обработки.</div>
           {/if}
-        {#if previewRaw}
+          {#if previewRaw}
             <details class="preview-raw">
               <summary>Показать raw результат parser runtime</summary>
               <pre>{JSON.stringify(previewRaw, null, 2)}</pre>
             </details>
           {/if}
         </div>
+        {/if}
 
         <details class="parser-legacy-panel">
           <summary class="parser-legacy-summary">Legacy: библиотека шаблонов parser</summary>
@@ -2641,6 +2785,47 @@
     flex-direction: column;
     gap: 14px;
   }
+  .parser-steps-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+  .parser-step-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 999px;
+    border: 1px solid #dbe4f0;
+    background: #fff;
+    color: #334155;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+  }
+  .parser-step-btn.is-active {
+    background: #0f172a;
+    border-color: #0f172a;
+    color: #fff;
+  }
+  .parser-step-index {
+    display: inline-flex;
+    width: 20px;
+    height: 20px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: #e2e8f0;
+    color: #0f172a;
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .parser-step-btn.is-active .parser-step-index {
+    background: rgba(255, 255, 255, 0.18);
+    color: #fff;
+  }
   .parser-shell-card {
     border: 1px solid #dbe4f0;
     border-radius: 12px;
@@ -2756,6 +2941,10 @@
     flex-direction: column;
     gap: 4px;
   }
+  .parser-contract-item.is-selected {
+    border-color: #c7d2fe;
+    background: #f8faff;
+  }
   .parser-contract-name {
     font-size: 12px;
     font-weight: 600;
@@ -2770,10 +2959,30 @@
     color: #64748b;
     word-break: break-word;
   }
+  .parser-contract-actions {
+    margin-top: 4px;
+    display: flex;
+    justify-content: flex-start;
+  }
+  .parser-contract-add-btn {
+    padding: 6px 10px;
+  }
   .parser-contract-fallback {
     font-size: 11px;
     line-height: 1.45;
     color: #64748b;
+  }
+  .parser-step-context-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    align-items: center;
+    padding: 10px 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    background: #f8fafc;
+    font-size: 12px;
+    color: #334155;
   }
   .parser-legacy-panel {
     border: 1px dashed #dbe4f0;
@@ -2967,6 +3176,9 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+  }
+  .parser-step-panel {
+    background: #fcfdff;
   }
   .subsection-head {
     display: flex;
