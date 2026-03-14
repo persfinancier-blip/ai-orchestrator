@@ -240,9 +240,9 @@
   };
   const PARSER_EDITOR_STEPS: Array<{ id: ParserEditorStep; label: string; order: string }> = [
     { id: 'input', label: 'Вход', order: '1' },
-    { id: 'parse', label: 'Разбор', order: '2' },
-    { id: 'payload', label: 'Payload', order: '3' },
-    { id: 'workingSet', label: 'Набор', order: '4' },
+    { id: 'parse', label: 'Чтение', order: '2' },
+    { id: 'payload', label: 'Данные', order: '3' },
+    { id: 'workingSet', label: 'Строки', order: '4' },
     { id: 'fields', label: 'Поля', order: '5' },
     { id: 'processing', label: 'Обработка', order: '6' },
     { id: 'result', label: 'Результат', order: '7' }
@@ -554,6 +554,9 @@
   let sourceNodePreviewMessage = '';
   let parserPipelineModel: ParserPipelineViewModel = emptyParserPipelineModel();
   let activeStep: ParserEditorStep = 'fields';
+  let parseOverrideOpen = false;
+  let payloadOverrideOpen = false;
+  let workingSetOverrideOpen = false;
 
   $: {
     const next = normalizeSettings(initialSettings);
@@ -582,45 +585,74 @@
   $: sourceNodePreview = settings.sourceMode === 'node' ? buildSourceNodePreviewFromTemplate(currentSourceTemplate) : { rows: [], columns: [], message: '' };
   $: sourceNodePreviewJson = sourceNodePreview.rows.length ? JSON.stringify(sourceNodePreview.rows, null, 2) : '';
   $: sourceNodePreviewMessage = sourceNodePreview.message || '';
+  $: incomingSamplePreview = buildIncomingSamplePreview(incomingDescriptor);
   $: sourcePreviewColumns =
     settings.sourceMode === 'node'
-      ? sourceNodePreview.columns
+      ? incomingSamplePreview.columns.length
+        ? incomingSamplePreview.columns
+        : sourceNodePreview.columns
       : Array.isArray(previewData?.raw_columns)
       ? previewData.raw_columns
       : [];
   $: sourcePreviewRows =
     settings.sourceMode === 'node'
-      ? sourceNodePreview.rows
+      ? incomingSamplePreview.rows.length
+        ? incomingSamplePreview.rows
+        : sourceNodePreview.rows
       : Array.isArray(previewData?.raw_sample_rows)
       ? previewData.raw_sample_rows
       : [];
   $: sourcePreviewRowCount =
     settings.sourceMode === 'node'
-      ? currentSourceTemplate
+      ? incomingSamplePreview.rows.length
+        ? incomingSamplePreview.rowCount
+        : currentSourceTemplate
         ? sourceNodePreview.rows.length
         : '-'
       : (previewData?.raw_row_count ?? '-');
   $: sourcePreviewColumnCount =
     settings.sourceMode === 'node'
-      ? currentSourceTemplate
+      ? incomingSamplePreview.columns.length
+        ? incomingSamplePreview.columnCount
+        : currentSourceTemplate
         ? sourceNodePreview.columns.length
         : '-'
       : (previewData?.raw_column_count ?? '-');
   $: sourcePreviewSourceRef =
     settings.sourceMode === 'node'
-      ? currentSourceTemplate
+      ? incomingSamplePreview.sourceRef
+        ? incomingSamplePreview.sourceRef
+        : currentSourceTemplate
         ? sourceTemplateLabel(currentSourceTemplate)
         : '-'
       : previewData?.source_ref || '-';
+  $: sourcePreviewEmptyMessage =
+    settings.sourceMode === 'node'
+      ? incomingSamplePreview.emptyMessage || 'Upstream источник уже определён, но sample snapshot для preview пока недоступен.'
+      : 'Нет preview входа. Выбери источник и обнови preview.';
+  $: incomingContractFieldCandidates = Array.from(
+    new Set(
+      incomingNodes
+        .flatMap((item) => incomingContractFields(item))
+        .map((field) => incomingFieldKey(field))
+        .filter(Boolean)
+    )
+  );
   $: workingFieldCandidates = Array.from(
     new Set([
-      ...sourcePreviewColumns,
       ...(Array.isArray(previewData?.columns) ? previewData.columns : []),
+      ...sourcePreviewColumns,
+      ...incomingContractFieldCandidates,
       ...parseCsvText(settings.selectFields),
       ...parseCsvText(settings.groupByFields),
       ...parseCsvText(settings.dedupeFields)
     ].filter(Boolean))
   );
+  $: hasIncomingUpstream = incomingNodes.length > 0;
+  $: autoSourceDefined = settings.sourceMode === 'node' && hasIncomingUpstream;
+  $: showParseOverride = parseOverrideOpen || parserPipelineModel.autoManualState.strategy === 'manual';
+  $: showPayloadOverride = payloadOverrideOpen || parserPipelineModel.autoManualState.payload === 'manual';
+  $: showWorkingSetOverride = workingSetOverrideOpen || parserPipelineModel.autoManualState.workingSet === 'manual';
   $: renameMapValue = parseJsonSafe(settings.renameMap, {});
   $: defaultValuesValue = parseJsonSafe(settings.defaultValues, {});
   $: typeMapValue = parseJsonSafe(settings.typeMap, {});
@@ -1221,19 +1253,18 @@
     try {
       let inputValue = settings.sampleInput;
       if (settings.sourceMode === 'node') {
-        if (!currentSourceTemplate) {
-          previewError = 'Сначала выбери шаблон ноды-источника.';
+        const sampleNode = incomingSampleNode();
+        const sampleInput = inputValueFromIncomingSample(sampleNode);
+        if (sampleInput) {
+          inputValue = sampleInput;
+        } else if (currentSourceTemplate && sourceNodePreviewJson) {
+          inputValue = sourceNodePreviewJson;
+        } else {
+          previewError = 'Upstream источник уже определён, но sample snapshot для preview пока недоступен. Legacy fallback нужен только если требуется ручной пример входа.';
           previewData = null;
           previewRaw = null;
           return;
         }
-        if (!sourceNodePreviewJson) {
-          previewError = sourceNodePreviewMessage || 'У выбранного шаблона ноды ещё не настроены выходные параметры.';
-          previewData = null;
-          previewRaw = null;
-          return;
-        }
-        inputValue = sourceNodePreviewJson;
       }
       const payload = await apiJson<{ preview?: ParserPreview; result?: any }>(`${apiBase}/parser-configs/preview`, {
         method: 'POST',
@@ -1293,6 +1324,70 @@
 
   function incomingSampleNode() {
     return incomingNodes.find((item) => item?.sampleRaw !== undefined || item?.samplePayload !== undefined || (Array.isArray(item?.sampleRows) && item.sampleRows.length)) || null;
+  }
+
+  function previewRowsFromValue(value: any) {
+    if (Array.isArray(value)) {
+      const rows = value.filter((item) => item && typeof item === 'object' && !Array.isArray(item));
+      return rows.slice(0, 10);
+    }
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return [value];
+    }
+    return [];
+  }
+
+  function previewColumnsFromRows(rows: Array<Record<string, any>>) {
+    return Array.from(
+      new Set(
+        (Array.isArray(rows) ? rows : [])
+          .flatMap((row) => (row && typeof row === 'object' ? Object.keys(row) : []))
+          .map((item) => String(item || '').trim())
+          .filter(Boolean)
+      )
+    );
+  }
+
+  function inputValueFromIncomingSample(item: ParserIncomingDescriptor['upstreamNodes'][number] | null | undefined) {
+    const value = item?.samplePayload ?? item?.sampleRaw ?? (Array.isArray(item?.sampleRows) ? item.sampleRows : null);
+    if (value === undefined || value === null) return '';
+    return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  }
+
+  function buildIncomingSamplePreview(descriptor: ParserIncomingDescriptor | null | undefined) {
+    const node =
+      Array.isArray(descriptor?.upstreamNodes)
+        ? descriptor.upstreamNodes.find(
+            (item) =>
+              item?.sampleRaw !== undefined ||
+              item?.samplePayload !== undefined ||
+              (Array.isArray(item?.sampleRows) && item.sampleRows.length)
+          ) || null
+        : null;
+    if (!node) {
+      return {
+        rows: [] as Array<Record<string, any>>,
+        columns: [] as string[],
+        rowCount: '-' as number | string,
+        columnCount: '-' as number | string,
+        sourceRef: '',
+        emptyMessage: 'Upstream источник определён, но sample snapshot для preview пока недоступен.'
+      };
+    }
+    const sampleRows = Array.isArray(node.sampleRows) ? node.sampleRows.filter((item) => item && typeof item === 'object') : [];
+    const rows =
+      sampleRows.length
+        ? sampleRows.slice(0, 10)
+        : previewRowsFromValue(node.samplePayload !== undefined ? node.samplePayload : node.sampleRaw);
+    const columns = previewColumnsFromRows(rows);
+    return {
+      rows,
+      columns,
+      rowCount: rows.length,
+      columnCount: columns.length,
+      sourceRef: `Sample snapshot · ${node.nodeName}`,
+      emptyMessage: 'Sample snapshot у upstream есть, но он не содержит табличного фрагмента для preview.'
+    };
   }
 
   function incomingFieldKey(field: ParserIncomingContractField | null | undefined) {
@@ -1723,8 +1818,8 @@
       <div class="parser-card">
         <div class="parser-card-head">
           <div>
-            <h3>Вход parser и preview</h3>
-            <p>Parser получает вход из upstream node, который уже показан слева. Здесь задаётся только способ чтения payload и проверка preview.</p>
+            <h3>Источник и preview</h3>
+            <p>Parser работает от входа предыдущей ноды. Здесь остаётся только подтверждение источника и вспомогательный preview, без template-centric сценария как primary UX.</p>
           </div>
           <button type="button" class="primary-btn" on:click={previewNow} disabled={previewLoading}>
             {previewLoading ? 'Обновление...' : 'Обновить preview'}
@@ -1746,25 +1841,32 @@
         </div>
 
         {#if activeStep === 'input'}
-          <div class="form-grid form-grid-1">
-            <label>
-              Тип источника
-              <select value={settings.sourceMode} on:change={(e) => patchSetting('sourceMode', selectValue(e))}>
-                <option value="node">Нода</option>
-                <option value="table">Таблица</option>
-                <option value="file_url">Файл / ссылка</option>
-              </select>
-            </label>
-          </div>
+          {#if autoSourceDefined}
+            <div class="selected-source-box">
+              <div><strong>Источник определён автоматически</strong></div>
+              <div class="hint">{parserPipelineModel.inputProfile.upstreamSummary}. Входной контракт уже показан слева, а parser строится от этого upstream без обязательного выбора источника вручную.</div>
+              <div class="preview-meta">
+                <span>Режим: node-driven</span>
+                <span>Основа: {parserPipelineModel.inputProfile.sourceBasis}</span>
+                <span>Статус auto-detect: {parserPipelineModel.autoManualState.input}</span>
+              </div>
+            </div>
+          {:else}
+            <div class="form-grid form-grid-1">
+              <label>
+                Тип источника
+                <select value={settings.sourceMode} on:change={(e) => patchSetting('sourceMode', selectValue(e))}>
+                  <option value="node">Нода</option>
+                  <option value="table">Таблица</option>
+                  <option value="file_url">Файл / ссылка</option>
+                </select>
+              </label>
+            </div>
+          {/if}
 
           {#if settings.sourceMode === 'node'}
-            <div class="selected-source-box">
-              <div><strong>Основной сценарий: вход из upstream node</strong></div>
-              <div class="hint">Слева уже показан источник и его контракт. Legacy-шаблон источника ниже нужен только как fallback, если для preview требуется пример входа без живого upstream payload.</div>
-            </div>
-
             <details class="parser-legacy-panel">
-              <summary class="parser-legacy-summary">Legacy fallback: шаблон ноды-источника для preview</summary>
+              <summary class="parser-legacy-summary">Legacy / миграция: fallback preview из шаблона ноды-источника</summary>
               <div class="parser-legacy-body">
                 <label>
                   Legacy-шаблон ноды-источника
@@ -1897,12 +1999,12 @@
               </table>
             </div>
           {:else}
-            <div class="empty-box">{settings.sourceMode === 'node' && sourceNodePreviewMessage ? sourceNodePreviewMessage : 'Нет preview входа. Выбери источник и обнови preview.'}</div>
+            <div class="empty-box">{sourcePreviewEmptyMessage}</div>
           {/if}
         {:else}
           <div class="parser-step-context-strip">
             <span class="chip-chip readonly-chip">Текущий шаг: {PARSER_EDITOR_STEPS.find((item) => item.id === activeStep)?.label || '—'}</span>
-            <span>Источник: {settings.sourceMode === 'node' ? 'upstream node' : settings.sourceMode === 'table' ? 'таблица' : 'файл / ссылка'}</span>
+            <span>Источник: {autoSourceDefined ? parserPipelineModel.inputProfile.upstreamSummary : settings.sourceMode === 'table' ? 'таблица' : settings.sourceMode === 'file_url' ? 'файл / ссылка' : 'upstream node'}</span>
             <span>Preview входа: {sourcePreviewRows.length ? `${sourcePreviewRows.length} строк` : 'без данных'}</span>
             <button type="button" class="mini-btn" on:click={() => (activeStep = 'input')}>Открыть шаг «Вход»</button>
           </div>
@@ -1912,8 +2014,8 @@
       <div class="parser-card">
         <div class="parser-card-head">
           <div>
-            <h3>Настройка обработки</h3>
-            <p>Шаги идут последовательно: разбор входа, приведение полей, присоединение данных из таблицы, фильтры, вычисления, дедупликация, группировка и preview результата.</p>
+            <h3>Настройка parser</h3>
+            <p>Центр теперь работает по шагам pipeline: чтение входа, поиск данных и строк, выбор полей результата, затем обработка и итог.</p>
           </div>
         </div>
 
@@ -1953,13 +2055,17 @@
         {#if activeStep === 'parse'}
           <div class="subsection parser-step-panel">
             <div class="subsection-head">
-              <h4>Разбор</h4>
+              <h4>Чтение</h4>
             </div>
-            <div class="inline-hint inline-hint-box">Шаг отвечает за то, как parser будет читать вход. Оставь автоопределение, если формат уже распознан корректно.</div>
-            <div class="preview-metrics">
-              <span>Распознанный формат: {autoParseInfo.detectedFormat}</span>
-              <span>Стратегия: {parserPipelineModel.parseStrategy.strategy}</span>
-              <span>Режим: {parserPipelineModel.autoManualState.strategy}</span>
+            <div class="inline-hint inline-hint-box">Сначала parser сам определяет, как читать вход. Ручные поля нужны только как override, если автоопределение не устраивает.</div>
+            <div class="auto-detect-box">
+              <div class="auto-detect-copy">
+                <strong>Определено автоматически: {autoParseInfo.detectedFormat}</strong>
+                <div class="hint">Стратегия: {parserPipelineModel.parseStrategy.strategy} · режим: {parserPipelineModel.autoManualState.strategy}</div>
+              </div>
+              <button type="button" class="mini-btn" on:click={() => (parseOverrideOpen = !parseOverrideOpen)}>
+                {showParseOverride ? 'Скрыть ручные поля' : 'Переопределить вручную'}
+              </button>
             </div>
             {#if parserWarnings.length}
               <div class="warnings-box">
@@ -1968,44 +2074,46 @@
                 {/each}
               </div>
             {:else}
-              <div class="inline-hint">Авторазбор умеет распознавать JSON, JSON в строке, CSV, NDJSON, текст и runtime-обёртки. Явное переопределение нужно только когда результат не совпадает с ожиданием.</div>
+              <div class="inline-hint">Авторазбор умеет распознавать JSON, JSON в строке, CSV, NDJSON, текст и runtime-обёртки. Если текущий режим подходит, ручной override можно не открывать.</div>
             {/if}
-            <div class="form-grid form-grid-2">
-              <label>
-                Формат
-                <select value={settings.sourceFormat} on:change={(e) => patchSetting('sourceFormat', selectValue(e))}>
-                  <option value="auto">Определять автоматически</option>
-                  <option value="json">JSON</option>
-                  <option value="csv">CSV</option>
-                  <option value="ndjson">NDJSON</option>
-                  <option value="text">Текст</option>
-                  <option value="zip">ZIP</option>
-                </select>
-                <span class="hint">Явный формат включает manual override для чтения входа.</span>
-              </label>
-              <label>
-                Делимитер CSV
-                <input value={settings.csvDelimiter} on:input={(e) => patchSetting('csvDelimiter', inputValue(e))} placeholder="," />
-                <span class="hint">Используется только для CSV/TSV-подобного входа.</span>
-              </label>
-            </div>
-            {#if settings.sourceFormat === 'zip'}
+            {#if showParseOverride}
               <div class="form-grid form-grid-2">
                 <label>
-                  Файл внутри ZIP
-                  <input value={settings.archiveEntry} on:input={(e) => patchSetting('archiveEntry', inputValue(e))} placeholder="export/data.csv" />
-                </label>
-                <label>
-                  Формат файла внутри ZIP
-                  <select value={settings.archiveFormat} on:change={(e) => patchSetting('archiveFormat', selectValue(e))}>
+                  Формат чтения
+                  <select value={settings.sourceFormat} on:change={(e) => patchSetting('sourceFormat', selectValue(e))}>
                     <option value="auto">Определять автоматически</option>
-                    <option value="csv">CSV</option>
                     <option value="json">JSON</option>
+                    <option value="csv">CSV</option>
                     <option value="ndjson">NDJSON</option>
                     <option value="text">Текст</option>
+                    <option value="zip">ZIP</option>
                   </select>
+                  <span class="hint">Явный формат нужен только если parser читает вход не так, как ожидалось.</span>
+                </label>
+                <label>
+                  Делимитер CSV
+                  <input value={settings.csvDelimiter} on:input={(e) => patchSetting('csvDelimiter', inputValue(e))} placeholder="," />
+                  <span class="hint">Используется только для CSV/TSV-подобного входа.</span>
                 </label>
               </div>
+              {#if settings.sourceFormat === 'zip'}
+                <div class="form-grid form-grid-2">
+                  <label>
+                    Файл внутри ZIP
+                    <input value={settings.archiveEntry} on:input={(e) => patchSetting('archiveEntry', inputValue(e))} placeholder="export/data.csv" />
+                  </label>
+                  <label>
+                    Формат файла внутри ZIP
+                    <select value={settings.archiveFormat} on:change={(e) => patchSetting('archiveFormat', selectValue(e))}>
+                      <option value="auto">Определять автоматически</option>
+                      <option value="csv">CSV</option>
+                      <option value="json">JSON</option>
+                      <option value="ndjson">NDJSON</option>
+                      <option value="text">Текст</option>
+                    </select>
+                  </label>
+                </div>
+              {/if}
             {/if}
           </div>
         {/if}
@@ -2013,34 +2121,44 @@
         {#if activeStep === 'payload'}
           <div class="subsection parser-step-panel">
             <div class="subsection-head">
-              <h4>Payload</h4>
+              <h4>Данные</h4>
             </div>
-            <div class="inline-hint inline-hint-box">На этом шаге parser определяет, где внутри входа лежат полезные данные. Если payload уже в корне, поле можно оставить пустым.</div>
-            <div class="preview-metrics">
-              <span>Источник payload: {autoParseInfo.payloadOrigin}</span>
-              <span>Candidate path: {parserPipelineModel.payloadCandidate.candidatePath}</span>
-              <span>Режим: {parserPipelineModel.autoManualState.payload}</span>
+            <div class="inline-hint inline-hint-box">Шаг отвечает за полезные данные внутри входа. Пользователь сначала видит автоматически найденный путь и только потом при необходимости переопределяет его.</div>
+            <div class="auto-detect-box">
+              <div class="auto-detect-copy">
+                <strong>Найдено автоматически: {parserPipelineModel.payloadCandidate.candidatePath}</strong>
+                <div class="hint">Источник: {autoParseInfo.payloadOrigin} · режим: {parserPipelineModel.autoManualState.payload}</div>
+              </div>
+              <button type="button" class="mini-btn" on:click={() => (payloadOverrideOpen = !payloadOverrideOpen)}>
+                {showPayloadOverride ? 'Скрыть ручное поле' : 'Переопределить вручную'}
+              </button>
             </div>
-            <div class="form-grid form-grid-1">
-              <label>
-                Путь до payload во входе
-                <input value={settings.inputPath} on:input={(e) => patchSetting('inputPath', inputValue(e))} placeholder="response.data" />
-                <span class="hint">Нужен, если полезный payload лежит глубже входного контракта слева. Пустое значение означает чтение входа целиком.</span>
-              </label>
-            </div>
+            {#if showPayloadOverride}
+              <div class="form-grid form-grid-1">
+                <label>
+                  Путь до данных во входе
+                  <input value={settings.inputPath} on:input={(e) => patchSetting('inputPath', inputValue(e))} placeholder="response.data" />
+                  <span class="hint">Нужен только если полезные данные лежат глубже входного контракта слева. Пустое значение означает чтение входа целиком.</span>
+                </label>
+              </div>
+            {/if}
           </div>
         {/if}
 
         {#if activeStep === 'workingSet'}
           <div class="subsection parser-step-panel">
             <div class="subsection-head">
-              <h4>Набор</h4>
+              <h4>Строки</h4>
             </div>
-            <div class="inline-hint inline-hint-box">Здесь parser определяет рабочий набор строк, над которым дальше выполняются поля, формулы, фильтры, join и агрегаты.</div>
-            <div class="preview-metrics">
-              <span>Working set path: {autoParseInfo.workingSetPath}</span>
-              <span>Режим: {parserPipelineModel.autoManualState.workingSet}</span>
-              <span>Preview строк: {parserPipelineModel.workingSetCandidate.sampleRowsAvailable}</span>
+            <div class="inline-hint inline-hint-box">Шаг определяет, какой массив считать рабочими строками parser. Если строки уже найдены автоматически, ручной путь можно не заполнять.</div>
+            <div class="auto-detect-box">
+              <div class="auto-detect-copy">
+                <strong>Строки найдены: {autoParseInfo.workingSetPath}</strong>
+                <div class="hint">Режим: {parserPipelineModel.autoManualState.workingSet} · preview строк: {parserPipelineModel.workingSetCandidate.sampleRowsAvailable}</div>
+              </div>
+              <button type="button" class="mini-btn" on:click={() => (workingSetOverrideOpen = !workingSetOverrideOpen)}>
+                {showWorkingSetOverride ? 'Скрыть ручные поля' : 'Переопределить вручную'}
+              </button>
             </div>
             {#if bayesInput?.recommended_candidate}
               <div class="bayes-box">
@@ -2067,23 +2185,25 @@
                 {/if}
               </div>
             {/if}
-            <div class="form-grid form-grid-3">
-              <label>
-                Путь до массива записей
-                <input value={settings.recordPath} on:input={(e) => patchSetting('recordPath', inputValue(e))} placeholder="items.rows" />
-                <span class="hint">Укажи путь только если внутри payload записи лежат глубже корня.</span>
-              </label>
-              <label>
-                Размер пакета
-                <input type="number" min="1" max="5000" value={settings.batchSize} on:input={(e) => patchSetting('batchSize', inputValue(e))} />
-                <span class="hint">Влияет на объём данных в одном проходе preview/runtime.</span>
-              </label>
-              <label>
-                Множитель парсинга
-                <input type="number" min="1" value={settings.parserMultiplier} on:input={(e) => patchSetting('parserMultiplier', inputValue(e))} />
-                <span class="hint">Нужен только если один входной элемент разворачивается в несколько строк результата.</span>
-              </label>
-            </div>
+            {#if showWorkingSetOverride}
+              <div class="form-grid form-grid-3">
+                <label>
+                  Путь до строк
+                  <input value={settings.recordPath} on:input={(e) => patchSetting('recordPath', inputValue(e))} placeholder="items.rows" />
+                  <span class="hint">Укажи путь только если рабочие строки лежат глубже найденных данных.</span>
+                </label>
+                <label>
+                  Размер пакета
+                  <input type="number" min="1" max="5000" value={settings.batchSize} on:input={(e) => patchSetting('batchSize', inputValue(e))} />
+                  <span class="hint">Влияет на объём данных в одном проходе preview/runtime.</span>
+                </label>
+                <label>
+                  Множитель парсинга
+                  <input type="number" min="1" value={settings.parserMultiplier} on:input={(e) => patchSetting('parserMultiplier', inputValue(e))} />
+                  <span class="hint">Нужен только если один входной элемент разворачивается в несколько строк результата.</span>
+                </label>
+              </div>
+            {/if}
           </div>
         {/if}
 
@@ -2096,7 +2216,7 @@
                 <button type="button" class="mini-btn" on:click={() => rebuildFieldSettings([])} disabled={!selectedFieldRows.length}>Очистить</button>
               </div>
             </div>
-            <div class="inline-hint">Здесь фиксируется итоговый набор полей parser. Поле можно добавить прямо из левой колонки или выбрать вручную из текущего рабочего набора.</div>
+            <div class="inline-hint">Здесь фиксируется итоговый набор полей parser. Кандидаты берутся по fallback-цепочке: строки preview, данные preview, контракт upstream слева, уже сохранённые поля результата.</div>
             <div class="field-picker">
               <select on:change={(e) => { addSelectedField(selectValue(e)); clearSelectValue(e); }}>
                 <option value="">Добавить поле в результат</option>
@@ -2105,7 +2225,7 @@
                 {/each}
               </select>
             </div>
-            <div class="inline-hint">Список берётся из preview результата, уже выбранных полей и зафиксированных путей parser. Клик по полю слева тоже приводит сюда.</div>
+            <div class="inline-hint">Клик по полю слева сразу добавляет его в `selectFields` через существующие parser settings и переводит в этот шаг.</div>
             {#if selectedFieldRows.length}
               <div class="rules-grid">
                 <div class="rules-grid-head">Поле из рабочего набора</div>
@@ -2620,9 +2740,10 @@
           {/if}
         </div>
         {/if}
+      </div>
 
-        <details class="parser-legacy-panel">
-          <summary class="parser-legacy-summary">Legacy: библиотека шаблонов parser</summary>
+      <details class="parser-legacy-panel parser-legacy-panel-secondary">
+          <summary class="parser-legacy-summary">Legacy / миграция: библиотека шаблонов parser</summary>
           <div class="parser-legacy-body">
           <div class="parser-card-head">
             <div>
@@ -2717,7 +2838,6 @@
           </div>
           </div>
         </details>
-      </div>
     </section>
 
     <section class="parser-column parser-column-output">
@@ -2984,11 +3104,34 @@
     font-size: 12px;
     color: #334155;
   }
+  .auto-detect-box {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid #dbe4f0;
+    border-radius: 12px;
+    background: #f8fafc;
+  }
+  .auto-detect-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+  .auto-detect-copy strong {
+    font-size: 13px;
+    color: #0f172a;
+  }
   .parser-legacy-panel {
     border: 1px dashed #dbe4f0;
     border-radius: 12px;
     background: #f8fafc;
     padding: 0;
+  }
+  .parser-legacy-panel-secondary {
+    margin-top: 0;
   }
   .parser-legacy-summary {
     cursor: pointer;
