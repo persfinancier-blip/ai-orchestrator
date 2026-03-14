@@ -50,6 +50,12 @@
     output_parameters?: Array<Record<string, any>>;
     picked_paths?: string[];
   };
+  type ParserIncomingContractField = {
+    name: string;
+    alias?: string;
+    type?: string;
+    path?: string;
+  };
   type ParserIncomingDescriptor = {
     nodeId?: string;
     upstreamNodes?: Array<{
@@ -57,6 +63,7 @@
       nodeName: string;
       nodeType: string;
       fromPort: string;
+      contractFields?: ParserIncomingContractField[];
     }>;
   };
   type LookupJoinRule = {
@@ -1116,6 +1123,10 @@
     return `Источник приходит из desk graph от ноды типа «${nodeType}» через порт «${port}».`;
   }
 
+  function incomingContractFields(item: { contractFields?: ParserIncomingContractField[] }) {
+    return Array.isArray(item?.contractFields) ? item.contractFields.filter(Boolean) : [];
+  }
+
   function selectValue(event: Event) {
     return (event.currentTarget as HTMLSelectElement | null)?.value ?? '';
   }
@@ -1171,6 +1182,39 @@
                   <span>Порт: {item.fromPort || 'out'}</span>
                 </div>
                 <div class="parser-shell-description">{incomingNodeDescription(item)}</div>
+                <div class="parser-contract-block">
+                  <div class="parser-contract-head">
+                    <span>Входной контракт upstream</span>
+                    <span>{incomingContractFields(item).length ? `${incomingContractFields(item).length} полей` : 'контракт не определён'}</span>
+                  </div>
+                  {#if incomingContractFields(item).length}
+                    <div class="parser-contract-list">
+                      {#each incomingContractFields(item) as field}
+                        <div class="parser-contract-item">
+                          <div class="parser-contract-name">{field.alias || field.name || field.path || 'Поле'}</div>
+                          <div class="parser-contract-meta">
+                            {#if field.name && field.alias && field.name !== field.alias}
+                              <span>Имя: {field.name}</span>
+                            {/if}
+                            {#if field.alias}
+                              <span>Alias: {field.alias}</span>
+                            {/if}
+                            {#if field.type}
+                              <span>Тип: {field.type}</span>
+                            {/if}
+                            {#if field.path}
+                              <span>Path: {field.path}</span>
+                            {/if}
+                          </div>
+                        </div>
+                      {/each}
+                    </div>
+                  {:else}
+                    <div class="parser-contract-fallback">
+                      Upstream источник определён, но его входной контракт сейчас не описан в текущем desk state.
+                    </div>
+                  {/if}
+                </div>
               </div>
             {/each}
           </div>
@@ -2165,6 +2209,55 @@
     font-size: 11px;
     line-height: 1.45;
     color: #475569;
+  }
+  .parser-contract-block {
+    margin-top: 4px;
+    padding-top: 8px;
+    border-top: 1px dashed #dbe4f0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .parser-contract-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 11px;
+    color: #475569;
+  }
+  .parser-contract-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .parser-contract-item {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #fff;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .parser-contract-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: #0f172a;
+    word-break: break-word;
+  }
+  .parser-contract-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 11px;
+    color: #64748b;
+    word-break: break-word;
+  }
+  .parser-contract-fallback {
+    font-size: 11px;
+    line-height: 1.45;
+    color: #64748b;
   }
   .primary-btn,
   .secondary-btn,

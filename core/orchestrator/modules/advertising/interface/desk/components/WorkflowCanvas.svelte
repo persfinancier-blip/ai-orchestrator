@@ -4,6 +4,7 @@
   import ParserBuilderTab from '../tabs/ParserBuilderTab.svelte';
   import TableNodeBuilderTab from '../tabs/TableNodeBuilderTab.svelte';
   import WriteBuilderTab from '../tabs/WriteBuilderTab.svelte';
+  import { buildAliasFromPath, normalizeTemplatePath } from '../tabs/outputContractCore.js';
   import {
     tools,
     toolPorts,
@@ -251,6 +252,19 @@
     error_text?: string;
     created_at?: string;
     updated_at?: string;
+  };
+  type ParserIncomingContractField = {
+    name: string;
+    alias?: string;
+    type?: string;
+    path?: string;
+  };
+  type ParserIncomingUpstreamNode = {
+    nodeId: string;
+    nodeName: string;
+    nodeType: string;
+    fromPort: string;
+    contractFields?: ParserIncomingContractField[];
   };
 
   type ApiTemplateSelectionChangePayload = {
@@ -2703,11 +2717,166 @@
     return Boolean(n && n.type === 'tool' && toolCfg(n).toolType === 'table_parser');
   }
 
+  function tryList(value: any): any[] {
+    if (Array.isArray(value)) return value;
+    if (typeof value !== 'string') return [];
+    const src = String(value || '').trim();
+    if (!src) return [];
+    try {
+      const parsed = JSON.parse(src);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function parserIncomingContractPath(raw: any, fallbackPath = '') {
+    const rootPath = normalizeTemplatePath(String(raw?.rootPath || raw?.root_path || ''));
+    const directPath = normalizeTemplatePath(
+      String(raw?.path || raw?.response_path || raw?.sourcePath || raw?.source_path || fallbackPath || '')
+    );
+    if (rootPath && directPath) {
+      return directPath.startsWith(`${rootPath}.`) ? directPath : `${rootPath}.${directPath}`;
+    }
+    return directPath || rootPath;
+  }
+
+  function parserIncomingContractField(
+    raw: any,
+    index: number,
+    fallbackPath = ''
+  ): ParserIncomingContractField | null {
+    const path = parserIncomingContractPath(raw, fallbackPath);
+    const alias =
+      String(raw?.alias || raw?.outputName || raw?.output_name || raw?.name || '').trim() ||
+      (path ? buildAliasFromPath(path) : '');
+    const name =
+      String(raw?.name || raw?.fieldName || raw?.field_name || raw?.outputName || raw?.output_name || '').trim() ||
+      alias ||
+      (path
+        ? String(path)
+            .split('.')
+            .map((part) => part.trim())
+            .filter(Boolean)
+            .slice(-1)[0]
+        : `field_${index + 1}`);
+    const type = String(raw?.valueType || raw?.value_type || raw?.type || '').trim();
+    if (!(name || alias || path)) return null;
+    return {
+      name: name || alias || path,
+      alias: alias || undefined,
+      type: type || undefined,
+      path: path || undefined
+    };
+  }
+
+  function uniqueParserIncomingContractFields(fields: ParserIncomingContractField[]) {
+    const seen = new Set<string>();
+    return fields.filter((field) => {
+      const key = `${String(field.alias || '').trim().toLowerCase()}::${String(field.path || '').trim().toLowerCase()}::${String(field.name || '').trim().toLowerCase()}`;
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function parserIncomingContractFromApiNode(node: WorkflowNode): ParserIncomingContractField[] {
+    const source = resolveTemplateSourceForNode(node, getApiRequestForNode(node));
+    const row = source?.rawRow && typeof source.rawRow === 'object' ? source.rawRow : {};
+    const config = tryObj(row?.config_json);
+    const mapping = tryObj(config?.mapping_json || row?.mapping_json);
+    const outputParametersRaw = Array.isArray(row?.output_parameters)
+      ? row.output_parameters
+      : Array.isArray(mapping?.output_parameters)
+      ? mapping.output_parameters
+      : Array.isArray(config?.output_parameters)
+      ? config.output_parameters
+      : [];
+    const directFields = outputParametersRaw
+      .map((item: any, index: number) => parserIncomingContractField(item, index))
+      .filter((item: ParserIncomingContractField | null): item is ParserIncomingContractField => Boolean(item));
+    if (directFields.length) return uniqueParserIncomingContractFields(directFields);
+
+    const pickedPathsRaw = Array.isArray(row?.picked_paths)
+      ? row.picked_paths
+      : Array.isArray(mapping?.picked_paths)
+      ? mapping.picked_paths
+      : Array.isArray(config?.picked_paths)
+      ? config.picked_paths
+      : [];
+    const pickedFields = pickedPathsRaw
+      .map((item: any, index: number) => parserIncomingContractField({}, index, String(item || '')))
+      .filter((entry: ParserIncomingContractField | null): entry is ParserIncomingContractField => Boolean(entry));
+    return uniqueParserIncomingContractFields(pickedFields);
+  }
+
+  function parserIncomingContractFromParserNode(node: WorkflowNode): ParserIncomingContractField[] {
+    const settings = toolCfg(node).settings || {};
+    const rawFields = Array.isArray(settings.selectFields || settings.select_fields)
+      ? settings.selectFields || settings.select_fields
+      : String(settings.selectFields || settings.select_fields || '')
+          .split(',')
+          .map((item) => String(item || '').trim())
+          .filter(Boolean);
+    const selectFields = uniqueAliasList(rawFields.map((item) => String(item || '').trim()).filter(Boolean));
+    const renameMap = tryObj(settings.renameMap || settings.rename_map || '{}');
+    const typeMap = tryObj(settings.typeMap || settings.type_map || '{}');
+    return uniqueParserIncomingContractFields(
+      selectFields
+        .map((path, index) => {
+          const leaf =
+            String(path || '')
+              .split('.')
+              .map((part) => part.trim())
+              .filter(Boolean)
+              .slice(-1)[0] || '';
+          return parserIncomingContractField(
+            {
+              path,
+              alias: String(renameMap[path] || renameMap[leaf] || '').trim(),
+              type: String(typeMap[path] || typeMap[leaf] || '').trim(),
+              name: leaf
+            },
+            index
+          );
+        })
+        .filter((item: ParserIncomingContractField | null): item is ParserIncomingContractField => Boolean(item))
+    );
+  }
+
+  function parserIncomingContractFromTableNode(node: WorkflowNode): ParserIncomingContractField[] {
+    const settings = toolCfg(node).settings || {};
+    const selectedFields = tryList(settings.selectedFieldsJson || settings.selectedFields || settings.selected_fields);
+    const fields = selectedFields
+      .map((item: any, index: number) =>
+        parserIncomingContractField(
+          {
+            name: String(item?.outputName || item?.output_name || item?.fieldName || item?.field_name || '').trim(),
+            alias: String(item?.outputName || item?.output_name || '').trim(),
+            type: '',
+            path: String(item?.sourceAlias || item?.source_alias || '').trim() && String(item?.fieldName || item?.field_name || '').trim()
+              ? `${String(item?.sourceAlias || item?.source_alias || '').trim()}.${String(item?.fieldName || item?.field_name || '').trim()}`
+              : String(item?.fieldName || item?.field_name || '').trim()
+          },
+          index
+        )
+      )
+      .filter((item: ParserIncomingContractField | null): item is ParserIncomingContractField => Boolean(item));
+    return uniqueParserIncomingContractFields(fields);
+  }
+
+  function parserIncomingContractFieldsForNode(node: WorkflowNode): ParserIncomingContractField[] {
+    if (isApiNode(node) || isApiToolNode(node)) return parserIncomingContractFromApiNode(node);
+    if (isParserToolNode(node)) return parserIncomingContractFromParserNode(node);
+    if (isTableNodeTool(node)) return parserIncomingContractFromTableNode(node);
+    return [];
+  }
+
   function parserIncomingDescriptor(n: WorkflowNode | null | undefined) {
     if (!n) return null;
     const upstreamNodes = edges
       .filter((edge) => edge.to === n.id)
-      .reduce<Array<{ nodeId: string; nodeName: string; nodeType: string; fromPort: string }>>((acc, edge) => {
+      .reduce<ParserIncomingUpstreamNode[]>((acc, edge) => {
         const src = nodes.find((candidate) => candidate.id === edge.from);
         if (!src) return acc;
         acc.push({
@@ -2717,7 +2886,8 @@
             src.type === 'tool'
               ? String(toolCfg(src).toolType || src.type).trim()
               : String(src.config?.group || src.type || '').trim() || src.type,
-          fromPort: String(edge.fromPort || 'out').trim() || 'out'
+          fromPort: String(edge.fromPort || 'out').trim() || 'out',
+          contractFields: parserIncomingContractFieldsForNode(src)
         });
         return acc;
       }, []);
