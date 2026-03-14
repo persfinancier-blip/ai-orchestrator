@@ -15,16 +15,6 @@
   type ExistingTable = { schema_name: string; table_name: string };
   type ColumnMeta = { name: string; type?: string };
   type ParserSettings = Record<string, string>;
-  type ParserDraft = {
-    id: number;
-    name: string;
-    parser_name: string;
-    description: string;
-    revision: number;
-    updated_at?: string | null;
-    updated_by?: string;
-    config_json?: Record<string, any>;
-  };
   type ParserPreview = {
     row_count: number;
     column_count: number;
@@ -466,16 +456,6 @@
     return { ...value };
   }
 
-  function storeIdFromSettings(value: Record<string, any> | null | undefined) {
-    const raw = Number(String(value?.templateStoreId || '').trim());
-    return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 0;
-  }
-
-  function templateIdForDraft(draft: ParserDraft | null | undefined) {
-    const id = Number(draft?.id || 0);
-    return id > 0 ? `parser_tpl_${id}` : '';
-  }
-
   function buildTemplatePayload(settingsValue: ParserSettings) {
     const cfg: Record<string, any> = {
       sourceMode: settingsValue.sourceMode,
@@ -533,19 +513,10 @@
 
   let settings = normalizeSettings(initialSettings);
   let lastInitialSignature = JSON.stringify(settings);
-  let templatesLoading = false;
-  let templatesError = '';
-  let drafts: ParserDraft[] = [];
   let sourceTemplatesLoading = false;
   let sourceTemplatesError = '';
   let sourceTemplates: SourceNodeTemplate[] = [];
   let columnsCache: Record<string, ColumnMeta[]> = {};
-  let selectedDraftId = 0;
-  let templateNameInput = '';
-  let templateDescriptionInput = '';
-  let templateSaving = false;
-  let templateDeleting = false;
-  let templateSearch = '';
   let previewLoading = false;
   let previewError = '';
   let previewData: ParserPreview | null = null;
@@ -567,17 +538,6 @@
     }
   }
 
-  $: selectedDraft = drafts.find((item) => Number(item.id || 0) === selectedDraftId) || null;
-  $: filteredDrafts = drafts.filter((item) => {
-    const needle = templateSearch.trim().toLowerCase();
-    if (!needle) return true;
-    const hay = `${item.name} ${item.description}`.toLowerCase();
-    return hay.includes(needle);
-  });
-  $: currentTemplateStoreId = storeIdFromSettings(settings);
-  $: currentTemplate = drafts.find((item) => Number(item.id || 0) === currentTemplateStoreId) || null;
-  $: selectedIsCurrent = Boolean(selectedDraft && currentTemplate && Number(selectedDraft.id) === Number(currentTemplate.id));
-  $: canSwitchTemplate = Boolean(selectedDraft && !selectedIsCurrent);
   $: currentSourceTemplate =
     sourceTemplates.find((item) => item.ref === String(settings.sourceNodeTemplateRef || '').trim()) ||
     sourceTemplates.find((item) => String(item.storeId || 0) === String(settings.sourceNodeTemplateStoreId || '').trim()) ||
@@ -718,10 +678,6 @@
     ...category,
     items: COMPUTED_FUNCTIONS.filter((item) => item.category === category.id)
   }));
-  $: if (!selectedDraft && currentTemplate) {
-    templateNameInput = templateNameInput || currentTemplate.name;
-    templateDescriptionInput = templateDescriptionInput || currentTemplate.description;
-  }
   function dispatchSettings(next: ParserSettings) {
     settings = cloneSettings(next);
     dispatch('configChange', { settings: settings });
@@ -1073,48 +1029,6 @@
     updateRulesSetting('aggregateRulesJson', aggregateRules.filter((_row: any, idx: number) => idx !== index));
   }
 
-  function patchFromDraft(draft: ParserDraft) {
-    const next = normalizeSettings({
-      ...(draft?.config_json && typeof draft.config_json === 'object' ? draft.config_json : {}),
-      templateId: templateIdForDraft(draft),
-      templateStoreId: String(draft.id)
-    });
-    dispatchSettings(next);
-  }
-
-  async function loadDrafts(selectStoreId = 0) {
-    templatesLoading = true;
-    templatesError = '';
-    try {
-      const payload = await apiJson<{ parser_configs?: ParserDraft[] }>(`${apiBase}/parser-configs`, {
-        method: 'GET',
-        headers: { Accept: 'application/json', ...headers() }
-      });
-      drafts = (Array.isArray(payload?.parser_configs) ? payload.parser_configs : []).map((item) => ({
-        id: Number(item?.id || 0),
-        name: String(item?.name || item?.parser_name || '').trim(),
-        parser_name: String(item?.parser_name || item?.name || '').trim(),
-        description: String(item?.description || '').trim(),
-        revision: Number(item?.revision || 1) || 1,
-        updated_at: item?.updated_at || null,
-        updated_by: String(item?.updated_by || '').trim(),
-        config_json: item?.config_json && typeof item.config_json === 'object' ? item.config_json : {}
-      }));
-      const wantedId = selectStoreId > 0 ? selectStoreId : selectedDraftId;
-      if (wantedId > 0 && drafts.some((item) => Number(item.id) === wantedId)) {
-        selectedDraftId = wantedId;
-      } else if (currentTemplateStoreId > 0 && drafts.some((item) => Number(item.id) === currentTemplateStoreId)) {
-        selectedDraftId = currentTemplateStoreId;
-      } else if (drafts.length && !selectedDraftId) {
-        selectedDraftId = Number(drafts[0].id || 0);
-      }
-    } catch (e: any) {
-      templatesError = String(e?.message || e || 'Не удалось загрузить шаблоны parser');
-    } finally {
-      templatesLoading = false;
-    }
-  }
-
   async function loadSourceTemplates() {
     sourceTemplatesLoading = true;
     sourceTemplatesError = '';
@@ -1124,7 +1038,7 @@
           method: 'GET',
           headers: { Accept: 'application/json', ...headers() }
         }),
-        apiJson<{ parser_configs?: ParserDraft[] }>(`${apiBase}/parser-configs`, {
+        apiJson<{ parser_configs?: Array<Record<string, any>> }>(`${apiBase}/parser-configs`, {
           method: 'GET',
           headers: { Accept: 'application/json', ...headers() }
         })
@@ -1158,93 +1072,6 @@
     } finally {
       sourceTemplatesLoading = false;
     }
-  }
-
-  async function saveTemplate() {
-    const parser_name = String(templateNameInput || '').trim();
-    if (!parser_name) {
-      templatesError = 'Укажи название шаблона парсинга.';
-      return;
-    }
-    templateSaving = true;
-    templatesError = '';
-    try {
-      const currentId = Number(selectedDraft?.id || 0);
-      const payload = await apiJson<{ id: number; revision: number }>(`${apiBase}/parser-configs/upsert`, {
-        method: 'POST',
-        headers: headers(),
-        body: JSON.stringify({
-          id: currentId > 0 ? currentId : undefined,
-          parser_name,
-          description: String(templateDescriptionInput || '').trim(),
-          config_json: buildTemplatePayload(settings)
-        })
-      });
-      const savedId = Number(payload?.id || 0);
-      await loadDrafts(savedId);
-      await loadSourceTemplates();
-      const savedDraft = drafts.find((item) => Number(item.id) === savedId);
-      if (savedDraft) {
-        patchFromDraft(savedDraft);
-        templateNameInput = savedDraft.name;
-        templateDescriptionInput = savedDraft.description;
-      } else if (savedId > 0) {
-        const next = cloneSettings(settings);
-        next.templateStoreId = String(savedId);
-        next.templateId = `parser_tpl_${savedId}`;
-        dispatchSettings(next);
-      }
-    } catch (e: any) {
-      templatesError = String(e?.message || e || 'Не удалось сохранить шаблон');
-    } finally {
-      templateSaving = false;
-    }
-  }
-
-  async function deleteTemplate() {
-    if (!selectedDraft) return;
-    templateDeleting = true;
-    templatesError = '';
-    try {
-      await apiJson(`${apiBase}/parser-configs/delete`, {
-        method: 'POST',
-        headers: headers(),
-        body: JSON.stringify({ id: selectedDraft.id })
-      });
-      const deletedId = Number(selectedDraft.id || 0);
-      selectedDraftId = 0;
-      if (currentTemplateStoreId === deletedId) {
-        const next = cloneSettings(settings);
-        next.templateId = '';
-        next.templateStoreId = '';
-        dispatchSettings(next);
-      }
-      templateNameInput = '';
-      templateDescriptionInput = '';
-      await loadDrafts();
-      await loadSourceTemplates();
-    } catch (e: any) {
-      templatesError = String(e?.message || e || 'Не удалось удалить шаблон');
-    } finally {
-      templateDeleting = false;
-    }
-  }
-
-  function resetTemplateDraft() {
-    selectedDraftId = 0;
-    templateNameInput = '';
-    templateDescriptionInput = '';
-  }
-
-  function selectDraft(draft: ParserDraft) {
-    selectedDraftId = Number(draft.id || 0);
-    templateNameInput = draft.name;
-    templateDescriptionInput = draft.description;
-  }
-
-  function applySelectedTemplate() {
-    if (!selectedDraft || selectedIsCurrent) return;
-    patchFromDraft(selectedDraft);
   }
 
   async function previewNow() {
@@ -1708,7 +1535,6 @@
   }
 
   onMount(() => {
-    void loadDrafts(storeIdFromSettings(initialSettings));
     void loadSourceTemplates();
     void previewNow();
   });
@@ -2742,102 +2568,6 @@
         {/if}
       </div>
 
-      <details class="parser-legacy-panel parser-legacy-panel-secondary">
-          <summary class="parser-legacy-summary">Legacy / миграция: библиотека шаблонов parser</summary>
-          <div class="parser-legacy-body">
-          <div class="parser-card-head">
-            <div>
-              <p>Совместимость со старыми desks сохранена, но основной сценарий теперь идёт через node editor текущего рабочего стола.</p>
-            </div>
-            <button type="button" class="mini-btn" on:click={() => loadDrafts()} disabled={templatesLoading}>
-              Обновить
-            </button>
-          </div>
-
-          <div class="current-template-box">
-            <div class="current-template-line">
-              <span class="current-template-key">Текущий шаблон:</span>
-              <span class="current-template-value">{currentTemplate?.name || 'Шаблон не подключён'}</span>
-            </div>
-            <div class="current-template-line">
-              <span class="current-template-key">Выбран в библиотеке:</span>
-              <span class="current-template-value muted">{selectedDraft?.name || 'Ничего не выбрано'}</span>
-            </div>
-            <div class="current-template-actions">
-              <button type="button" class="primary-btn" on:click={applySelectedTemplate} disabled={!canSwitchTemplate}>
-                Сменить шаблон
-              </button>
-              <span class="hint">
-                {#if !selectedDraft}
-                  Выбери шаблон из библиотеки.
-                {:else if selectedIsCurrent}
-                  Этот шаблон уже подключён.
-                {:else}
-                  Готов к перепривязке.
-                {/if}
-              </span>
-            </div>
-          </div>
-
-          {#if templatesError}
-            <div class="inline-error">{templatesError}</div>
-          {/if}
-
-          <div class="template-editor">
-            <label>
-              Название шаблона
-              <input value={templateNameInput} on:input={(e) => (templateNameInput = inputValue(e))} placeholder="Например: JSON список карточек" />
-            </label>
-            <label>
-              Описание
-              <textarea rows="3" value={templateDescriptionInput} on:input={(e) => (templateDescriptionInput = textareaValue(e))}></textarea>
-            </label>
-            <div class="template-editor-actions">
-              <button type="button" class="primary-btn" on:click={saveTemplate} disabled={templateSaving}>
-                {templateSaving ? 'Сохранение...' : 'Сохранить'}
-              </button>
-              <button type="button" class="secondary-btn" on:click={resetTemplateDraft}>Новый</button>
-              <button type="button" class="secondary-btn danger" on:click={deleteTemplate} disabled={!selectedDraft || templateDeleting}>
-                {templateDeleting ? 'Удаление...' : 'Удалить'}
-              </button>
-            </div>
-          </div>
-
-          <label>
-            Поиск шаблона
-            <input value={templateSearch} on:input={(e) => (templateSearch = inputValue(e))} placeholder="Название или описание" />
-          </label>
-
-          <div class="template-list-wrap">
-            {#if templatesLoading}
-              <div class="empty-box">Загрузка шаблонов...</div>
-            {:else if filteredDrafts.length}
-              <div class="template-list">
-                {#each filteredDrafts as draft (draft.id)}
-                  <button
-                    type="button"
-                    class="template-item"
-                    class:is-selected={selectedDraftId === draft.id}
-                    class:is-current={currentTemplateStoreId === draft.id}
-                    on:click={() => selectDraft(draft)}
-                  >
-                    <span class="template-item-name">{draft.name}</span>
-                    <span class="template-item-desc">{draft.description || 'Без описания'}</span>
-                    <span class="template-item-meta">
-                      rev {draft.revision}
-                      {#if currentTemplateStoreId === draft.id}
-                        <strong>подключён</strong>
-                      {/if}
-                    </span>
-                  </button>
-                {/each}
-              </div>
-            {:else}
-              <div class="empty-box">Шаблоны parser пока не найдены.</div>
-            {/if}
-          </div>
-          </div>
-        </details>
     </section>
 
     <section class="parser-column parser-column-output">
@@ -3130,9 +2860,6 @@
     background: #f8fafc;
     padding: 0;
   }
-  .parser-legacy-panel-secondary {
-    margin-top: 0;
-  }
   .parser-legacy-summary {
     cursor: pointer;
     list-style: none;
@@ -3151,7 +2878,6 @@
     gap: 12px;
   }
   .primary-btn,
-  .secondary-btn,
   .mini-btn {
     border-radius: 10px;
     border: 1px solid #dbe4f0;
@@ -3166,17 +2892,11 @@
     color: #fff;
     border-color: #0f172a;
   }
-  .secondary-btn,
   .mini-btn {
     background: #fff;
     color: #334155;
   }
-  .secondary-btn.danger {
-    color: #b91c1c;
-    border-color: #fecaca;
-  }
   .primary-btn:disabled,
-  .secondary-btn:disabled,
   .mini-btn:disabled {
     opacity: 0.55;
     cursor: not-allowed;
@@ -3396,13 +3116,10 @@
   .rules-grid-join {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   }
-  .rules-grid-computed {
-    grid-template-columns: minmax(170px, 0.8fr) minmax(0, 1.5fr) minmax(150px, 0.6fr) auto;
-  }
   .rules-grid-aggregates {
     grid-template-columns: minmax(0, 1fr) minmax(170px, 0.8fr) minmax(0, 1fr) auto;
   }
-  .rules-grid:not(.rules-grid-filters):not(.rules-grid-computed):not(.rules-grid-aggregates) {
+  .rules-grid:not(.rules-grid-filters):not(.rules-grid-aggregates) {
     grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(170px, 0.6fr) minmax(0, 1fr) auto;
   }
   .rules-grid-head {
@@ -3420,9 +3137,7 @@
     align-items: center;
     justify-content: center;
   }
-  .current-template-box,
-  .selected-source-box,
-  .template-editor {
+  .selected-source-box {
     border: 1px solid #e2e8f0;
     border-radius: 12px;
     padding: 10px;
@@ -3432,79 +3147,6 @@
   }
   .selected-source-box {
     background: #f8fafc;
-  }
-  .current-template-line {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .current-template-key {
-    font-size: 11px;
-    color: #64748b;
-  }
-  .current-template-value {
-    font-size: 13px;
-    font-weight: 600;
-    color: #0f172a;
-  }
-  .current-template-value.muted {
-    font-weight: 500;
-    color: #334155;
-  }
-  .current-template-actions,
-  .template-editor-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
-  }
-  .template-list-wrap {
-    border: 1px solid #e2e8f0;
-    border-radius: 12px;
-    min-height: 220px;
-    max-height: 520px;
-    overflow: auto;
-    background: #f8fafc;
-  }
-  .template-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 10px;
-  }
-  .template-item {
-    text-align: left;
-    border: 1px solid #dbe4f0;
-    border-radius: 12px;
-    padding: 10px;
-    background: #fff;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    cursor: pointer;
-  }
-  .template-item.is-selected {
-    border-color: #2563eb;
-    box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.18);
-  }
-  .template-item.is-current {
-    background: #eff6ff;
-  }
-  .template-item-name {
-    font-size: 13px;
-    font-weight: 600;
-    color: #0f172a;
-  }
-  .template-item-desc {
-    font-size: 11px;
-    color: #64748b;
-  }
-  .template-item-meta {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    font-size: 10px;
-    color: #475569;
   }
   .empty-box {
     padding: 14px;
@@ -3664,7 +3306,6 @@
     }
     .rules-grid,
     .rules-grid-filters,
-    .rules-grid-computed,
     .rules-grid-aggregates,
     .rules-grid-join-suggestions {
       grid-template-columns: 1fr;
@@ -3685,7 +3326,6 @@
     }
     .rules-grid,
     .rules-grid-filters,
-    .rules-grid-computed,
     .rules-grid-aggregates,
     .rules-grid-join-suggestions {
       grid-template-columns: 1fr;
