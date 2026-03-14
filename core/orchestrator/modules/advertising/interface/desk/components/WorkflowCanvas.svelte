@@ -2703,6 +2703,27 @@
     return Boolean(n && n.type === 'tool' && toolCfg(n).toolType === 'table_parser');
   }
 
+  function parserIncomingDescriptor(n: WorkflowNode | null | undefined) {
+    if (!n) return null;
+    const upstreamNodes = edges
+      .filter((edge) => edge.to === n.id)
+      .reduce<Array<{ nodeId: string; nodeName: string; nodeType: string; fromPort: string }>>((acc, edge) => {
+        const src = nodes.find((candidate) => candidate.id === edge.from);
+        if (!src) return acc;
+        acc.push({
+          nodeId: src.id,
+          nodeName: String(src.config?.name || src.id || '').trim() || src.id,
+          nodeType:
+            src.type === 'tool'
+              ? String(toolCfg(src).toolType || src.type).trim()
+              : String(src.config?.group || src.type || '').trim() || src.type,
+          fromPort: String(edge.fromPort || 'out').trim() || 'out'
+        });
+        return acc;
+      }, []);
+    return { nodeId: n.id, upstreamNodes };
+  }
+
   function isTableNodeTool(n: WorkflowNode | null | undefined) {
     return Boolean(n && n.type === 'tool' && toolCfg(n).toolType === 'table_node');
   }
@@ -6195,6 +6216,7 @@
               headers={workflowApiHeaders}
               existingTables={apiBuilderExistingTables}
               initialSettings={toolCfg(settingsNode).settings || {}}
+              incomingDescriptor={parserIncomingDescriptor(settingsNode)}
               embeddedMode={false}
               on:configChange={(event) => replaceToolSettings(settingsNode.id, event.detail?.settings || {})}
             />

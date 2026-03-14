@@ -50,6 +50,15 @@
     output_parameters?: Array<Record<string, any>>;
     picked_paths?: string[];
   };
+  type ParserIncomingDescriptor = {
+    nodeId?: string;
+    upstreamNodes?: Array<{
+      nodeId: string;
+      nodeName: string;
+      nodeType: string;
+      fromPort: string;
+    }>;
+  };
   type LookupJoinRule = {
     sourceField: string;
     targetField: string;
@@ -61,6 +70,7 @@
   export let existingTables: ExistingTable[] = [];
   export let initialSettings: Record<string, any> = {};
   export let embeddedMode = false;
+  export let incomingDescriptor: ParserIncomingDescriptor | null = null;
 
   const dispatch = createEventDispatcher<{
     configChange: { settings: ParserSettings };
@@ -490,6 +500,7 @@
   };
   $: sourceTableColumnsMeta = columnsCache[tableCacheKey(settings.sourceSchema, settings.sourceTable)] || [];
   $: previewResultRows = Array.isArray(previewData?.sample_rows) ? previewData.sample_rows : [];
+  $: incomingNodes = Array.isArray(incomingDescriptor?.upstreamNodes) ? incomingDescriptor.upstreamNodes : [];
   $: computedFunctionLibrary = COMPUTED_FUNCTION_CATEGORIES.map((category) => ({
     ...category,
     items: COMPUTED_FUNCTIONS.filter((item) => item.category === category.id)
@@ -1111,12 +1122,35 @@
 
 <section class="panel" class:panel-embedded={embeddedMode}>
   <div class="parser-layout">
-    <section class="parser-column parser-column-preview">
+    <section class="parser-column parser-column-input">
+      <div class="parser-shell-card">
+        <div class="parser-card-head">
+          <div>
+            <h3>Входящие параметры</h3>
+            <p>Честный upstream descriptor из текущего desk graph. На этом шаге секция остаётся read-only.</p>
+          </div>
+        </div>
+        {#if incomingNodes.length}
+          <div class="parser-shell-list">
+            {#each incomingNodes as item}
+              <div class="parser-shell-item">
+                <strong>{item.nodeName}</strong>
+                <span>{item.nodeType} · {item.fromPort}</span>
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <div class="inline-hint">В текущем desk graph upstream descriptor пуст или ещё не определён. Следующий шаг заполнит секцию содержимым.</div>
+        {/if}
+      </div>
+    </section>
+
+    <section class="parser-column parser-column-settings">
       <div class="parser-card">
         <div class="parser-card-head">
           <div>
-            <h3>Источник данных</h3>
-            <p>Выбери, откуда брать вход: от шаблона ноды, из таблицы или из файла/ссылки. Здесь же видно preview входа.</p>
+            <h3>Источник данных и preview входа</h3>
+            <p>Текущая рабочая настройка источника parser сохранена в центральной секции без изменения логики.</p>
           </div>
           <button type="button" class="primary-btn" on:click={previewNow} disabled={previewLoading}>
             {previewLoading ? 'Обновление...' : 'Обновить preview'}
@@ -1143,7 +1177,7 @@
                 <option value={item.ref}>{sourceTemplateLabel(item)}</option>
               {/each}
             </select>
-            <span class="hint">Для нод источник задаётся через шаблон ноды, а не через конкретный экземпляр на canvas.</span>
+            <span class="hint">Для нод источник пока задаётся через шаблон ноды, а не через конкретный экземпляр на canvas.</span>
           </label>
           {#if sourceTemplatesError}
             <div class="inline-error">{sourceTemplatesError}</div>
@@ -1267,9 +1301,7 @@
           <div class="empty-box">{settings.sourceMode === 'node' && sourceNodePreviewMessage ? sourceNodePreviewMessage : 'Нет preview входа. Выбери источник и обнови preview.'}</div>
         {/if}
       </div>
-    </section>
 
-    <section class="parser-column parser-column-settings">
       <div class="parser-card">
         <div class="parser-card-head">
           <div>
@@ -1882,110 +1914,120 @@
           {:else}
             <div class="empty-box">Нет результата preview. Обнови preview после изменения настроек обработки.</div>
           {/if}
-          {#if previewRaw}
+        {#if previewRaw}
             <details class="preview-raw">
               <summary>Показать raw результат parser runtime</summary>
               <pre>{JSON.stringify(previewRaw, null, 2)}</pre>
             </details>
           {/if}
         </div>
+
+        <div class="parser-card">
+          <div class="parser-card-head">
+            <div>
+              <h3>Шаблоны обработки данных</h3>
+              <p>Legacy-библиотека шаблонов parser пока остаётся доступной, но рабочая конфигурация ноды уже живёт в settings текущего desk.</p>
+            </div>
+            <button type="button" class="mini-btn" on:click={() => loadDrafts()} disabled={templatesLoading}>
+              Обновить
+            </button>
+          </div>
+
+          <div class="current-template-box">
+            <div class="current-template-line">
+              <span class="current-template-key">Текущий шаблон:</span>
+              <span class="current-template-value">{currentTemplate?.name || 'Шаблон не подключён'}</span>
+            </div>
+            <div class="current-template-line">
+              <span class="current-template-key">Выбран в библиотеке:</span>
+              <span class="current-template-value muted">{selectedDraft?.name || 'Ничего не выбрано'}</span>
+            </div>
+            <div class="current-template-actions">
+              <button type="button" class="primary-btn" on:click={applySelectedTemplate} disabled={!canSwitchTemplate}>
+                Сменить шаблон
+              </button>
+              <span class="hint">
+                {#if !selectedDraft}
+                  Выбери шаблон из библиотеки.
+                {:else if selectedIsCurrent}
+                  Этот шаблон уже подключён.
+                {:else}
+                  Готов к перепривязке.
+                {/if}
+              </span>
+            </div>
+          </div>
+
+          {#if templatesError}
+            <div class="inline-error">{templatesError}</div>
+          {/if}
+
+          <div class="template-editor">
+            <label>
+              Название шаблона
+              <input value={templateNameInput} on:input={(e) => (templateNameInput = inputValue(e))} placeholder="Например: JSON список карточек" />
+            </label>
+            <label>
+              Описание
+              <textarea rows="3" value={templateDescriptionInput} on:input={(e) => (templateDescriptionInput = textareaValue(e))}></textarea>
+            </label>
+            <div class="template-editor-actions">
+              <button type="button" class="primary-btn" on:click={saveTemplate} disabled={templateSaving}>
+                {templateSaving ? 'Сохранение...' : 'Сохранить'}
+              </button>
+              <button type="button" class="secondary-btn" on:click={resetTemplateDraft}>Новый</button>
+              <button type="button" class="secondary-btn danger" on:click={deleteTemplate} disabled={!selectedDraft || templateDeleting}>
+                {templateDeleting ? 'Удаление...' : 'Удалить'}
+              </button>
+            </div>
+          </div>
+
+          <label>
+            Поиск шаблона
+            <input value={templateSearch} on:input={(e) => (templateSearch = inputValue(e))} placeholder="Название или описание" />
+          </label>
+
+          <div class="template-list-wrap">
+            {#if templatesLoading}
+              <div class="empty-box">Загрузка шаблонов...</div>
+            {:else if filteredDrafts.length}
+              <div class="template-list">
+                {#each filteredDrafts as draft (draft.id)}
+                  <button
+                    type="button"
+                    class="template-item"
+                    class:is-selected={selectedDraftId === draft.id}
+                    class:is-current={currentTemplateStoreId === draft.id}
+                    on:click={() => selectDraft(draft)}
+                  >
+                    <span class="template-item-name">{draft.name}</span>
+                    <span class="template-item-desc">{draft.description || 'Без описания'}</span>
+                    <span class="template-item-meta">
+                      rev {draft.revision}
+                      {#if currentTemplateStoreId === draft.id}
+                        <strong>подключён</strong>
+                      {/if}
+                    </span>
+                  </button>
+                {/each}
+              </div>
+            {:else}
+              <div class="empty-box">Шаблоны parser пока не найдены.</div>
+            {/if}
+          </div>
+        </div>
       </div>
     </section>
 
-    <section class="parser-column parser-column-library">
-      <div class="parser-card">
+    <section class="parser-column parser-column-output">
+      <div class="parser-shell-card">
         <div class="parser-card-head">
           <div>
-            <h3>Шаблоны обработки данных</h3>
-            <p>Сохранённые настройки источника и обработки. Нода привязывается к шаблону, а результат всё равно передаётся дальше как обычный output ноды.</p>
-          </div>
-          <button type="button" class="mini-btn" on:click={() => loadDrafts()} disabled={templatesLoading}>
-            Обновить
-          </button>
-        </div>
-
-        <div class="current-template-box">
-          <div class="current-template-line">
-            <span class="current-template-key">Текущий шаблон:</span>
-            <span class="current-template-value">{currentTemplate?.name || 'Шаблон не подключён'}</span>
-          </div>
-          <div class="current-template-line">
-            <span class="current-template-key">Выбран в библиотеке:</span>
-            <span class="current-template-value muted">{selectedDraft?.name || 'Ничего не выбрано'}</span>
-          </div>
-          <div class="current-template-actions">
-            <button type="button" class="primary-btn" on:click={applySelectedTemplate} disabled={!canSwitchTemplate}>
-              Сменить шаблон
-            </button>
-            <span class="hint">
-              {#if !selectedDraft}
-                Выбери шаблон справа.
-              {:else if selectedIsCurrent}
-                Этот шаблон уже подключён.
-              {:else}
-                Готов к перепривязке.
-              {/if}
-            </span>
+            <h3>Исходящие параметры</h3>
+            <p>Read-only зона результата для следующей ноды. На этом шаге отдельный output preview ещё не вводится.</p>
           </div>
         </div>
-
-        {#if templatesError}
-          <div class="inline-error">{templatesError}</div>
-        {/if}
-
-        <div class="template-editor">
-          <label>
-            Название шаблона
-            <input value={templateNameInput} on:input={(e) => (templateNameInput = inputValue(e))} placeholder="Например: JSON список карточек" />
-          </label>
-          <label>
-            Описание
-            <textarea rows="3" value={templateDescriptionInput} on:input={(e) => (templateDescriptionInput = textareaValue(e))}></textarea>
-          </label>
-          <div class="template-editor-actions">
-            <button type="button" class="primary-btn" on:click={saveTemplate} disabled={templateSaving}>
-              {templateSaving ? 'Сохранение...' : 'Сохранить'}
-            </button>
-            <button type="button" class="secondary-btn" on:click={resetTemplateDraft}>Новый</button>
-            <button type="button" class="secondary-btn danger" on:click={deleteTemplate} disabled={!selectedDraft || templateDeleting}>
-              {templateDeleting ? 'Удаление...' : 'Удалить'}
-            </button>
-          </div>
-        </div>
-
-        <label>
-          Поиск шаблона
-          <input value={templateSearch} on:input={(e) => (templateSearch = inputValue(e))} placeholder="Название или описание" />
-        </label>
-
-        <div class="template-list-wrap">
-          {#if templatesLoading}
-            <div class="empty-box">Загрузка шаблонов...</div>
-          {:else if filteredDrafts.length}
-            <div class="template-list">
-              {#each filteredDrafts as draft (draft.id)}
-                <button
-                  type="button"
-                  class="template-item"
-                  class:is-selected={selectedDraftId === draft.id}
-                  class:is-current={currentTemplateStoreId === draft.id}
-                  on:click={() => selectDraft(draft)}
-                >
-                  <span class="template-item-name">{draft.name}</span>
-                  <span class="template-item-desc">{draft.description || 'Без описания'}</span>
-                  <span class="template-item-meta">
-                    rev {draft.revision}
-                    {#if currentTemplateStoreId === draft.id}
-                      <strong>подключён</strong>
-                    {/if}
-                  </span>
-                </button>
-              {/each}
-            </div>
-          {:else}
-            <div class="empty-box">Шаблоны parser пока не найдены.</div>
-          {/if}
-        </div>
+        <div class="inline-hint">Правая колонка подготовлена под derived output/result. На текущем шаге она остаётся честным placeholder без новой схемы и без редактирования.</div>
       </div>
     </section>
   </div>
@@ -2012,6 +2054,17 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
+    gap: 14px;
+  }
+  .parser-shell-card {
+    border: 1px solid #dbe4f0;
+    border-radius: 12px;
+    background: #fff;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
   }
   .parser-card {
     border: 1px solid #dbe4f0;
@@ -2039,6 +2092,28 @@
     font-size: 12px;
     color: #64748b;
     line-height: 1.4;
+  }
+  .parser-shell-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .parser-shell-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 10px;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background: #f8fafc;
+  }
+  .parser-shell-item strong {
+    font-size: 12px;
+    color: #0f172a;
+  }
+  .parser-shell-item span {
+    font-size: 11px;
+    color: #64748b;
   }
   .primary-btn,
   .secondary-btn,
