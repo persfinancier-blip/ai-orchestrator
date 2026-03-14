@@ -10,10 +10,10 @@
     normalizeComputedFieldRule,
     serializeComputedFieldRule
   } from './computedFieldBuilderCore.js';
-  import { buildSourceNodePreviewFromTemplate } from './parserSourcePreviewCore.js';
   import {
     descriptorFieldKey,
     descriptorFields,
+    descriptorOutputKindLabel,
     descriptorSampleColumns,
     descriptorSampleRows,
     type NodeDescriptor,
@@ -38,16 +38,6 @@
     source_format: string;
     batch: Record<string, any>;
     stats: Record<string, any>;
-  };
-  type SourceNodeTemplate = {
-    ref: string;
-    templateType: 'api_request' | 'table_parser';
-    storeId: number;
-    name: string;
-    description: string;
-    config_json?: Record<string, any>;
-    output_parameters?: Array<Record<string, any>>;
-    picked_paths?: string[];
   };
   type ParserDerivedOutputField = {
     name: string;
@@ -113,7 +103,6 @@
     warningsSummary: {
       ambiguity: boolean;
       missingSample: boolean;
-      legacyFallbackInUse: boolean;
       insufficientData: boolean;
       parserWarnings: string[];
       total: number;
@@ -417,7 +406,6 @@
       warningsSummary: {
         ambiguity: false,
         missingSample: true,
-        legacyFallbackInUse: false,
         insufficientData: true,
         parserWarnings: [],
         total: 0
@@ -493,19 +481,14 @@
 
   let settings = normalizeSettings(initialSettings);
   let lastInitialSignature = JSON.stringify(settings);
-  let sourceTemplatesLoading = false;
-  let sourceTemplatesError = '';
-  let sourceTemplates: SourceNodeTemplate[] = [];
-  let sourceTemplatesRequested = false;
   let columnsCache: Record<string, ColumnMeta[]> = {};
   let previewLoading = false;
   let previewError = '';
   let previewData: ParserPreview | null = null;
   let previewRaw: any = null;
   let previewUpdatedAt = '';
-  let sourceNodePreviewMessage = '';
   let parserPipelineModel: ParserPipelineViewModel = emptyParserPipelineModel();
-  let activeStep: ParserEditorStep = 'fields';
+  let activeStep: ParserEditorStep = 'input';
   let detectOverrideOpen = false;
   let payloadManualInputOpen = false;
   let workingSetManualInputOpen = false;
@@ -519,58 +502,26 @@
     }
   }
 
-  $: currentSourceTemplate =
-    sourceTemplates.find((item) => item.ref === String(settings.sourceNodeTemplateRef || '').trim()) ||
-    sourceTemplates.find((item) => String(item.storeId || 0) === String(settings.sourceNodeTemplateStoreId || '').trim()) ||
-    null;
-  $: sourceNodePreview = settings.sourceMode === 'node' ? buildSourceNodePreviewFromTemplate(currentSourceTemplate) : { rows: [], columns: [], message: '' };
-  $: sourceNodePreviewJson = sourceNodePreview.rows.length ? JSON.stringify(sourceNodePreview.rows, null, 2) : '';
-  $: sourceNodePreviewMessage = sourceNodePreview.message || '';
   $: incomingSamplePreview = buildIncomingSamplePreview(incomingDescriptor);
   $: sourcePreviewColumns =
-    settings.sourceMode === 'node'
-      ? incomingSamplePreview.columns.length
-        ? incomingSamplePreview.columns
-        : sourceNodePreview.columns
-      : Array.isArray(previewData?.raw_columns)
+    Array.isArray(previewData?.raw_columns) && previewData.raw_columns.length
       ? previewData.raw_columns
-      : [];
+      : incomingSamplePreview.columns;
   $: sourcePreviewRows =
-    settings.sourceMode === 'node'
-      ? incomingSamplePreview.rows.length
-        ? incomingSamplePreview.rows
-        : sourceNodePreview.rows
-      : Array.isArray(previewData?.raw_sample_rows)
+    Array.isArray(previewData?.raw_sample_rows) && previewData.raw_sample_rows.length
       ? previewData.raw_sample_rows
-      : [];
+      : incomingSamplePreview.rows;
   $: sourcePreviewRowCount =
-    settings.sourceMode === 'node'
-      ? incomingSamplePreview.rows.length
-        ? incomingSamplePreview.rowCount
-        : currentSourceTemplate
-        ? sourceNodePreview.rows.length
-        : '-'
-      : (previewData?.raw_row_count ?? '-');
+    Array.isArray(previewData?.raw_sample_rows) && previewData.raw_sample_rows.length
+      ? previewData?.raw_row_count ?? previewData.raw_sample_rows.length
+      : incomingSamplePreview.rowCount;
   $: sourcePreviewColumnCount =
-    settings.sourceMode === 'node'
-      ? incomingSamplePreview.columns.length
-        ? incomingSamplePreview.columnCount
-        : currentSourceTemplate
-        ? sourceNodePreview.columns.length
-        : '-'
-      : (previewData?.raw_column_count ?? '-');
+    Array.isArray(previewData?.raw_columns) && previewData.raw_columns.length
+      ? previewData?.raw_column_count ?? previewData.raw_columns.length
+      : incomingSamplePreview.columnCount;
   $: sourcePreviewSourceRef =
-    settings.sourceMode === 'node'
-      ? incomingSamplePreview.sourceRef
-        ? incomingSamplePreview.sourceRef
-        : currentSourceTemplate
-        ? sourceTemplateLabel(currentSourceTemplate)
-        : '-'
-      : previewData?.source_ref || '-';
-  $: sourcePreviewEmptyMessage =
-    settings.sourceMode === 'node'
-      ? incomingSamplePreview.emptyMessage || 'Upstream источник уже определён, но sample snapshot для preview пока недоступен.'
-      : 'Нет preview входа. Выбери источник и обнови preview.';
+    String(previewData?.source_ref || '').trim() || incomingSamplePreview.sourceRef || '-';
+  $: sourcePreviewEmptyMessage = incomingSamplePreview.emptyMessage || 'Upstream источник уже определён, но sample snapshot для preview пока недоступен.';
   $: incomingContractFieldCandidates = Array.from(
     new Set(
       incomingNodes
@@ -590,7 +541,10 @@
     ].filter(Boolean))
   );
   $: hasIncomingUpstream = incomingNodes.length > 0;
-  $: autoSourceDefined = settings.sourceMode === 'node' && hasIncomingUpstream;
+  $: autoSourceDefined = hasIncomingUpstream;
+  $: legacyStandaloneSourceMode = !hasIncomingUpstream && settings.sourceMode !== 'node';
+  $: legacyStandaloneSourceLabel =
+    settings.sourceMode === 'table' ? 'table source' : settings.sourceMode === 'file_url' ? 'file/link source' : 'node';
   $: hasDetectManualOverrides =
     parserPipelineModel.autoManualState.strategy === 'manual' ||
     parserPipelineModel.autoManualState.payload === 'manual' ||
@@ -652,6 +606,10 @@
   $: incomingNodes = Array.isArray(incomingDescriptor?.upstreamDescriptors) ? incomingDescriptor.upstreamDescriptors : [];
   $: incomingDescriptorNodeId = String(incomingDescriptor?.nodeId || '').trim();
   $: derivedOutputFields = buildDerivedOutputFields();
+  $: publishedDescriptorFields = descriptorFields(outputDescriptor);
+  $: outputDescriptorDetection = outputDescriptor?.detection && typeof outputDescriptor.detection === 'object' ? outputDescriptor.detection : {};
+  $: outputDescriptorKind = String(outputDescriptor?.outputKind || 'unknown').trim() || 'unknown';
+  $: outputDescriptorKindLabelValue = descriptorOutputKindLabel(outputDescriptor?.outputKind || 'unknown');
   $: derivedOutputSourceLabel =
     Array.isArray(previewData?.columns) && previewData.columns.length
       ? 'По результату preview'
@@ -762,31 +720,6 @@
   function patchSetting(key: string, value: string) {
     const next = cloneSettings(settings);
     next[key] = value;
-    dispatchSettings(next);
-  }
-
-  function sourceTemplateRef(kind: 'api_request' | 'table_parser', storeId: number) {
-    return `${kind}:${Math.trunc(Number(storeId || 0))}`;
-  }
-
-  function sourceTemplateLabel(item: SourceNodeTemplate) {
-    return `${item.templateType === 'api_request' ? 'Запросы' : 'Legacy parser'} / ${item.name}`;
-  }
-
-  function applySourceNodeTemplateRef(ref: string) {
-    const next = cloneSettings(settings);
-    const selected = sourceTemplates.find((item) => item.ref === String(ref || '').trim()) || null;
-    if (!selected) {
-      next.sourceNodeTemplateRef = '';
-      next.sourceNodeTemplateType = '';
-      next.sourceNodeTemplateStoreId = '';
-      next.sourceNodeTemplateName = '';
-    } else {
-      next.sourceNodeTemplateRef = selected.ref;
-      next.sourceNodeTemplateType = selected.templateType;
-      next.sourceNodeTemplateStoreId = String(selected.storeId);
-      next.sourceNodeTemplateName = selected.name;
-    }
     dispatchSettings(next);
   }
 
@@ -1105,52 +1038,6 @@
     updateRulesSetting('aggregateRulesJson', aggregateRules.filter((_row: any, idx: number) => idx !== index));
   }
 
-  async function loadSourceTemplates() {
-    sourceTemplatesRequested = true;
-    sourceTemplatesLoading = true;
-    sourceTemplatesError = '';
-    try {
-      const [apiPayload, parserPayload] = await Promise.all([
-        apiJson<{ api_configs?: any[] }>(`${apiBase}/api-configs`, {
-          method: 'GET',
-          headers: { Accept: 'application/json', ...headers() }
-        }),
-        apiJson<{ parser_configs?: Array<Record<string, any>> }>(`${apiBase}/parser-configs`, {
-          method: 'GET',
-          headers: { Accept: 'application/json', ...headers() }
-        })
-      ]);
-      const apiTemplates: SourceNodeTemplate[] = (Array.isArray(apiPayload?.api_configs) ? apiPayload.api_configs : [])
-        .map((item) => ({
-          ref: sourceTemplateRef('api_request', Number(item?.id || 0)),
-          templateType: 'api_request' as const,
-          storeId: Number(item?.id || 0),
-          name: String(item?.api_name || item?.name || '').trim(),
-          description: String(item?.description || '').trim(),
-          config_json: item?.config_json && typeof item.config_json === 'object' ? item.config_json : {},
-          output_parameters: Array.isArray(item?.output_parameters) ? item.output_parameters : [],
-          picked_paths: Array.isArray(item?.picked_paths) ? item.picked_paths : []
-        }))
-        .filter((item) => item.storeId > 0 && item.name);
-      const parserTemplates: SourceNodeTemplate[] = (Array.isArray(parserPayload?.parser_configs) ? parserPayload.parser_configs : [])
-        .map((item) => ({
-          ref: sourceTemplateRef('table_parser', Number(item?.id || 0)),
-          templateType: 'table_parser' as const,
-          storeId: Number(item?.id || 0),
-          name: String(item?.parser_name || item?.name || '').trim(),
-          description: String(item?.description || '').trim(),
-          config_json: item?.config_json && typeof item.config_json === 'object' ? item.config_json : {}
-        }))
-        .filter((item) => item.storeId > 0 && item.name);
-      sourceTemplates = [...apiTemplates, ...parserTemplates];
-    } catch (e: any) {
-      sourceTemplatesError = String(e?.message || e || 'Не удалось загрузить шаблоны нод');
-      sourceTemplates = [];
-    } finally {
-      sourceTemplatesLoading = false;
-    }
-  }
-
   async function previewNow(options: { silentMissingInput?: boolean } = {}) {
     previewLoading = true;
     previewError = '';
@@ -1161,8 +1048,8 @@
         const sampleInput = inputValueFromIncomingSample(sampleNode);
         if (sampleInput) {
           inputValue = sampleInput;
-        } else if (currentSourceTemplate && sourceNodePreviewJson) {
-          inputValue = sourceNodePreviewJson;
+        } else if (String(inputValue || '').trim()) {
+          inputValue = String(inputValue || '').trim();
         } else {
           if (!options.silentMissingInput) {
             previewError = 'Upstream источник уже определён, но sample snapshot для preview пока недоступен. Для preview нужны sample-данные или явный ручной override.';
@@ -1195,14 +1082,6 @@
 
   function sourceTableOptions() {
     return Array.isArray(existingTables) ? existingTables : [];
-  }
-
-  function currentTableColumnsHint() {
-    const parts = [];
-    if (settings.sourceSchema && settings.sourceTable) parts.push(`${settings.sourceSchema}.${settings.sourceTable}`);
-    if (settings.sourceColumn) parts.push(`колонка ${settings.sourceColumn}`);
-    else if (sourceColumnOptions.length) parts.push(`доступно колонок: ${sourceColumnOptions.length}`);
-    return parts.join(' / ');
   }
 
   function inputValue(event: Event) {
@@ -1498,14 +1377,12 @@
           : 'insufficient-data';
       const ambiguity = Boolean((safeBayesAlternatives.length > 1) || safeIncomingNodes.length > 1);
       const missingSample = !(hasSampleRaw || hasSamplePayload || hasSampleRows);
-      const legacyFallbackInUse = settings.sourceMode === 'node' && Boolean(String(settings.sourceNodeTemplateRef || '').trim());
       const insufficientData = !totalContractFields && missingSample && !hasPreviewSignals;
       const parserWarningsList = safeParserWarnings.map((item) => String(item || '').trim()).filter(Boolean);
       const warningsTotal =
         parserWarningsList.length +
         (ambiguity ? 1 : 0) +
         (missingSample ? 1 : 0) +
-        (legacyFallbackInUse ? 1 : 0) +
         (insufficientData ? 1 : 0);
 
       return {
@@ -1549,7 +1426,6 @@
         warningsSummary: {
           ambiguity,
           missingSample,
-          legacyFallbackInUse,
           insufficientData,
           parserWarnings: parserWarningsList,
           total: warningsTotal
@@ -1690,20 +1566,9 @@
   }
 
   onMount(() => {
-    if (settings.sourceNodeTemplateRef) {
-      void loadSourceTemplates();
-    }
     void previewNow({ silentMissingInput: true });
   });
 
-  $: if (!settings.sourceNodeTemplateRef) {
-    sourceTemplatesRequested = false;
-  }
-  $: if (settings.sourceNodeTemplateRef && !sourceTemplates.length && !sourceTemplatesLoading && !sourceTemplatesRequested) {
-    void loadSourceTemplates();
-  }
-
-  $: sourceColumnOptions = columnOptionsFor(settings.sourceSchema, settings.sourceTable);
   $: lookupColumnOptions = columnOptionsFor(settings.lookupSchema, settings.lookupTable);
   $: if (settings.sourceSchema && settings.sourceTable) {
     void ensureColumnsFor(settings.sourceSchema, settings.sourceTable);
@@ -1720,7 +1585,7 @@
         <div class="parser-card-head">
           <div>
             <h3>Входящие параметры</h3>
-            <p>Реальный upstream из текущего desk graph. Поля ниже можно быстро добавить в результат parser без отдельного legacy-flow.</p>
+            <p>Consume-side единого descriptor flow. Здесь parser читает опубликованный upstream descriptor и может сразу брать его поля в результат.</p>
           </div>
         </div>
         {#if incomingNodes.length}
@@ -1739,6 +1604,15 @@
                   <span>Порт: {item.sourcePort || 'out'}</span>
                 </div>
                 <div class="parser-shell-description">{incomingNodeDescription(item)}</div>
+                <div class="parser-shell-summary">
+                  <span class="chip-chip readonly-chip">Kind: {descriptorOutputKindLabel(item.outputKind)}</span>
+                  {#if item.detection?.detectedFormat}
+                    <span class="chip-chip readonly-chip">Формат: {item.detection.detectedFormat}</span>
+                  {/if}
+                  {#if item.detection?.recordPath}
+                    <span class="chip-chip readonly-chip">Строки: {item.detection.recordPath}</span>
+                  {/if}
+                </div>
                 {#if incomingSampleMeta(item)}
                   <div class="inline-hint">Доступен optional sample snapshot из текущего UI-state{#if incomingSampleMeta(item)?.responsesCount} · ответов: {incomingSampleMeta(item)?.responsesCount}{/if}{#if incomingSampleMeta(item)?.payloadPath} · payload path: {incomingSampleMeta(item)?.payloadPath}{/if}</div>
                 {/if}
@@ -1808,8 +1682,8 @@
       <div class="parser-card">
         <div class="parser-card-head">
           <div>
-            <h3>Источник и preview</h3>
-            <p>Parser работает от входа предыдущей ноды. Здесь остаётся только подтверждение источника и вспомогательный preview, без template-centric сценария как primary UX.</p>
+            <h3>Контекст parser</h3>
+            <p>Parser читает upstream descriptor слева, использует его как primary source of truth и дополняет знания только текущим preview и сохранёнными settings.</p>
           </div>
           <button type="button" class="primary-btn" on:click={previewNow} disabled={previewLoading}>
             {previewLoading ? 'Обновление...' : 'Обновить preview'}
@@ -1836,66 +1710,18 @@
             <div class="hint">{parserPipelineModel.inputProfile.upstreamSummary}. Входной контракт уже показан слева, а parser строится от этого upstream без обязательного выбора источника вручную.</div>
             <div class="preview-meta">
               <span>Режим: node-driven</span>
+              <span>Источников: {incomingNodes.length}</span>
               <span>Основа: {parserPipelineModel.inputProfile.sourceBasis}</span>
               <span>Preview входа: {sourcePreviewRows.length ? `${sourcePreviewRows.length} строк` : 'без sample'}</span>
             </div>
           </div>
+        {:else if legacyStandaloneSourceMode}
+          <div class="warning-box">
+            <strong>Открыта legacy-конфигурация parser</strong>
+            <div>В этой ноде нет upstream descriptor, а сохранённый source mode = <code>{legacyStandaloneSourceLabel}</code>. Исполнение старого desk не ломается, но новый editor больше не строится вокруг самостоятельного выбора источника.</div>
+          </div>
         {:else}
-          <div class="form-grid form-grid-1">
-            <label>
-              Тип источника
-              <select value={settings.sourceMode} on:change={(e) => patchSetting('sourceMode', selectValue(e))}>
-                <option value="node">Нода</option>
-                <option value="table">Таблица</option>
-                <option value="file_url">Файл / ссылка</option>
-              </select>
-            </label>
-          </div>
-        {/if}
-
-        {#if settings.sourceMode === 'table' && !autoSourceDefined}
-          <div class="form-grid form-grid-3">
-            <label>
-              Схема
-              <select value={settings.sourceSchema} on:change={(e) => patchSetting('sourceSchema', selectValue(e))}>
-                <option value="">Выбери схему</option>
-                {#each Array.from(new Set(sourceTableOptions().map((item) => item.schema_name))) as schemaName}
-                  <option value={schemaName}>{schemaName}</option>
-                {/each}
-              </select>
-            </label>
-            <label>
-              Таблица
-              <select value={settings.sourceTable} on:change={(e) => patchSetting('sourceTable', selectValue(e))}>
-                <option value="">Выбери таблицу</option>
-                {#each sourceTableOptions().filter((item) => !settings.sourceSchema || item.schema_name === settings.sourceSchema) as item}
-                  <option value={item.table_name}>{item.table_name}</option>
-                {/each}
-              </select>
-            </label>
-            <label>
-              Колонка с payload
-              <select value={settings.sourceColumn} on:change={(e) => patchSetting('sourceColumn', selectValue(e))}>
-                <option value="">Вся строка таблицы</option>
-                {#each sourceColumnOptions as columnName}
-                  <option value={columnName}>{columnName}</option>
-                {/each}
-              </select>
-            </label>
-          </div>
-        {/if}
-
-        {#if settings.sourceMode === 'file_url' && !autoSourceDefined}
-          <div class="form-grid form-grid-2">
-            <label>
-              URL / путь к файлу
-              <input value={settings.fileUrl} on:input={(e) => patchSetting('fileUrl', inputValue(e))} placeholder="https://... или /path/to/file" />
-            </label>
-            <label>
-              Путь до URL во входе
-              <input value={settings.fileUrlPath} on:input={(e) => patchSetting('fileUrlPath', inputValue(e))} placeholder="response.download_url" />
-            </label>
-          </div>
+          <div class="inline-hint inline-hint-box">Upstream descriptor пока не найден. Parser откроется и сохранит текущие settings, но auto-first flow начнётся только после подключения входящей ноды.</div>
         {/if}
 
         {#if previewError}
@@ -1906,7 +1732,7 @@
           <span>Сырых строк: {sourcePreviewRowCount}</span>
           <span>Сырых колонок: {sourcePreviewColumnCount}</span>
           <span>Формат: {previewData?.source_format || '-'}</span>
-          <span>Источник: {settings.sourceMode === 'node' ? 'Нода' : settings.sourceMode === 'table' ? 'Таблица' : 'Файл / ссылка'}</span>
+          <span>Источник: {autoSourceDefined ? 'Upstream descriptor' : legacyStandaloneSourceMode ? legacyStandaloneSourceLabel : 'Не определён'}</span>
         </div>
 
         <div class="preview-meta">
@@ -1952,48 +1778,6 @@
             {/if}
           </div>
         </details>
-
-        {#if settings.sourceMode === 'node' && settings.sourceNodeTemplateRef}
-          <details class="parser-legacy-panel">
-            <summary class="parser-legacy-summary">Legacy / миграция: fallback preview из шаблона ноды-источника</summary>
-            <div class="parser-legacy-body">
-              <label>
-                Legacy-шаблон ноды-источника
-                <select value={settings.sourceNodeTemplateRef} on:change={(e) => applySourceNodeTemplateRef(selectValue(e))}>
-                  <option value="">Выбери шаблон ноды</option>
-                  {#each sourceTemplates as item (item.ref)}
-                    <option value={item.ref}>{sourceTemplateLabel(item)}</option>
-                  {/each}
-                </select>
-                <span class="hint">Этот выбор не определяет основной parser flow. Он нужен только для fallback preview входа.</span>
-              </label>
-              {#if sourceTemplatesError}
-                <div class="inline-error">{sourceTemplatesError}</div>
-              {:else if sourceTemplatesLoading}
-                <div class="inline-hint">Загрузка шаблонов нод...</div>
-              {:else if currentSourceTemplate}
-                <div class="selected-source-box">
-                  <div><strong>{sourceTemplateLabel(currentSourceTemplate)}</strong></div>
-                  <div class="hint">{currentSourceTemplate.description || 'Описание шаблона не заполнено.'}</div>
-                </div>
-              {:else}
-                <div class="inline-hint">Оставь блок пустым, если preview можно строить без legacy fallback-источника.</div>
-              {/if}
-
-              <label>
-                Legacy preview входа
-                {#if currentSourceTemplate && sourceNodePreviewJson}
-                  <textarea rows="10" readonly value={sourceNodePreviewJson}></textarea>
-                  <span class="hint">{sourceNodePreviewMessage}</span>
-                {:else if currentSourceTemplate}
-                  <div class="inline-hint">{sourceNodePreviewMessage}</div>
-                {:else}
-                  <div class="inline-hint">Выбери legacy-шаблон ноды-источника только если нужен fallback preview входа.</div>
-                {/if}
-              </label>
-            </div>
-          </details>
-        {/if}
       </div>
 
       <div class="parser-card">
@@ -2737,6 +2521,13 @@
             <span>Поля: {parserPipelineModel.resultSummary.fieldsCount}</span>
             <span>Источник summary: {parserPipelineModel.resultSummary.source}</span>
             <span>Derived preview: {parserPipelineModel.resultSummary.hasDerivedOutputPreview ? 'есть' : 'нет'}</span>
+            <span>Publish kind: {outputDescriptorKindLabelValue}</span>
+          </div>
+          <div class="preview-meta">
+            <span>Публикуемый descriptor: {publishedDescriptorFields.length ? `${publishedDescriptorFields.length} полей` : 'пока partial'}</span>
+            <span>Read mode: {outputDescriptorDetection?.readMode || '-'}</span>
+            <span>Payload path: {outputDescriptorDetection?.payloadPath || '-'}</span>
+            <span>Rows path: {outputDescriptorDetection?.recordPath || '-'}</span>
           </div>
           {#if derivedOutputFields.length}
             <div class="preview-columns">
@@ -2760,7 +2551,7 @@
             <span>Строк: {previewData?.row_count ?? '-'}</span>
             <span>Колонок: {previewData?.column_count ?? '-'}</span>
             <span>Формат: {previewData?.source_format || '-'}</span>
-            <span>Источник: {settings.sourceMode === 'node' ? 'Нода' : settings.sourceMode === 'table' ? 'Таблица' : 'Файл / ссылка'}</span>
+            <span>Источник: {autoSourceDefined ? 'Upstream descriptor' : legacyStandaloneSourceMode ? legacyStandaloneSourceLabel : 'Не определён'}</span>
           </div>
           <div class="preview-meta">
             <span>Пакет: {previewData?.batch?.returned_rows ?? 0} / {previewData?.batch?.batch_size ?? '-'}</span>
@@ -2822,8 +2613,20 @@
         <div class="parser-card-head">
           <div>
             <h3>Исходящие параметры</h3>
-            <p>Read-only derived preview результата для следующей ноды. Правая колонка не вводит новую schema и не даёт редактирование.</p>
+            <p>Publish-side того же descriptor flow. Правая колонка показывает, что parser публикует для следующей ноды, без отдельной editable schema.</p>
           </div>
+        </div>
+        <div class="parser-shell-summary">
+          <span class="chip-chip readonly-chip">Kind: {outputDescriptorKindLabelValue}</span>
+          <span class="chip-chip readonly-chip">Поля: {publishedDescriptorFields.length}</span>
+          {#if outputDescriptorDetection?.detectedFormat}
+            <span class="chip-chip readonly-chip">Формат: {outputDescriptorDetection.detectedFormat}</span>
+          {/if}
+        </div>
+        <div class="preview-meta">
+          <span>Read mode: {outputDescriptorDetection?.readMode || '-'}</span>
+          <span>Payload path: {outputDescriptorDetection?.payloadPath || '-'}</span>
+          <span>Rows path: {outputDescriptorDetection?.recordPath || '-'}</span>
         </div>
         {#if derivedOutputFields.length}
           <div class="parser-shell-summary">
@@ -3125,29 +2928,6 @@
     flex-direction: column;
     gap: 10px;
     padding: 0 12px 12px;
-  }
-  .parser-legacy-panel {
-    border: 1px dashed #dbe4f0;
-    border-radius: 12px;
-    background: #f8fafc;
-    padding: 0;
-  }
-  .parser-legacy-summary {
-    cursor: pointer;
-    list-style: none;
-    padding: 12px 14px;
-    font-size: 12px;
-    font-weight: 700;
-    color: #334155;
-  }
-  .parser-legacy-summary::-webkit-details-marker {
-    display: none;
-  }
-  .parser-legacy-body {
-    padding: 0 14px 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
   }
   .primary-btn,
   .mini-btn {
