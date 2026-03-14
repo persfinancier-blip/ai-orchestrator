@@ -526,7 +526,7 @@
     new Set(
       incomingNodes
         .flatMap((item) => incomingContractFields(item))
-        .map((field) => incomingFieldKey(field))
+        .map((field) => descriptorFieldKey(field))
         .filter(Boolean)
     )
   );
