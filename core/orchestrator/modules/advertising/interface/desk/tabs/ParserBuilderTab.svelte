@@ -1591,8 +1591,10 @@
 </script>
 
 <section class="panel" class:panel-embedded={embeddedMode}>
-  <div class="parser-layout">
-    <section class="parser-column parser-column-input">
+  <div class="parser-modal-split">
+    <div class="parser-top-pane">
+      <div class="parser-layout">
+        <section class="parser-column parser-column-input">
       <div class="parser-shell-card">
         <div class="parser-card-head">
           <div>
@@ -1675,7 +1677,7 @@
       </div>
     </section>
 
-    <section class="parser-column parser-column-settings">
+        <section class="parser-column parser-column-settings">
       <div class="parser-steps-bar" aria-label="Шаги parser pipeline">
         {#each PARSER_EDITOR_STEPS as step}
           <button
@@ -1691,6 +1693,7 @@
         {/each}
       </div>
 
+      {#if activeStep === 'input'}
       <div class="parser-card">
         <div class="parser-card-head">
           <div>
@@ -1791,6 +1794,7 @@
           </div>
         </details>
       </div>
+      {/if}
 
       <div class="parser-card">
         <div class="parser-card-head">
@@ -2593,7 +2597,7 @@
 
     </section>
 
-    <section class="parser-column parser-column-output">
+        <section class="parser-column parser-column-output">
       <div class="parser-shell-card">
         <div class="parser-card-head">
           <div>
@@ -2670,73 +2674,92 @@
           <div class="inline-hint">Publish descriptor пока partial: parser ещё не зафиксировал поля результата и preview не вернул итоговые колонки.</div>
         {/if}
       </div>
-    </section>
-  </div>
+        </section>
+      </div>
+    </div>
 
-  <section class="parser-result-preview-section parser-card">
-    <div class="parser-card-head">
-      <div>
-        <h3>Предпросмотр результата</h3>
-        <p>Это итоговый tabular preview результата parser, а не preview сырого входа. Здесь видно, что реально выйдет из ноды и уйдёт дальше.</p>
-      </div>
-      <button type="button" class="mini-btn" on:click={previewNow} disabled={previewLoading}>
-        {previewLoading ? 'Обновление...' : 'Обновить preview'}
-      </button>
-    </div>
-    <div class="preview-metrics">
-      <span>Строк: {previewData?.row_count ?? '-'}</span>
-      <span>Колонок: {previewData?.column_count ?? '-'}</span>
-      <span>Формат: {previewData?.source_format || '-'}</span>
-      <span>Источник: {autoSourceDefined ? 'Upstream descriptor' : legacyStandaloneSourceMode ? legacyStandaloneSourceLabel : 'Не определён'}</span>
-    </div>
-    <div class="preview-meta">
-      <span>Пакет: {previewData?.batch?.returned_rows ?? 0} / {previewData?.batch?.batch_size ?? '-'}</span>
-      <span>Есть ещё данные: {previewData?.batch?.has_more ? 'да' : 'нет'}</span>
-      <span>Обновлено: {previewUpdatedAt ? new Date(previewUpdatedAt).toLocaleString('ru-RU') : '-'}</span>
-    </div>
-    {#if previewResultColumns.length}
-      <div class="preview-columns">
-        {#each previewResultColumns as column}
-          <span>{column}</span>
-        {/each}
-      </div>
-    {/if}
-    {#if previewResultRows.length && previewResultColumns.length}
-      <div class="preview-table-wrap">
-        <table class="preview-table">
-          <thead>
-            <tr>
-              {#each previewResultColumns as column}
-                <th>{column}</th>
-              {/each}
-            </tr>
-          </thead>
-          <tbody>
-            {#each previewResultRows as row}
-              <tr>
-                {#each previewResultColumns as column}
-                  <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
-                {/each}
-              </tr>
+    <div class="parser-bottom-pane">
+      <section class="parser-result-preview-section parser-card">
+        <div class="parser-card-head">
+          <div>
+            <h3>Предпросмотр результата</h3>
+            <p>Это итоговый tabular preview результата parser, а не preview сырого входа. Здесь видно, что реально выйдет из ноды и уйдёт дальше.</p>
+          </div>
+          <button type="button" class="mini-btn" on:click={previewNow} disabled={previewLoading}>
+            {previewLoading ? 'Обновление...' : 'Обновить preview'}
+          </button>
+        </div>
+        <div class="preview-metrics">
+          <span>Строк: {previewData?.row_count ?? '-'}</span>
+          <span>Колонок: {previewData?.column_count ?? '-'}</span>
+          <span>Формат: {previewData?.source_format || '-'}</span>
+          <span>Источник: {autoSourceDefined ? 'Upstream descriptor' : legacyStandaloneSourceMode ? legacyStandaloneSourceLabel : 'Не определён'}</span>
+        </div>
+        <div class="preview-meta">
+          <span>Пакет: {previewData?.batch?.returned_rows ?? 0} / {previewData?.batch?.batch_size ?? '-'}</span>
+          <span>Есть ещё данные: {previewData?.batch?.has_more ? 'да' : 'нет'}</span>
+          <span>Обновлено: {previewUpdatedAt ? new Date(previewUpdatedAt).toLocaleString('ru-RU') : '-'}</span>
+        </div>
+        {#if previewResultColumns.length}
+          <div class="preview-columns">
+            {#each previewResultColumns as column}
+              <span>{column}</span>
             {/each}
-          </tbody>
-        </table>
-      </div>
-    {:else}
-      <div class="empty-box">Нет итогового preview результата. Обнови preview после изменения настроек parser.</div>
-    {/if}
-  </section>
+          </div>
+        {/if}
+        {#if previewResultRows.length && previewResultColumns.length}
+          <div class="preview-table-wrap">
+            <table class="preview-table">
+              <thead>
+                <tr>
+                  {#each previewResultColumns as column}
+                    <th>{column}</th>
+                  {/each}
+                </tr>
+              </thead>
+              <tbody>
+                {#each previewResultRows as row}
+                  <tr>
+                    {#each previewResultColumns as column}
+                      <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
+                    {/each}
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {:else}
+          <div class="empty-box">Нет итогового preview результата. Обнови preview после изменения настроек parser.</div>
+        {/if}
+      </section>
+    </div>
+  </div>
 </section>
 
 <style>
   .panel {
     min-width: 0;
+    min-height: 0;
+    height: 100%;
     display: flex;
     flex-direction: column;
     gap: 12px;
   }
   .panel-embedded {
     min-height: 0;
+    flex: 1 1 auto;
+  }
+  .parser-modal-split {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px;
+  }
+  .parser-top-pane,
+  .parser-bottom-pane {
+    min-height: 0;
+    overflow: auto;
   }
   .parser-layout {
     display: grid;
@@ -2833,6 +2856,9 @@
     flex-direction: column;
     gap: 12px;
     min-width: 0;
+  }
+  .parser-result-preview-section {
+    min-height: 100%;
   }
   .parser-card-head {
     display: flex;
