@@ -1330,8 +1330,8 @@
       <div class="parser-card">
         <div class="parser-card-head">
           <div>
-            <h3>Источник данных и preview входа</h3>
-            <p>Текущая рабочая настройка источника parser сохранена в центральной секции без изменения логики.</p>
+            <h3>Вход parser и preview</h3>
+            <p>Parser получает вход из upstream node, который уже показан слева. Здесь задаётся только способ чтения payload и проверка preview.</p>
           </div>
           <button type="button" class="primary-btn" on:click={previewNow} disabled={previewLoading}>
             {previewLoading ? 'Обновление...' : 'Обновить preview'}
@@ -1350,40 +1350,50 @@
         </div>
 
         {#if settings.sourceMode === 'node'}
-          <label>
-            Legacy-шаблон ноды-источника для preview
-            <select value={settings.sourceNodeTemplateRef} on:change={(e) => applySourceNodeTemplateRef(selectValue(e))}>
-              <option value="">Выбери шаблон ноды</option>
-              {#each sourceTemplates as item (item.ref)}
-                <option value={item.ref}>{sourceTemplateLabel(item)}</option>
-              {/each}
-            </select>
-            <span class="hint">Этот legacy-выбор нужен только для preview входа. Рабочая настройка parser остаётся в текущей ноде рабочего стола.</span>
-          </label>
-          {#if sourceTemplatesError}
-            <div class="inline-error">{sourceTemplatesError}</div>
-          {:else if sourceTemplatesLoading}
-            <div class="inline-hint">Загрузка шаблонов нод...</div>
-          {:else if currentSourceTemplate}
-            <div class="selected-source-box">
-              <div><strong>{sourceTemplateLabel(currentSourceTemplate)}</strong></div>
-              <div class="hint">{currentSourceTemplate.description || 'Описание шаблона не заполнено.'}</div>
-            </div>
-          {:else}
-            <div class="inline-hint">Если для preview нужен пример входа, выбери legacy-шаблон upstream-ноды. Для обычной работы parser отдельный режим больше не нужен.</div>
-          {/if}
+          <div class="selected-source-box">
+            <div><strong>Основной сценарий: вход из upstream node</strong></div>
+            <div class="hint">Слева уже показан источник и его контракт. Legacy-шаблон источника ниже нужен только как fallback, если для preview требуется пример входа без живого upstream payload.</div>
+          </div>
 
-          <label>
-            Legacy preview входа
-            {#if currentSourceTemplate && sourceNodePreviewJson}
-              <textarea rows="10" readonly value={sourceNodePreviewJson}></textarea>
-              <span class="hint">{sourceNodePreviewMessage}</span>
-            {:else if currentSourceTemplate}
-              <div class="inline-hint">{sourceNodePreviewMessage}</div>
-            {:else}
-              <div class="inline-hint">Выбери legacy-шаблон ноды-источника, только если нужен fallback preview входа.</div>
-            {/if}
-          </label>
+          <details class="parser-legacy-panel">
+            <summary class="parser-legacy-summary">Legacy fallback: шаблон ноды-источника для preview</summary>
+            <div class="parser-legacy-body">
+              <label>
+                Legacy-шаблон ноды-источника
+                <select value={settings.sourceNodeTemplateRef} on:change={(e) => applySourceNodeTemplateRef(selectValue(e))}>
+                  <option value="">Выбери шаблон ноды</option>
+                  {#each sourceTemplates as item (item.ref)}
+                    <option value={item.ref}>{sourceTemplateLabel(item)}</option>
+                  {/each}
+                </select>
+                <span class="hint">Этот выбор не определяет основной parser flow. Он нужен только для fallback preview входа.</span>
+              </label>
+              {#if sourceTemplatesError}
+                <div class="inline-error">{sourceTemplatesError}</div>
+              {:else if sourceTemplatesLoading}
+                <div class="inline-hint">Загрузка шаблонов нод...</div>
+              {:else if currentSourceTemplate}
+                <div class="selected-source-box">
+                  <div><strong>{sourceTemplateLabel(currentSourceTemplate)}</strong></div>
+                  <div class="hint">{currentSourceTemplate.description || 'Описание шаблона не заполнено.'}</div>
+                </div>
+              {:else}
+                <div class="inline-hint">Оставь блок пустым, если preview можно строить без legacy fallback-источника.</div>
+              {/if}
+
+              <label>
+                Legacy preview входа
+                {#if currentSourceTemplate && sourceNodePreviewJson}
+                  <textarea rows="10" readonly value={sourceNodePreviewJson}></textarea>
+                  <span class="hint">{sourceNodePreviewMessage}</span>
+                {:else if currentSourceTemplate}
+                  <div class="inline-hint">{sourceNodePreviewMessage}</div>
+                {:else}
+                  <div class="inline-hint">Выбери legacy-шаблон ноды-источника только если нужен fallback preview входа.</div>
+                {/if}
+              </label>
+            </div>
+          </details>
         {/if}
 
         {#if settings.sourceMode === 'table'}
@@ -1495,6 +1505,7 @@
           <div class="subsection-head">
             <h4>Разбор входа</h4>
           </div>
+          <div class="inline-hint inline-hint-box">Parser читает payload из входного контракта слева и затем выделяет рабочий набор записей. Если вход уже приходит в нужном виде, пути ниже можно оставить пустыми.</div>
           <div class="preview-metrics">
             <span>Распознанный формат: {autoParseInfo.detectedFormat}</span>
             <span>Источник payload: {autoParseInfo.payloadOrigin}</span>
@@ -1552,28 +1563,34 @@
                 <option value="text">Текст</option>
                 <option value="zip">ZIP</option>
               </select>
+              <span class="hint">Оставь автоопределение, если parser сам корректно распознаёт payload. Явный формат нужен только когда авторазбор даёт неверный результат.</span>
             </label>
             <label>
-              Путь до входа
+              Путь до payload во входе
               <input value={settings.inputPath} on:input={(e) => patchSetting('inputPath', inputValue(e))} placeholder="response.data" />
+              <span class="hint">Нужен, если полезные данные лежат глубже входного контракта слева. Оставь пустым, чтобы parser читал вход целиком.</span>
             </label>
             <label>
               Путь до массива записей
               <input value={settings.recordPath} on:input={(e) => patchSetting('recordPath', inputValue(e))} placeholder="items.rows" />
+              <span class="hint">Нужен, если внутри payload записи лежат в массиве. Оставь пустым, если рабочий набор уже находится в корне.</span>
             </label>
           </div>
           <div class="form-grid form-grid-3">
             <label>
               Делимитер CSV
               <input value={settings.csvDelimiter} on:input={(e) => patchSetting('csvDelimiter', inputValue(e))} placeholder="," />
+              <span class="hint">Используется только для CSV-источников. Для JSON, NDJSON и текста это поле можно не трогать.</span>
             </label>
             <label>
               Размер пакета
               <input type="number" min="1" max="5000" value={settings.batchSize} on:input={(e) => patchSetting('batchSize', inputValue(e))} />
+              <span class="hint">Сколько записей parser берёт за один проход preview/runtime. Меняй только если нужен другой баланс между скоростью и объёмом памяти.</span>
             </label>
             <label>
               Множитель парсинга
               <input type="number" min="1" value={settings.parserMultiplier} on:input={(e) => patchSetting('parserMultiplier', inputValue(e))} />
+              <span class="hint">Редкий advanced-параметр. Используй его только если один входной элемент должен разворачиваться в несколько выходных строк.</span>
             </label>
           </div>
           {#if settings.sourceFormat === 'zip'}
@@ -1599,24 +1616,26 @@
 
         <div class="subsection">
           <div class="subsection-head">
-            <h4>Приведение данных в порядок</h4>
+            <h4>Поля результата</h4>
             <div class="subsection-actions">
-              <button type="button" class="mini-btn" on:click={addAllDetectedFields} disabled={!workingFieldCandidates.length}>Взять все поля</button>
+              <button type="button" class="mini-btn" on:click={addAllDetectedFields} disabled={!workingFieldCandidates.length}>Взять всё из рабочего набора</button>
               <button type="button" class="mini-btn" on:click={() => rebuildFieldSettings([])} disabled={!selectedFieldRows.length}>Очистить</button>
             </div>
           </div>
+          <div class="inline-hint">Рабочий набор формируется после разбора входа. Здесь ты фиксируешь, какие поля parser отдаст дальше, под какими именами и с каким приведением типов.</div>
           <div class="field-picker">
             <select on:change={(e) => { addSelectedField(selectValue(e)); clearSelectValue(e); }}>
-              <option value="">Добавить поле из рабочего набора</option>
+              <option value="">Добавить поле в результат</option>
               {#each workingFieldCandidates.filter((item) => !selectedFieldPaths.includes(item)) as fieldName}
                 <option value={fieldName}>{fieldName}</option>
               {/each}
             </select>
           </div>
+          <div class="inline-hint">Список берётся из текущего рабочего набора: preview результата, уже выбранных полей и зафиксированных путей parser.</div>
           {#if selectedFieldRows.length}
             <div class="rules-grid">
-              <div class="rules-grid-head">Поле источника</div>
-              <div class="rules-grid-head">Алиас</div>
+              <div class="rules-grid-head">Поле из рабочего набора</div>
+              <div class="rules-grid-head">Имя в результате</div>
               <div class="rules-grid-head">Тип</div>
               <div class="rules-grid-head">Значение по умолчанию</div>
               <div class="rules-grid-head"></div>
@@ -1641,7 +1660,7 @@
               {/each}
             </div>
           {:else}
-            <div class="inline-hint">По умолчанию parser может взять все поля рабочего набора. Чтобы явно зафиксировать контракт полей, нажми «Взять все поля» и удали лишнее.</div>
+            <div class="inline-hint">Если оставить блок пустым, parser попытается отдать весь рабочий набор. Нажми «Взять всё из рабочего набора», чтобы явно зафиксировать поля результата и потом убрать лишнее.</div>
           {/if}
         </div>
 
