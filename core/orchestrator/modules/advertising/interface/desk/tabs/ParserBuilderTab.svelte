@@ -56,6 +56,13 @@
     type?: string;
     path?: string;
   };
+  type ParserIncomingSampleMeta = {
+    source: 'node_execution';
+    status?: number;
+    responsesCount?: number;
+    payloadPath?: string;
+    startedAt?: string;
+  };
   type ParserDerivedOutputField = {
     name: string;
     alias?: string;
@@ -71,6 +78,10 @@
       nodeType: string;
       fromPort: string;
       contractFields?: ParserIncomingContractField[];
+      sampleRaw?: any;
+      samplePayload?: any;
+      sampleRows?: Array<Record<string, any>>;
+      sampleMeta?: ParserIncomingSampleMeta;
     }>;
   };
   type LookupJoinRule = {
@@ -1141,6 +1152,10 @@
     return Array.isArray(item?.contractFields) ? item.contractFields.filter(Boolean) : [];
   }
 
+  function incomingSampleMeta(item: { sampleMeta?: ParserIncomingSampleMeta | null }) {
+    return item?.sampleMeta && typeof item.sampleMeta === 'object' ? item.sampleMeta : null;
+  }
+
   function outputFieldTypeFromSettings(fieldName: string) {
     const wanted = String(fieldName || '').trim();
     if (!wanted) return '';
@@ -1284,6 +1299,9 @@
                   <span>Порт: {item.fromPort || 'out'}</span>
                 </div>
                 <div class="parser-shell-description">{incomingNodeDescription(item)}</div>
+                {#if incomingSampleMeta(item)}
+                  <div class="inline-hint">Доступен optional sample snapshot из текущего UI-state{#if incomingSampleMeta(item)?.responsesCount} · ответов: {incomingSampleMeta(item)?.responsesCount}{/if}{#if incomingSampleMeta(item)?.payloadPath} · payload path: {incomingSampleMeta(item)?.payloadPath}{/if}</div>
+                {/if}
                 <div class="parser-contract-block">
                   <div class="parser-contract-head">
                     <span>Входной контракт upstream</span>

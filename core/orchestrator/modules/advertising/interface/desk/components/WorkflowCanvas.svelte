@@ -259,12 +259,23 @@
     type?: string;
     path?: string;
   };
+  type ParserIncomingSampleMeta = {
+    source: 'node_execution';
+    status?: number;
+    responsesCount?: number;
+    payloadPath?: string;
+    startedAt?: string;
+  };
   type ParserIncomingUpstreamNode = {
     nodeId: string;
     nodeName: string;
     nodeType: string;
     fromPort: string;
     contractFields?: ParserIncomingContractField[];
+    sampleRaw?: any;
+    samplePayload?: any;
+    sampleRows?: Array<Record<string, any>>;
+    sampleMeta?: ParserIncomingSampleMeta;
   };
 
   type ApiTemplateSelectionChangePayload = {
@@ -2872,6 +2883,32 @@
     return [];
   }
 
+  function parserIncomingSampleForNode(node: WorkflowNode) {
+    if (!(isApiNode(node) || isApiToolNode(node))) return {};
+    const exec = nodeExecutions[String(node.id || '').trim()];
+    const responsePreview = exec?.responsePreview && typeof exec.responsePreview === 'object' ? exec.responsePreview : null;
+    const responses = Array.isArray(responsePreview?.responses) ? responsePreview.responses : [];
+    const firstResponse = responses[0]?.response;
+    if (firstResponse === undefined) return {};
+    const pagination = getPaginationForNode(node);
+    const payloadPath = String(pagination?.dataPath || '').trim();
+    const samplePayload = payloadPath
+      ? getByPath({ response: firstResponse, value: firstResponse, input: firstResponse }, payloadPath)
+      : undefined;
+    return {
+      sampleRaw: firstResponse,
+      samplePayload: samplePayload === undefined ? undefined : samplePayload,
+      sampleRows: Array.isArray(samplePayload) ? samplePayload.slice(0, 5) : undefined,
+      sampleMeta: {
+        source: 'node_execution' as const,
+        status: Number.isFinite(Number(exec?.status)) ? Number(exec?.status) : undefined,
+        responsesCount: responses.length || undefined,
+        payloadPath: payloadPath || undefined,
+        startedAt: String(exec?.startedAt || '').trim() || undefined
+      }
+    };
+  }
+
   function parserIncomingDescriptor(n: WorkflowNode | null | undefined) {
     if (!n) return null;
     const upstreamNodes = edges
@@ -2882,13 +2919,14 @@
         acc.push({
           nodeId: src.id,
           nodeName: String(src.config?.name || src.id || '').trim() || src.id,
-          nodeType:
-            src.type === 'tool'
-              ? String(toolCfg(src).toolType || src.type).trim()
-              : String(src.config?.group || src.type || '').trim() || src.type,
-          fromPort: String(edge.fromPort || 'out').trim() || 'out',
-          contractFields: parserIncomingContractFieldsForNode(src)
-        });
+            nodeType:
+              src.type === 'tool'
+                ? String(toolCfg(src).toolType || src.type).trim()
+                : String(src.config?.group || src.type || '').trim() || src.type,
+            fromPort: String(edge.fromPort || 'out').trim() || 'out',
+            contractFields: parserIncomingContractFieldsForNode(src),
+            ...parserIncomingSampleForNode(src)
+          });
         return acc;
       }, []);
     return { nodeId: n.id, upstreamNodes };
