@@ -4295,6 +4295,61 @@ function parseHttpHeaders(rawHeaders) {
   return out;
 }
 
+function findHeaderValue(headers, headerName) {
+  const target = String(headerName || '').trim().toLowerCase();
+  if (!target) return '';
+  const src = headers && typeof headers === 'object' && !Array.isArray(headers) ? headers : {};
+  for (const [key, value] of Object.entries(src)) {
+    if (String(key || '').trim().toLowerCase() !== target) continue;
+    return value === undefined || value === null ? '' : String(value);
+  }
+  return '';
+}
+
+function ensureHeaderValue(headers, headerName, value) {
+  const target = String(headerName || '').trim();
+  if (!target) return;
+  const src = headers && typeof headers === 'object' && !Array.isArray(headers) ? headers : {};
+  const existing = Object.keys(src).find((key) => String(key || '').trim().toLowerCase() === target.toLowerCase());
+  src[existing || target] = value;
+}
+
+function toFormUrlEncoded(body) {
+  if (body === undefined || body === null) return '';
+  if (typeof body === 'string') return body;
+  if (typeof body !== 'object' || Array.isArray(body)) return String(body);
+  const query = new URLSearchParams();
+  Object.entries(body).forEach(([key, value]) => {
+    if (value === undefined || value === null) return;
+    if (Array.isArray(value)) {
+      value.forEach((item) => query.append(key, item === undefined || item === null ? '' : String(item)));
+      return;
+    }
+    if (typeof value === 'object') {
+      query.append(key, JSON.stringify(value));
+      return;
+    }
+    query.append(key, String(value));
+  });
+  return query.toString();
+}
+
+function buildHttpRequestBodyByContentType(method, headers, body) {
+  const upperMethod = String(method || 'GET').trim().toUpperCase();
+  if (upperMethod === 'GET' || upperMethod === 'HEAD' || upperMethod === 'DELETE') return undefined;
+  if (body === undefined || body === null) return undefined;
+  if (typeof body === 'string') return body;
+  const contentType = findHeaderValue(headers, 'Content-Type').toLowerCase();
+  if (contentType.includes('application/x-www-form-urlencoded')) {
+    return toFormUrlEncoded(body);
+  }
+  if (typeof body === 'object') {
+    if (!contentType) ensureHeaderValue(headers, 'Content-Type', 'application/json');
+    return JSON.stringify(body);
+  }
+  return String(body);
+}
+
 async function executeHttpWithRetry({ method, url, headers, body }) {
   let attempt = 0;
   let lastResult = null;
@@ -4306,7 +4361,12 @@ async function executeHttpWithRetry({ method, url, headers, body }) {
       const resp = await fetch(url, {
         method,
         headers,
-        body: body === undefined ? undefined : JSON.stringify(body),
+        body:
+          body === undefined
+            ? undefined
+            : typeof body === 'string'
+            ? body
+            : JSON.stringify(body),
         redirect: 'follow',
         signal: controller.signal
       });
@@ -4357,6 +4417,187 @@ async function executeHttpWithRetry({ method, url, headers, body }) {
   );
 }
 
+function normalizeApiAuthTemplate(template) {
+  const mapping = tryObject(template?.mapping_json);
+  return tryObject(template?.auth_json || mapping?.auth_json);
+}
+
+function oauth2MappingsFromTemplate(template) {
+  const mapping = tryObject(template?.mapping_json);
+  const oauth2 = tryObject(mapping?.oauth2 || template?.oauth2);
+  const oauth2Flow = tryObject(mapping?.oauth2_flow || mapping?.oauth2Flow || template?.oauth2_flow || template?.oauth2Flow);
+  const mappingsRaw = Array.isArray(oauth2Flow?.response_mappings)
+    ? oauth2Flow.response_mappings
+    : Array.isArray(oauth2Flow?.responseMappings)
+    ? oauth2Flow.responseMappings
+    : [];
+  const normalized = mappingsRaw
+    .map((item) => ({
+      responsePath: String(item?.response_path || item?.responsePath || '').trim(),
+      alias: String(item?.alias || '').trim()
+    }))
+    .filter((item) => item.responsePath && item.alias);
+  if (normalized.length) return normalized;
+  return [
+    {
+      responsePath: String(template?.oauth2_token_field || oauth2?.token_field || 'access_token').trim() || 'access_token',
+      alias: 'access_token'
+    },
+    {
+      responsePath: String(template?.oauth2_expires_field || oauth2?.expires_field || 'expires_in').trim() || 'expires_in',
+      alias: 'expires_in'
+    },
+    {
+      responsePath: String(template?.oauth2_token_type_field || oauth2?.token_type_field || 'token_type').trim() || 'token_type',
+      alias: 'token_type'
+    }
+  ];
+}
+
+function resolveOAuth2RequestUrlFromTemplate(template) {
+  const mapping = tryObject(template?.mapping_json);
+  const oauth2 = tryObject(mapping?.oauth2 || template?.oauth2);
+  const oauth2Flow = tryObject(mapping?.oauth2_flow || mapping?.oauth2Flow || template?.oauth2_flow || template?.oauth2Flow);
+  const request = tryObject(oauth2Flow?.request || oauth2Flow?.token_request);
+  const directUrl = String(request?.url || template?.oauth2_request_url || template?.oauth2_token_url || oauth2?.token_url || '').trim();
+  if (directUrl) return directUrl;
+  const host = String(request?.host || template?.oauth2_request_host || '').trim().replace(/\/+$/, '');
+  const pathRaw = String(request?.path || template?.oauth2_request_path || '').trim();
+  const path = pathRaw ? (pathRaw.startsWith('/') ? pathRaw : `/${pathRaw}`) : '';
+  if (!host) return '';
+  return `${host}${path}`;
+}
+
+function buildOAuth2RequestBaseFromTemplate(template) {
+  const mapping = tryObject(template?.mapping_json);
+  const oauth2Flow = tryObject(mapping?.oauth2_flow || mapping?.oauth2Flow || template?.oauth2_flow || template?.oauth2Flow);
+  const request = tryObject(oauth2Flow?.request || oauth2Flow?.token_request);
+  return {
+    method: String(request?.method || template?.oauth2_request_method || 'POST').trim().toUpperCase() || 'POST',
+    url: resolveOAuth2RequestUrlFromTemplate(template),
+    headers: tryObject(
+      request?.headers_json ||
+        request?.headers || {
+          'Content-Type': 'application/json',
+          Accept: 'application/json'
+        }
+    ),
+    query: tryObject(request?.query_json || request?.query),
+    body: request?.body_json !== undefined ? deepClone(request.body_json) : request?.body !== undefined ? deepClone(request.body) : {}
+  };
+}
+
+async function resolveApiOAuthAliases(template, resolvedParameters = {}) {
+  const authMode = String(template?.auth_mode || 'manual').trim().toLowerCase();
+  if (authMode !== 'oauth2_client_credentials') {
+    return {};
+  }
+  const reqBase = buildOAuth2RequestBaseFromTemplate(template);
+  if (!String(reqBase.url || '').trim()) {
+    throw new Error('oauth2_token_request_url_empty');
+  }
+
+  const reqHeaders = deepClone(reqBase.headers || {});
+  const reqQuery = deepClone(reqBase.query || {});
+  const reqBody = reqBase.body && typeof reqBase.body === 'object' ? deepClone(reqBase.body) : reqBase.body;
+
+  applyParametersToValue(reqHeaders, resolvedParameters || {});
+  applyParametersToValue(reqQuery, resolvedParameters || {});
+  applyParametersToValue(reqBody, resolvedParameters || {});
+
+  let reqUrl = replaceParameterTokens(String(reqBase.url || '').trim(), resolvedParameters || {});
+  const reqUrlObj = new URL(reqUrl);
+  Object.entries(reqQuery || {}).forEach(([key, value]) => {
+    if (value === undefined || value === null) return;
+    reqUrlObj.searchParams.set(key, String(value));
+  });
+  reqUrl = reqUrlObj.toString();
+
+  const unresolved = new Set();
+  collectParameterTokens(reqUrl, unresolved);
+  collectParameterTokens(reqHeaders, unresolved);
+  collectParameterTokens(reqQuery, unresolved);
+  collectParameterTokens(reqBody, unresolved);
+  if (unresolved.size) {
+    throw new Error(`oauth2_token_request_unresolved:${Array.from(unresolved).join(',')}`);
+  }
+
+  const outgoingBody = buildHttpRequestBodyByContentType(reqBase.method, reqHeaders, reqBody);
+  const resp = await executeHttpWithRetry({
+    method: reqBase.method,
+    url: reqUrl,
+    headers: reqHeaders,
+    body: outgoingBody
+  });
+  const responseBody = resp?.body;
+  const status = Number(resp?.status || 0);
+  if (!resp?.ok) {
+    const details =
+      typeof responseBody === 'string'
+        ? responseBody
+        : (() => {
+            try {
+              return JSON.stringify(responseBody || {});
+            } catch {
+              return String(responseBody || '');
+            }
+          })();
+    throw new Error(`oauth2_token_request_failed:${status}:${details}`);
+  }
+
+  const json =
+    responseBody && typeof responseBody === 'object' && !Array.isArray(responseBody)
+      ? responseBody
+      : (() => {
+          try {
+            return responseBody ? JSON.parse(String(responseBody || '')) : {};
+          } catch {
+            return {};
+          }
+        })();
+  const mappings = oauth2MappingsFromTemplate(template);
+  const mappedAliases = {};
+  const missingMappings = [];
+  mappings.forEach((map) => {
+    const value = getByPath(json, map.responsePath);
+    if (value === undefined) {
+      missingMappings.push(`${map.alias}<-${map.responsePath}`);
+      return;
+    }
+    mappedAliases[map.alias] = value;
+  });
+  if (missingMappings.length) {
+    throw new Error(`oauth2_token_mapping_missing:${missingMappings.join(',')}`);
+  }
+
+  const tokenAlias = Object.prototype.hasOwnProperty.call(mappedAliases, 'access_token')
+    ? 'access_token'
+    : String(template?.oauth2_token_field || 'access_token').trim() || 'access_token';
+  const token = String(mappedAliases[tokenAlias] ?? getByPath(json, tokenAlias) ?? '').trim();
+  if (!token) {
+    throw new Error(`oauth2_token_missing:${tokenAlias}`);
+  }
+  const tokenType = String(
+    mappedAliases.token_type ??
+      getByPath(json, String(template?.oauth2_token_type_field || 'token_type').trim() || 'token_type') ??
+      getByPath(json, 'token_type') ??
+      'Bearer'
+  ).trim() || 'Bearer';
+  const expiresIn = Number(
+    mappedAliases.expires_in ??
+      getByPath(json, String(template?.oauth2_expires_field || 'expires_in').trim() || 'expires_in') ??
+      getByPath(json, 'expires_in') ??
+      0
+  );
+
+  return {
+    ...mappedAliases,
+    access_token: token,
+    token_type: tokenType,
+    expires_in: expiresIn
+  };
+}
+
 async function executeApiNode(client, node, template, processCtx = {}) {
   const request = normalizeApiRequestFromTemplateRow(template);
   const method = String(request.method || 'GET').trim().toUpperCase() || 'GET';
@@ -4365,6 +4606,7 @@ async function executeApiNode(client, node, template, processCtx = {}) {
     throw new Error('У шаблона API пустой URL');
   }
   const pagination = paginationFromTemplateRaw(template);
+  const authTemplate = normalizeApiAuthTemplate(template);
   const headersObj = request.headers && typeof request.headers === 'object' ? deepClone(request.headers) : {};
   const baseQueryObj = request.query && typeof request.query === 'object' ? deepClone(request.query) : {};
   const bodyRaw = request.body !== undefined ? deepClone(request.body) : {};
@@ -4372,10 +4614,18 @@ async function executeApiNode(client, node, template, processCtx = {}) {
 
   const requestedAliasesSet = new Set();
   collectParameterTokens(urlRaw, requestedAliasesSet);
+  collectParameterTokens(authTemplate, requestedAliasesSet);
   collectParameterTokens(headersObj, requestedAliasesSet);
   collectParameterTokens(baseQueryObj, requestedAliasesSet);
   collectParameterTokens(baseBodyObj, requestedAliasesSet);
-  const requestedAliases = Array.from(requestedAliasesSet);
+  const oauth2ProvidedAliasesLower = new Set(
+    oauth2MappingsFromTemplate(template)
+      .map((item) => String(item?.alias || '').trim().toLowerCase())
+      .filter(Boolean)
+  );
+  const requestedAliases = Array.from(requestedAliasesSet).filter(
+    (alias) => !oauth2ProvidedAliasesLower.has(String(alias || '').trim().toLowerCase())
+  );
 
   let resolveIssues = {};
   let entityParameterMaps = [{}];
@@ -4459,17 +4709,22 @@ async function executeApiNode(client, node, template, processCtx = {}) {
 
   for (let entityIdx = 0; entityIdx < finalEntityMaps.length; entityIdx += 1) {
     const resolvedParameters = finalEntityMaps[entityIdx] || {};
+    const authForEntity = deepClone(authTemplate || {});
     const headersForEntity = deepClone(headersObj || {});
     const queryForEntity = deepClone(baseQueryObj || {});
     const bodyForEntity = deepClone(baseBodyObj || {});
-    const resolvedUrlRaw = replaceParameterTokens(urlRaw, resolvedParameters);
+    const oauthResolvedAliases = await resolveApiOAuthAliases(template, resolvedParameters);
+    const runtimeValues = { ...resolvedParameters, ...oauthResolvedAliases };
+    const resolvedUrlRaw = replaceParameterTokens(urlRaw, runtimeValues);
 
-    applyParametersToValue(headersForEntity, resolvedParameters);
-    applyParametersToValue(queryForEntity, resolvedParameters);
-    applyParametersToValue(bodyForEntity, resolvedParameters);
+    applyParametersToValue(authForEntity, runtimeValues);
+    applyParametersToValue(headersForEntity, runtimeValues);
+    applyParametersToValue(queryForEntity, runtimeValues);
+    applyParametersToValue(bodyForEntity, runtimeValues);
 
     const unresolvedBeforeStrip = new Set();
     collectParameterTokens(resolvedUrlRaw, unresolvedBeforeStrip);
+    collectParameterTokens(authForEntity, unresolvedBeforeStrip);
     collectParameterTokens(headersForEntity, unresolvedBeforeStrip);
     collectParameterTokens(queryForEntity, unresolvedBeforeStrip);
     collectParameterTokens(bodyForEntity, unresolvedBeforeStrip);
@@ -4487,6 +4742,7 @@ async function executeApiNode(client, node, template, processCtx = {}) {
 
     const unresolvedTokens = new Set();
     collectParameterTokens(resolvedUrlRaw, unresolvedTokens);
+    collectParameterTokens(authForEntity, unresolvedTokens);
     collectParameterTokens(headersForEntity, unresolvedTokens);
     collectParameterTokens(queryForEntity, unresolvedTokens);
     collectParameterTokens(bodyForEntity, unresolvedTokens);
@@ -4546,7 +4802,8 @@ async function executeApiNode(client, node, template, processCtx = {}) {
       Object.entries(queryObj || {}).forEach(([k, v]) => {
         if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
       });
-      const headers = parseHttpHeaders(headersForEntity);
+      const headers = parseHttpHeaders({ ...(authForEntity || {}), ...(headersForEntity || {}) });
+      const outgoingBody = buildHttpRequestBodyByContentType(method, headers, bodyObj);
       const reqPayload = {
         entity_index: entityIdx + 1,
         page: pageNo,
@@ -4554,7 +4811,7 @@ async function executeApiNode(client, node, template, processCtx = {}) {
         url: url.toString(),
         headers,
         query: queryObj,
-        body: method === 'GET' || method === 'DELETE' ? undefined : bodyObj
+        body: outgoingBody
       };
       requestCount += 1;
       if (requestsPreview.length < MAX_REQUESTS_PREVIEW) requestsPreview.push(reqPayload);
@@ -4563,7 +4820,7 @@ async function executeApiNode(client, node, template, processCtx = {}) {
         method,
         url: reqPayload.url,
         headers,
-        body: method === 'GET' || method === 'DELETE' ? undefined : bodyObj
+        body: outgoingBody
       });
       lastStatus = Number(resp?.status || 0);
       if (resp?.ok) success += 1;
@@ -4593,7 +4850,7 @@ async function executeApiNode(client, node, template, processCtx = {}) {
         }
       }
 
-      const stopRuleHit = findTriggeredStopRule(responseBody, pagination.stopRules || [], resolvedParameters, {
+      const stopRuleHit = findTriggeredStopRule(responseBody, pagination.stopRules || [], runtimeValues, {
         body: bodyObj,
         query: queryObj,
         headers
@@ -5755,6 +6012,42 @@ function buildReachableSubgraph(nodes, edges, startNodeId) {
   return { nodes: subNodes, edges: subEdges, order };
 }
 
+function buildUpstreamSubgraphToTarget(subgraph, targetNodeId) {
+  const targetId = String(targetNodeId || '').trim();
+  const nodes = Array.isArray(subgraph?.nodes) ? subgraph.nodes : [];
+  const edges = Array.isArray(subgraph?.edges) ? subgraph.edges : [];
+  if (!targetId) return { nodes, edges, order: Array.isArray(subgraph?.order) ? subgraph.order : [] };
+  const validNodeIds = new Set(nodes.map((node) => String(node?.id || '').trim()).filter(Boolean));
+  if (!validNodeIds.has(targetId)) throw new Error(`preview_target_not_in_subgraph:${targetId}`);
+  const reverse = new Map();
+  edges.forEach((edge) => {
+    const to = String(edge?.to || '').trim();
+    const from = String(edge?.from || '').trim();
+    if (!to || !from) return;
+    if (!reverse.has(to)) reverse.set(to, []);
+    reverse.get(to).push(from);
+  });
+  const visited = new Set([targetId]);
+  const queue = [targetId];
+  while (queue.length) {
+    const current = String(queue.shift() || '');
+    const parents = reverse.get(current) || [];
+    parents.forEach((parentId) => {
+      const normalizedParentId = String(parentId || '').trim();
+      if (!normalizedParentId || visited.has(normalizedParentId)) return;
+      visited.add(normalizedParentId);
+      queue.push(normalizedParentId);
+    });
+  }
+  const filteredNodes = nodes.filter((node) => visited.has(String(node?.id || '').trim()));
+  const filteredEdges = edges.filter(
+    (edge) => visited.has(String(edge?.from || '').trim()) && visited.has(String(edge?.to || '').trim())
+  );
+  const order = topoSort(filteredNodes, filteredEdges);
+  if (!order) throw new Error(`preview_subgraph_cycle:${targetId}`);
+  return { nodes: filteredNodes, edges: filteredEdges, order };
+}
+
 function processConfigFromStartNode(startNode, deskId, override = null) {
   const settings = startNode?.config?.settings && typeof startNode.config.settings === 'object' ? startNode.config.settings : {};
   const triggerType = normalizeTriggerType(override?.trigger_type || settings?.triggerType || settings?.trigger_type || 'interval');
@@ -6680,8 +6973,14 @@ async function executeProcessNode(client, config, processCtx, node, templates, i
     };
   }
   if (isApiNode(node) || (node?.type === 'tool' && toolType === 'api_request')) {
+    const apiTemplateOverrides =
+      execOptions?.api_template_overrides && typeof execOptions.api_template_overrides === 'object'
+        ? execOptions.api_template_overrides
+        : {};
+    const overrideRaw = apiTemplateOverrides[String(node?.id || '').trim()];
+    const overrideTemplate = overrideRaw ? materializeApiConfigRow(overrideRaw) : null;
     const refs = nodeTemplateRefs(node);
-    const template = templates.find((tpl) => refs.some((ref) => sourceMatchesTemplateRef(tpl, ref)));
+    const template = overrideTemplate || templates.find((tpl) => refs.some((ref) => sourceMatchesTemplateRef(tpl, ref)));
     if (!template) throw new Error(`api_template_not_found:${requestSignature(node)}`);
     const exec = await executeApiNode(client, node, template, processCtx || {});
     const outputEnvelope = composeNodeOutputEnvelope(
@@ -6824,6 +7123,138 @@ async function executeProcessNode(client, config, processCtx, node, templates, i
     metrics: { skipped: true, node_type: toolType || node?.type || 'unknown' },
     request_payload: {},
     response_payload: { skipped: true }
+  };
+}
+
+function findProcessContainingNode(processes, targetNodeId) {
+  const targetId = String(targetNodeId || '').trim();
+  if (!targetId) return null;
+  const matches = (Array.isArray(processes) ? processes : []).filter((process) =>
+    Array.isArray(process?.subgraph?.order) && process.subgraph.order.some((node) => String(node?.id || '').trim() === targetId)
+  );
+  if (!matches.length) return null;
+  if (matches.length > 1) {
+    throw new Error(`preview_process_ambiguous:${targetId}`);
+  }
+  return matches[0];
+}
+
+async function executeProcessPreviewUntilNode(client, config, deskRow, processDef, runMeta, targetNodeId, execOptions = {}) {
+  const runUid = String(runMeta?.run_uid || '').trim();
+  const targetId = String(targetNodeId || '').trim();
+  if (!targetId) throw new Error('preview_target_node_required');
+  const executionScope = buildExecutionScope(
+    {
+      scope_type: runMeta?.scope_type,
+      scope_ref: runMeta?.scope_ref,
+      tenant_id: runMeta?.tenant_id,
+      context_json: runMeta?.context_json
+    },
+    buildDefaultExecutionScopeForProcess(processDef)
+  );
+  const processCtx = {
+    run_uid: runUid,
+    desk_id: Math.trunc(Number(deskRow?.desk_id || 0)),
+    desk_version_id: Math.trunc(Number(deskRow?.desk_version_id || 0)),
+    start_node_id: String(processDef?.start_node_id || ''),
+    process_code: String(processDef?.process_code || ''),
+    scope_type: executionScope.scope_type,
+    scope_ref: executionScope.scope_ref,
+    tenant_id: executionScope.tenant_id,
+    client_id: String(runMeta?.client_id || processDef?.client_id || '').trim(),
+    context_json: executionScope.context_json || {}
+  };
+  const startTs = Date.now();
+  const templates = await loadActiveApiConfigs(client, config);
+  const order = Array.isArray(processDef?.subgraph?.order) ? processDef.subgraph.order : [];
+  if (!order.length) throw new Error('process_subgraph_empty');
+  const targetIndex = order.findIndex((node) => String(node?.id || '').trim() === targetId);
+  if (targetIndex < 0) throw new Error(`preview_target_not_in_process:${targetId}`);
+
+  const steps = [];
+  let lastOutput = null;
+  let totalRequests = 0;
+  let totalSuccess = 0;
+  let totalFailed = 0;
+  let totalPayload = 0;
+  let stepErrors = 0;
+
+  for (let index = 0; index <= targetIndex; index += 1) {
+    const node = order[index];
+    const stepOrder = index + 1;
+    const stepStarted = Date.now();
+    let status = 'ok';
+    let reqPayload = {};
+    let respPayload = {};
+    let outputValue = {};
+    let metrics = {};
+    let errorText = '';
+    try {
+      const exec = await executeProcessNode(client, config, processCtx, node, templates, lastOutput, execOptions);
+      reqPayload = exec.request_payload || {};
+      respPayload = exec.response_payload || {};
+      outputValue = exec.output ?? {};
+      metrics = exec.metrics || {};
+      totalRequests += Math.max(0, Number(metrics?.requestCount || 0));
+      totalSuccess += Math.max(0, Number(metrics?.success || 0));
+      totalFailed += Math.max(0, Number(metrics?.failed || 0));
+      totalPayload += Math.max(0, Number(metrics?.payloadCount || 0));
+      if (Number(metrics?.failed || 0) > 0) status = 'warn';
+      lastOutput = outputValue;
+    } catch (e) {
+      status = 'error';
+      errorText = String(e?.message || e || 'step_failed');
+      respPayload = { error: errorText };
+      outputValue = { error: errorText };
+      metrics = { failed: true };
+      stepErrors += 1;
+      lastOutput = outputValue;
+    }
+    const durationMs = Date.now() - stepStarted;
+    const stepRow = {
+      run_uid: runUid,
+      step_order: stepOrder,
+      node_id: String(node?.id || ''),
+      node_name: String(node?.config?.name || node?.id || '').trim(),
+      node_type: String(node?.config?.toolType || node?.type || '').trim(),
+      status,
+      started_at: new Date(stepStarted).toISOString(),
+      finished_at: new Date(stepStarted + durationMs).toISOString(),
+      duration_ms: durationMs,
+      input_json: reqPayload,
+      output_json: outputValue,
+      request_payload: reqPayload,
+      response_payload: respPayload,
+      metrics_json: metrics,
+      error_text: errorText
+    };
+    await insertProcessStepRow(client, config, stepRow);
+    steps.push(stepRow);
+    if (status === 'error') break;
+  }
+
+  const durationMs = Date.now() - startTs;
+  const hasErrors = totalFailed > 0 || stepErrors > 0;
+  const summary = {
+    desk_id: Number(deskRow?.desk_id || 0),
+    desk_version_id: Number(deskRow?.desk_version_id || 0),
+    start_node_id: String(processDef?.start_node_id || ''),
+    process_code: String(processDef?.process_code || ''),
+    target_node_id: targetId,
+    steps_executed: steps.length,
+    total_requests: totalRequests,
+    success: totalSuccess,
+    failed: totalFailed,
+    payload_count: totalPayload,
+    step_errors: stepErrors
+  };
+  return {
+    status: hasErrors ? 'completed_with_errors' : 'completed',
+    summary_json: summary,
+    error_text: '',
+    duration_ms: durationMs,
+    steps,
+    target_step: steps.find((step) => String(step?.node_id || '').trim() === targetId) || null
   };
 }
 
@@ -7436,6 +7867,136 @@ async function getProcessRunHandler(req, res) {
   }
 }
 
+async function previewApiNodeProcessHandler(req, res) {
+  const deskId = Math.trunc(Number(req.body?.desk_id || 0));
+  const targetNodeId = String(req.body?.target_node_id || '').trim();
+  const graphJson = req.body?.graph_json && typeof req.body.graph_json === 'object' ? req.body.graph_json : null;
+  const apiTemplateOverride =
+    req.body?.api_template_override && typeof req.body.api_template_override === 'object' ? req.body.api_template_override : null;
+  if (!targetNodeId) {
+    return res.status(400).json({ error: 'bad_request', details: 'target_node_id is required' });
+  }
+  if (!graphJson && deskId <= 0) {
+    return res.status(400).json({ error: 'bad_request', details: 'desk_id or graph_json is required' });
+  }
+
+  let client = null;
+  let runUid = buildRunUid('wf_preview');
+  let config = { ...DEFAULT_CONFIG };
+  try {
+    client = await pool.connect();
+    config = await loadRuntimeStorageConfig(client);
+    await ensureWorkflowAutomationTables(client, config);
+
+    const publishedDesk = deskId > 0 ? await loadPublishedDeskById(client, config, deskId) : null;
+    const deskRow = {
+      desk_id: deskId > 0 ? deskId : Math.trunc(Number(publishedDesk?.desk_id || 0)),
+      desk_name: String(req.body?.desk_name || publishedDesk?.desk_name || '').trim(),
+      desk_version_id: Math.trunc(Number(publishedDesk?.desk_version_id || 0)),
+      version_no: Math.trunc(Number(publishedDesk?.version_no || 0)),
+      graph_json: graphJson || publishedDesk?.graph_json || {}
+    };
+    const overrideRows = deskRow.desk_id > 0 ? await loadProcessOverrides(client, config, deskRow.desk_id) : [];
+    const processes = discoverProcessesFromGraph({
+      deskId: deskRow.desk_id,
+      deskVersionId: deskRow.desk_version_id,
+      versionNo: deskRow.version_no,
+      graphJson: deskRow.graph_json,
+      overrideRows
+    });
+    const process = findProcessContainingNode(processes, targetNodeId);
+    if (!process) {
+      return res.status(404).json({ error: 'not_found', details: 'process for target node not found' });
+    }
+    const targetNode =
+      Array.isArray(process?.subgraph?.order)
+        ? process.subgraph.order.find((node) => String(node?.id || '').trim() === targetNodeId)
+        : null;
+    if (!targetNode || !(isApiNode(targetNode) || (targetNode?.type === 'tool' && String(targetNode?.config?.toolType || '').trim().toLowerCase() === 'api_request'))) {
+      return res.status(400).json({ error: 'bad_request', details: 'target node is not an API node' });
+    }
+
+    const scopes = await resolveExecutionScopesForProcess(client, config, deskRow, process);
+    const previewScope = Array.isArray(scopes) && scopes.length ? scopes[0] : buildDefaultExecutionScopeForProcess(process);
+    const previewProcess = {
+      ...process,
+      subgraph: buildUpstreamSubgraphToTarget(process?.subgraph || {}, targetNodeId)
+    };
+
+    await insertProcessRunRow(client, config, {
+      run_uid: runUid,
+      desk_id: deskRow.desk_id,
+      desk_name: deskRow.desk_name || `desk_${deskRow.desk_id || 0}`,
+      desk_version_id: deskRow.desk_version_id,
+      start_node_id: String(previewProcess?.start_node_id || '').trim(),
+      process_code: String(previewProcess?.process_code || '').trim(),
+      scope_type: previewScope.scope_type,
+      scope_ref: previewScope.scope_ref,
+      tenant_id: previewScope.tenant_id,
+      context_json: previewScope.context_json || {},
+      run_policy: String(previewProcess?.run_policy || 'single_instance').trim(),
+      orchestration_mode: 'preview',
+      trigger_source: 'preview',
+      trigger_type: 'preview',
+      trigger_key: targetNodeId,
+      trigger_meta: {
+        preview_target_node_id: targetNodeId,
+        graph_source: graphJson ? 'editor_snapshot' : 'published_desk',
+        preview_scope: previewScope
+      },
+      status: 'running',
+      created_by: String(req.body?.created_by || 'api_preview').trim() || 'api_preview'
+    });
+
+    const result = await executeProcessPreviewUntilNode(client, config, deskRow, previewProcess, {
+      run_uid: runUid,
+      scope_type: previewScope.scope_type,
+      scope_ref: previewScope.scope_ref,
+      tenant_id: previewScope.tenant_id,
+      context_json: previewScope.context_json || {}
+    }, targetNodeId, {
+      api_template_overrides: apiTemplateOverride ? { [targetNodeId]: apiTemplateOverride } : {}
+    });
+
+    await updateRunRow(client, config, runUid, {
+      status: result.status,
+      finished_at: new Date().toISOString(),
+      duration_ms: Number(result.duration_ms || 0),
+      summary_json: result.summary_json || {},
+      error_text: result.error_text || ''
+    });
+
+    return res.json({
+      run_uid: runUid,
+      process: {
+        start_node_id: String(previewProcess?.start_node_id || '').trim(),
+        process_code: String(previewProcess?.process_code || '').trim()
+      },
+      scope: previewScope,
+      target_step: result.target_step || null,
+      steps: Array.isArray(result.steps) ? result.steps : []
+    });
+  } catch (e) {
+    const errorText = String(e?.message || e || 'preview_api_node_failed');
+    if (client) {
+      try {
+        await updateRunRow(client, config, runUid, {
+          status: 'failed',
+          finished_at: new Date().toISOString(),
+          duration_ms: 0,
+          summary_json: {},
+          error_text: errorText
+        });
+      } catch {
+        // ignore secondary preview run update failure
+      }
+    }
+    return res.status(500).json({ error: 'preview_api_node_failed', details: errorText });
+  } finally {
+    if (client) client.release();
+  }
+}
+
 async function triggerProcessRunsHandler(req, res) {
   const deskId = Number(req.body?.desk_id || 0);
   const startNodeId = String(req.body?.start_node_id || '').trim();
@@ -8003,6 +8564,7 @@ async function listIncrementalStateHandler(req, res) {
 workflowAutomationRouter.get('/process-runs', requireDataAdmin, listProcessRunsHandler);
 workflowAutomationRouter.get('/process-runs/aggregation', requireDataAdmin, listRunAggregationHandler);
 workflowAutomationRouter.get('/process-runs/:run_uid', requireDataAdmin, getProcessRunHandler);
+workflowAutomationRouter.post('/process-runs/preview-api-node', requireDataAdmin, previewApiNodeProcessHandler);
 workflowAutomationRouter.post('/process-runs/trigger', requireDataAdmin, triggerProcessRunsHandler);
 workflowAutomationRouter.post('/desks/:desk_id/publish', requireDataAdmin, publishDeskHandler);
 workflowAutomationRouter.get('/desks/:desk_id/processes', requireDataAdmin, listDeskProcessesHandler);

@@ -137,9 +137,19 @@ function collectLeaves(node, basePath, out) {
 export function buildOutputFieldsFromNode(sampleNode, rootPath = '') {
   const fields = [];
   collectLeaves(sampleNode, '', fields);
+  const deduped = [];
+  const seenPaths = new Set();
+  fields.forEach((entry) => {
+    const path = normalizeLeafPath(entry?.path);
+    if (!path || seenPaths.has(path)) return;
+    seenPaths.add(path);
+    deduped.push({
+      path,
+      valueType: entry?.valueType
+    });
+  });
   const used = new Set();
-  return fields
-    .filter((entry) => String(entry.path || '').trim())
+  return deduped
     .map((entry, idx) => ({
       id: `out_${Date.now()}_${idx}_${Math.random().toString(16).slice(2, 8)}`,
       rootPath: normalizeTemplatePath(rootPath),

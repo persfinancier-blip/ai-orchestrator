@@ -23,6 +23,9 @@
   export let refreshTables: () => Promise<void>;
   export let initialApiStoreId: number | null = null;
   export let embeddedMode = false;
+  export let workflowDeskId: number | null = null;
+  export let workflowNodeId = '';
+  export let workflowGraph: any = null;
   const EMBEDDED_LAYOUT_BREAKPOINT = 900;
   let compactLayoutByContainer = false;
   $: effectiveEmbeddedMode = embeddedMode || compactLayoutByContainer;
@@ -30,6 +33,11 @@
     templateSelectionChange: {
       ref: string;
       name: string;
+      storeId: number;
+      templateId: string;
+    };
+    templateSaved: {
+      ref: string;
       storeId: number;
       templateId: string;
     };
@@ -870,6 +878,37 @@ function formatBytes(bytes: number) {
     };
   }
 
+  function outputParameterSemanticKey(rootPath: string, path: string) {
+    return `${normalizeTemplatePath(rootPath)}|${normalizeTemplatePath(path)}`;
+  }
+
+  function normalizeOutputParametersList(items: any[]): OutputParameterDefinition[] {
+    const deduped = new Map<string, OutputParameterDefinition>();
+    (Array.isArray(items) ? items : []).forEach((item: any) => {
+      const rootPath = normalizeTemplatePath(String(item?.rootPath || item?.root_path || ''));
+      const directPath = normalizeTemplatePath(String(item?.path || item?.response_path || ''));
+      const path = rootPath && directPath.startsWith(`${rootPath}.`) ? directPath.slice(rootPath.length + 1) : directPath;
+      const normalizedPath = normalizeTemplatePath(path);
+      const semanticKey = outputParameterSemanticKey(rootPath, normalizedPath);
+      if (!semanticKey || semanticKey === '|') return;
+      if (deduped.has(semanticKey)) return;
+      const alias = String(item?.alias || buildAliasFromPath(normalizedPath || rootPath)).trim();
+      if (!alias) return;
+      deduped.set(semanticKey, {
+        id: String(item?.id || uid()),
+        rootPath,
+        path: normalizedPath,
+        alias,
+        valueType: String(item?.valueType || item?.value_type || '').trim() || 'Значение'
+      });
+    });
+    return [...deduped.values()];
+  }
+
+  function hasWorkflowServerPreviewContext() {
+    return Math.trunc(Number(workflowDeskId || 0)) > 0 && Boolean(String(workflowNodeId || '').trim()) && workflowGraph && typeof workflowGraph === 'object';
+  }
+
   function fromRow(row: any): ApiDraft {
     const d = baseDraft();
     const storeIdNum = extractStoreIdFromRow(row);
@@ -953,22 +992,7 @@ function formatBytes(bytes: number) {
       : Array.isArray(mapping?.output_parameters)
       ? mapping.output_parameters
       : [];
-    const normalizedOutputParameters = outputParametersSource
-      .map((item: any) => {
-        const rootPath = normalizeTemplatePath(String(item?.rootPath || item?.root_path || ''));
-        const path = normalizeTemplatePath(String(item?.path || ''));
-        const alias = String(item?.alias || buildAliasFromPath(path || rootPath)).trim();
-        const valueType = String(item?.valueType || item?.value_type || '').trim();
-        if (!alias || (!rootPath && !path)) return null;
-        return {
-          id: String(item?.id || uid()),
-          rootPath,
-          path: rootPath && path.startsWith(`${rootPath}.`) ? path.slice(rootPath.length + 1) : path,
-          alias,
-          valueType: valueType || 'Значение'
-        };
-      })
-      .filter((item: OutputParameterDefinition | null): item is OutputParameterDefinition => Boolean(item));
+    const normalizedOutputParameters = normalizeOutputParametersList(outputParametersSource);
     const executionCfg = tryObj(mapping?.execution || row?.execution_json || legacy?.execution);
     const bindingRulesRaw = Array.isArray(row?.binding_rules)
       ? row.binding_rules
@@ -1639,7 +1663,7 @@ function formatBytes(bytes: number) {
               .filter((m) => m.response_path && m.alias)
           }
         : { mode: 'manual' };
-    const outputParametersPayload = (Array.isArray(d.outputParameters) ? d.outputParameters : [])
+    const outputParametersPayload = normalizeOutputParametersList(Array.isArray(d.outputParameters) ? d.outputParameters : [])
       .map((item) => ({
         id: String(item?.id || uid()),
         root_path: normalizeTemplatePath(String(item?.rootPath || '')),
@@ -2434,14 +2458,14 @@ function formatBytes(bytes: number) {
       outputTreeSource = null;
       outputTreeSourceJson = false;
       outputTreeRefreshedAt = Date.now();
-      outputTreeMessage = 'Нажми «Обновить», чтобы получить тестовый результат и построить дерево ответа.';
-      if (showMessage) err = 'Нажми «Обновить», чтобы получить тестовый результат и построить дерево ответа.';
+      outputTreeMessage = 'Нажми «Обновить», чтобы получить результат API-шага и построить дерево ответа.';
+      if (showMessage) err = 'Нажми «Обновить», чтобы получить результат API-шага и построить дерево ответа.';
       return;
     }
     outputTreeSource = deepClone(responseJson);
     outputTreeSourceJson = true;
     outputTreeRefreshedAt = Date.now();
-    outputTreeMessage = 'Источник выходного контракта обновлён из текущего тестового результата.';
+    outputTreeMessage = 'Источник выходного контракта обновлён из последнего результата API-шага.';
     if (showMessage) ok = 'Дерево ответа обновлено для выходного контракта';
   }
 
@@ -2477,10 +2501,105 @@ function formatBytes(bytes: number) {
     });
   }
 
+  function previewPayloadSize(value: any) {
+    if (value === undefined || value === null) return 0;
+    try {
+      return JSON.stringify(value).length;
+    } catch {
+      return String(value).length;
+    }
+  }
+
+  async function checkApiNowViaWorkflowServer(draft: ApiDraft) {
+    const parsedFields = {
+      authJson: parseJsonObjectField('Авторизация', draft.authJson),
+      headersJson: parseJsonObjectField('Headers JSON', draft.headersJson),
+      queryJson: parseJsonObjectField('Query JSON', draft.queryJson),
+      bodyJson: parseJsonAnyField('Body JSON', draft.bodyJson)
+    };
+    const previewResult = await apiJson<{
+      run_uid?: string;
+      target_step?: any;
+      steps?: any[];
+    }>(`${apiBase}/process-runs/preview-api-node`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({
+        desk_id: Math.trunc(Number(workflowDeskId || 0)),
+        target_node_id: String(workflowNodeId || '').trim(),
+        graph_json: workflowGraph,
+        api_template_override: toPayload(draft, parsedFields)
+      })
+    });
+    const targetStep = previewResult?.target_step && typeof previewResult.target_step === 'object' ? previewResult.target_step : null;
+    if (!targetStep) {
+      throw new Error('Сервер не вернул результат текущего API-шага.');
+    }
+    if (String(targetStep?.status || '').trim().toLowerCase() === 'error') {
+      throw new Error(String(targetStep?.error_text || 'Ошибка выполнения API-шага'));
+    }
+
+    const requestPreview = targetStep?.request_payload && typeof targetStep.request_payload === 'object' ? deepClone(targetStep.request_payload) : {};
+    const responsePreview = targetStep?.response_payload && typeof targetStep.response_payload === 'object' ? deepClone(targetStep.response_payload) : {};
+    const metrics = targetStep?.metrics_json && typeof targetStep.metrics_json === 'object' ? targetStep.metrics_json : {};
+    const startedAt = String(targetStep?.started_at || new Date().toISOString());
+    const durationMs = Math.max(0, Number(targetStep?.duration_ms || 0));
+    const lastResponse = Array.isArray(responsePreview?.responses) ? responsePreview.responses[responsePreview.responses.length - 1] : null;
+    const businessPayload = extractApiBusinessPayload(responsePreview);
+    const lastStatus = Math.max(
+      0,
+      Number(metrics?.status || lastResponse?.status || responsePreview?.status || targetStep?.status_code || 0)
+    );
+    const requestCount = Math.max(
+      0,
+      Number(metrics?.requestCount || responsePreview?.total_requests || (Array.isArray(responsePreview?.responses) ? responsePreview.responses.length : 0))
+    );
+    const payloadCount = Math.max(
+      0,
+      Number(
+        metrics?.payloadCount ||
+          (Array.isArray(businessPayload) ? businessPayload.length : businessPayload && typeof businessPayload === 'object' ? 1 : 0)
+      )
+    );
+    const payloadSize = previewPayloadSize(responsePreview);
+    const treePayload = businessPayload;
+
+    myApiPreview = JSON.stringify(requestPreview, null, 2);
+    myPreviewDirty = false;
+    myPreviewApplyMessage = previewResult?.run_uid
+      ? `Показан серверный preview-run до текущей API-ноды (${previewResult.run_uid})`
+      : 'Показан серверный preview-run до текущей API-ноды';
+    responseStatus = lastStatus;
+    responsePagesCount = requestCount;
+    responsePayloadCount = payloadCount;
+    responsePayloadSize = payloadSize;
+    responseTimeMs = durationMs;
+    applyResponsePreviewPayload(
+      treePayload,
+      responsePreview,
+      'Источник выходного контракта обновлён из серверного результата API-шага.'
+    );
+    apiResponseCache = { ...apiResponseCache, [refOf(draft)]: treePayload ?? null };
+    ok = previewResult?.run_uid
+      ? `Проверка выполнена через server runtime path (${previewResult.run_uid})`
+      : 'Проверка выполнена через server runtime path';
+    publishExecutionPreview({
+      startedAt,
+      durationMs,
+      status: lastStatus,
+      ok: String(targetStep?.status || '').trim().toLowerCase() !== 'error',
+      totalRequests: requestCount,
+      payloadCount,
+      payloadSize,
+      requestPreview,
+      responsePreview
+    });
+  }
+
   async function refreshOutputContractNow() {
     await checkApiNow();
     if (!responseIsJson || !responseJson) return;
-    ok = 'Тестовый результат обновлён и дерево ответа перестроено для выходного контракта';
+    ok = 'Результат API-шага обновлён и дерево ответа перестроено для выходного контракта';
   }
 
   function updateOutputTreeSourceFromPayload(payload: any, message = '') {
@@ -7017,6 +7136,11 @@ function handleDefinitionInput(value: string) {
           selectedBaselineSignature = selectedDraftSignature(m, m.name);
         }
       }
+      dispatch('templateSaved', {
+        ref: selectedRef,
+        storeId: id,
+        templateId: id > 0 ? `api_tpl_${id}` : ''
+      });
       ok = 'API сохранен в БД';
     } catch (e: any) {
       err = e?.message ?? String(e);
@@ -8032,6 +8156,11 @@ function handleDefinitionInput(value: string) {
     checking = true;
     try {
       applyUrlInput(requestInput);
+      const currentDraft = byRef(selectedRef) || selected || s;
+      if (currentDraft && hasWorkflowServerPreviewContext()) {
+        await checkApiNowViaWorkflowServer(currentDraft);
+        return;
+      }
       if (isGroupedDispatchEnabled(s)) {
         const groupedPlan = await buildGroupedRequestPlan(s);
         if (!groupedPlan.allRequests.length) {
@@ -8074,6 +8203,18 @@ function handleDefinitionInput(value: string) {
         responsePayloadCount = execution.totalItems;
         responsePayloadSize = execution.totalSize;
         responseTimeMs = Date.now() - startedAt;
+        const sentPreviewPayload = {
+          mode: execution.modeLabel,
+          execution_mode: s.executionMode || 'sync',
+          request_groups: groupedPlan.allRequests.length,
+          request_count: execution.requestCount,
+          shown_requests: execution.sentRequests.length,
+          requests: execution.sentRequests,
+          issues:
+            Object.keys({ ...(groupedPlan.issues || {}), ...(execution.issues || {}) }).length
+              ? { ...(groupedPlan.issues || {}), ...(execution.issues || {}) }
+              : undefined
+        };
         const groupedResponsePayload = {
             total_requests: execution.requestCount,
             request_groups: groupedPlan.allRequests.length,
@@ -8163,6 +8304,18 @@ function handleDefinitionInput(value: string) {
         responsePayloadCount = execution.totalItems;
         responsePayloadSize = execution.totalSize;
         responseTimeMs = Date.now() - startedAt;
+        const sentPreviewPayload = {
+          mode: execution.modeLabel,
+          execution_mode: s.executionMode || 'sync',
+          request_rows: rowPlan.allRequests.length,
+          request_count: execution.requestCount,
+          shown_requests: execution.sentRequests.length,
+          requests: execution.sentRequests,
+          issues:
+            Object.keys({ ...(rowPlan.issues || {}), ...(execution.issues || {}) }).length
+              ? { ...(rowPlan.issues || {}), ...(execution.issues || {}) }
+              : undefined
+        };
         const rowResponsePayload = {
             total_requests: execution.requestCount,
             request_rows: rowPlan.allRequests.length,
@@ -10345,15 +10498,15 @@ function syncParameterEditorsHeight() {
 
         <div class="targets-wrap">
           <div class="targets-head">
-            <div>
+              <div>
               <div class="targets-title">Выходные параметры</div>
-              <div class="hint">Здесь формируется универсальный выходной контракт шаблона на основе текущего тестового результата, а не буквального пути одного тестового ответа.</div>
+              <div class="hint">Здесь формируется publish-контракт API-ноды как фильтр канонического результата последней серверной проверки.</div>
             </div>
             <button
               class="icon-btn refresh-btn"
               type="button"
-              title="Обновить тестовый результат и дерево ответа"
-              aria-label="Обновить тестовый результат и дерево ответа"
+              title="Обновить результат API-шага и дерево ответа"
+              aria-label="Обновить результат API-шага и дерево ответа"
               on:click={refreshOutputContractNow}
               disabled={checking || loading || !selectedRef}
             >{checking ? '…' : '↻'}</button>
@@ -10362,7 +10515,7 @@ function syncParameterEditorsHeight() {
             <div class="crumbs-panel output-tree-panel">
               <div class="crumbs-title-row">
                 <div class="crumbs-title">Дерево результата</div>
-                <small>Источник: текущий тестовый ответ</small>
+                <small>Источник: канонический результат последней проверки</small>
               </div>
               {#if outputTreeMessage}
                 <p class="hint">{outputTreeMessage}</p>
@@ -10383,7 +10536,7 @@ function syncParameterEditorsHeight() {
                   />
                 </div>
               {:else}
-                <div class="empty-box">Нажми «Обновить», чтобы получить тестовый результат и построить дерево для выходного контракта.</div>
+                <div class="empty-box">Нажми «Обновить», чтобы получить результат API-шага и построить дерево для выходного контракта.</div>
               {/if}
             </div>
 

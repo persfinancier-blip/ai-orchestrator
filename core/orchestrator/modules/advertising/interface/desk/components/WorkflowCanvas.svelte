@@ -2783,7 +2783,16 @@
     const directFields = outputParametersRaw
       .map((item: any, index: number) => descriptorContractField(item, index, '', 'api_output_contract'))
       .filter((item: NodeDescriptorField | null): item is NodeDescriptorField => Boolean(item));
-    if (directFields.length) return uniqueDescriptorFields(directFields);
+    if (directFields.length) {
+      const dedupedByPath = new Map<string, NodeDescriptorField>();
+      directFields.forEach((field) => {
+        const semanticPath = normalizeTemplatePath(String(field?.path || ''));
+        const key = semanticPath || String(field?.alias || field?.name || '').trim().toLowerCase();
+        if (!key || dedupedByPath.has(key)) return;
+        dedupedByPath.set(key, field);
+      });
+      return uniqueDescriptorFields([...dedupedByPath.values()]);
+    }
 
     const pickedPathsRaw = Array.isArray(row?.picked_paths)
       ? row.picked_paths
@@ -3671,6 +3680,11 @@
       storeId,
       templateId
     };
+  }
+
+  async function onApiBuilderTemplateSaved(event: CustomEvent<{ ref: string; storeId: number; templateId: string }>) {
+    onApiBuilderTemplateSelectionChange(event as unknown as CustomEvent<ApiTemplateSelectionChangePayload>);
+    await loadDynamicSourceCatalog();
   }
 
   function parseTemplateStoreId(value: any) {
@@ -6552,8 +6566,12 @@
                 existingTables={apiBuilderExistingTables}
                 refreshTables={refreshApiBuilderTables}
                 initialApiStoreId={settingsApiBuilderStoreId}
+                workflowDeskId={deskId}
+                workflowNodeId={settingsNode.id}
+                workflowGraph={captureDeskState()}
                 embeddedMode={false}
                 on:templateSelectionChange={onApiBuilderTemplateSelectionChange}
+                on:templateSaved={onApiBuilderTemplateSaved}
                 on:executionPreviewChange={onApiBuilderExecutionPreviewChange}
               />
             {/key}
