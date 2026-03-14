@@ -618,6 +618,12 @@
   $: incomingDescriptorNodeId = String(incomingDescriptor?.nodeId || '').trim();
   $: derivedOutputFields = buildDerivedOutputFields();
   $: publishedDescriptorFields = descriptorFields(outputDescriptor);
+  $: previewDescriptorColumns = uniqueStringList(
+    publishedDescriptorFields.length
+      ? publishedDescriptorFields.map((field) => field.alias || field.name || field.path || '')
+      : derivedOutputFields.map((field) => field.alias || field.name || field.path || '')
+  );
+  $: previewTableColumns = previewResultColumns.length ? previewResultColumns : previewDescriptorColumns;
   $: outputDescriptorDetection = outputDescriptor?.detection && typeof outputDescriptor.detection === 'object' ? outputDescriptor.detection : {};
   $: outputDescriptorKind = String(outputDescriptor?.outputKind || 'unknown').trim() || 'unknown';
   $: outputDescriptorKindLabelValue = descriptorOutputKindLabel(outputDescriptor?.outputKind || 'unknown');
@@ -2691,7 +2697,7 @@
         </div>
         <div class="preview-metrics">
           <span>Строк: {previewData?.row_count ?? '-'}</span>
-          <span>Колонок: {previewData?.column_count ?? '-'}</span>
+          <span>Колонок: {(previewData?.column_count ?? previewTableColumns.length) || '-'}</span>
           <span>Формат: {previewData?.source_format || '-'}</span>
           <span>Источник: {autoSourceDefined ? 'Upstream descriptor' : legacyStandaloneSourceMode ? legacyStandaloneSourceLabel : 'Не определён'}</span>
         </div>
@@ -2700,31 +2706,39 @@
           <span>Есть ещё данные: {previewData?.batch?.has_more ? 'да' : 'нет'}</span>
           <span>Обновлено: {previewUpdatedAt ? new Date(previewUpdatedAt).toLocaleString('ru-RU') : '-'}</span>
         </div>
-        {#if previewResultColumns.length}
+        {#if previewTableColumns.length}
           <div class="preview-columns">
-            {#each previewResultColumns as column}
+            {#each previewTableColumns as column}
               <span>{column}</span>
             {/each}
           </div>
         {/if}
-        {#if previewResultRows.length && previewResultColumns.length}
+        {#if previewTableColumns.length}
           <div class="preview-table-wrap">
             <table class="preview-table">
               <thead>
                 <tr>
-                  {#each previewResultColumns as column}
+                  {#each previewTableColumns as column}
                     <th>{column}</th>
                   {/each}
                 </tr>
               </thead>
               <tbody>
-                {#each previewResultRows as row}
+                {#if previewResultRows.length}
+                  {#each previewResultRows as row}
+                    <tr>
+                      {#each previewTableColumns as column}
+                        <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
+                      {/each}
+                    </tr>
+                  {/each}
+                {:else}
                   <tr>
-                    {#each previewResultColumns as column}
-                      <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
-                    {/each}
+                    <td colspan={previewTableColumns.length} class="preview-empty-cell">
+                      Preview-строки пока недоступны. Таблица уже показывает итоговую структуру результата по publish descriptor и текущим settings parser.
+                    </td>
                   </tr>
-                {/each}
+                {/if}
               </tbody>
             </table>
           </div>
@@ -3134,6 +3148,11 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .preview-empty-cell {
+    white-space: normal;
+    color: #64748b;
+    line-height: 1.45;
   }
   .form-grid {
     display: grid;
