@@ -120,6 +120,7 @@
     targetField: string;
   };
   type ParserEditorStep = 'input' | 'fields' | 'result';
+  type ParserChangeStep = 'incoming' | 'lookup' | 'filters' | 'computed' | 'dedupe' | 'grouping';
 
   export let apiBase: string;
   export let apiJson: <T = any>(url: string, init?: RequestInit) => Promise<T>;
@@ -205,6 +206,14 @@
     { id: 'input', label: 'Определение данных', order: '1' },
     { id: 'fields', label: 'Изменение данных', order: '2' },
     { id: 'result', label: 'Результат', order: '3' }
+  ];
+  const PARSER_CHANGE_STEPS: Array<{ id: ParserChangeStep; label: string }> = [
+    { id: 'incoming', label: 'Входящие данные' },
+    { id: 'lookup', label: 'Присоединить данные из таблицы' },
+    { id: 'filters', label: 'Фильтры' },
+    { id: 'computed', label: 'Вычисляемые поля' },
+    { id: 'dedupe', label: 'Удаление дублей' },
+    { id: 'grouping', label: 'Группировки и агрегаты' }
   ];
 
   function normalizeSettings(raw: Record<string, any> | null | undefined): ParserSettings {
@@ -489,6 +498,7 @@
   let previewUpdatedAt = '';
   let parserPipelineModel: ParserPipelineViewModel = emptyParserPipelineModel();
   let activeStep: ParserEditorStep = 'input';
+  let activeChangeStep: ParserChangeStep = 'incoming';
   let detectOverrideOpen = false;
   let payloadManualInputOpen = false;
   let workingSetManualInputOpen = false;
@@ -603,6 +613,7 @@
   };
   $: sourceTableColumnsMeta = columnsCache[tableCacheKey(settings.sourceSchema, settings.sourceTable)] || [];
   $: previewResultRows = Array.isArray(previewData?.sample_rows) ? previewData.sample_rows : [];
+  $: previewResultColumns = Array.isArray(previewData?.columns) ? previewData.columns : [];
   $: incomingNodes = Array.isArray(incomingDescriptor?.upstreamDescriptors) ? incomingDescriptor.upstreamDescriptors : [];
   $: incomingDescriptorNodeId = String(incomingDescriptor?.nodeId || '').trim();
   $: derivedOutputFields = buildDerivedOutputFields();
@@ -1191,6 +1202,7 @@
   function useIncomingField(field: NodeDescriptorField | null | undefined) {
     const key = descriptorFieldKey(field);
     activeStep = 'fields';
+    activeChangeStep = 'incoming';
     if (!key) return;
     addSelectedField(key);
   }
@@ -1682,8 +1694,8 @@
       <div class="parser-card">
         <div class="parser-card-head">
           <div>
-            <h3>Контекст parser</h3>
-            <p>Parser читает upstream descriptor слева, использует его как primary source of truth и дополняет знания только текущим preview и сохранёнными settings.</p>
+            <h3>Настройка parser</h3>
+            <p>Секция 2 отвечает только за логику parser: она читает consume descriptor слева, меняет данные текущей ноды и публикует итог вправо и вниз.</p>
           </div>
           <button type="button" class="primary-btn" on:click={previewNow} disabled={previewLoading}>
             {previewLoading ? 'Обновление...' : 'Обновить preview'}
@@ -2019,24 +2031,11 @@
                     <div class="inline-hint inline-hint-box">Parser пока не смог автоматически определить путь до рабочего набора строк. Здесь нужен ручной override.</div>
                   {/if}
                   {#if showWorkingSetManualInput}
-                    <div class="form-grid form-grid-2">
+                    <div class="form-grid form-grid-1">
                       <label>
                         Ручной путь до строк
                         <input value={settings.recordPath} on:input={(e) => patchSetting('recordPath', inputValue(e))} placeholder="items.rows" />
                         <span class="hint">Нужен только если рабочие строки лежат глубже найденных данных.</span>
-                      </label>
-                      <label>
-                        Размер пакета
-                        <input type="number" min="1" max="5000" value={settings.batchSize} on:input={(e) => patchSetting('batchSize', inputValue(e))} />
-                        <span class="hint">Влияет на объём данных в одном проходе preview/runtime.</span>
-                      </label>
-                    </div>
-                  {:else}
-                    <div class="form-grid form-grid-1">
-                      <label>
-                        Размер пакета
-                        <input type="number" min="1" max="5000" value={settings.batchSize} on:input={(e) => patchSetting('batchSize', inputValue(e))} />
-                        <span class="hint">Влияет на объём данных в одном проходе preview/runtime.</span>
                       </label>
                     </div>
                   {/if}
@@ -2063,13 +2062,34 @@
         {#if activeStep === 'fields'}
           <div class="subsection parser-step-panel">
             <div class="subsection-head">
-              <h4>Поля результата</h4>
+              <h4>Изменение данных</h4>
+            </div>
+            <div class="inline-hint inline-hint-box">Это главный рабочий шаг parser. Сначала фиксируй поля результата, затем подключай присоединения, фильтры, вычисляемые поля, удаление дублей и агрегаты.</div>
+            <div class="parser-substeps-bar" aria-label="Подшаги изменения данных">
+              {#each PARSER_CHANGE_STEPS as step}
+                <button
+                  type="button"
+                  class="parser-substep-btn"
+                  class:is-active={activeChangeStep === step.id}
+                  aria-pressed={activeChangeStep === step.id}
+                  on:click={() => (activeChangeStep = step.id)}
+                >
+                  {step.label}
+                </button>
+              {/each}
+            </div>
+          </div>
+
+          {#if activeChangeStep === 'incoming'}
+          <div class="subsection parser-step-panel">
+            <div class="subsection-head">
+              <h4>Входящие данные</h4>
               <div class="subsection-actions">
                 <button type="button" class="mini-btn" on:click={addAllDetectedFields} disabled={!workingFieldCandidates.length}>Взять всё из рабочего набора</button>
                 <button type="button" class="mini-btn" on:click={() => rebuildFieldSettings([])} disabled={!selectedFieldRows.length}>Очистить</button>
               </div>
             </div>
-            <div class="inline-hint">Здесь фиксируется итоговый набор полей parser. Кандидаты берутся по fallback-цепочке: строки preview, данные preview, контракт upstream слева, уже сохранённые поля результата.</div>
+            <div class="inline-hint">Здесь фиксируется итоговый набор полей parser: какие поля уйдут дальше, как они будут переименованы, типизированы и чем будут заполняться по умолчанию.</div>
             <div class="field-picker">
               <select on:change={(e) => { addSelectedField(selectValue(e)); clearSelectValue(e); }}>
                 <option value="">Добавить поле в результат</option>
@@ -2078,7 +2098,7 @@
                 {/each}
               </select>
             </div>
-            <div class="inline-hint">Клик по полю слева сразу добавляет его в `selectFields` через существующие parser settings и переводит в этот шаг.</div>
+            <div class="inline-hint">Клик по полю слева сразу добавляет его в `selectFields` через существующие parser settings и переводит в этот подпункт.</div>
             {#if selectedFieldRows.length}
               <div class="rules-grid">
                 <div class="rules-grid-head">Поле из рабочего набора</div>
@@ -2109,14 +2129,31 @@
             {:else}
               <div class="inline-hint">Если оставить блок пустым, parser попытается отдать весь рабочий набор. Нажми «Взять всё из рабочего набора» или добавь поле из левой колонки, чтобы явно зафиксировать результат.</div>
             {/if}
-          </div>
-          <div class="subsection parser-step-panel">
-            <div class="subsection-head">
-              <h4>Обработка</h4>
-            </div>
-            <div class="inline-hint inline-hint-box">После выбора полей можно обогащать данные, фильтровать строки, рассчитывать новые колонки, удалять дубли и агрегировать результат.</div>
-          </div>
 
+            <details class="parser-advanced-panel">
+              <summary>Дополнительно: preview и runtime</summary>
+              <div class="parser-advanced-body">
+                <div class="form-grid form-grid-3">
+                  <label>
+                    Лимит preview
+                    <input type="number" min="1" max="200" value={settings.previewLimit} on:input={(e) => patchSetting('previewLimit', inputValue(e))} />
+                  </label>
+                  <label>
+                    Лимит JSON в памяти (байт)
+                    <input type="number" min="65536" value={settings.maxJsonBytes} on:input={(e) => patchSetting('maxJsonBytes', inputValue(e))} />
+                  </label>
+                  <label>
+                    Размер пакета runtime
+                    <input type="number" min="1" max="5000" value={settings.batchSize} on:input={(e) => patchSetting('batchSize', inputValue(e))} />
+                  </label>
+                </div>
+                <div class="inline-hint">Эти параметры не участвуют в определении данных. Они только ограничивают preview и пакетную обработку внутри runtime parser.</div>
+              </div>
+            </details>
+          </div>
+          {/if}
+
+        {#if activeChangeStep === 'lookup'}
         <div class="subsection parser-step-panel">
           <div class="subsection-head">
             <h4>Присоединить данные из таблицы</h4>
@@ -2286,7 +2323,9 @@
             <div class="inline-hint">Этот блок нужен, когда к текущему набору строк нужно присоединить дополнительные данные из выбранной таблицы по понятным условиям связи.</div>
           {/if}
         </div>
+        {/if}
 
+        {#if activeChangeStep === 'filters'}
         <div class="subsection parser-step-panel">
           <div class="subsection-head">
             <h4>Фильтры</h4>
@@ -2324,7 +2363,9 @@
             <div class="inline-hint">Фильтры применяются после вычисляемых полей и могут работать как по исходным, так и по новым колонкам.</div>
           {/if}
         </div>
+        {/if}
 
+        {#if activeChangeStep === 'computed'}
         <div class="subsection parser-step-panel">
           <div class="subsection-head">
             <h4>Вычисляемые поля</h4>
@@ -2414,7 +2455,9 @@
             <div class="inline-hint">Добавь вычисляемое поле, чтобы собрать выражение через конструктор или перейти в ручной режим.</div>
           {/if}
         </div>
+        {/if}
 
+        {#if activeChangeStep === 'dedupe'}
         <div class="subsection parser-step-panel">
           <div class="subsection-head">
             <h4>Удаление дублей</h4>
@@ -2447,7 +2490,9 @@
             </label>
           </div>
         </div>
+        {/if}
 
+        {#if activeChangeStep === 'grouping'}
         <div class="subsection parser-step-panel">
           <div class="subsection-head">
             <h4>Группировки и агрегаты</h4>
@@ -2489,34 +2534,15 @@
             <div class="inline-hint">Сначала укажи поля группировки, затем добавь нужные агрегаты: сумма, количество, минимум, максимум или среднее.</div>
           {/if}
         </div>
-
-        <div class="subsection parser-step-panel">
-          <div class="subsection-head">
-            <h4>Безопасность и runtime</h4>
-          </div>
-          <div class="form-grid form-grid-3">
-            <label>
-              Лимит preview
-              <input type="number" min="1" max="200" value={settings.previewLimit} on:input={(e) => patchSetting('previewLimit', inputValue(e))} />
-            </label>
-            <label>
-              Лимит JSON в памяти (байт)
-              <input type="number" min="65536" value={settings.maxJsonBytes} on:input={(e) => patchSetting('maxJsonBytes', inputValue(e))} />
-            </label>
-            <label>
-              Размер пакета runtime
-              <input type="number" min="1" max="5000" value={settings.batchSize} on:input={(e) => patchSetting('batchSize', inputValue(e))} />
-            </label>
-          </div>
-          <div class="inline-hint">Parser обрабатывает данные пакетно внутри одной ноды. Preview ограничен, а основной runtime остаётся пакетным.</div>
-        </div>
+        {/if}
         {/if}
 
         {#if activeStep === 'result'}
         <div class="subsection parser-step-panel">
           <div class="subsection-head">
-            <h4>Итог результата</h4>
+            <h4>Результат</h4>
           </div>
+          <div class="inline-hint inline-hint-box">Это обзор publish-side parser. Табличный preview итогового результата вынесен в отдельную нижнюю секцию, чтобы не смешивать summary и сами строки.</div>
           <div class="preview-metrics">
             <span>Поля: {parserPipelineModel.resultSummary.fieldsCount}</span>
             <span>Источник summary: {parserPipelineModel.resultSummary.source}</span>
@@ -2529,7 +2555,20 @@
             <span>Payload path: {outputDescriptorDetection?.payloadPath || '-'}</span>
             <span>Rows path: {outputDescriptorDetection?.recordPath || '-'}</span>
           </div>
-          {#if derivedOutputFields.length}
+          {#if parserAppliedSteps.length}
+            <div class="applied-steps">
+              {#each parserAppliedSteps as step}
+                <span>{step}</span>
+              {/each}
+            </div>
+          {/if}
+          {#if publishedDescriptorFields.length}
+            <div class="preview-columns">
+              {#each publishedDescriptorFields as field}
+                <span>{field.alias || field.name}</span>
+              {/each}
+            </div>
+          {:else if derivedOutputFields.length}
             <div class="preview-columns">
               {#each derivedOutputFields as field}
                 <span>{field.name}</span>
@@ -2538,69 +2577,15 @@
           {:else}
             <div class="inline-hint">Итоговый output строится из текущих settings parser и preview результата. Если данных мало, справа и здесь остаётся только partial summary.</div>
           {/if}
-        </div>
-
-        <div class="subsection parser-step-panel">
-          <div class="subsection-head">
-            <h4>Результат обработки</h4>
-            <button type="button" class="mini-btn" on:click={previewNow} disabled={previewLoading}>
-              {previewLoading ? 'Обновление...' : 'Обновить preview'}
-            </button>
-          </div>
-          <div class="preview-metrics">
-            <span>Строк: {previewData?.row_count ?? '-'}</span>
-            <span>Колонок: {previewData?.column_count ?? '-'}</span>
-            <span>Формат: {previewData?.source_format || '-'}</span>
-            <span>Источник: {autoSourceDefined ? 'Upstream descriptor' : legacyStandaloneSourceMode ? legacyStandaloneSourceLabel : 'Не определён'}</span>
-          </div>
-          <div class="preview-meta">
-            <span>Пакет: {previewData?.batch?.returned_rows ?? 0} / {previewData?.batch?.batch_size ?? '-'}</span>
-            <span>Есть ещё данные: {previewData?.batch?.has_more ? 'да' : 'нет'}</span>
-            <span>Обновлено: {previewUpdatedAt ? new Date(previewUpdatedAt).toLocaleString('ru-RU') : '-'}</span>
-          </div>
-          {#if parserAppliedSteps.length}
-            <div class="applied-steps">
-              {#each parserAppliedSteps as step}
-                <span>{step}</span>
+          {#if parserPipelineModel.warningsSummary.total}
+            <div class="warnings-box">
+              {#each parserPipelineModel.warningsSummary.parserWarnings as warning}
+                <div class="warning-line">{warning}</div>
               {/each}
+              {#if parserPipelineModel.warningsSummary.insufficientData}
+                <div class="warning-line">Для полного итогового результата пока не хватает preview-данных. Parser остаётся в settings-first режиме и публикует partial descriptor.</div>
+              {/if}
             </div>
-          {/if}
-          {#if previewData?.columns?.length}
-            <div class="preview-columns">
-              {#each previewData.columns as column}
-                <span>{column}</span>
-              {/each}
-            </div>
-          {/if}
-          {#if previewData?.sample_rows?.length}
-            <div class="preview-table-wrap">
-              <table class="preview-table">
-                <thead>
-                  <tr>
-                    {#each previewData.columns as column}
-                      <th>{column}</th>
-                    {/each}
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each previewData.sample_rows as row}
-                    <tr>
-                      {#each previewData.columns as column}
-                        <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
-                      {/each}
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
-            </div>
-          {:else}
-            <div class="empty-box">Нет результата preview. Обнови preview после изменения настроек обработки.</div>
-          {/if}
-          {#if previewRaw}
-            <details class="preview-raw">
-              <summary>Показать raw результат parser runtime</summary>
-              <pre>{JSON.stringify(previewRaw, null, 2)}</pre>
-            </details>
           {/if}
         </div>
         {/if}
@@ -2628,7 +2613,34 @@
           <span>Payload path: {outputDescriptorDetection?.payloadPath || '-'}</span>
           <span>Rows path: {outputDescriptorDetection?.recordPath || '-'}</span>
         </div>
-        {#if derivedOutputFields.length}
+        {#if publishedDescriptorFields.length}
+          <div class="parser-shell-summary">
+            <span class="chip-chip readonly-chip">{publishedDescriptorFields.length} {publishedDescriptorFields.length === 1 ? 'поле' : publishedDescriptorFields.length < 5 ? 'поля' : 'полей'}</span>
+            <span class="inline-hint">Publish descriptor текущей ноды</span>
+          </div>
+          <div class="parser-contract-list">
+            {#each publishedDescriptorFields as field}
+              <div class="parser-contract-item">
+                <div class="parser-contract-name">{field.alias || field.name}</div>
+                <div class="parser-contract-meta">
+                  <span>Имя: {field.name}</span>
+                  {#if field.alias}
+                    <span>Alias: {field.alias}</span>
+                  {/if}
+                  {#if field.type}
+                    <span>Тип: {field.type}</span>
+                  {/if}
+                  {#if field.path}
+                    <span>Path: {field.path}</span>
+                  {/if}
+                  {#if field.origin}
+                    <span>Источник: {field.origin}</span>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
+        {:else if derivedOutputFields.length}
           <div class="parser-shell-summary">
             <span class="chip-chip readonly-chip">{derivedOutputFields.length} {derivedOutputFields.length === 1 ? 'поле' : derivedOutputFields.length < 5 ? 'поля' : 'полей'}</span>
             {#if derivedOutputSourceLabel}
@@ -2655,11 +2667,65 @@
             {/each}
           </div>
         {:else}
-          <div class="inline-hint">Derived output preview пока недоступен: parser ещё не зафиксировал поля результата и preview не вернул итоговые колонки.</div>
+          <div class="inline-hint">Publish descriptor пока partial: parser ещё не зафиксировал поля результата и preview не вернул итоговые колонки.</div>
         {/if}
       </div>
     </section>
   </div>
+
+  <section class="parser-result-preview-section parser-card">
+    <div class="parser-card-head">
+      <div>
+        <h3>Предпросмотр результата</h3>
+        <p>Это итоговый tabular preview результата parser, а не preview сырого входа. Здесь видно, что реально выйдет из ноды и уйдёт дальше.</p>
+      </div>
+      <button type="button" class="mini-btn" on:click={previewNow} disabled={previewLoading}>
+        {previewLoading ? 'Обновление...' : 'Обновить preview'}
+      </button>
+    </div>
+    <div class="preview-metrics">
+      <span>Строк: {previewData?.row_count ?? '-'}</span>
+      <span>Колонок: {previewData?.column_count ?? '-'}</span>
+      <span>Формат: {previewData?.source_format || '-'}</span>
+      <span>Источник: {autoSourceDefined ? 'Upstream descriptor' : legacyStandaloneSourceMode ? legacyStandaloneSourceLabel : 'Не определён'}</span>
+    </div>
+    <div class="preview-meta">
+      <span>Пакет: {previewData?.batch?.returned_rows ?? 0} / {previewData?.batch?.batch_size ?? '-'}</span>
+      <span>Есть ещё данные: {previewData?.batch?.has_more ? 'да' : 'нет'}</span>
+      <span>Обновлено: {previewUpdatedAt ? new Date(previewUpdatedAt).toLocaleString('ru-RU') : '-'}</span>
+    </div>
+    {#if previewResultColumns.length}
+      <div class="preview-columns">
+        {#each previewResultColumns as column}
+          <span>{column}</span>
+        {/each}
+      </div>
+    {/if}
+    {#if previewResultRows.length && previewResultColumns.length}
+      <div class="preview-table-wrap">
+        <table class="preview-table">
+          <thead>
+            <tr>
+              {#each previewResultColumns as column}
+                <th>{column}</th>
+              {/each}
+            </tr>
+          </thead>
+          <tbody>
+            {#each previewResultRows as row}
+              <tr>
+                {#each previewResultColumns as column}
+                  <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
+                {/each}
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {:else}
+      <div class="empty-box">Нет итогового preview результата. Обнови preview после изменения настроек parser.</div>
+    {/if}
+  </section>
 </section>
 
 <style>
@@ -2691,6 +2757,12 @@
     gap: 8px;
     align-items: center;
   }
+  .parser-substeps-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
   .parser-step-btn {
     display: inline-flex;
     align-items: center;
@@ -2709,6 +2781,22 @@
     background: #0f172a;
     border-color: #0f172a;
     color: #fff;
+  }
+  .parser-substep-btn {
+    border-radius: 999px;
+    border: 1px solid #dbe4f0;
+    background: #fff;
+    color: #334155;
+    padding: 7px 11px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+  }
+  .parser-substep-btn.is-active {
+    background: #e8f0ff;
+    border-color: #93c5fd;
+    color: #1d4ed8;
   }
   .parser-step-index {
     display: inline-flex;
@@ -2929,6 +3017,24 @@
     gap: 10px;
     padding: 0 12px 12px;
   }
+  .parser-advanced-panel {
+    border: 1px solid #dbe4f0;
+    border-radius: 12px;
+    background: #f8fafc;
+    padding: 10px 12px;
+  }
+  .parser-advanced-panel summary {
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    color: #334155;
+  }
+  .parser-advanced-body {
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
   .primary-btn,
   .mini-btn {
     border-radius: 10px;
@@ -3002,24 +3108,6 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-  .preview-raw {
-    border-top: 1px dashed #dbe4f0;
-    padding-top: 10px;
-  }
-  .preview-raw summary {
-    cursor: pointer;
-    color: #334155;
-    font-size: 12px;
-  }
-  .preview-raw pre {
-    margin: 10px 0 0;
-    padding: 10px;
-    border-radius: 10px;
-    background: #0f172a;
-    color: #e2e8f0;
-    overflow: auto;
-    font-size: 11px;
   }
   .form-grid {
     display: grid;
