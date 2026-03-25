@@ -1,34 +1,5 @@
 import { buildAliasFromPath } from './outputContractCore.js';
-
-function parseJsonObjectSafe(raw, fallback = {}) {
-  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
-  const txt = String(raw || '').trim();
-  if (!txt) return fallback;
-  try {
-    const parsed = JSON.parse(txt);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function parseCsvList(raw) {
-  if (Array.isArray(raw)) return raw.map((x) => String(x || '').trim()).filter(Boolean);
-  return String(raw || '')
-    .split(',')
-    .map((x) => x.trim())
-    .filter(Boolean);
-}
-
-function lastSegment(path) {
-  return String(path || '')
-    .replace(/\[(\d+)\]/g, '')
-    .replace(/\[\]/g, '')
-    .split('.')
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .slice(-1)[0] || '';
-}
+import { buildParserPublishRows } from '../../shared/parserPublishContractCore.js';
 
 function sampleValueFromType(typeName, alias) {
   const raw = String(typeName || '').trim().toLowerCase();
@@ -115,28 +86,8 @@ function buildPreviewFromParserTemplate(template) {
     };
   }
 
-  const selectFields = parseCsvList(cfg.selectFields ?? cfg.select_fields);
-  const renameMap = parseJsonObjectSafe(cfg.renameMap ?? cfg.rename_map, {});
-  const defaultValues = parseJsonObjectSafe(cfg.defaultValues ?? cfg.default_values, {});
-  const typeMap = parseJsonObjectSafe(cfg.typeMap ?? cfg.type_map, {});
-
-  const keys = [];
-  selectFields.forEach((sourcePath) => {
-    const leaf = lastSegment(sourcePath);
-    const targetKey = String(renameMap[sourcePath] || renameMap[leaf] || leaf || '').trim();
-    if (targetKey && !keys.includes(targetKey)) keys.push(targetKey);
-  });
-  Object.keys(defaultValues).forEach((key) => {
-    const normalized = String(key || '').trim();
-    if (normalized && !keys.includes(normalized)) keys.push(normalized);
-  });
-  if (!keys.length) {
-    Object.values(renameMap).forEach((value) => {
-      const normalized = String(value || '').trim();
-      if (normalized && !keys.includes(normalized)) keys.push(normalized);
-    });
-  }
-  if (!keys.length) {
+  const publishRows = buildParserPublishRows({ settings: cfg, incomingDescriptors: [] }).rows;
+  if (!publishRows.length) {
     return {
       rows: [],
       columns: [],
@@ -145,15 +96,10 @@ function buildPreviewFromParserTemplate(template) {
   }
 
   const row = {};
-  keys.forEach((key) => {
-    const byDefault = defaultValues[key];
-    const sourcePath = selectFields.find((field) => {
-      const leaf = lastSegment(field);
-      return String(renameMap[field] || renameMap[leaf] || leaf || '').trim() === key;
-    });
-    const sourceLeaf = lastSegment(sourcePath || '');
-    const valueType = typeMap[key] || typeMap[sourcePath || ''] || typeMap[sourceLeaf] || '';
-    row[key] = byDefault !== undefined ? byDefault : sampleValueFromType(valueType, key);
+  publishRows.forEach((field) => {
+    const key = String(field?.alias || '').trim();
+    if (!key) return;
+    row[key] = field.defaultValue !== '' ? field.defaultValue : sampleValueFromType(field.type, key);
   });
   return {
     rows: [row],

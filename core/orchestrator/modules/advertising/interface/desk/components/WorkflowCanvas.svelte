@@ -5,6 +5,7 @@
   import TableNodeBuilderTab from '../tabs/TableNodeBuilderTab.svelte';
   import WriteBuilderTab from '../tabs/WriteBuilderTab.svelte';
   import { buildAliasFromPath, normalizeTemplatePath } from '../tabs/outputContractCore.js';
+  import { buildParserPublishDescriptorFields } from '../../shared/parserPublishContractCore.js';
   import {
     tools,
     toolPorts,
@@ -2807,39 +2808,24 @@
     return uniqueDescriptorFields(pickedFields);
   }
 
-  function descriptorFieldsFromParserNode(node: WorkflowNode): NodeDescriptorField[] {
+  function descriptorFieldsFromParserNode(node: WorkflowNode, upstreamDescriptors: NodeDescriptor[] = []): NodeDescriptorField[] {
     const settings = toolCfg(node).settings || {};
-    const rawFields = Array.isArray(settings.selectFields || settings.select_fields)
-      ? settings.selectFields || settings.select_fields
-      : String(settings.selectFields || settings.select_fields || '')
-          .split(',')
-          .map((item) => String(item || '').trim())
-          .filter(Boolean);
-    const selectFields = uniqueAliasList(rawFields.map((item) => String(item || '').trim()).filter(Boolean));
-    const renameMap = tryObj(settings.renameMap || settings.rename_map || '{}');
-    const typeMap = tryObj(settings.typeMap || settings.type_map || '{}');
     return uniqueDescriptorFields(
-      selectFields
-        .map((path, index) => {
-          const leaf =
-            String(path || '')
-              .split('.')
-              .map((part) => part.trim())
-              .filter(Boolean)
-              .slice(-1)[0] || '';
-          return descriptorContractField(
+      buildParserPublishDescriptorFields({ settings, incomingDescriptors: upstreamDescriptors, origin: 'parser_settings' })
+        .map((field: any, index: number) =>
+          descriptorContractField(
             {
-              path,
-              alias: String(renameMap[path] || renameMap[leaf] || '').trim(),
-              type: String(typeMap[path] || typeMap[leaf] || '').trim(),
-              name: leaf,
+              path: String(field?.path || '').trim(),
+              alias: String(field?.alias || field?.name || '').trim(),
+              type: String(field?.type || '').trim(),
+              name: String(field?.name || field?.alias || '').trim(),
               origin: 'parser_settings'
             },
             index,
-            path,
+            String(field?.path || '').trim(),
             'parser_settings'
-          );
-        })
+          )
+        )
         .filter((item: NodeDescriptorField | null): item is NodeDescriptorField => Boolean(item))
     );
   }
@@ -2904,9 +2890,9 @@
     return targetColumns;
   }
 
-  function nodeDescriptorFieldsForNode(node: WorkflowNode): NodeDescriptorField[] {
+  function nodeDescriptorFieldsForNode(node: WorkflowNode, upstreamDescriptors: NodeDescriptor[] = []): NodeDescriptorField[] {
     if (isApiNode(node) || isApiToolNode(node)) return descriptorFieldsFromApiNode(node);
-    if (isParserToolNode(node)) return descriptorFieldsFromParserNode(node);
+    if (isParserToolNode(node)) return descriptorFieldsFromParserNode(node, upstreamDescriptors);
     if (isTableNodeTool(node)) return descriptorFieldsFromTableNode(node);
     if (isWriteToolNode(node)) return descriptorFieldsFromWriteNode(node);
     return [];
@@ -3034,7 +3020,7 @@
     if (!node) return null;
     const sourcePort = String(context.sourcePort || 'out').trim() || 'out';
     const upstreamDescriptors = Array.isArray(context.upstreamDescriptors) ? context.upstreamDescriptors : [];
-    const fields = nodeDescriptorFieldsForNode(node);
+    const fields = nodeDescriptorFieldsForNode(node, upstreamDescriptors);
     const sample = nodeDescriptorSampleForApiNode(node);
     const registry = descriptorRegistryForNode(node);
     if (!fields.length && upstreamDescriptors.length === 1 && !(isApiNode(node) || isApiToolNode(node) || isParserToolNode(node) || isTableNodeTool(node) || isWriteToolNode(node))) {

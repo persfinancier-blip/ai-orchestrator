@@ -652,23 +652,45 @@ function applyFieldMapping(record, cfg) {
   const src = normalizeObjectRow(record);
   let out = {};
   if (cfg.selectFields.length) {
+    const handledSourceKeys = new Set();
     for (const path of cfg.selectFields) {
       const value = getByPath(src, path);
       const fallbackKey = String(path || '').split('.').filter(Boolean).slice(-1)[0] || String(path || '').trim();
+      handledSourceKeys.add(String(path || '').trim());
+      handledSourceKeys.add(fallbackKey);
       const targetKey = String(cfg.renameMap?.[path] || cfg.renameMap?.[fallbackKey] || fallbackKey).trim() || fallbackKey;
       out[targetKey] = value;
+      const defaultValue =
+        cfg.defaultValues?.[path] !== undefined
+          ? cfg.defaultValues[path]
+          : cfg.defaultValues?.[fallbackKey] !== undefined
+          ? cfg.defaultValues[fallbackKey]
+          : cfg.defaultValues?.[targetKey];
+      if ((out[targetKey] === undefined || out[targetKey] === null || out[targetKey] === '') && defaultValue !== undefined) {
+        out[targetKey] = defaultValue;
+      }
+      const explicitType = String(cfg.typeMap?.[path] || cfg.typeMap?.[fallbackKey] || cfg.typeMap?.[targetKey] || '').trim();
+      if (explicitType) out[targetKey] = convertFieldType(out[targetKey], explicitType);
+    }
+    for (const [key, value] of Object.entries(cfg.defaultValues || {})) {
+      if (handledSourceKeys.has(String(key || '').trim())) continue;
+      if (out[key] === undefined || out[key] === null || out[key] === '') out[key] = value;
+    }
+    for (const [key, typeName] of Object.entries(cfg.typeMap || {})) {
+      if (handledSourceKeys.has(String(key || '').trim())) continue;
+      if (Object.prototype.hasOwnProperty.call(out, key)) out[key] = convertFieldType(out[key], typeName);
     }
   } else {
     for (const [key, value] of Object.entries(src)) {
       const targetKey = String(cfg.renameMap?.[key] || key).trim() || key;
       out[targetKey] = value;
     }
-  }
-  for (const [key, value] of Object.entries(cfg.defaultValues || {})) {
-    if (out[key] === undefined || out[key] === null || out[key] === '') out[key] = value;
-  }
-  for (const [key, typeName] of Object.entries(cfg.typeMap || {})) {
-    if (Object.prototype.hasOwnProperty.call(out, key)) out[key] = convertFieldType(out[key], typeName);
+    for (const [key, value] of Object.entries(cfg.defaultValues || {})) {
+      if (out[key] === undefined || out[key] === null || out[key] === '') out[key] = value;
+    }
+    for (const [key, typeName] of Object.entries(cfg.typeMap || {})) {
+      if (Object.prototype.hasOwnProperty.call(out, key)) out[key] = convertFieldType(out[key], typeName);
+    }
   }
   return out;
 }

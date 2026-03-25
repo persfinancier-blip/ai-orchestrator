@@ -77,6 +77,31 @@ test('parser runtime: JSON input -> mapped rows -> preview summary', async () =>
   assert.deepEqual(preview.raw_columns.sort(), ['id', 'name']);
 });
 
+test('parser runtime: path-keyed default and type maps stay aligned with renamed publish fields', async () => {
+  const result = await executeParserRows(
+    { query: async () => ({ rows: [] }) },
+    {
+      sourceMode: 'node',
+      sourceFormat: 'json',
+      recordPath: 'items',
+      selectFields: 'meta.id',
+      renameMap: '{"meta.id":"product_id"}',
+      defaultValues: '{"meta.id":"100"}',
+      typeMap: '{"meta.id":"integer"}'
+    },
+    {
+      inputValue: {
+        items: [
+          { meta: { id: '7' } },
+          { meta: {} }
+        ]
+      }
+    }
+  );
+
+  assert.deepEqual(result.rows, [{ product_id: 7 }, { product_id: 100 }]);
+});
+
 test('parser runtime: CSV input supports batch cursor without loading fake chunks in UI', async () => {
   const csv = 'id,name\n1,a\n2,b\n3,c\n4,d\n';
   const settings = {

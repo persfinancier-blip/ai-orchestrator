@@ -40,6 +40,22 @@ test('parser source preview: parser template derives preview from mapping fields
   });
 });
 
+test('parser source preview: parser template respects path-keyed rename and default values', () => {
+  const preview = buildSourceNodePreviewFromTemplate({
+    templateType: 'table_parser',
+    config_json: {
+      selectFields: 'meta.id',
+      renameMap: { 'meta.id': 'product_id' },
+      defaultValues: { 'meta.id': '100' },
+      typeMap: { 'meta.id': 'integer' }
+    }
+  });
+
+  assert.equal(preview.rows.length, 1);
+  assert.deepEqual(preview.columns, ['product_id']);
+  assert.deepEqual(preview.rows[0], { product_id: '100' });
+});
+
 test('parser source preview: missing contract returns russian explanation instead of fake json error', () => {
   const preview = buildSourceNodePreviewFromTemplate({
     templateType: 'api_request',

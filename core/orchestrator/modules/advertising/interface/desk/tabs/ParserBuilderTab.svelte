@@ -1,5 +1,5 @@
 ﻿<script lang="ts">
-  import { createEventDispatcher, onMount } from 'svelte';
+  import { createEventDispatcher } from 'svelte';
   import ComputedExpressionBuilder from '../components/ComputedExpressionBuilder.svelte';
   import {
     COMPUTED_FUNCTION_CATEGORIES,
@@ -20,6 +20,12 @@
     type NodeDescriptorField,
     type NodeDescriptorFlow
   } from '../data/nodeDescriptorFlow';
+  import {
+    buildParserPublishRows,
+    resolveIncomingParserField,
+    serializeParserPublishRows
+  } from '../../shared/parserPublishContractCore.js';
+  import { buildParserResultPreviewState } from './parserResultPreviewCore.js';
 
   type ExistingTable = { schema_name: string; table_name: string };
   type ColumnMeta = { name: string; type?: string };
@@ -118,6 +124,57 @@
   type LookupJoinRule = {
     sourceField: string;
     targetField: string;
+  };
+  type ParserIncomingPublishField = {
+    path: string;
+    alias: string;
+    name: string;
+    type: string;
+    defaultOutputName: string;
+    isDirectPublishSupported: boolean;
+  };
+  type ParserSelectedFieldRow = {
+    path: string;
+    alias: string;
+    type: string;
+    defaultValue: string;
+    sourcePath: string;
+    sourceAlias: string;
+    sourceName: string;
+    sourceType: string;
+    sourceExists: boolean;
+    sourceSupported: boolean;
+    defaultAlias: string;
+    status: string;
+    statusLabel: string;
+    statusHint: string;
+    isDuplicateAlias: boolean;
+    isMissingUpstream: boolean;
+    isValidForPublish: boolean;
+  };
+  type ParserResultPreviewField = {
+    name: string;
+    alias?: string;
+    type?: string;
+    path?: string;
+    origin?: string;
+  };
+  type ParserResultPreviewMode = 'rows' | 'shape_only' | 'no_preview_yet' | 'preview_failed';
+  type ParserResultPreviewState = {
+    mode: ParserResultPreviewMode;
+    modeLabel: string;
+    statusTone: string;
+    statusTitle: string;
+    statusDescription: string;
+    rows: Array<Record<string, any>>;
+    columns: string[];
+    structureFields: ParserResultPreviewField[];
+    showStructure: boolean;
+    structureColumns?: string[];
+    liveRowsCount: number;
+    liveColumnsCount: number;
+    sourceFormat?: string;
+    isStalePreview: boolean;
   };
   type ParserEditorStep = 'input' | 'fields' | 'result';
   type ParserChangeStep = 'incoming' | 'lookup' | 'filters' | 'computed' | 'dedupe' | 'grouping';
@@ -488,6 +545,48 @@
     return cfg;
   }
 
+  function buildPreviewExecutionConfig(settingsValue: ParserSettings) {
+    const base = buildTemplatePayload(settingsValue);
+    const effectiveRows = (Array.isArray(selectedFieldRows) ? selectedFieldRows : []).filter(
+      (row) => Boolean(row?.isValidForPublish)
+    );
+    if (!effectiveRows.length) return base;
+
+    const effectiveSelectFields: string[] = [];
+    const effectiveRenameMap: Record<string, any> = {};
+    const effectiveTypeMap: Record<string, any> = {};
+    const effectiveDefaultValues: Record<string, any> = {};
+
+    effectiveRows.forEach((row) => {
+      const path = String(row?.path || row?.sourcePath || '').trim();
+      if (!path) return;
+      effectiveSelectFields.push(path);
+      const fallbackName = fallbackFieldName(path);
+      const alias = String(row?.alias || fallbackName).trim() || fallbackName;
+      const type = String(row?.type || '').trim();
+      const defaultValue = row?.defaultValue ?? '';
+      if (alias && alias !== fallbackName) effectiveRenameMap[path] = alias;
+      if (type) effectiveTypeMap[path] = type;
+      if (defaultValue !== '') effectiveDefaultValues[path] = defaultValue;
+    });
+
+    return {
+      ...base,
+      selectFields: effectiveSelectFields.join(', '),
+      renameMap: effectiveRenameMap,
+      typeMap: effectiveTypeMap,
+      defaultValues: effectiveDefaultValues
+    };
+  }
+
+  function buildPreviewConfigSignature(settingsValue: ParserSettings) {
+    try {
+      return JSON.stringify(buildPreviewExecutionConfig(settingsValue));
+    } catch {
+      return '';
+    }
+  }
+
   let settings = normalizeSettings(initialSettings);
   let lastInitialSignature = JSON.stringify(settings);
   let columnsCache: Record<string, ColumnMeta[]> = {};
@@ -496,12 +595,31 @@
   let previewData: ParserPreview | null = null;
   let previewRaw: any = null;
   let previewUpdatedAt = '';
+  let previewLastAttemptSignature = '';
+  let previewLastSuccessSignature = '';
   let parserPipelineModel: ParserPipelineViewModel = emptyParserPipelineModel();
   let activeStep: ParserEditorStep = 'input';
   let activeChangeStep: ParserChangeStep = 'incoming';
   let detectOverrideOpen = false;
   let payloadManualInputOpen = false;
   let workingSetManualInputOpen = false;
+  let highlightedPublishFieldPath = '';
+  let previewResultState: ParserResultPreviewState = {
+    mode: 'no_preview_yet',
+    modeLabel: 'Preview ещё не готов',
+    statusTone: 'info',
+    statusTitle: 'Preview результата пока не готов',
+    statusDescription: 'Настрой parser и нажми «Обновить preview».',
+    rows: [],
+    columns: [],
+    structureFields: [],
+    showStructure: false,
+    structureColumns: [],
+    liveRowsCount: 0,
+    liveColumnsCount: 0,
+    sourceFormat: '',
+    isStalePreview: false
+  };
 
   $: {
     const next = normalizeSettings(initialSettings);
@@ -532,11 +650,15 @@
   $: sourcePreviewSourceRef =
     String(previewData?.source_ref || '').trim() || incomingSamplePreview.sourceRef || '-';
   $: sourcePreviewEmptyMessage = incomingSamplePreview.emptyMessage || 'Upstream источник уже определён, но sample snapshot для preview пока недоступен.';
+  $: incomingNodes = Array.isArray(incomingDescriptor?.upstreamDescriptors) ? incomingDescriptor.upstreamDescriptors : [];
+  $: parserPublishState = buildParserPublishRows({ settings, incomingDescriptors: incomingNodes });
+  $: incomingPublishFields = Array.isArray(parserPublishState?.incomingFields) ? (parserPublishState.incomingFields as ParserIncomingPublishField[]) : [];
+  $: selectedFieldRows = Array.isArray(parserPublishState?.rows) ? (parserPublishState.rows as ParserSelectedFieldRow[]) : [];
+  $: duplicateSelectedFieldPaths = Array.isArray(parserPublishState?.duplicateSourcePaths) ? parserPublishState.duplicateSourcePaths : [];
   $: incomingContractFieldCandidates = Array.from(
     new Set(
-      incomingNodes
-        .flatMap((item) => incomingContractFields(item))
-        .map((field) => descriptorFieldKey(field))
+      incomingPublishFields
+        .map((field) => String(field?.path || '').trim())
         .filter(Boolean)
     )
   );
@@ -563,21 +685,7 @@
   $: renameMapValue = parseJsonSafe(settings.renameMap, {});
   $: defaultValuesValue = parseJsonSafe(settings.defaultValues, {});
   $: typeMapValue = parseJsonSafe(settings.typeMap, {});
-  $: selectedFieldPaths = parseCsvText(settings.selectFields);
-  $: selectedFieldRows = selectedFieldPaths.map((path) => {
-    const fallbackKey = fallbackFieldName(path);
-    return {
-      path,
-      alias: String(renameMapValue?.[path] || renameMapValue?.[fallbackKey] || fallbackKey).trim(),
-      type: String(typeMapValue?.[path] || typeMapValue?.[fallbackKey] || '').trim(),
-      defaultValue:
-        defaultValuesValue?.[path] !== undefined
-          ? String(defaultValuesValue[path])
-          : defaultValuesValue?.[fallbackKey] !== undefined
-          ? String(defaultValuesValue[fallbackKey])
-          : ''
-    };
-  });
+  $: selectedFieldPaths = selectedFieldRows.map((row) => row.path);
   $: filterRules = Array.isArray(parseJsonSafe(settings.filterRulesJson, [])) ? parseJsonSafe(settings.filterRulesJson, []) : [];
   $: computedFields = (Array.isArray(parseJsonSafe(settings.computedFieldsJson, [])) ? parseJsonSafe(settings.computedFieldsJson, []) : [])
     .map((row: any) => normalizeComputedFieldRule(row));
@@ -614,25 +722,21 @@
   $: sourceTableColumnsMeta = columnsCache[tableCacheKey(settings.sourceSchema, settings.sourceTable)] || [];
   $: previewResultRows = Array.isArray(previewData?.sample_rows) ? previewData.sample_rows : [];
   $: previewResultColumns = Array.isArray(previewData?.columns) ? previewData.columns : [];
-  $: incomingNodes = Array.isArray(incomingDescriptor?.upstreamDescriptors) ? incomingDescriptor.upstreamDescriptors : [];
   $: incomingDescriptorNodeId = String(incomingDescriptor?.nodeId || '').trim();
   $: derivedOutputFields = buildDerivedOutputFields();
   $: publishedDescriptorFields = descriptorFields(outputDescriptor);
-  $: previewDescriptorColumns = uniqueStringList(
-    publishedDescriptorFields.length
-      ? publishedDescriptorFields.map((field) => field.alias || field.name || field.path || '')
-      : derivedOutputFields.map((field) => field.alias || field.name || field.path || '')
-  );
-  $: previewTableColumns = previewResultColumns.length ? previewResultColumns : previewDescriptorColumns;
+  $: previewConfigSignature = buildPreviewConfigSignature(settings);
+  $: previewResultState = buildParserResultPreviewState({
+    previewData,
+    previewError,
+    publishedDescriptorFields,
+    currentConfigSignature: previewConfigSignature,
+    previewLastAttemptSignature,
+    previewLastSuccessSignature
+  });
   $: outputDescriptorDetection = outputDescriptor?.detection && typeof outputDescriptor.detection === 'object' ? outputDescriptor.detection : {};
   $: outputDescriptorKind = String(outputDescriptor?.outputKind || 'unknown').trim() || 'unknown';
   $: outputDescriptorKindLabelValue = descriptorOutputKindLabel(outputDescriptor?.outputKind || 'unknown');
-  $: derivedOutputSourceLabel =
-    Array.isArray(previewData?.columns) && previewData.columns.length
-      ? 'По результату preview'
-      : derivedOutputFields.length
-      ? 'По текущим settings parser'
-      : '';
   $: parserPipelineModel = buildParserPipelineViewModel();
   $: detectedInputLabel = humanizeDetectedInput(parserPipelineModel.inputProfile.inputKind, autoParseInfo.detectedFormat, settings.sourceMode);
   $: detectedReadLabel = humanizeReadMode(parserPipelineModel.parseStrategy.strategy, autoParseInfo.detectedFormat, settings.sourceMode);
@@ -881,40 +985,44 @@
 
   function rebuildFieldSettings(rows: Array<{ path: string; alias?: string; type?: string; defaultValue?: string }>) {
     const next = cloneSettings(settings);
-    const cleanRows = rows
-      .map((row) => ({
-        path: String(row?.path || '').trim(),
-        alias: String(row?.alias || '').trim(),
-        type: String(row?.type || '').trim(),
-        defaultValue: row?.defaultValue ?? ''
-      }))
-      .filter((row) => row.path);
-    next.selectFields = cleanRows.map((row) => row.path).join(', ');
-    const renameMap: Record<string, any> = {};
-    const defaultValues: Record<string, any> = {};
-    const typeMap: Record<string, any> = {};
-    for (const row of cleanRows) {
-      const fallbackKey = String(row.path || '').split('.').filter(Boolean).slice(-1)[0] || row.path;
-      if (row.alias && row.alias !== fallbackKey) renameMap[row.path] = row.alias;
-      if (row.defaultValue !== '') defaultValues[row.path] = row.defaultValue;
-      if (row.type) typeMap[row.path] = row.type;
-    }
-    next.renameMap = toPrettyJson(renameMap, '{}');
-    next.defaultValues = toPrettyJson(defaultValues, '{}');
-    next.typeMap = toPrettyJson(typeMap, '{}');
+    const serialized = serializeParserPublishRows(rows, incomingNodes);
+    next.selectFields = serialized.selectFields.join(', ');
+    next.renameMap = toPrettyJson(serialized.renameMap, '{}');
+    next.defaultValues = toPrettyJson(serialized.defaultValues, '{}');
+    next.typeMap = toPrettyJson(serialized.typeMap, '{}');
     dispatchSettings(next);
   }
 
-  function addAllDetectedFields() {
-    const rows = workingFieldCandidates.map((path) => ({ path }));
-    rebuildFieldSettings(rows);
+  function addAllIncomingFields() {
+    const existing = new Set(selectedFieldRows.map((row) => row.path));
+    const additions = incomingPublishFields
+      .filter((field) => field.isDirectPublishSupported)
+      .filter((field) => !existing.has(field.path))
+      .map((field) => ({
+        path: field.path,
+        alias: field.defaultOutputName,
+        type: field.type,
+        defaultValue: ''
+      }));
+    if (additions.length) highlightedPublishFieldPath = additions[0].path;
+    rebuildFieldSettings([...selectedFieldRows, ...additions]);
   }
 
   function addSelectedField(path: string) {
     const wanted = String(path || '').trim();
     if (!wanted) return;
+    highlightedPublishFieldPath = wanted;
     if (selectedFieldPaths.includes(wanted)) return;
-    rebuildFieldSettings([...selectedFieldRows, { path: wanted }]);
+    const source = resolveIncomingParserField(wanted, incomingPublishFields);
+    rebuildFieldSettings([
+      ...selectedFieldRows,
+      {
+        path: wanted,
+        alias: source?.defaultOutputName || fallbackFieldName(wanted),
+        type: source?.type || '',
+        defaultValue: ''
+      }
+    ]);
   }
 
   function updateSelectedFieldRow(index: number, patch: Record<string, any>) {
@@ -1022,7 +1130,9 @@
     sourceRows: Array<Record<string, any>> = [],
     resultRows: Array<Record<string, any>> = []
   ) {
-    const safeSelectedRows = Array.isArray(selectedRows) ? selectedRows : [];
+    const safeSelectedRows = (Array.isArray(selectedRows) ? selectedRows : []).filter(
+      (row: any) => !row?.isMissingUpstream && !row?.isDuplicateAlias
+    );
     const safeWorkingCandidates = Array.isArray(workingCandidates) ? workingCandidates : [];
     const safeTableColumns = Array.isArray(tableColumns) ? tableColumns : [];
     const safeSourceRows = Array.isArray(sourceRows) ? sourceRows : [];
@@ -1058,6 +1168,8 @@
   async function previewNow(options: { silentMissingInput?: boolean } = {}) {
     previewLoading = true;
     previewError = '';
+    const previewConfig = buildPreviewExecutionConfig(settings);
+    const requestSignature = JSON.stringify(previewConfig);
     try {
       let inputValue = settings.sampleInput;
       if (settings.sourceMode === 'node') {
@@ -1069,6 +1181,8 @@
           inputValue = String(inputValue || '').trim();
         } else {
           if (!options.silentMissingInput) {
+            previewLastAttemptSignature = requestSignature;
+            previewLastSuccessSignature = '';
             previewError = 'Upstream источник уже определён, но sample snapshot для preview пока недоступен. Для preview нужны sample-данные или явный ручной override.';
           }
           previewData = null;
@@ -1076,11 +1190,12 @@
           return;
         }
       }
+      previewLastAttemptSignature = requestSignature;
       const payload = await apiJson<{ preview?: ParserPreview; result?: any }>(`${apiBase}/parser-configs/preview`, {
         method: 'POST',
         headers: headers(),
         body: JSON.stringify({
-          config_json: buildTemplatePayload(settings),
+          config_json: previewConfig,
           input_value: inputValue,
           cursor: { offset: 0 }
         })
@@ -1088,7 +1203,10 @@
       previewData = payload?.preview || null;
       previewRaw = payload?.result || null;
       previewUpdatedAt = new Date().toISOString();
+      previewLastSuccessSignature = requestSignature;
     } catch (e: any) {
+      previewLastAttemptSignature = requestSignature;
+      previewLastSuccessSignature = '';
       previewError = String(e?.message || e || 'Не удалось получить preview');
       previewData = null;
       previewRaw = null;
@@ -1201,21 +1319,16 @@
   }
 
   function incomingFieldSelected(field: NodeDescriptorField | null | undefined) {
-    const key = descriptorFieldKey(field);
+    const key = resolveIncomingParserField(descriptorFieldKey(field), incomingPublishFields)?.path || descriptorFieldKey(field);
     return key ? selectedFieldPaths.includes(key) : false;
   }
 
   function useIncomingField(field: NodeDescriptorField | null | undefined) {
-    const key = descriptorFieldKey(field);
+    const key = resolveIncomingParserField(descriptorFieldKey(field), incomingPublishFields)?.path || descriptorFieldKey(field);
     activeStep = 'fields';
     activeChangeStep = 'incoming';
     if (!key) return;
     addSelectedField(key);
-  }
-
-  function fieldOptionsForRow(row: { path?: string }) {
-    const current = String(row?.path || '').trim();
-    return Array.from(new Set([current, ...(Array.isArray(workingFieldCandidates) ? workingFieldCandidates : [])].filter(Boolean)));
   }
 
   function uniqueStringList(values: any[]) {
@@ -1582,10 +1695,6 @@
     const target = event.currentTarget as HTMLSelectElement | null;
     if (target) target.value = '';
   }
-
-  onMount(() => {
-    void previewNow({ silentMissingInput: true });
-  });
 
   $: lookupColumnOptions = columnOptionsFor(settings.lookupSchema, settings.lookupTable);
   $: if (settings.sourceSchema && settings.sourceTable) {
@@ -2095,33 +2204,43 @@
             <div class="subsection-head">
               <h4>Входящие данные</h4>
               <div class="subsection-actions">
-                <button type="button" class="mini-btn" on:click={addAllDetectedFields} disabled={!workingFieldCandidates.length}>Взять всё из рабочего набора</button>
+                <button type="button" class="mini-btn" on:click={addAllIncomingFields} disabled={!incomingPublishFields.some((field) => field.isDirectPublishSupported && !selectedFieldPaths.includes(field.path))}>Добавить все</button>
                 <button type="button" class="mini-btn" on:click={() => rebuildFieldSettings([])} disabled={!selectedFieldRows.length}>Очистить</button>
               </div>
             </div>
-            <div class="inline-hint">Здесь фиксируется итоговый набор полей parser: какие поля уйдут дальше, как они будут переименованы, типизированы и чем будут заполняться по умолчанию.</div>
+            <div class="inline-hint">Таблица ниже и есть publish-модель parser node. Она собирается только из входного контракта слева, хранится в `selectFields / renameMap / typeMap / defaultValues` и именно из неё строится секция 3.</div>
             <div class="field-picker">
               <select on:change={(e) => { addSelectedField(selectValue(e)); clearSelectValue(e); }}>
                 <option value="">Добавить поле в результат</option>
-                {#each workingFieldCandidates.filter((item) => !selectedFieldPaths.includes(item)) as fieldName}
-                  <option value={fieldName}>{fieldName}</option>
+                {#each incomingPublishFields.filter((field) => !selectedFieldPaths.includes(field.path)) as field}
+                  <option value={field.path}>{field.defaultOutputName} ← {field.path}{field.type ? ` • ${field.type}` : ''}{field.isDirectPublishSupported ? '' : ' • complex/manual only'}</option>
                 {/each}
               </select>
             </div>
-            <div class="inline-hint">Клик по полю слева сразу добавляет его в `selectFields` через существующие parser settings и переводит в этот подпункт.</div>
+            <div class="inline-hint">Клик `В результат` слева и `Добавить все` выше пишут в один и тот же settings-backed слой. По `Добавить все` берутся только scalar/supportable поля; complex поля остаются доступными только для явного ручного выбора.</div>
+            {#if duplicateSelectedFieldPaths.length}
+              <div class="warning-line">В сохранённых `selectFields` были повторные source path. UI оставил одну canonical-строку на path и больше не плодит дубли.</div>
+            {/if}
             {#if selectedFieldRows.length}
-              <div class="rules-grid">
-                <div class="rules-grid-head">Поле из рабочего набора</div>
+              <div class="rules-grid rules-grid-parser-publish">
+                <div class="rules-grid-head">Поле из входа</div>
                 <div class="rules-grid-head">Имя в результате</div>
                 <div class="rules-grid-head">Тип</div>
                 <div class="rules-grid-head">Значение по умолчанию</div>
+                <div class="rules-grid-head">Статус</div>
                 <div class="rules-grid-head"></div>
                 {#each selectedFieldRows as row, index}
-                  <select value={row.path} on:change={(e) => updateSelectedFieldRow(index, { path: selectValue(e) })}>
-                    {#each fieldOptionsForRow(row) as fieldName}
-                      <option value={fieldName}>{fieldName}</option>
-                    {/each}
-                  </select>
+                  <div class="parser-source-cell" class:is-highlighted={highlightedPublishFieldPath === row.path}>
+                    <div class="parser-source-cell-title">{row.sourceAlias || row.sourceName || row.path}</div>
+                    <div class="parser-source-cell-meta">
+                      <span>Path: {row.path}</span>
+                      <span>Alias upstream: {row.sourceAlias || row.sourceName || '-'}</span>
+                      <span>Тип upstream: {row.sourceType || '-'}</span>
+                      {#if !row.sourceSupported}
+                        <span>Complex field: добавлено вручную</span>
+                      {/if}
+                    </div>
+                  </div>
                   <input value={row.alias} on:input={(e) => updateSelectedFieldRow(index, { alias: inputValue(e) })} placeholder="alias" />
                   <select value={row.type} on:change={(e) => updateSelectedFieldRow(index, { type: selectValue(e) })}>
                     <option value="">Без приведения</option>
@@ -2133,11 +2252,12 @@
                     <option value="timestamp">Дата и время</option>
                   </select>
                   <input value={row.defaultValue} on:input={(e) => updateSelectedFieldRow(index, { defaultValue: inputValue(e) })} placeholder="по умолчанию" />
+                  <div class={`parser-status-chip status-${row.status.replace(/\s+/g, '-')}`} title={row.statusHint}>{row.statusLabel}</div>
                   <button type="button" class="icon-btn danger-icon-btn" on:click={() => removeSelectedField(index)}>x</button>
                 {/each}
               </div>
             {:else}
-              <div class="inline-hint">Если оставить блок пустым, parser попытается отдать весь рабочий набор. Нажми «Взять всё из рабочего набора» или добавь поле из левой колонки, чтобы явно зафиксировать результат.</div>
+              <div class="inline-hint">Пока publish-модель пустая. Добавь поле слева через `В результат` или нажми `Добавить все`, чтобы зафиксировать реальный publish contract текущей ноды.</div>
             {/if}
 
             <details class="parser-advanced-panel">
@@ -2552,15 +2672,15 @@
           <div class="subsection-head">
             <h4>Результат</h4>
           </div>
-          <div class="inline-hint inline-hint-box">Это обзор publish-side parser. Табличный preview итогового результата вынесен в отдельную нижнюю секцию, чтобы не смешивать summary и сами строки.</div>
+          <div class="inline-hint inline-hint-box">Секция 3 показывает publish contract, собранный только из строк подпункта `Входящие данные`. Preview ниже остаётся отдельным runtime-предпросмотром и не является truth-source для этого списка.</div>
           <div class="preview-metrics">
-            <span>Поля: {parserPipelineModel.resultSummary.fieldsCount}</span>
-            <span>Источник summary: {parserPipelineModel.resultSummary.source}</span>
-            <span>Derived preview: {parserPipelineModel.resultSummary.hasDerivedOutputPreview ? 'есть' : 'нет'}</span>
+            <span>Поля: {publishedDescriptorFields.length}</span>
+            <span>Строк в publish-модели: {selectedFieldRows.length}</span>
+            <span>Валидны для publish: {selectedFieldRows.filter((row) => row.isValidForPublish).length}</span>
             <span>Publish kind: {outputDescriptorKindLabelValue}</span>
           </div>
           <div class="preview-meta">
-            <span>Публикуемый descriptor: {publishedDescriptorFields.length ? `${publishedDescriptorFields.length} полей` : 'пока partial'}</span>
+            <span>Публикуемый descriptor: {publishedDescriptorFields.length ? `${publishedDescriptorFields.length} полей` : 'пока пуст'}</span>
             <span>Read mode: {outputDescriptorDetection?.readMode || '-'}</span>
             <span>Payload path: {outputDescriptorDetection?.payloadPath || '-'}</span>
             <span>Rows path: {outputDescriptorDetection?.recordPath || '-'}</span>
@@ -2578,14 +2698,15 @@
                 <span>{field.alias || field.name}</span>
               {/each}
             </div>
-          {:else if derivedOutputFields.length}
-            <div class="preview-columns">
-              {#each derivedOutputFields as field}
-                <span>{field.name}</span>
+          {:else}
+            <div class="inline-hint">Пока в publish contract нет валидных строк из подпункта `Входящие данные`.</div>
+          {/if}
+          {#if selectedFieldRows.some((row) => !row.isValidForPublish)}
+            <div class="warnings-box">
+              {#each selectedFieldRows.filter((row) => !row.isValidForPublish) as row}
+                <div class="warning-line">{row.alias || row.path}: {row.statusLabel}</div>
               {/each}
             </div>
-          {:else}
-            <div class="inline-hint">Итоговый output строится из текущих settings parser и preview результата. Если данных мало, справа и здесь остаётся только partial summary.</div>
           {/if}
           {#if parserPipelineModel.warningsSummary.total}
             <div class="warnings-box">
@@ -2650,34 +2771,15 @@
               </div>
             {/each}
           </div>
-        {:else if derivedOutputFields.length}
-          <div class="parser-shell-summary">
-            <span class="chip-chip readonly-chip">{derivedOutputFields.length} {derivedOutputFields.length === 1 ? 'поле' : derivedOutputFields.length < 5 ? 'поля' : 'полей'}</span>
-            {#if derivedOutputSourceLabel}
-              <span class="inline-hint">{derivedOutputSourceLabel}</span>
-            {/if}
-          </div>
-          <div class="parser-contract-list">
-            {#each derivedOutputFields as field}
-              <div class="parser-contract-item">
-                <div class="parser-contract-name">{field.name}</div>
-                <div class="parser-contract-meta">
-                  {#if field.alias}
-                    <span>Alias: {field.alias}</span>
-                  {/if}
-                  {#if field.type}
-                    <span>Тип: {field.type}</span>
-                  {/if}
-                  {#if field.path}
-                    <span>Path: {field.path}</span>
-                  {/if}
-                  <span>Источник: {field.source === 'preview' ? 'preview результата' : 'settings parser'}</span>
-                </div>
-              </div>
+        {:else}
+          <div class="inline-hint">Publish descriptor пуст: в `Входящие данные` пока нет валидных строк publish-модели.</div>
+        {/if}
+        {#if selectedFieldRows.some((row) => !row.isValidForPublish)}
+          <div class="warnings-box">
+            {#each selectedFieldRows.filter((row) => !row.isValidForPublish) as row}
+              <div class="warning-line">{row.alias || row.path}: {row.statusLabel}</div>
             {/each}
           </div>
-        {:else}
-          <div class="inline-hint">Publish descriptor пока partial: parser ещё не зафиксировал поля результата и preview не вернул итоговые колонки.</div>
         {/if}
       </div>
         </section>
@@ -2696,54 +2798,88 @@
           </button>
         </div>
         <div class="preview-metrics">
-          <span>Строк: {previewData?.row_count ?? '-'}</span>
-          <span>Колонок: {(previewData?.column_count ?? previewTableColumns.length) || '-'}</span>
-          <span>Формат: {previewData?.source_format || '-'}</span>
+          <span>Режим: {previewResultState.modeLabel}</span>
+          <span>Живых строк: {previewResultState.mode === 'rows' ? previewResultState.liveRowsCount : 0}</span>
+          <span>
+            Колонок: {previewResultState.mode === 'rows'
+              ? previewResultState.columns.length
+              : previewResultState.showStructure
+              ? previewResultState.structureFields.length
+              : 0}
+          </span>
+          <span>Формат: {previewResultState.sourceFormat || '-'}</span>
           <span>Источник: {autoSourceDefined ? 'Upstream descriptor' : legacyStandaloneSourceMode ? legacyStandaloneSourceLabel : 'Не определён'}</span>
         </div>
         <div class="preview-meta">
-          <span>Пакет: {previewData?.batch?.returned_rows ?? 0} / {previewData?.batch?.batch_size ?? '-'}</span>
-          <span>Есть ещё данные: {previewData?.batch?.has_more ? 'да' : 'нет'}</span>
-          <span>Обновлено: {previewUpdatedAt ? new Date(previewUpdatedAt).toLocaleString('ru-RU') : '-'}</span>
+          <span>Пакет: {previewResultState.mode === 'rows' ? `${previewData?.batch?.returned_rows ?? 0} / ${previewData?.batch?.batch_size ?? '-'}` : '-'}</span>
+          <span>Есть ещё данные: {previewResultState.mode === 'rows' ? (previewData?.batch?.has_more ? 'да' : 'нет') : '-'}</span>
+          <span>
+            Обновлено: {previewResultState.mode !== 'no_preview_yet' && previewUpdatedAt && !previewResultState.isStalePreview
+              ? new Date(previewUpdatedAt).toLocaleString('ru-RU')
+              : '-'}
+          </span>
+          {#if previewResultState.isStalePreview && previewUpdatedAt}
+            <span>Последний preview: {new Date(previewUpdatedAt).toLocaleString('ru-RU')} (устарел)</span>
+          {/if}
         </div>
-        {#if previewTableColumns.length}
+        <div class={`preview-state-box preview-state-${previewResultState.statusTone}`}>
+          <strong>{previewResultState.statusTitle}</strong>
+          <div>{previewResultState.statusDescription}</div>
+        </div>
+        {#if previewResultState.mode === 'rows'}
           <div class="preview-columns">
-            {#each previewTableColumns as column}
+            {#each previewResultState.columns as column}
               <span>{column}</span>
             {/each}
           </div>
-        {/if}
-        {#if previewTableColumns.length}
           <div class="preview-table-wrap">
             <table class="preview-table">
               <thead>
                 <tr>
-                  {#each previewTableColumns as column}
+                  {#each previewResultState.columns as column}
                     <th>{column}</th>
                   {/each}
                 </tr>
               </thead>
               <tbody>
-                {#if previewResultRows.length}
-                  {#each previewResultRows as row}
-                    <tr>
-                      {#each previewTableColumns as column}
-                        <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
-                      {/each}
-                    </tr>
-                  {/each}
-                {:else}
+                {#each previewResultState.rows as row}
                   <tr>
-                    <td colspan={previewTableColumns.length} class="preview-empty-cell">
-                      Preview-строки пока недоступны. Таблица уже показывает итоговую структуру результата по publish descriptor и текущим settings parser.
-                    </td>
+                    {#each previewResultState.columns as column}
+                      <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
+                    {/each}
                   </tr>
-                {/if}
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {:else if previewResultState.showStructure}
+          <div class="preview-columns">
+            {#each previewResultState.structureFields as field}
+              <span>{field.name}</span>
+            {/each}
+          </div>
+          <div class="preview-table-wrap">
+            <table class="preview-table preview-structure-table">
+              <thead>
+                <tr>
+                  <th>Колонка</th>
+                  <th>Тип</th>
+                  <th>Path</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each previewResultState.structureFields as field}
+                  <tr>
+                    <td>{field.name}</td>
+                    <td>{field.type || '-'}</td>
+                    <td>{field.path || '-'}</td>
+                  </tr>
+                {/each}
               </tbody>
             </table>
           </div>
         {:else}
-          <div class="empty-box">Нет итогового preview результата. Обнови preview после изменения настроек parser.</div>
+          <div class="empty-box">{previewResultState.statusDescription}</div>
         {/if}
       </section>
     </div>
@@ -3107,6 +3243,37 @@
     font-size: 12px;
     color: #334155;
   }
+  .preview-state-box {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid #dbe4f0;
+    background: #f8fafc;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #334155;
+  }
+  .preview-state-box strong {
+    color: #0f172a;
+  }
+  .preview-state-info {
+    background: #f8fafc;
+    border-color: #dbe4f0;
+  }
+  .preview-state-ok {
+    background: #f0fdf4;
+    border-color: #86efac;
+  }
+  .preview-state-warn {
+    background: #fffbeb;
+    border-color: #fcd34d;
+  }
+  .preview-state-error {
+    background: #fef2f2;
+    border-color: #fca5a5;
+  }
   .preview-columns {
     display: flex;
     flex-wrap: wrap;
@@ -3148,6 +3315,11 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .preview-structure-table td {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
   }
   .preview-empty-cell {
     white-space: normal;
@@ -3304,13 +3476,80 @@
   .rules-grid-aggregates {
     grid-template-columns: minmax(0, 1fr) minmax(170px, 0.8fr) minmax(0, 1fr) auto;
   }
-  .rules-grid:not(.rules-grid-filters):not(.rules-grid-aggregates) {
+  .rules-grid-parser-publish {
+    grid-template-columns: minmax(220px, 1.25fr) minmax(0, 0.95fr) minmax(170px, 0.65fr) minmax(0, 0.95fr) minmax(160px, 0.7fr) auto;
+  }
+  .rules-grid:not(.rules-grid-filters):not(.rules-grid-aggregates):not(.rules-grid-parser-publish) {
     grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(170px, 0.6fr) minmax(0, 1fr) auto;
   }
   .rules-grid-head {
     font-size: 11px;
     color: #64748b;
     font-weight: 600;
+  }
+  .parser-source-cell {
+    min-height: 100%;
+    border: 1px solid #dbe4f0;
+    border-radius: 10px;
+    padding: 8px 10px;
+    background: #fff;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .parser-source-cell.is-highlighted {
+    border-color: #93c5fd;
+    box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.18);
+  }
+  .parser-source-cell-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #0f172a;
+    word-break: break-word;
+  }
+  .parser-source-cell-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 11px;
+    color: #64748b;
+    word-break: break-word;
+  }
+  .parser-status-chip {
+    min-height: 34px;
+    border-radius: 999px;
+    padding: 0 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #dbe4f0;
+    background: #fff;
+    font-size: 11px;
+    color: #334155;
+    text-align: center;
+  }
+  .parser-status-chip.status-auto {
+    background: #f8fafc;
+  }
+  .parser-status-chip.status-manual {
+    background: #fefce8;
+    border-color: #fde68a;
+    color: #854d0e;
+  }
+  .parser-status-chip.status-changed {
+    background: #eff6ff;
+    border-color: #bfdbfe;
+    color: #1d4ed8;
+  }
+  .parser-status-chip.status-missing-upstream {
+    background: #fff1f2;
+    border-color: #fecdd3;
+    color: #be123c;
+  }
+  .parser-status-chip.status-duplicate-blocked {
+    background: #fff7ed;
+    border-color: #fed7aa;
+    color: #c2410c;
   }
   .danger-icon-btn {
     color: #b91c1c;
