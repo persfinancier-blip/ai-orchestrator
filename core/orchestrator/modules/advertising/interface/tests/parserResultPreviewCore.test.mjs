@@ -2,11 +2,37 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  buildParserFlowPreviewState,
+  buildParserPreviewDataFromRuntimeValue,
   buildParserPreviewDataFromRuntimeStep,
   buildParserDraftPreviewUxState,
   buildParserResultPreviewState,
   buildParserRuntimeResultState
 } from '../desk/tabs/parserResultPreviewCore.js';
+
+test('parser preview data from runtime value: canonical input envelope becomes preview payload', () => {
+  const preview = buildParserPreviewDataFromRuntimeValue(
+    {
+      contract_version: 'node_io_v1',
+      row_count: 1,
+      rows: [{ id: 101, title: 'Campaign A', state: 'active' }],
+      meta: {
+        source_type: 'api_request',
+        source_ref: 'upstream_api',
+        source_format: 'json'
+      }
+    },
+    { previewLimit: 20 }
+  );
+
+  assert.ok(preview);
+  assert.equal(preview.row_count, 1);
+  assert.deepEqual(preview.columns, ['id', 'title', 'state']);
+  assert.deepEqual(preview.sample_rows[0], { id: 101, title: 'Campaign A', state: 'active' });
+  assert.equal(preview.source_type, 'api_request');
+  assert.equal(preview.source_ref, 'upstream_api');
+  assert.equal(preview.source_format, 'json');
+});
 
 test('parser preview data from runtime step: output envelope becomes draft preview payload', () => {
   const preview = buildParserPreviewDataFromRuntimeStep(
@@ -44,6 +70,37 @@ test('parser preview data from runtime step: output envelope becomes draft previ
   assert.equal(preview.source_ref, 'workflow_preview');
   assert.equal(preview.source_format, 'json');
   assert.equal(preview.batch.returned_rows, 2);
+});
+
+test('parser flow preview state: input view uses canonical input rows from the same preview run', () => {
+  const state = buildParserFlowPreviewState({
+    viewKind: 'input',
+    previewData: {
+      row_count: 1,
+      columns: ['id', 'title', 'state'],
+      sample_rows: [{ id: 101, title: 'Campaign A', state: 'active' }],
+      source_format: 'json'
+    },
+    publishedDescriptorFields: [
+      { alias: 'id', type: 'numeric', path: 'id' },
+      { alias: 'title', type: 'text', path: 'title' },
+      { alias: 'state', type: 'text', path: 'state' }
+    ],
+    currentConfigSignature: 'cfg:input:1',
+    previewLastAttemptSignature: 'cfg:input:1',
+    previewLastSuccessSignature: 'cfg:input:1',
+    currentInputSource: {
+      key: 'server_preview_run',
+      label: 'Источник входа для preview: server preview-run',
+      description: 'Один и тот же server preview-run для input/output.',
+      available: true
+    }
+  });
+
+  assert.equal(state.mode, 'rows');
+  assert.deepEqual(state.columns, ['id', 'title', 'state']);
+  assert.deepEqual(state.rows[0], { id: 101, title: 'Campaign A', state: 'active' });
+  assert.match(state.statusTitle, /входн/i);
 });
 
 test('parser result preview state: fresh preview rows are normalized to publish aliases', () => {

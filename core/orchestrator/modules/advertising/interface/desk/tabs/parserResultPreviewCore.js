@@ -126,12 +126,11 @@ export function parserRuntimeRowsFromValue(value) {
   return [];
 }
 
-export function buildParserPreviewDataFromRuntimeStep(runtimeStep = null, options = {}) {
-  const outputValue = runtimeStep && typeof runtimeStep === 'object' ? runtimeStep.output_json : null;
-  const output = outputValue && typeof outputValue === 'object' ? outputValue : null;
-  if (!output) return null;
+export function buildParserPreviewDataFromRuntimeValue(runtimeValue = null, options = {}) {
+  const runtimeObject = runtimeValue && typeof runtimeValue === 'object' ? runtimeValue : null;
+  if (!runtimeObject) return null;
 
-  const rows = parserRuntimeRowsFromValue(output);
+  const rows = parserRuntimeRowsFromValue(runtimeObject);
   const requestedLimit = Math.trunc(Number(options?.previewLimit || options?.limit || 20));
   const previewLimit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? requestedLimit : 20;
   const sampleRows = rows.slice(0, previewLimit);
@@ -140,9 +139,11 @@ export function buildParserPreviewDataFromRuntimeStep(runtimeStep = null, option
     ...parserResultPreviewColumnsFromRows(sampleRows)
   ]);
   const parserBatch =
-    output?.meta && output.meta && typeof output.meta.parser_batch === 'object' ? output.meta.parser_batch : null;
+    runtimeObject?.meta && typeof runtimeObject.meta === 'object' && typeof runtimeObject.meta.parser_batch === 'object'
+      ? runtimeObject.meta.parser_batch
+      : null;
   const returnedRows = sampleRows.length;
-  const rowCount = Math.max(0, Number(output?.row_count || rows.length) || 0);
+  const rowCount = Math.max(0, Number(runtimeObject?.row_count || rows.length) || 0);
   const batch = parserBatch
     ? {
         ...parserBatch,
@@ -160,7 +161,8 @@ export function buildParserPreviewDataFromRuntimeStep(runtimeStep = null, option
         has_more: rowCount > returnedRows,
         next_cursor: null
       };
-  const metrics = runtimeStep?.metrics_json && typeof runtimeStep.metrics_json === 'object' ? runtimeStep.metrics_json : {};
+  const metrics = options?.metrics && typeof options.metrics === 'object' ? options.metrics : {};
+  const meta = runtimeObject?.meta && typeof runtimeObject.meta === 'object' ? runtimeObject.meta : {};
 
   return {
     row_count: rowCount,
@@ -171,12 +173,21 @@ export function buildParserPreviewDataFromRuntimeStep(runtimeStep = null, option
     raw_column_count: columns.length,
     raw_columns: columns,
     raw_sample_rows: sampleRows,
-    source_type: trim(output?.meta?.source_type),
-    source_ref: trim(output?.meta?.source_ref),
-    source_format: trim(output?.meta?.source_format),
+    source_type: trim(options?.sourceType || meta?.source_type),
+    source_ref: trim(options?.sourceRef || meta?.source_ref),
+    source_format: trim(options?.sourceFormat || meta?.source_format),
     batch,
     stats: metrics
   };
+}
+
+export function buildParserPreviewDataFromRuntimeStep(runtimeStep = null, options = {}) {
+  const outputValue = runtimeStep && typeof runtimeStep === 'object' ? runtimeStep.output_json : null;
+  const metrics = runtimeStep?.metrics_json && typeof runtimeStep.metrics_json === 'object' ? runtimeStep.metrics_json : {};
+  return buildParserPreviewDataFromRuntimeValue(outputValue, {
+    ...options,
+    metrics
+  });
 }
 
 function readValueFromRow(row, candidates = []) {
@@ -772,6 +783,76 @@ export function buildParserResultPreviewState({
       rawPreviewColumns: previewColumns
     }
   });
+}
+
+export function buildParserFlowPreviewState({
+  viewKind = 'result',
+  ...rest
+} = {}) {
+  const base = buildParserResultPreviewState(rest);
+  const kind = trim(viewKind).toLowerCase();
+  if (kind === 'result') return base;
+
+  const staleDescription =
+    kind === 'input'
+      ? 'Ниже остаётся canonical input текущей parser node из последнего preview-run. Настройки parser изменились, поэтому для синхронной проверки входа и выхода preview нужно обновить.'
+      : 'Ниже остаётся canonical output текущей parser node из последнего preview-run. Настройки parser изменились, поэтому для синхронной проверки входа и выхода preview нужно обновить.';
+
+  if (base.mode === 'rows') {
+    return {
+      ...base,
+      modeLabel: kind === 'input' ? 'Preview входных строк' : 'Preview выходных строк',
+      statusTitle:
+        base.isStalePreview
+          ? kind === 'input'
+            ? 'Показаны входные строки последнего preview-run'
+            : 'Показаны выходные строки последнего preview-run'
+          : kind === 'input'
+          ? 'Показаны реальные входные строки parser'
+          : 'Показаны реальные выходные строки parser',
+      statusDescription: base.isStalePreview
+        ? staleDescription
+        : kind === 'input'
+        ? 'Таблица показывает canonical input текущей parser node из того же server preview-run, который используется для проверки выхода.'
+        : 'Таблица показывает canonical output текущей parser node из того же server preview-run, который подтверждает publish-блок section 3.'
+    };
+  }
+
+  if (base.mode === 'no_preview_yet') {
+    return {
+      ...base,
+      modeLabel: kind === 'input' ? 'Preview входа не запускался' : 'Preview выхода не запускался',
+      statusTitle: kind === 'input' ? 'Preview входных строк ещё не запускался' : 'Preview выходных строк ещё не запускался',
+      statusDescription:
+        kind === 'input'
+          ? 'После запуска server preview-run здесь появятся canonical input rows текущей parser node.'
+          : 'После запуска server preview-run здесь появятся canonical output rows текущей parser node.'
+    };
+  }
+
+  if (base.mode === 'preview_failed') {
+    return {
+      ...base,
+      modeLabel: kind === 'input' ? 'Preview входа с ошибкой' : 'Preview выхода с ошибкой',
+      statusTitle:
+        kind === 'input'
+          ? 'Не удалось собрать preview входных строк parser'
+          : 'Не удалось собрать preview выходных строк parser'
+    };
+  }
+
+  if (base.mode === 'shape_only') {
+    return {
+      ...base,
+      modeLabel: kind === 'input' ? 'Preview входа без строк' : 'Preview выхода без строк',
+      statusTitle:
+        kind === 'input'
+          ? 'Preview входа не вернул живые строки'
+          : 'Preview выхода не вернул живые строки'
+    };
+  }
+
+  return base;
 }
 
 export function buildParserDraftPreviewUxState({ previewState = null, previewLoading = false, inputSource = null } = {}) {

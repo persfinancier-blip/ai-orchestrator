@@ -26,6 +26,8 @@
     serializeParserPublishRows
   } from '../../shared/parserPublishContractCore.js';
   import {
+    buildParserFlowPreviewState,
+    buildParserPreviewDataFromRuntimeValue,
     buildParserPreviewDataFromRuntimeStep,
     buildParserResultPreviewState,
     buildParserRuntimeResultState,
@@ -812,6 +814,16 @@
   $: incomingPublishFields = Array.isArray(parserPublishState?.incomingFields) ? (parserPublishState.incomingFields as ParserIncomingPublishField[]) : [];
   $: selectedFieldRows = Array.isArray(parserPublishState?.rows) ? (parserPublishState.rows as ParserSelectedFieldRow[]) : [];
   $: duplicateSelectedFieldPaths = Array.isArray(parserPublishState?.duplicateSourcePaths) ? parserPublishState.duplicateSourcePaths : [];
+  $: incomingPreviewContractFields = Array.from(
+    new Map(
+      incomingNodes
+        .flatMap((item) => incomingContractFields(item))
+        .map((field) => {
+          const key = descriptorFieldKey(field) || `${String(field?.alias || field?.name || '').trim()}::${String(field?.type || '').trim()}`;
+          return [key, field];
+        })
+    ).values()
+  );
   $: incomingContractFieldCandidates = Array.from(
     new Set(
       incomingPublishFields
@@ -886,6 +898,38 @@
   $: previewInputSource = resolvePreviewInputSource();
   $: draftPreviewData = buildParserPreviewDataFromRuntimeStep(draftPreviewStep, {
     previewLimit: settings.previewLimit
+  });
+  $: draftPreviewInputData = buildParserPreviewDataFromRuntimeValue(draftPreviewStep?.input_json, {
+    previewLimit: settings.previewLimit,
+    metrics: draftPreviewStep?.metrics_json,
+    sourceRef: String(
+      draftPreviewStep?.previous_step?.node_name ||
+        draftPreviewStep?.previous_step?.node_id ||
+        draftPreviewStep?.run_uid ||
+        ''
+    ).trim()
+  });
+  $: inputFlowPreviewState = buildParserFlowPreviewState({
+    viewKind: 'input',
+    previewData: draftPreviewInputData,
+    previewError,
+    publishedDescriptorFields: incomingPreviewContractFields,
+    currentConfigSignature: previewConfigSignature,
+    previewLastAttemptSignature,
+    previewLastSuccessSignature,
+    currentInputSource: previewInputSource,
+    lastResolvedInputSource: previewLastResolvedInputSource
+  });
+  $: outputFlowPreviewState = buildParserFlowPreviewState({
+    viewKind: 'output',
+    previewData: draftPreviewData,
+    previewError,
+    publishedDescriptorFields,
+    currentConfigSignature: previewConfigSignature,
+    previewLastAttemptSignature,
+    previewLastSuccessSignature,
+    currentInputSource: previewInputSource,
+    lastResolvedInputSource: previewLastResolvedInputSource
   });
   $: previewResultState = buildParserResultPreviewState({
     previewData: draftPreviewData,
@@ -2086,6 +2130,62 @@
         {:else}
           <div class="inline-hint">В текущем desk graph для parser пока нет входящего соединения или upstream descriptor ещё не определён. Секция остаётся пустой, потому что fake input здесь не используется.</div>
         {/if}
+        <div class="parser-contract-block parser-flow-preview-block">
+          <div class="parser-contract-head">
+            <span>Preview входных строк</span>
+            <span>{inputFlowPreviewState.mode === 'rows' ? `${inputFlowPreviewState.liveRowsCount} строк` : 'read-only'}</span>
+          </div>
+          <div class="preview-meta">
+            <span>{draftPreviewUxState.sourceLabel}</span>
+            <span>Run: {draftPreviewStep?.run_uid || '-'}</span>
+            <span>Строк: {inputFlowPreviewState.responseRowCount}</span>
+            <span>Колонок: {inputFlowPreviewState.mode === 'rows' ? inputFlowPreviewState.columns.length : incomingPreviewContractFields.length}</span>
+          </div>
+          <div class={`preview-state-box preview-state-${inputFlowPreviewState.statusTone}`}>
+            <strong>{inputFlowPreviewState.statusTitle}</strong>
+            <div>{inputFlowPreviewState.statusDescription}</div>
+          </div>
+          {#if previewError && draftPreviewUxState.state === 'preview_failed'}
+            <div class="inline-error">{previewError}</div>
+          {/if}
+          {#if inputFlowPreviewState.mode === 'rows'}
+            {#if inputFlowPreviewState.isStalePreview}
+              <div class="preview-stale-banner">
+                Таблица ниже показывает canonical input из последнего preview-run. Для синхронной проверки входа и выхода запусти preview ещё раз.
+              </div>
+            {/if}
+            <div class="preview-columns">
+              {#each inputFlowPreviewState.columns as column}
+                <span>{column}</span>
+              {/each}
+            </div>
+            <div class="preview-table-wrap" class:is-stale-wrap={inputFlowPreviewState.isStalePreview}>
+              <table class="preview-table">
+                <thead>
+                  <tr>
+                    {#each inputFlowPreviewState.columns as column}
+                      <th>{column}</th>
+                    {/each}
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each inputFlowPreviewState.rows as row}
+                    <tr>
+                      {#each inputFlowPreviewState.columns as column}
+                        <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
+                      {/each}
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {:else}
+            <div class="empty-box">
+              <strong>{inputFlowPreviewState.statusTitle}</strong>
+              <div>{inputFlowPreviewState.statusDescription}</div>
+            </div>
+          {/if}
+        </div>
       </div>
     </section>
 
@@ -3084,6 +3184,62 @@
             {/each}
           </div>
         {/if}
+        <div class="parser-contract-block parser-flow-preview-block">
+          <div class="parser-contract-head">
+            <span>Preview выходных строк</span>
+            <span>{outputFlowPreviewState.mode === 'rows' ? `${outputFlowPreviewState.liveRowsCount} строк` : 'read-only'}</span>
+          </div>
+          <div class="preview-meta">
+            <span>{draftPreviewUxState.sourceLabel}</span>
+            <span>Run: {draftPreviewStep?.run_uid || '-'}</span>
+            <span>Строк: {outputFlowPreviewState.responseRowCount}</span>
+            <span>Колонок: {outputFlowPreviewState.mode === 'rows' ? outputFlowPreviewState.columns.length : publishedDescriptorFields.length}</span>
+          </div>
+          <div class={`preview-state-box preview-state-${outputFlowPreviewState.statusTone}`}>
+            <strong>{outputFlowPreviewState.statusTitle}</strong>
+            <div>{outputFlowPreviewState.statusDescription}</div>
+          </div>
+          {#if previewError && draftPreviewUxState.state === 'preview_failed'}
+            <div class="inline-error">{previewError}</div>
+          {/if}
+          {#if outputFlowPreviewState.mode === 'rows'}
+            {#if outputFlowPreviewState.isStalePreview}
+              <div class="preview-stale-banner">
+                Таблица ниже показывает canonical output из последнего preview-run. Чтобы синхронно обновить contract и строки, запусти preview ещё раз.
+              </div>
+            {/if}
+            <div class="preview-columns">
+              {#each outputFlowPreviewState.columns as column}
+                <span>{column}</span>
+              {/each}
+            </div>
+            <div class="preview-table-wrap" class:is-stale-wrap={outputFlowPreviewState.isStalePreview}>
+              <table class="preview-table">
+                <thead>
+                  <tr>
+                    {#each outputFlowPreviewState.columns as column}
+                      <th>{column}</th>
+                    {/each}
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each outputFlowPreviewState.rows as row}
+                    <tr>
+                      {#each outputFlowPreviewState.columns as column}
+                        <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
+                      {/each}
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {:else}
+            <div class="empty-box">
+              <strong>{outputFlowPreviewState.statusTitle}</strong>
+              <div>{outputFlowPreviewState.statusDescription}</div>
+            </div>
+          {/if}
+        </div>
       </div>
         </section>
       </div>
@@ -3094,7 +3250,7 @@
         <div class="parser-card-head">
           <div>
             <h3>Предпросмотр результата</h3>
-            <p>Показывает итоговые строки результата parser по текущим настройкам. Last runtime result остаётся отдельным read-only reference block, а draft preview запускается как server preview-run по текущему graph_json до этой parser node.</p>
+            <p>Запускает один server preview-run по текущему graph_json до этой parser node. Тот же run одновременно кормит preview входа в section 1 и preview выхода в section 3, а здесь остаётся детальная расшифровка результата.</p>
           </div>
         </div>
         <div class="preview-action-bar">
