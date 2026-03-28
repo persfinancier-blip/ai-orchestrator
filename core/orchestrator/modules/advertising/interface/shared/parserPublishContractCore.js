@@ -2,8 +2,22 @@ function trim(value) {
   return String(value ?? '').trim();
 }
 
+function uniqueStrings(values) {
+  return Array.from(
+    new Set(
+      (Array.isArray(values) ? values : [])
+        .map((item) => trim(item))
+        .filter(Boolean)
+    )
+  );
+}
+
 function normalizePath(value) {
-  return trim(value).replace(/\[(\w+)\]/g, '.$1').replace(/^\.+/, '').replace(/\.+/g, '.');
+  return trim(value)
+    .replace(/\[\]/g, '')
+    .replace(/\[(\w+)\]/g, '.$1')
+    .replace(/^\.+/, '')
+    .replace(/\.+/g, '.');
 }
 
 function hasOwn(source, key) {
@@ -51,6 +65,24 @@ export function parserPublishDefaultName(fieldOrPath) {
     );
   }
   return parserPublishLeaf(fieldOrPath) || 'field';
+}
+
+export function parserPublishRelativePath(path, workingSetPath = '') {
+  const normalizedPath = normalizePath(path);
+  const normalizedWorkingSetPath = normalizePath(workingSetPath);
+  if (!normalizedPath || !normalizedWorkingSetPath) return '';
+  if (normalizedPath === normalizedWorkingSetPath) return '';
+  if (normalizedPath.startsWith(`${normalizedWorkingSetPath}.`)) {
+    return normalizedPath.slice(normalizedWorkingSetPath.length + 1);
+  }
+  return '';
+}
+
+export function buildParserPublishReadCandidates(path, workingSetPath = '') {
+  const normalizedPath = normalizePath(path);
+  const relativePath = parserPublishRelativePath(normalizedPath, workingSetPath);
+  const leaf = parserPublishLeaf(normalizedPath);
+  return uniqueStrings([normalizedPath, relativePath, leaf]);
 }
 
 export function isParserPublishComplexType(typeName) {
@@ -147,6 +179,29 @@ function lookupParserValue(map, candidates) {
     if (hasOwn(safeMap, key)) return safeMap[key];
   }
   return undefined;
+}
+
+export function buildParserPublishRuntimeEntries({ settings = {}, workingSetPath = '' } = {}) {
+  const selectFields = parseParserSelectFields(settings?.selectFields ?? settings?.select_fields);
+  const renameMap = parseParserPublishMap(settings?.renameMap ?? settings?.rename_map, {});
+  const typeMap = parseParserPublishMap(settings?.typeMap ?? settings?.type_map, {});
+  const defaultValues = parseParserPublishMap(settings?.defaultValues ?? settings?.default_values, {});
+
+  return selectFields.map((rawReference) => {
+    const path = normalizePath(rawReference);
+    if (!path) return null;
+    const leaf = parserPublishLeaf(path);
+    const defaultOutputName = parserPublishDefaultName(path);
+    const outputName = trim(lookupParserValue(renameMap, [path, rawReference, leaf])) || defaultOutputName;
+    return {
+      sourcePath: path,
+      leaf,
+      outputName,
+      explicitType: trim(lookupParserValue(typeMap, [path, rawReference, leaf, defaultOutputName, outputName])),
+      defaultValue: lookupParserValue(defaultValues, [path, rawReference, leaf, defaultOutputName, outputName]),
+      readCandidates: buildParserPublishReadCandidates(path, workingSetPath)
+    };
+  }).filter(Boolean);
 }
 
 function statusMeta(status) {

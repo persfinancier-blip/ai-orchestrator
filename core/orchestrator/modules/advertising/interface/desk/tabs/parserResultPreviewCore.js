@@ -851,8 +851,6 @@ export function buildParserFlowPreviewState({
   const preferredFreshGrid = (() => {
     if (!structureColumns.length) return rawGrid;
     if (inputView) return structureGrid;
-    if (isPreviewGridRenderable(directContractGrid)) return directContractGrid;
-    if (isPreviewGridRenderable(structureGrid)) return structureGrid;
     return directContractGrid;
   })();
   const preferredStaleGrid = (() => {
@@ -860,8 +858,8 @@ export function buildParserFlowPreviewState({
       if (isPreviewGridRenderable(structureGrid)) return structureGrid;
       return rawGrid;
     }
+    if (!structureColumns.length) return rawGrid;
     if (isPreviewGridRenderable(directContractGrid)) return directContractGrid;
-    if (isPreviewGridRenderable(structureGrid)) return structureGrid;
     return rawGrid;
   })();
   const freshRowsRenderable = isPreviewGridRenderable(preferredFreshGrid);

@@ -102,6 +102,28 @@ test('parser runtime: path-keyed default and type maps stay aligned with renamed
   assert.deepEqual(result.rows, [{ product_id: 7 }, { product_id: 100 }]);
 });
 
+test('parser runtime: publish output stays canonical when selectFields keep full upstream path inside working set', async () => {
+  const result = await executeParserRows(
+    { query: async () => ({ rows: [] }) },
+    {
+      sourceMode: 'input',
+      sourceFormat: 'json',
+      recordPath: 'list',
+      selectFields: 'list.id, list.title, list.state',
+      renameMap: '{"list.id":"id","list.title":"title","list.state":"state"}',
+      previewLimit: '20'
+    },
+    {
+      inputValue: {
+        list: [{ id: 101, title: 'Campaign A', state: 'active' }]
+      }
+    }
+  );
+
+  assert.deepEqual(result.rows, [{ id: 101, title: 'Campaign A', state: 'active' }]);
+  assert.deepEqual(result.columns, ['id', 'title', 'state']);
+});
+
 test('parser runtime: CSV input supports batch cursor without loading fake chunks in UI', async () => {
   const csv = 'id,name\n1,a\n2,b\n3,c\n4,d\n';
   const settings = {

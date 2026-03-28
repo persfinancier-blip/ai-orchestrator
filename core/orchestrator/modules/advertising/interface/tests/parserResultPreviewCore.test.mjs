@@ -263,6 +263,34 @@ test('parser flow preview state: output mapping failure mentions publish columns
   assert.deepEqual(state.columns, []);
 });
 
+test('parser flow preview state: output view does not remap nested source paths after runtime serialization', () => {
+  const state = buildParserFlowPreviewState({
+    viewKind: 'output',
+    previewData: {
+      row_count: 1,
+      columns: ['list.id', 'list.title'],
+      sample_rows: [{ list: { id: 101, title: 'Campaign A' } }],
+      source_format: 'json'
+    },
+    publishedDescriptorFields: [
+      { alias: 'id', type: 'text', path: 'list.id' },
+      { alias: 'title', type: 'text', path: 'list.title' }
+    ],
+    currentConfigSignature: 'cfg:output:canonical',
+    previewLastAttemptSignature: 'cfg:output:canonical',
+    previewLastSuccessSignature: 'cfg:output:canonical',
+    currentInputSource: {
+      key: 'server_preview_run',
+      label: 'Р ВРЎРѓРЎвЂљР С•РЎвЂЎР Р…Р С‘Р С” Р Р†РЎвЂ¦Р С•Р Т‘Р В° Р Т‘Р В»РЎРЏ preview: server preview-run',
+      description: 'РћРґРёРЅ Рё С‚РѕС‚ Р¶Рµ server preview-run РґР»СЏ input/output.',
+      available: true
+    }
+  });
+
+  assert.equal(state.mode, 'preview_failed');
+  assert.match(state.statusDescription, /publish columns/i);
+});
+
 test('parser result preview state: successful preview keeps the actually used source label even if current source is now missing', () => {
   const state = buildParserResultPreviewState({
     previewData: {

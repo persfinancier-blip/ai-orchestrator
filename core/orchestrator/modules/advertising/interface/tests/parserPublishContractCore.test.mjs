@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  buildParserPublishReadCandidates,
+  buildParserPublishRuntimeEntries,
   buildParserPublishDescriptorFields,
   buildParserPublishRows,
   serializeParserPublishRows
@@ -100,4 +102,44 @@ test('parser publish descriptor fields: builds publish contract only from valid 
       { name: 'title', alias: 'title', type: 'text', path: 'items.name' }
     ]
   );
+});
+
+test('parser publish runtime entries: keep output aliases and add read candidates relative to working set', () => {
+  const entries = buildParserPublishRuntimeEntries({
+    settings: {
+      selectFields: 'list.id, list.title',
+      renameMap: { 'list.id': 'id', 'list.title': 'title' },
+      defaultValues: { 'list.title': 'unknown' },
+      typeMap: { 'list.id': 'integer' }
+    },
+    workingSetPath: '[].list'
+  });
+
+  assert.deepEqual(
+    entries.map((entry) => ({
+      sourcePath: entry.sourcePath,
+      outputName: entry.outputName,
+      readCandidates: entry.readCandidates,
+      defaultValue: entry.defaultValue,
+      explicitType: entry.explicitType
+    })),
+    [
+      {
+        sourcePath: 'list.id',
+        outputName: 'id',
+        readCandidates: ['list.id', 'id'],
+        defaultValue: undefined,
+        explicitType: 'integer'
+      },
+      {
+        sourcePath: 'list.title',
+        outputName: 'title',
+        readCandidates: ['list.title', 'title'],
+        defaultValue: 'unknown',
+        explicitType: ''
+      }
+    ]
+  );
+
+  assert.deepEqual(buildParserPublishReadCandidates('items.meta.id', 'items.meta'), ['items.meta.id', 'id']);
 });

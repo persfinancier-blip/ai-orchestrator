@@ -1,6 +1,7 @@
 ﻿import { Readable } from 'node:stream';
 import { createRequire } from 'node:module';
 import { analyzeInputCandidatesByBayes, analyzeJoinPairsByBayes } from './parserBayesCore.mjs';
+import { buildParserPublishRuntimeEntries } from '../shared/parserPublishContractCore.js';
 
 const require = createRequire(import.meta.url);
 const { parse: csvParse } = require('csv-parse');
@@ -648,28 +649,50 @@ function evaluateComputedExpression(expression, row) {
   return evaluator(field, fn);
 }
 
-function applyFieldMapping(record, cfg) {
+function readFirstCandidateValue(source, candidates = []) {
+  const src = source && typeof source === 'object' && !Array.isArray(source) ? source : null;
+  if (!src) return undefined;
+  for (const rawCandidate of Array.isArray(candidates) ? candidates : []) {
+    const candidate = String(rawCandidate || '').trim();
+    if (!candidate) continue;
+    if (Object.prototype.hasOwnProperty.call(src, candidate)) return src[candidate];
+    const nested = getByPath(src, candidate);
+    if (nested !== undefined) return nested;
+  }
+  return undefined;
+}
+
+function applyFieldMapping(record, cfg, runtimeMeta = {}) {
   const src = normalizeObjectRow(record);
   let out = {};
   if (cfg.selectFields.length) {
     const handledSourceKeys = new Set();
-    for (const path of cfg.selectFields) {
-      const value = getByPath(src, path);
-      const fallbackKey = String(path || '').split('.').filter(Boolean).slice(-1)[0] || String(path || '').trim();
-      handledSourceKeys.add(String(path || '').trim());
+    const publishEntries = buildParserPublishRuntimeEntries({
+      settings: {
+        selectFields: cfg.selectFields,
+        renameMap: cfg.renameMap,
+        typeMap: cfg.typeMap,
+        defaultValues: cfg.defaultValues
+      },
+      workingSetPath: runtimeMeta?.workingSetPath || ''
+    });
+    for (const entry of publishEntries) {
+      const path = String(entry?.sourcePath || '').trim();
+      if (!path) continue;
+      const fallbackKey = String(entry?.leaf || '').trim() || String(path || '').split('.').filter(Boolean).slice(-1)[0] || String(path || '').trim();
+      handledSourceKeys.add(path);
       handledSourceKeys.add(fallbackKey);
-      const targetKey = String(cfg.renameMap?.[path] || cfg.renameMap?.[fallbackKey] || fallbackKey).trim() || fallbackKey;
+      for (const candidate of Array.isArray(entry?.readCandidates) ? entry.readCandidates : []) {
+        handledSourceKeys.add(String(candidate || '').trim());
+      }
+      const targetKey = String(entry?.outputName || fallbackKey).trim() || fallbackKey;
+      const value = readFirstCandidateValue(src, entry?.readCandidates || [path, fallbackKey]);
       out[targetKey] = value;
-      const defaultValue =
-        cfg.defaultValues?.[path] !== undefined
-          ? cfg.defaultValues[path]
-          : cfg.defaultValues?.[fallbackKey] !== undefined
-          ? cfg.defaultValues[fallbackKey]
-          : cfg.defaultValues?.[targetKey];
+      const defaultValue = entry?.defaultValue;
       if ((out[targetKey] === undefined || out[targetKey] === null || out[targetKey] === '') && defaultValue !== undefined) {
         out[targetKey] = defaultValue;
       }
-      const explicitType = String(cfg.typeMap?.[path] || cfg.typeMap?.[fallbackKey] || cfg.typeMap?.[targetKey] || '').trim();
+      const explicitType = String(entry?.explicitType || '').trim();
       if (explicitType) out[targetKey] = convertFieldType(out[targetKey], explicitType);
     }
     for (const [key, value] of Object.entries(cfg.defaultValues || {})) {
@@ -721,8 +744,8 @@ function compareByOperator(left, operator, right) {
   return String(left ?? '') === String(right ?? '');
 }
 
-function applyParserTransform(record, cfg) {
-  const mapped = applyFieldMapping(record, cfg);
+function applyParserTransform(record, cfg, runtimeMeta = {}) {
+  const mapped = applyFieldMapping(record, cfg, runtimeMeta);
   if (cfg.parserMultiplier <= 1) return [mapped];
   return Array.from({ length: cfg.parserMultiplier }).map(() => cloneJson(mapped));
 }
@@ -1397,9 +1420,10 @@ export async function executeParserRows(client, rawSettings = {}, options = {}) 
     warnings: [...(Array.isArray(raw?.analysis?.warnings) ? raw.analysis.warnings : [])],
     steps: []
   };
+  const workingSetPath = String(raw?.analysis?.bayes_working_set_path || cfg.recordPath || '').trim();
   let rows = [];
   for (const record of raw.rows) {
-    const transformed = applyParserTransform(record, cfg);
+    const transformed = applyParserTransform(record, cfg, { workingSetPath });
     if (!transformed) continue;
     rows.push(...transformed);
   }
