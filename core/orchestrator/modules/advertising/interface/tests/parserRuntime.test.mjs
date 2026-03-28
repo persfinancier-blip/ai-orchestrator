@@ -124,6 +124,27 @@ test('parser runtime: publish output stays canonical when selectFields keep full
   assert.deepEqual(result.columns, ['id', 'title', 'state']);
 });
 
+test('parser runtime: reads upstream published alias keys when source path leaf uses camelCase', async () => {
+  const result = await executeParserRows(
+    { query: async () => ({ rows: [] }) },
+    {
+      sourceMode: 'input',
+      sourceFormat: 'json',
+      recordPath: 'list',
+      selectFields: 'list.advObjectType, list.fromDate',
+      renameMap: '{"list.advObjectType":"adv_object_type","list.fromDate":"from_date"}',
+      previewLimit: '20'
+    },
+    {
+      inputValue: {
+        list: [{ adv_object_type: 'SKU', from_date: '2026-03-25' }]
+      }
+    }
+  );
+
+  assert.deepEqual(result.rows, [{ adv_object_type: 'SKU', from_date: '2026-03-25' }]);
+});
+
 test('parser runtime: CSV input supports batch cursor without loading fake chunks in UI', async () => {
   const csv = 'id,name\n1,a\n2,b\n3,c\n4,d\n';
   const settings = {

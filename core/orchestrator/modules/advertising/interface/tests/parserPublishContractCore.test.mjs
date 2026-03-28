@@ -142,4 +142,5 @@ test('parser publish runtime entries: keep output aliases and add read candidate
   );
 
   assert.deepEqual(buildParserPublishReadCandidates('items.meta.id', 'items.meta'), ['items.meta.id', 'id']);
+  assert.deepEqual(buildParserPublishReadCandidates('list.advObjectType', 'list'), ['list.advObjectType', 'advObjectType', 'adv_object_type']);
 });

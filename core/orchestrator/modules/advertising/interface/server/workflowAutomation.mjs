@@ -11,6 +11,11 @@ import {
   groupRowsByAliases,
   evaluateStopRuleValue
 } from '../desk/tabs/apiBuilderRuntimeCore.js';
+import {
+  normalizeTemplatePath,
+  buildAliasFromPath,
+  parseTemplatePathParts
+} from '../desk/tabs/outputContractCore.js';
 
 const SETTINGS_SCHEMA = 'ao_system';
 const SETTINGS_TABLE = 'table_settings_store';
@@ -4133,6 +4138,134 @@ function isApiToolNode(node) {
   return Boolean(node && node.type === 'tool' && (toolType === 'api_request' || toolType === 'http_request'));
 }
 
+function normalizeApiOutputParametersList(items = []) {
+  const deduped = new Map();
+  (Array.isArray(items) ? items : []).forEach((item, index) => {
+    const rootPath = normalizeTemplatePath(String(item?.rootPath || item?.root_path || ''));
+    const directPath = normalizeTemplatePath(
+      String(item?.path || item?.responsePath || item?.response_path || '')
+    );
+    const relativePath =
+      rootPath && directPath.startsWith(`${rootPath}.`) ? directPath.slice(rootPath.length + 1) : directPath;
+    const path = normalizeTemplatePath(relativePath);
+    const alias = String(item?.alias || buildAliasFromPath(path || rootPath) || `field_${index + 1}`).trim();
+    if (!(alias && (rootPath || path))) return;
+    const key = `${rootPath}|${path}|${alias.toLowerCase()}`;
+    if (deduped.has(key)) return;
+    deduped.set(key, {
+      id: String(item?.id || '').trim() || `api_output_${index + 1}`,
+      rootPath,
+      path,
+      alias
+    });
+  });
+  return [...deduped.values()];
+}
+
+function apiOutputParametersFromTemplate(template) {
+  const mapping = tryObject(template?.mapping_json);
+  const configJson = tryObject(template?.config_json);
+  const raw =
+    (Array.isArray(template?.output_parameters) && template.output_parameters) ||
+    (Array.isArray(mapping?.output_parameters) && mapping.output_parameters) ||
+    (Array.isArray(configJson?.output_parameters) && configJson.output_parameters) ||
+    [];
+  return normalizeApiOutputParametersList(raw);
+}
+
+function flattenTemplateWalkValue(value) {
+  if (value === undefined) return [];
+  if (Array.isArray(value)) return value.flatMap((item) => flattenTemplateWalkValue(item));
+  return [value];
+}
+
+function extractApiTemplateValues(source, path = '') {
+  const normalizedPath = normalizeTemplatePath(path);
+  if (!normalizedPath) return flattenTemplateWalkValue(source);
+  const parts = parseTemplatePathParts(normalizedPath);
+  const out = [];
+  function walk(node, index) {
+    if (index >= parts.length) {
+      flattenTemplateWalkValue(node).forEach((item) => out.push(item));
+      return;
+    }
+    const part = parts[index];
+    if (part === '[]') {
+      if (!Array.isArray(node)) return;
+      node.forEach((item) => walk(item, index + 1));
+      return;
+    }
+    if (node === undefined || node === null) return;
+    walk(node?.[part], index + 1);
+  }
+  walk(source, 0);
+  return out.filter((item) => item !== undefined);
+}
+
+function resolveApiTemplateValue(source, path = '') {
+  if (!path) return source;
+  const values = extractApiTemplateValues(source, path);
+  if (!values.length) return undefined;
+  return values.length === 1 ? values[0] : values;
+}
+
+function normalizeApiPublishedRow(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  if (value === undefined || value === null) return null;
+  return { value };
+}
+
+function buildApiPublishedRowsFromResponseBody(responseBody, template) {
+  const outputParameters = apiOutputParametersFromTemplate(template);
+  const pagination = paginationFromTemplateRaw(template);
+  if (outputParameters.length) {
+    const groupedByRoot = new Map();
+    outputParameters.forEach((field) => {
+      const key = String(field?.rootPath || '').trim();
+      if (!groupedByRoot.has(key)) groupedByRoot.set(key, []);
+      groupedByRoot.get(key).push(field);
+    });
+    const rows = [];
+    groupedByRoot.forEach((fields, rootPath) => {
+      const rootItems = extractApiTemplateValues(responseBody, rootPath);
+      const normalizedRoots = rootItems.length ? rootItems : [rootPath ? undefined : responseBody];
+      normalizedRoots.forEach((rootItem) => {
+        if (rootItem === undefined) return;
+        const row = {};
+        let hasAnyValue = false;
+        fields.forEach((field) => {
+          const value = resolveApiTemplateValue(rootItem, field?.path || '');
+          if (value !== undefined) hasAnyValue = true;
+          row[field.alias] = value;
+        });
+        if (hasAnyValue || Object.keys(row).length) rows.push(row);
+      });
+    });
+    return rows
+      .map((row) => normalizeApiPublishedRow(row))
+      .filter(Boolean);
+  }
+
+  const payloadRoots = extractApiTemplateValues(responseBody, String(pagination?.dataPath || '').trim());
+  const fallbackRoots = payloadRoots.length ? payloadRoots : [responseBody];
+  return fallbackRoots
+    .map((item) => normalizeApiPublishedRow(item))
+    .filter(Boolean);
+}
+
+function buildApiPublishedRowsFromExecution(template, exec = {}) {
+  const responses = Array.isArray(exec?.responsePreview?.responses) ? exec.responsePreview.responses : [];
+  const rows = [];
+  responses.forEach((entry) => {
+    const responseBody =
+      entry && typeof entry === 'object' && Object.prototype.hasOwnProperty.call(entry, 'response')
+        ? entry.response
+        : entry;
+    buildApiPublishedRowsFromResponseBody(responseBody, template).forEach((row) => rows.push(row));
+  });
+  return rows;
+}
+
 function isParserToolNode(node) {
   const toolType = String(node?.config?.toolType || '').trim().toLowerCase();
   return Boolean(node && node.type === 'tool' && toolType === 'table_parser');
@@ -7055,10 +7188,11 @@ async function executeProcessNode(client, config, processCtx, node, templates, i
     const template = overrideTemplate || templates.find((tpl) => refs.some((ref) => sourceMatchesTemplateRef(tpl, ref)));
     if (!template) throw new Error(`api_template_not_found:${requestSignature(node)}`);
     const exec = await executeApiNode(client, node, template, processCtx || {});
+    const publishedRows = buildApiPublishedRowsFromExecution(template, exec);
     const outputEnvelope = composeNodeOutputEnvelope(
       processCtx,
       node,
-      Array.isArray(exec?.responsePreview?.responses) ? exec.responsePreview.responses : [exec.responsePreview || {}],
+      publishedRows,
       {
         source_type: 'api_request',
         request_count: Number(exec?.metrics?.requestCount || 0),

@@ -24,6 +24,7 @@ const {
   buildProcessStepObservabilityRow,
   normalizeNodeIoEnvelope,
   composeNodeOutputEnvelope,
+  executeProcessPreviewUntilNode,
   applyToolSettingsOverrideToGraph,
   executeTableParserNode,
   executeTableNode,
@@ -226,6 +227,157 @@ test('step observability contract: canonical handoff is separate from request/re
   assert.deepEqual(stepRow.response_payload, parserOutput);
   assert.deepEqual(stepRow.request_payload.input_contract, apiOutput);
   assert.notDeepEqual(stepRow.input_json, stepRow.request_payload);
+});
+
+test('preview parser run: api published output becomes canonical parser input instead of debug wrapper', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    async text() {
+      return JSON.stringify({
+        list: [
+          {
+            id: '24105106',
+            title: '982379323 25.03.2026',
+            state: 'CAMPAIGN_STATE_RUNNING',
+            advObjectType: 'SKU',
+            fromDate: '2026-03-25'
+          }
+        ]
+      });
+    }
+  });
+
+  const client = {
+    query: async (sql) => {
+      const text = String(sql || '').replace(/\s+/g, ' ').trim();
+      if (text.includes('"ao_system"."api_configs_store"')) {
+        return {
+          rows: [
+            {
+              id: 1,
+              is_active: true,
+              api_name: 'API Preview',
+              method: 'GET',
+              base_url: 'https://example.test',
+              path: '/campaigns',
+              headers_json: {},
+              query_json: {},
+              body_json: {},
+              auth_mode: 'manual',
+              pagination_json: {
+                enabled: false,
+                data_path: 'list'
+              },
+              output_parameters: [
+                { root_path: 'list', path: 'id', alias: 'id' },
+                { root_path: 'list', path: 'title', alias: 'title' },
+                { root_path: 'list', path: 'state', alias: 'state' },
+                { root_path: 'list', path: 'advObjectType', alias: 'adv_object_type' },
+                { root_path: 'list', path: 'fromDate', alias: 'from_date' }
+              ]
+            }
+          ]
+        };
+      }
+      if (text.includes('"ao_system"."workflow_run_steps_store"')) {
+        return { rows: [], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    }
+  };
+
+  const process = {
+    start_node_id: 'start_1',
+    process_code: 'preview_api_parser',
+    execution_scope_mode: 'single_global',
+    subgraph: {
+      order: [
+        {
+          id: 'start_1',
+          type: 'tool',
+          config: { name: 'Start', toolType: 'start_process', settings: {} }
+        },
+        {
+          id: 'api_1',
+          type: 'tool',
+          config: {
+            name: 'API',
+            toolType: 'api_request',
+            settings: {
+              templateStoreId: '1'
+            }
+          }
+        },
+        {
+          id: 'parser_1',
+          type: 'tool',
+          config: {
+            name: 'Parser',
+            toolType: 'table_parser',
+            settings: {
+              sourceMode: 'input',
+              sourceFormat: 'json',
+              selectFields: 'list.id, list.title, list.state, list.advObjectType, list.fromDate',
+              renameMap:
+                '{"list.id":"adv_id","list.title":"adv_title","list.state":"state","list.advObjectType":"adv_object_type","list.fromDate":"from_date"}'
+            }
+          }
+        }
+      ]
+    }
+  };
+
+  try {
+    const preview = await executeProcessPreviewUntilNode(
+      client,
+      {
+        api_configs_schema: 'ao_system',
+        api_configs_table: 'api_configs_store',
+        workflow_runs_schema: 'ao_system',
+        workflow_run_steps_table: 'workflow_run_steps_store'
+      },
+      {
+        desk_id: 24,
+        desk_version_id: 1
+      },
+      process,
+      {
+        run_uid: 'wf_preview_test_api_parser'
+      },
+      'parser_1'
+    );
+
+    const apiStep = preview.steps.find((step) => step.node_id === 'api_1');
+    const parserStep = preview.steps.find((step) => step.node_id === 'parser_1');
+
+    assert.ok(apiStep);
+    assert.ok(parserStep);
+    assert.deepEqual(apiStep.output_json, parserStep.input_json);
+    assert.equal(apiStep.output_json.row_count, 1);
+    assert.deepEqual(apiStep.output_json.rows[0], {
+      id: '24105106',
+      title: '982379323 25.03.2026',
+      state: 'CAMPAIGN_STATE_RUNNING',
+      adv_object_type: 'SKU',
+      from_date: '2026-03-25'
+    });
+    assert.deepEqual(parserStep.input_json.rows[0], apiStep.output_json.rows[0]);
+    assert.deepEqual(parserStep.output_json.rows[0], {
+      adv_id: '24105106',
+      adv_title: '982379323 25.03.2026',
+      state: 'CAMPAIGN_STATE_RUNNING',
+      adv_object_type: 'SKU',
+      from_date: '2026-03-25'
+    });
+    assert.equal(Object.prototype.hasOwnProperty.call(parserStep.input_json.rows[0], 'response'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(parserStep.input_json.rows[0], 'entity_index'), false);
+    assert.equal(Array.isArray(apiStep.response_payload.responses), true);
+    assert.equal(apiStep.response_payload.responses[0].status, 200);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('preview graph override: parser settings patch only changes target parser node in graph snapshot', () => {

@@ -20,6 +20,15 @@ function normalizePath(value) {
     .replace(/\.+/g, '.');
 }
 
+function toSnakeCase(value) {
+  return String(value || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/__+/g, '_')
+    .toLowerCase();
+}
+
 function hasOwn(source, key) {
   return Boolean(source) && Object.prototype.hasOwnProperty.call(source, key);
 }
@@ -82,7 +91,13 @@ export function buildParserPublishReadCandidates(path, workingSetPath = '') {
   const normalizedPath = normalizePath(path);
   const relativePath = parserPublishRelativePath(normalizedPath, workingSetPath);
   const leaf = parserPublishLeaf(normalizedPath);
-  return uniqueStrings([normalizedPath, relativePath, leaf]);
+  return uniqueStrings([
+    normalizedPath,
+    relativePath,
+    leaf,
+    toSnakeCase(relativePath),
+    toSnakeCase(leaf)
+  ]);
 }
 
 export function isParserPublishComplexType(typeName) {
