@@ -25,7 +25,7 @@
     resolveIncomingParserField,
     serializeParserPublishRows
   } from '../../shared/parserPublishContractCore.js';
-  import { buildParserResultPreviewState, buildParserRuntimeResultState } from './parserResultPreviewCore.js';
+  import { buildParserResultPreviewState, buildParserRuntimeResultState, buildParserDraftPreviewUxState } from './parserResultPreviewCore.js';
 
   type ExistingTable = { schema_name: string; table_name: string };
   type ColumnMeta = { name: string; type?: string };
@@ -175,6 +175,24 @@
     liveColumnsCount: number;
     sourceFormat?: string;
     isStalePreview: boolean;
+  };
+  type ParserPreviewInputSourceKind = 'last_runtime_input' | 'upstream_sample' | 'manual_sample' | 'legacy_source' | 'missing';
+  type ParserPreviewInputSource = {
+    key: ParserPreviewInputSourceKind;
+    label: string;
+    description: string;
+    available: boolean;
+    value: any;
+  };
+  type ParserDraftPreviewUxState = {
+    state: 'no_preview_yet' | 'stale_preview' | 'preview_running' | 'preview_ready' | 'preview_failed';
+    stateLabel: string;
+    statusTone: string;
+    statusDescription: string;
+    actionLabel: string;
+    actionDisabled: boolean;
+    sourceLabel: string;
+    sourceDescription: string;
   };
   type ParserLastRuntimeStep = {
     run_uid: string;
@@ -665,6 +683,23 @@
     sourceFormat: '',
     isStalePreview: false
   };
+  let previewInputSource: ParserPreviewInputSource = {
+    key: 'missing',
+    label: 'Источник входа для preview не найден',
+    description: 'Для запуска предпросмотра нужен last runtime input, upstream sample или manual sample.',
+    available: false,
+    value: null
+  };
+  let draftPreviewUxState: ParserDraftPreviewUxState = {
+    state: 'no_preview_yet',
+    stateLabel: 'Предпросмотр не запускался',
+    statusTone: 'info',
+    statusDescription: 'Предпросмотр результата ещё не запускался.',
+    actionLabel: 'Запустить предпросмотр результата',
+    actionDisabled: false,
+    sourceLabel: 'Источник входа для preview не найден',
+    sourceDescription: 'Для запуска предпросмотра нужен last runtime input, upstream sample или manual sample.'
+  };
   let runtimeResultState: ParserRuntimeResultState = {
     mode: 'no_data',
     modeLabel: 'Last runtime не найден',
@@ -795,6 +830,12 @@
     currentConfigSignature: previewConfigSignature,
     previewLastAttemptSignature,
     previewLastSuccessSignature
+  });
+  $: previewInputSource = resolvePreviewInputSource();
+  $: draftPreviewUxState = buildParserDraftPreviewUxState({
+    previewState: previewResultState,
+    previewLoading,
+    inputSource: previewInputSource
   });
   $: runtimeResultState = buildParserRuntimeResultState({
     runtimeStep: lastRuntimeStep,
@@ -1238,23 +1279,18 @@
     const requestSignature = JSON.stringify(previewConfig);
     try {
       let inputValue = settings.sampleInput;
-      if (settings.sourceMode === 'node') {
-        const sampleNode = incomingSampleNode();
-        const sampleInput = inputValueFromIncomingSample(sampleNode);
-        if (sampleInput) {
-          inputValue = sampleInput;
-        } else if (String(inputValue || '').trim()) {
-          inputValue = String(inputValue || '').trim();
-        } else {
-          if (!options.silentMissingInput) {
-            previewLastAttemptSignature = requestSignature;
-            previewLastSuccessSignature = '';
-            previewError = 'Upstream источник уже определён, но sample snapshot для preview пока недоступен. Для preview нужны sample-данные или явный ручной override.';
-          }
-          previewData = null;
-          previewRaw = null;
-          return;
+      const source = resolvePreviewInputSource();
+      if (source.key === 'last_runtime_input' || source.key === 'upstream_sample' || source.key === 'manual_sample') {
+        inputValue = source.value;
+      } else if (source.key === 'missing') {
+        if (!options.silentMissingInput) {
+          previewLastAttemptSignature = requestSignature;
+          previewLastSuccessSignature = '';
+          previewError = source.description;
         }
+        previewData = null;
+        previewRaw = null;
+        return;
       }
       previewLastAttemptSignature = requestSignature;
       const payload = await apiJson<{ preview?: ParserPreview; result?: any }>(`${apiBase}/parser-configs/preview`, {
@@ -1309,8 +1345,9 @@
   }
 
   function incomingSampleNode() {
+    const nodes = Array.isArray(incomingNodes) ? incomingNodes : [];
     return (
-      incomingNodes.find(
+      nodes.find(
         (item) =>
           item?.sample?.sampleRaw !== undefined ||
           item?.sample?.samplePayload !== undefined ||
@@ -1365,11 +1402,76 @@
     return runtimeRowsFromValue(value).length;
   }
 
+  function hasPreviewInputValue(value: any) {
+    if (value === undefined || value === null) return false;
+    if (typeof value === 'string') return Boolean(value.trim());
+    return true;
+  }
+
+  function incomingSampleInputValue(item: NodeDescriptor | null | undefined) {
+    return item?.sample?.samplePayload ?? item?.sample?.sampleRaw ?? (Array.isArray(item?.sample?.sampleRows) ? item.sample.sampleRows : null);
+  }
+
   function inputValueFromIncomingSample(item: NodeDescriptor | null | undefined) {
-    const value =
-      item?.sample?.samplePayload ?? item?.sample?.sampleRaw ?? (Array.isArray(item?.sample?.sampleRows) ? item.sample.sampleRows : null);
+    const value = incomingSampleInputValue(item);
     if (value === undefined || value === null) return '';
     return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  }
+
+  function resolvePreviewInputSource(): ParserPreviewInputSource {
+    const runtimeInput = lastRuntimeStep?.input_json;
+    if (hasPreviewInputValue(runtimeInput)) {
+      return {
+        key: 'last_runtime_input',
+        label: 'Источник входа для preview: last runtime input',
+        description: 'Для draft preview будет использован канонический input этой ноды из последнего server run.',
+        available: true,
+        value: runtimeInput
+      };
+    }
+
+    const sampleNode = incomingSampleNode();
+    const sampleValue = incomingSampleInputValue(sampleNode);
+    if (hasPreviewInputValue(sampleValue)) {
+      return {
+        key: 'upstream_sample',
+        label: 'Источник входа для preview: upstream sample',
+        description: `Для draft preview будет использован sample snapshot upstream${sampleNode?.sourceNodeName ? ` (${sampleNode.sourceNodeName})` : ''}.`,
+        available: true,
+        value: sampleValue
+      };
+    }
+
+    const manualSample = String(settings.sampleInput || '').trim();
+    if (manualSample) {
+      return {
+        key: 'manual_sample',
+        label: 'Источник входа для preview: manual sample',
+        description: 'Для draft preview будет использован ручной sample из текущих настроек parser.',
+        available: true,
+        value: manualSample
+      };
+    }
+
+    if (legacyStandaloneSourceMode) {
+      return {
+        key: 'legacy_source',
+        label: `Источник входа для preview: ${legacyStandaloneSourceLabel}`,
+        description: 'Эта legacy-конфигурация читает источник напрямую из parser settings, поэтому отдельный upstream input не обязателен.',
+        available: true,
+        value: manualSample
+      };
+    }
+
+    return {
+      key: 'missing',
+      label: 'Источник входа для preview не найден',
+      description: hasIncomingUpstream
+        ? 'Нет last runtime input, нет upstream sample и нет manual sample. Сначала запусти workflow, дождись sample от upstream или задай ручной sample.'
+        : 'Parser ещё не получил вход. Подключи upstream ноду, запусти workflow или задай ручной sample для preview.',
+      available: false,
+      value: null
+    };
   }
 
   function buildIncomingSamplePreview(descriptor: NodeDescriptorFlow | null | undefined) {
@@ -1952,9 +2054,6 @@
             <h3>Настройка parser</h3>
             <p>Секция 2 отвечает только за логику parser: она читает consume descriptor слева, меняет данные текущей ноды и публикует итог вправо и вниз.</p>
           </div>
-          <button type="button" class="primary-btn" on:click={previewNow} disabled={previewLoading}>
-            {previewLoading ? 'Обновление...' : 'Обновить preview'}
-          </button>
         </div>
 
         <div class="parser-pipeline-summary-box">
@@ -1989,10 +2088,6 @@
           </div>
         {:else}
           <div class="inline-hint inline-hint-box">Upstream descriptor пока не найден. Parser откроется и сохранит текущие settings, но auto-first flow начнётся только после подключения входящей ноды.</div>
-        {/if}
-
-        {#if previewError}
-          <div class="inline-error">{previewError}</div>
         {/if}
 
         <div class="preview-metrics">
@@ -2953,12 +3048,33 @@
         <div class="parser-card-head">
           <div>
             <h3>Предпросмотр результата</h3>
-            <p>Секция 4 теперь явно разделяет last runtime truth и draft preview. Runtime показывает сохранённый server result, а preview ниже остаётся отдельным черновым запуском по текущим settings.</p>
+            <p>Показывает итоговые строки результата parser по текущим настройкам. Last runtime result остаётся отдельным read-only reference block, а draft preview запускается вручную по текущему входу и текущим settings секции 2.</p>
           </div>
-          <button type="button" class="mini-btn" on:click={previewNow} disabled={previewLoading}>
-            {previewLoading ? 'Обновление...' : 'Обновить preview'}
+        </div>
+        <div class="preview-action-bar">
+          <div class="preview-action-copy">
+            <div class={`preview-status-pill preview-status-pill-${draftPreviewUxState.statusTone}`}>
+              {draftPreviewUxState.stateLabel}
+            </div>
+            <div class="preview-action-lines">
+              <div class="preview-action-line">{draftPreviewUxState.sourceLabel}</div>
+              <div class="preview-action-line preview-action-line-muted">{draftPreviewUxState.sourceDescription}</div>
+            </div>
+          </div>
+          <button type="button" class="primary-btn" on:click={previewNow} disabled={previewLoading || draftPreviewUxState.actionDisabled}>
+            {draftPreviewUxState.actionLabel}
           </button>
         </div>
+        <div class={`preview-state-box preview-state-${draftPreviewUxState.statusTone}`}>
+          <strong>{draftPreviewUxState.stateLabel}</strong>
+          <div>{draftPreviewUxState.statusDescription}</div>
+        </div>
+        {#if previewUpdatedAt}
+          <div class="preview-meta">
+            <span>Последний запуск preview: {new Date(previewUpdatedAt).toLocaleString('ru-RU')}</span>
+            <span>Текущий config signature: {previewConfigSignature ? 'есть' : 'нет'}</span>
+          </div>
+        {/if}
         <div class="subsection-head">
           <h4>Last runtime result</h4>
         </div>
@@ -3046,7 +3162,7 @@
               : 0}
           </span>
           <span>Формат: {previewResultState.sourceFormat || '-'}</span>
-          <span>Источник: {autoSourceDefined ? 'Upstream descriptor' : legacyStandaloneSourceMode ? legacyStandaloneSourceLabel : 'Не определён'}</span>
+          <span>{draftPreviewUxState.sourceLabel}</span>
         </div>
         <div class="preview-meta">
           <span>Пакет: {previewResultState.mode === 'rows' ? `${previewData?.batch?.returned_rows ?? 0} / ${previewData?.batch?.batch_size ?? '-'}` : '-'}</span>
@@ -3060,17 +3176,25 @@
             <span>Последний preview: {new Date(previewUpdatedAt).toLocaleString('ru-RU')} (устарел)</span>
           {/if}
         </div>
+        {#if previewError && draftPreviewUxState.state === 'preview_failed'}
+          <div class="inline-error">{previewError}</div>
+        {/if}
         <div class={`preview-state-box preview-state-${previewResultState.statusTone}`}>
           <strong>{previewResultState.statusTitle}</strong>
           <div>{previewResultState.statusDescription}</div>
         </div>
         {#if previewResultState.mode === 'rows'}
+          {#if previewResultState.isStalePreview}
+            <div class="preview-stale-banner">
+              Таблица ниже показывает последний draft preview по старым settings. Чтобы увидеть актуальные строки результата, нажми «Обновить предпросмотр».
+            </div>
+          {/if}
           <div class="preview-columns">
             {#each previewResultState.columns as column}
               <span>{column}</span>
             {/each}
           </div>
-          <div class="preview-table-wrap">
+          <div class="preview-table-wrap" class:is-stale-wrap={previewResultState.isStalePreview}>
             <table class="preview-table">
               <thead>
                 <tr>
@@ -3091,6 +3215,10 @@
             </table>
           </div>
         {:else if previewResultState.showStructure}
+          <div class="preview-structure-head">
+            <strong>Структура результата</strong>
+            <span>Показывается без живых строк</span>
+          </div>
           <div class="preview-columns">
             {#each previewResultState.structureFields as field}
               <span>{field.name}</span>
@@ -3117,7 +3245,11 @@
             </table>
           </div>
         {:else}
-          <div class="empty-box">{previewResultState.statusDescription}</div>
+          <div class="empty-box">
+            <strong>{draftPreviewUxState.stateLabel}</strong>
+            <div>{previewResultState.statusDescription}</div>
+            <div class="empty-box-hint">{draftPreviewUxState.sourceDescription}</div>
+          </div>
         {/if}
       </section>
     </div>
@@ -3481,6 +3613,69 @@
     font-size: 12px;
     color: #334155;
   }
+  .preview-action-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px;
+    border: 1px solid #dbe4f0;
+    border-radius: 12px;
+    background: #fff;
+  }
+  .preview-action-copy {
+    min-width: 0;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .preview-action-lines {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .preview-action-line {
+    font-size: 12px;
+    color: #0f172a;
+    line-height: 1.45;
+  }
+  .preview-action-line-muted {
+    color: #64748b;
+  }
+  .preview-status-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    padding: 5px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+    border: 1px solid #dbe4f0;
+    background: #f8fafc;
+    color: #334155;
+  }
+  .preview-status-pill-info {
+    background: #f8fafc;
+    border-color: #dbe4f0;
+    color: #334155;
+  }
+  .preview-status-pill-ok {
+    background: #f0fdf4;
+    border-color: #86efac;
+    color: #166534;
+  }
+  .preview-status-pill-warn {
+    background: #fffbeb;
+    border-color: #fcd34d;
+    color: #92400e;
+  }
+  .preview-status-pill-error {
+    background: #fef2f2;
+    border-color: #fca5a5;
+    color: #b91c1c;
+  }
   .preview-state-box {
     display: flex;
     flex-direction: column;
@@ -3530,6 +3725,10 @@
     border: 1px solid #e2e8f0;
     border-radius: 10px;
   }
+  .preview-table-wrap.is-stale-wrap {
+    border-color: #f59e0b;
+    box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.12);
+  }
   .preview-table {
     width: 100%;
     border-collapse: collapse;
@@ -3563,6 +3762,26 @@
     white-space: normal;
     color: #64748b;
     line-height: 1.45;
+  }
+  .preview-stale-banner {
+    border: 1px solid #fcd34d;
+    background: #fffbeb;
+    color: #92400e;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .preview-structure-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 12px;
+    color: #64748b;
+  }
+  .preview-structure-head strong {
+    color: #0f172a;
   }
   .form-grid {
     display: grid;
@@ -3626,6 +3845,11 @@
     border-radius: 10px;
     padding: 10px;
     font-size: 12px;
+  }
+  .empty-box-hint {
+    margin-top: 8px;
+    color: #64748b;
+    line-height: 1.45;
   }
   .subsection {
     border: 1px solid #e2e8f0;
@@ -3981,6 +4205,12 @@
   @media (max-width: 1120px) {
     .parser-layout {
       grid-template-columns: 1fr;
+    }
+    .preview-action-bar,
+    .preview-action-copy,
+    .preview-structure-head {
+      flex-direction: column;
+      align-items: flex-start;
     }
     .detect-summary-grid,
     .form-grid-2,

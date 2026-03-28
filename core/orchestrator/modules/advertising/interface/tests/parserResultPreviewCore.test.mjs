@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildParserResultPreviewState, buildParserRuntimeResultState } from '../desk/tabs/parserResultPreviewCore.js';
+import { buildParserResultPreviewState, buildParserRuntimeResultState, buildParserDraftPreviewUxState } from '../desk/tabs/parserResultPreviewCore.js';
 
 test('parser result preview state: rows mode uses fresh preview rows and keeps publish contract columns primary', () => {
   const state = buildParserResultPreviewState({
@@ -51,7 +51,7 @@ test('parser result preview state: no_preview_yet mode exists before preview run
   assert.match(state.statusDescription, /ещё не запрашивались/i);
 });
 
-test('parser result preview state: shape_only mode marks stale preview as non-live', () => {
+test('parser result preview state: stale preview keeps last rows visible but marks them as outdated', () => {
   const state = buildParserResultPreviewState({
     previewData: {
       row_count: 1,
@@ -64,10 +64,10 @@ test('parser result preview state: shape_only mode marks stale preview as non-li
     previewLastSuccessSignature: 'cfg:3:old'
   });
 
-  assert.equal(state.mode, 'shape_only');
+  assert.equal(state.mode, 'rows');
   assert.equal(state.isStalePreview, true);
-  assert.deepEqual(state.rows, []);
-  assert.deepEqual(state.structureColumns, ['new_name']);
+  assert.deepEqual(state.columns, ['new_name']);
+  assert.deepEqual(state.rows, [{ old_name: 'legacy' }]);
 });
 
 test('parser result preview state: preview_failed mode keeps error honest and can still show structure', () => {
@@ -160,4 +160,47 @@ test('parser runtime result state: shape_only mode stays honest when runtime ste
   assert.equal(state.mode, 'shape_only');
   assert.equal(state.showStructure, true);
   assert.deepEqual(state.structureColumns, ['product_key']);
+});
+
+test('parser draft preview ux state: exposes no-preview, stale, running, ready and failed states', () => {
+  const source = {
+    label: 'Источник входа для preview: upstream sample',
+    description: 'Preview будет собран по sample snapshot upstream.'
+  };
+
+  const noPreview = buildParserDraftPreviewUxState({
+    previewState: { mode: 'no_preview_yet', isStalePreview: false },
+    inputSource: source
+  });
+  assert.equal(noPreview.state, 'no_preview_yet');
+  assert.equal(noPreview.actionLabel, 'Запустить предпросмотр результата');
+
+  const stale = buildParserDraftPreviewUxState({
+    previewState: { mode: 'rows', isStalePreview: true },
+    inputSource: source
+  });
+  assert.equal(stale.state, 'stale_preview');
+  assert.equal(stale.actionLabel, 'Обновить предпросмотр');
+
+  const running = buildParserDraftPreviewUxState({
+    previewState: { mode: 'rows', isStalePreview: true },
+    previewLoading: true,
+    inputSource: source
+  });
+  assert.equal(running.state, 'preview_running');
+  assert.equal(running.actionDisabled, true);
+
+  const ready = buildParserDraftPreviewUxState({
+    previewState: { mode: 'rows', isStalePreview: false },
+    inputSource: source
+  });
+  assert.equal(ready.state, 'preview_ready');
+  assert.equal(ready.actionLabel, 'Обновить предпросмотр');
+
+  const failed = buildParserDraftPreviewUxState({
+    previewState: { mode: 'preview_failed', statusDescription: 'preview failed', isStalePreview: false },
+    inputSource: source
+  });
+  assert.equal(failed.state, 'preview_failed');
+  assert.equal(failed.actionLabel, 'Повторить предпросмотр');
 });

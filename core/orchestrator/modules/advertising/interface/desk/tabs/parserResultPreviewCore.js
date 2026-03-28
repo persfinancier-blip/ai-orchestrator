@@ -244,6 +244,26 @@ export function buildParserResultPreviewState({
     };
   }
 
+  if (stalePreview && previewRows.length) {
+    const staleDisplayColumns = structureColumns.length ? structureColumns : previewColumns;
+    return {
+      mode: 'rows',
+      modeLabel: 'Последний preview устарел',
+      statusTone: 'warn',
+      statusTitle: 'Настройки изменились, предпросмотр устарел',
+      statusDescription:
+        'Таблица ниже показывает последний draft preview по старым settings. Чтобы увидеть актуальные строки результата, обнови предпросмотр заново.',
+      rows: previewRows,
+      columns: staleDisplayColumns,
+      structureFields,
+      showStructure: false,
+      liveRowsCount: Math.max(0, Number(previewData?.row_count || previewRows.length) || 0),
+      liveColumnsCount: staleDisplayColumns.length,
+      sourceFormat: trim(previewData?.source_format),
+      isStalePreview: true
+    };
+  }
+
   if (!hasAnyAttempt) {
     return {
       mode: 'no_preview_yet',
@@ -314,5 +334,80 @@ export function buildParserResultPreviewState({
     liveColumnsCount: 0,
     sourceFormat: trim(previewData?.source_format),
     isStalePreview: stalePreview
+  };
+}
+
+export function buildParserDraftPreviewUxState({ previewState = null, previewLoading = false, inputSource = null } = {}) {
+  const state = previewState && typeof previewState === 'object' ? previewState : {};
+  const source = inputSource && typeof inputSource === 'object' ? inputSource : {};
+  const sourceLabel = trim(source.label) || 'Источник входа для preview не найден';
+  const sourceDescription =
+    trim(source.description) ||
+    'Для запуска предпросмотра нужен доступный вход: last runtime input, upstream sample или manual sample.';
+
+  if (previewLoading) {
+    return {
+      state: 'preview_running',
+      stateLabel: 'Предпросмотр собирается',
+      statusTone: 'info',
+      statusDescription: 'Собираем предпросмотр результата по текущим настройкам parser.',
+      actionLabel: 'Собираем предпросмотр...',
+      actionDisabled: true,
+      sourceLabel,
+      sourceDescription
+    };
+  }
+
+  if (state.mode === 'preview_failed') {
+    return {
+      state: 'preview_failed',
+      stateLabel: 'Ошибка предпросмотра',
+      statusTone: 'error',
+      statusDescription: trim(state.statusDescription) || 'Не удалось собрать предпросмотр результата.',
+      actionLabel: 'Повторить предпросмотр',
+      actionDisabled: false,
+      sourceLabel,
+      sourceDescription
+    };
+  }
+
+  if (state.isStalePreview) {
+    return {
+      state: 'stale_preview',
+      stateLabel: 'Предпросмотр устарел',
+      statusTone: 'warn',
+      statusDescription: 'Настройки изменились, поэтому таблица ниже больше не считается актуальной.',
+      actionLabel: 'Обновить предпросмотр',
+      actionDisabled: false,
+      sourceLabel,
+      sourceDescription
+    };
+  }
+
+  if (state.mode === 'rows' || state.mode === 'shape_only') {
+    return {
+      state: 'preview_ready',
+      stateLabel: 'Предпросмотр актуален',
+      statusTone: 'ok',
+      statusDescription:
+        state.mode === 'rows'
+          ? 'Показаны актуальные draft preview rows по текущим настройкам parser.'
+          : 'Предпросмотр выполнен, но для текущих настроек доступны только структура результата без строк.',
+      actionLabel: 'Обновить предпросмотр',
+      actionDisabled: false,
+      sourceLabel,
+      sourceDescription
+    };
+  }
+
+  return {
+    state: 'no_preview_yet',
+    stateLabel: 'Предпросмотр не запускался',
+    statusTone: 'info',
+    statusDescription: 'Предпросмотр результата ещё не запускался.',
+    actionLabel: 'Запустить предпросмотр результата',
+    actionDisabled: false,
+    sourceLabel,
+    sourceDescription
   };
 }
