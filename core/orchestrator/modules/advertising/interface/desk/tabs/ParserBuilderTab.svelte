@@ -344,7 +344,7 @@
   const PARSER_EDITOR_STEPS: Array<{ id: ParserEditorStep; label: string; order: string }> = [
     { id: 'input', label: 'Определение данных', order: '1' },
     { id: 'fields', label: 'Изменение данных', order: '2' },
-    { id: 'result', label: 'Результат', order: '3' }
+    { id: 'result', label: 'Выходные параметры', order: '3' }
   ];
   const PARSER_CHANGE_STEPS: Array<{ id: ParserChangeStep; label: string }> = [
     { id: 'incoming', label: 'Входящие данные' },
@@ -1465,6 +1465,10 @@
     return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
   }
 
+  function hasIncomingSampleSnapshot(item: NodeDescriptor | null | undefined) {
+    return hasPreviewInputValue(incomingSampleInputValue(item));
+  }
+
   function resolvePreviewInputSource(): ParserPreviewInputSource {
     const runtimeInput = lastRuntimeStep?.input_json;
     if (hasPreviewInputValue(runtimeInput)) {
@@ -1953,16 +1957,14 @@
         <div class="parser-card-head">
           <div>
             <h3>Входящие параметры</h3>
-            <p>Consume-side единого descriptor flow. Здесь parser читает опубликованный upstream descriptor и может сразу брать его поля в результат.</p>
+            <p>Consume-view блока `Выходные параметры` предыдущей ноды. Parser читает именно опубликованный upstream contract и не заводит поверх него отдельный parser-only список полей.</p>
           </div>
         </div>
         {#if lastRuntimeStep}
-          {@const runtimeInputRows = runtimeRowsFromValue(lastRuntimeStep.input_json)}
-          {@const runtimeInputColumns = runtimeColumnsFromValue(lastRuntimeStep.input_json)}
           <div class="preview-state-box preview-state-ok">
-            <strong>Last runtime consume truth</strong>
+            <strong>Runtime snapshot consume-side</strong>
             <div>
-              Сохранённый server input этой ноды из run `{lastRuntimeStep.run_uid || '-'}`. Descriptor ниже остаётся expected contract, а этот блок показывает, что реально пришло в parser.
+              Последний server run сохранил canonical input этой ноды. Поля ниже всё равно берутся из publish-блока upstream, а runtime здесь используется только как read-only marker.
             </div>
           </div>
           <div class="preview-meta">
@@ -1970,38 +1972,8 @@
             <span>Статус: {lastRuntimeStep.run_status || lastRuntimeStep.status || '-'}</span>
             <span>Шаг: {lastRuntimeStep.step_order || '-'}</span>
             <span>Строк: {runtimeRowCountFromValue(lastRuntimeStep.input_json)}</span>
+            <span>Runtime source: доступен</span>
           </div>
-          {#if runtimeInputColumns.length}
-            <div class="preview-columns">
-              {#each runtimeInputColumns as column}
-                <span>{column}</span>
-              {/each}
-            </div>
-          {/if}
-          {#if runtimeInputRows.length}
-            <div class="preview-table-wrap">
-              <table class="preview-table">
-                <thead>
-                  <tr>
-                    {#each runtimeInputColumns as column}
-                      <th>{column}</th>
-                    {/each}
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each runtimeInputRows.slice(0, 5) as row}
-                    <tr>
-                      {#each runtimeInputColumns as column}
-                        <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
-                      {/each}
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
-            </div>
-          {:else}
-            <div class="empty-box">В последнем runtime для этой ноды не было строк canonical input.</div>
-          {/if}
         {/if}
         {#if incomingNodes.length}
           <div class="parser-shell-summary">
@@ -2021,19 +1993,19 @@
                 <div class="parser-shell-description">{incomingNodeDescription(item)}</div>
                 <div class="parser-shell-summary">
                   <span class="chip-chip readonly-chip">Kind: {descriptorOutputKindLabel(item.outputKind)}</span>
+                  <span class="chip-chip readonly-chip">Publish fields: {incomingContractFields(item).length}</span>
                   {#if item.detection?.detectedFormat}
                     <span class="chip-chip readonly-chip">Формат: {item.detection.detectedFormat}</span>
                   {/if}
                   {#if item.detection?.recordPath}
                     <span class="chip-chip readonly-chip">Строки: {item.detection.recordPath}</span>
                   {/if}
+                  <span class="chip-chip readonly-chip">Runtime snapshot: {lastRuntimeStep ? 'да' : 'нет'}</span>
+                  <span class="chip-chip readonly-chip">Preview sample: {hasIncomingSampleSnapshot(item) ? 'да' : 'нет'}</span>
                 </div>
-                {#if incomingSampleMeta(item)}
-                  <div class="inline-hint">Доступен optional sample snapshot из текущего UI-state{#if incomingSampleMeta(item)?.responsesCount} · ответов: {incomingSampleMeta(item)?.responsesCount}{/if}{#if incomingSampleMeta(item)?.payloadPath} · payload path: {incomingSampleMeta(item)?.payloadPath}{/if}</div>
-                {/if}
                 <div class="parser-contract-block">
                   <div class="parser-contract-head">
-                    <span>Входной контракт upstream</span>
+                    <span>Consume-view publish-блока upstream</span>
                     <span>{incomingContractFields(item).length ? `${incomingContractFields(item).length} полей` : 'контракт не определён'}</span>
                   </div>
                   {#if incomingContractFields(item).length}
@@ -2949,9 +2921,9 @@
         {#if activeStep === 'result'}
         <div class="subsection parser-step-panel">
           <div class="subsection-head">
-            <h4>Результат</h4>
+            <h4>Выходные параметры</h4>
           </div>
-          <div class="inline-hint inline-hint-box">Секция 3 показывает publish contract, собранный только из строк подпункта `Входящие данные`. Preview ниже остаётся отдельным runtime-предпросмотром и не является truth-source для этого списка.</div>
+          <div class="inline-hint inline-hint-box">Это тот же publish-блок, который следующая нода увидит у себя в `Входящих параметрах`. Он собирается только из строк подпункта `Входящие данные`; preview и runtime snapshot не конкурируют с этим контрактом.</div>
           <div class="preview-metrics">
             <span>Поля: {publishedDescriptorFields.length}</span>
             <span>Строк в publish-модели: {selectedFieldRows.length}</span>
@@ -3007,34 +2979,22 @@
       <div class="parser-shell-card">
         <div class="parser-card-head">
           <div>
-            <h3>Исходящие параметры</h3>
-            <p>Publish-side того же descriptor flow. Правая колонка показывает, что parser публикует для следующей ноды, без отдельной editable schema.</p>
+            <h3>Выходные параметры</h3>
+            <p>Publish-view канонического выхода текущей parser node. Именно этот блок дальше становится consume-view следующей ноды, без отдельного конкурирующего потока полей.</p>
           </div>
         </div>
         {#if lastRuntimeStep}
           <div class={`preview-state-box preview-state-${runtimeResultState.statusTone}`}>
-            <strong>Last runtime publish truth</strong>
-            <div>{runtimeResultState.statusDescription}</div>
+            <strong>Runtime snapshot publish-side</strong>
+            <div>Последний server run сохранил snapshot канонического выхода этой ноды. Поля ниже всё равно берутся из publish contract editor flow, а runtime здесь используется только как marker.</div>
           </div>
           <div class="preview-meta">
             <span>Run: {runtimeResultState.runUid || '-'}</span>
             <span>Статус: {runtimeResultState.runStatus || lastRuntimeStep.status || '-'}</span>
             <span>Строк: {runtimeResultState.rowCount}</span>
             <span>Handoff: {runtimeResultState.handoffMatchesUpstream === null ? '-' : runtimeResultState.handoffMatchesUpstream ? 'совпадает' : 'отличается'}</span>
+            <span>Runtime source: {lastRuntimeStep.output_json ? 'доступен' : 'нет'}</span>
           </div>
-          {#if runtimeResultState.mode === 'rows'}
-            <div class="preview-columns">
-              {#each runtimeResultState.columns as column}
-                <span>{column}</span>
-              {/each}
-            </div>
-          {:else if runtimeResultState.showStructure}
-            <div class="preview-columns">
-              {#each runtimeResultState.structureFields as field}
-                <span>{field.name}</span>
-              {/each}
-            </div>
-          {/if}
         {/if}
         <div class="parser-shell-summary">
           <span class="chip-chip readonly-chip">Kind: {outputDescriptorKindLabelValue}</span>
