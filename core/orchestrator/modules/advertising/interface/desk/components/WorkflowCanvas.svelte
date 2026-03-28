@@ -7007,6 +7007,9 @@
               apiJson={workflowApiJson}
               headers={workflowApiHeaders}
               existingTables={apiBuilderExistingTables}
+              workflowDeskId={deskId}
+              workflowNodeId={settingsNode.id}
+              workflowGraph={captureDeskState()}
               initialSettings={toolCfg(settingsNode).settings || {}}
               incomingDescriptor={incomingDescriptorForNode(settingsNode)}
               outputDescriptor={buildNodeOutputDescriptor(settingsNode, {

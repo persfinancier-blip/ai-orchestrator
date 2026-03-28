@@ -24,6 +24,7 @@ const {
   buildProcessStepObservabilityRow,
   normalizeNodeIoEnvelope,
   composeNodeOutputEnvelope,
+  applyToolSettingsOverrideToGraph,
   executeTableParserNode,
   executeTableNode,
   executeDbWriteNode,
@@ -225,6 +226,39 @@ test('step observability contract: canonical handoff is separate from request/re
   assert.deepEqual(stepRow.response_payload, parserOutput);
   assert.deepEqual(stepRow.request_payload.input_contract, apiOutput);
   assert.notDeepEqual(stepRow.input_json, stepRow.request_payload);
+});
+
+test('preview graph override: parser settings patch only changes target parser node in graph snapshot', () => {
+  const graph = {
+    nodes: [
+      {
+        id: 'parser_1',
+        type: 'tool',
+        config: {
+          name: 'Parser',
+          toolType: 'table_parser',
+          settings: { selectFields: 'id,title', previewLimit: '20' }
+        }
+      },
+      {
+        id: 'writer_1',
+        type: 'tool',
+        config: {
+          name: 'Writer',
+          toolType: 'db_write',
+          settings: { targetTable: 'ao_data.target' }
+        }
+      }
+    ],
+    edges: [{ from: 'parser_1', to: 'writer_1' }]
+  };
+
+  const patched = applyToolSettingsOverrideToGraph(graph, 'parser_1', { selectFields: 'id,state', defaultValues: '{"state":"draft"}' }, 'table_parser');
+
+  assert.equal(patched.nodes[0].config.settings.selectFields, 'id,state');
+  assert.equal(patched.nodes[0].config.settings.defaultValues, '{"state":"draft"}');
+  assert.equal(patched.nodes[1].config.settings.targetTable, 'ao_data.target');
+  assert.equal(graph.nodes[0].config.settings.selectFields, 'id,title');
 });
 
 test('first nodes runtime contract: table_parser -> db_write (process_bus fallback)', async () => {

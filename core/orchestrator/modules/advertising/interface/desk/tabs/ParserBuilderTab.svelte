@@ -25,7 +25,12 @@
     resolveIncomingParserField,
     serializeParserPublishRows
   } from '../../shared/parserPublishContractCore.js';
-  import { buildParserResultPreviewState, buildParserRuntimeResultState, buildParserDraftPreviewUxState } from './parserResultPreviewCore.js';
+  import {
+    buildParserPreviewDataFromRuntimeStep,
+    buildParserResultPreviewState,
+    buildParserRuntimeResultState,
+    buildParserDraftPreviewUxState
+  } from './parserResultPreviewCore.js';
 
   type ExistingTable = { schema_name: string; table_name: string };
   type ColumnMeta = { name: string; type?: string };
@@ -195,7 +200,13 @@
     effectiveInputSource: ParserPreviewInputSource;
     debug: ParserPreviewDebugState;
   };
-  type ParserPreviewInputSourceKind = 'last_runtime_input' | 'upstream_sample' | 'manual_sample' | 'legacy_source' | 'missing';
+  type ParserPreviewInputSourceKind =
+    | 'last_runtime_input'
+    | 'upstream_sample'
+    | 'manual_sample'
+    | 'legacy_source'
+    | 'server_preview_run'
+    | 'missing';
   type ParserPreviewInputSource = {
     key: ParserPreviewInputSourceKind;
     label: string;
@@ -264,6 +275,9 @@
   export let apiJson: <T = any>(url: string, init?: RequestInit) => Promise<T>;
   export let headers: () => Record<string, string>;
   export let existingTables: ExistingTable[] = [];
+  export let workflowDeskId: number | null = null;
+  export let workflowNodeId = '';
+  export let workflowGraph: any = null;
   export let initialSettings: Record<string, any> = {};
   export let embeddedMode = false;
   export let incomingDescriptor: NodeDescriptorFlow | null = null;
@@ -676,6 +690,8 @@
   let previewError = '';
   let previewData: ParserPreview | null = null;
   let previewRaw: any = null;
+  let draftPreviewStep: ParserLastRuntimeStep | null = null;
+  let draftPreviewData: ParserPreview | null = null;
   let previewUpdatedAt = '';
   let previewLastAttemptSignature = '';
   let previewLastSuccessSignature = '';
@@ -707,7 +723,7 @@
     effectiveInputSource: {
       key: 'missing',
       label: 'Источник входа для preview не найден',
-      description: 'Для запуска предпросмотра нужен last runtime input, upstream sample или manual sample.',
+      description: 'Для запуска предпросмотра нужен workflow desk context с текущим graph snapshot и target parser node.',
       available: false,
       value: null
     },
@@ -730,7 +746,7 @@
   let previewInputSource: ParserPreviewInputSource = {
     key: 'missing',
     label: 'Источник входа для preview не найден',
-    description: 'Для запуска предпросмотра нужен last runtime input, upstream sample или manual sample.',
+    description: 'Для запуска предпросмотра нужен workflow desk context с текущим graph snapshot и target parser node.',
     available: false,
     value: null
   };
@@ -867,8 +883,12 @@
   $: derivedOutputFields = buildDerivedOutputFields();
   $: publishedDescriptorFields = descriptorFields(outputDescriptor);
   $: previewConfigSignature = buildPreviewConfigSignature(settings);
+  $: previewInputSource = resolvePreviewInputSource();
+  $: draftPreviewData = buildParserPreviewDataFromRuntimeStep(draftPreviewStep, {
+    previewLimit: settings.previewLimit
+  });
   $: previewResultState = buildParserResultPreviewState({
-    previewData,
+    previewData: draftPreviewData,
     previewError,
     publishedDescriptorFields,
     currentConfigSignature: previewConfigSignature,
@@ -877,7 +897,6 @@
     currentInputSource: previewInputSource,
     lastResolvedInputSource: previewLastResolvedInputSource
   });
-  $: previewInputSource = resolvePreviewInputSource();
   $: draftPreviewUxState = buildParserDraftPreviewUxState({
     previewState: previewResultState,
     previewLoading,
@@ -1321,43 +1340,51 @@
   async function previewNow(options: { silentMissingInput?: boolean } = {}) {
     previewLoading = true;
     previewError = '';
-    const previewConfig = buildPreviewExecutionConfig(settings);
-    const requestSignature = JSON.stringify(previewConfig);
+    const requestSignature = JSON.stringify(buildPreviewExecutionConfig(settings));
     try {
-      let inputValue = settings.sampleInput;
       const source = resolvePreviewInputSource();
       previewLastResolvedInputSource = source;
-      if (source.key === 'last_runtime_input' || source.key === 'upstream_sample' || source.key === 'manual_sample') {
-        inputValue = source.value;
-      } else if (source.key === 'missing') {
+      if (!source.available) {
         if (!options.silentMissingInput) {
           previewLastAttemptSignature = requestSignature;
           previewLastSuccessSignature = '';
           previewError = source.description;
         }
-        previewData = null;
-        previewRaw = null;
+        draftPreviewStep = null;
         return;
       }
       previewLastAttemptSignature = requestSignature;
-      const payload = await apiJson<{ preview?: ParserPreview; result?: any }>(`${apiBase}/parser-configs/preview`, {
+      const payload = await apiJson<{
+        run_uid?: string;
+        target_step?: any;
+        steps?: any[];
+      }>(`${apiBase}/process-runs/preview-parser-node`, {
         method: 'POST',
         headers: headers(),
         body: JSON.stringify({
-          config_json: previewConfig,
-          input_value: inputValue,
-          cursor: { offset: 0 }
+          desk_id: Math.trunc(Number(workflowDeskId || 0)),
+          target_node_id: String(workflowNodeId || '').trim(),
+          graph_json: workflowGraph,
+          parser_settings_override: parserSettingsOverridePayload(settings)
         })
       });
-      previewData = payload?.preview || null;
-      previewRaw = payload?.result || null;
+      const targetStep = normalizePreviewStep(payload?.target_step, String(payload?.run_uid || '').trim());
+      if (!targetStep) {
+        throw new Error(previewFailureFromSteps(payload?.steps) || 'Сервер не вернул результат текущего parser-шага.');
+      }
+      if (String(targetStep?.status || '').trim().toLowerCase() === 'error') {
+        throw new Error(String(targetStep?.error_text || previewFailureFromSteps(payload?.steps) || 'Ошибка выполнения parser-шага'));
+      }
+      draftPreviewStep = targetStep;
+      previewLastResolvedInputSource = workflowPreviewInputSource(String(payload?.run_uid || '').trim());
+      previewRaw = targetStep.output_json ?? null;
       previewUpdatedAt = new Date().toISOString();
       previewLastSuccessSignature = requestSignature;
     } catch (e: any) {
       previewLastAttemptSignature = requestSignature;
       previewLastSuccessSignature = '';
       previewError = String(e?.message || e || 'Не удалось получить preview');
-      previewData = null;
+      draftPreviewStep = null;
       previewRaw = null;
     } finally {
       previewLoading = false;
@@ -1469,59 +1496,71 @@
     return hasPreviewInputValue(incomingSampleInputValue(item));
   }
 
-  function resolvePreviewInputSource(): ParserPreviewInputSource {
-    const runtimeInput = lastRuntimeStep?.input_json;
-    if (hasPreviewInputValue(runtimeInput)) {
+  function hasWorkflowServerPreviewContext() {
+    return Boolean(String(workflowNodeId || '').trim()) && workflowGraph && typeof workflowGraph === 'object';
+  }
+
+  function workflowPreviewInputSource(runUid = ''): ParserPreviewInputSource {
+    if (hasWorkflowServerPreviewContext()) {
       return {
-        key: 'last_runtime_input',
-        label: 'Источник входа для preview: last runtime input',
-        description: 'Для draft preview будет использован канонический input этой ноды из последнего server run.',
+        key: 'server_preview_run',
+        label: 'Источник входа для preview: server preview-run',
+        description: runUid
+          ? `Draft preview собран сервером по текущему graph_json до parser node (${runUid}).`
+          : 'Draft preview будет собран сервером по текущему graph_json от Start до текущей parser node с текущими settings.',
         available: true,
-        value: runtimeInput
+        value: {
+          desk_id: Math.trunc(Number(workflowDeskId || 0)),
+          target_node_id: String(workflowNodeId || '').trim()
+        }
       };
     }
-
-    const sampleNode = incomingSampleNode();
-    const sampleValue = incomingSampleInputValue(sampleNode);
-    if (hasPreviewInputValue(sampleValue)) {
-      return {
-        key: 'upstream_sample',
-        label: 'Источник входа для preview: upstream sample',
-        description: `Для draft preview будет использован sample snapshot upstream${sampleNode?.sourceNodeName ? ` (${sampleNode.sourceNodeName})` : ''}.`,
-        available: true,
-        value: sampleValue
-      };
-    }
-
-    const manualSample = String(settings.sampleInput || '').trim();
-    if (manualSample) {
-      return {
-        key: 'manual_sample',
-        label: 'Источник входа для preview: manual sample',
-        description: 'Для draft preview будет использован ручной sample из текущих настроек parser.',
-        available: true,
-        value: manualSample
-      };
-    }
-
-    if (legacyStandaloneSourceMode) {
-      return {
-        key: 'legacy_source',
-        label: `Источник входа для preview: ${legacyStandaloneSourceLabel}`,
-        description: 'Эта legacy-конфигурация читает источник напрямую из parser settings, поэтому отдельный upstream input не обязателен.',
-        available: true,
-        value: manualSample
-      };
-    }
-
     return {
       key: 'missing',
       label: 'Источник входа для preview не найден',
-      description: hasIncomingUpstream
-        ? 'Нет last runtime input, нет upstream sample и нет manual sample. Сначала запусти workflow, дождись sample от upstream или задай ручной sample.'
-        : 'Parser ещё не получил вход. Подключи upstream ноду, запусти workflow или задай ручной sample для preview.',
+      description: 'Draft preview доступен только внутри workflow desk, где есть текущий graph snapshot и target parser node.',
       available: false,
       value: null
+    };
+  }
+
+  function resolvePreviewInputSource(): ParserPreviewInputSource {
+    return workflowPreviewInputSource();
+  }
+
+  function parserSettingsOverridePayload(settingsValue: ParserSettings) {
+    return { ...(settingsValue || {}) };
+  }
+
+  function previewFailureFromSteps(steps: any[] = []) {
+    const safeSteps = Array.isArray(steps) ? steps : [];
+    const failedStep = [...safeSteps]
+      .reverse()
+      .find((step) => String(step?.status || '').trim().toLowerCase() === 'error' || String(step?.error_text || '').trim());
+    if (!failedStep) return '';
+    const nodeLabel = String(failedStep?.node_name || failedStep?.node_id || '').trim() || 'неизвестной ноде';
+    const errorText = String(failedStep?.error_text || failedStep?.response_payload?.error || '').trim() || 'preview-run завершился с ошибкой';
+    return `Server preview-run остановился на ноде «${nodeLabel}»: ${errorText}`;
+  }
+
+  function normalizePreviewStep(step: any, runUid = ''): ParserLastRuntimeStep | null {
+    if (!step || typeof step !== 'object') return null;
+    return {
+      run_uid: String(step?.run_uid || runUid || '').trim(),
+      run_status: String(step?.run_status || 'preview').trim() || 'preview',
+      run_started_at: String(step?.started_at || new Date().toISOString()),
+      run_finished_at: String(step?.finished_at || '').trim() || undefined,
+      step_order: Math.max(1, Math.trunc(Number(step?.step_order || 1))),
+      node_id: String(step?.node_id || '').trim(),
+      node_name: String(step?.node_name || '').trim(),
+      node_type: String(step?.node_type || '').trim(),
+      status: String(step?.status || '').trim(),
+      input_json: step?.input_json,
+      output_json: step?.output_json,
+      request_payload: step?.request_payload,
+      response_payload: step?.response_payload,
+      metrics_json: step?.metrics_json,
+      error_text: String(step?.error_text || '').trim() || undefined
     };
   }
 
@@ -3055,7 +3094,7 @@
         <div class="parser-card-head">
           <div>
             <h3>Предпросмотр результата</h3>
-            <p>Показывает итоговые строки результата parser по текущим настройкам. Last runtime result остаётся отдельным read-only reference block, а draft preview запускается вручную по текущему входу и текущим settings секции 2.</p>
+            <p>Показывает итоговые строки результата parser по текущим настройкам. Last runtime result остаётся отдельным read-only reference block, а draft preview запускается как server preview-run по текущему graph_json до этой parser node.</p>
           </div>
         </div>
         <div class="preview-action-bar">
@@ -3080,6 +3119,7 @@
           <div class="preview-meta">
             <span>Последний запуск preview: {new Date(previewUpdatedAt).toLocaleString('ru-RU')}</span>
             <span>Текущий config signature: {previewConfigSignature ? 'есть' : 'нет'}</span>
+            <span>Источник draft preview: server preview-run</span>
           </div>
         {/if}
         <div class="subsection-head">
@@ -3173,8 +3213,8 @@
           <span>{draftPreviewUxState.sourceLabel}</span>
         </div>
         <div class="preview-meta">
-          <span>Пакет: {previewResultState.mode === 'rows' ? `${previewData?.batch?.returned_rows ?? 0} / ${previewData?.batch?.batch_size ?? '-'}` : '-'}</span>
-          <span>Есть ещё данные: {previewResultState.mode === 'rows' ? (previewData?.batch?.has_more ? 'да' : 'нет') : '-'}</span>
+          <span>Пакет: {previewResultState.mode === 'rows' ? `${draftPreviewData?.batch?.returned_rows ?? 0} / ${draftPreviewData?.batch?.batch_size ?? '-'}` : '-'}</span>
+          <span>Есть ещё данные: {previewResultState.mode === 'rows' ? (draftPreviewData?.batch?.has_more ? 'да' : 'нет') : '-'}</span>
           <span>
             Обновлено: {previewResultState.mode !== 'no_preview_yet' && previewUpdatedAt && !previewResultState.isStalePreview
               ? new Date(previewUpdatedAt).toLocaleString('ru-RU')

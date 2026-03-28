@@ -4133,6 +4133,41 @@ function isApiToolNode(node) {
   return Boolean(node && node.type === 'tool' && (toolType === 'api_request' || toolType === 'http_request'));
 }
 
+function isParserToolNode(node) {
+  const toolType = String(node?.config?.toolType || '').trim().toLowerCase();
+  return Boolean(node && node.type === 'tool' && toolType === 'table_parser');
+}
+
+function applyToolSettingsOverrideToGraph(graphJson, targetNodeId, settingsOverride = null, expectedToolType = '') {
+  const graph = graphJson && typeof graphJson === 'object' ? deepClone(graphJson) : {};
+  const override =
+    settingsOverride && typeof settingsOverride === 'object' && !Array.isArray(settingsOverride) ? deepClone(settingsOverride) : null;
+  const targetId = String(targetNodeId || '').trim();
+  const expected = String(expectedToolType || '').trim().toLowerCase();
+  if (!override || !targetId) return graph;
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  graph.nodes = nodes.map((node) => {
+    if (String(node?.id || '').trim() !== targetId) return node;
+    if (expected) {
+      const actualToolType = String(node?.config?.toolType || '').trim().toLowerCase();
+      if (actualToolType !== expected) return node;
+    }
+    const config = node?.config && typeof node.config === 'object' ? node.config : {};
+    const settings = config?.settings && typeof config.settings === 'object' && !Array.isArray(config.settings) ? config.settings : {};
+    return {
+      ...node,
+      config: {
+        ...config,
+        settings: {
+          ...settings,
+          ...override
+        }
+      }
+    };
+  });
+  return graph;
+}
+
 function normalizeApiRequestFromTemplateRow(template) {
   const method = String(template?.method || 'GET').trim().toUpperCase() || 'GET';
   const baseUrl = String(template?.base_url || '').trim();
@@ -8035,6 +8070,151 @@ async function previewApiNodeProcessHandler(req, res) {
   }
 }
 
+async function previewParserNodeProcessHandler(req, res) {
+  const deskId = Math.trunc(Number(req.body?.desk_id || 0));
+  const targetNodeId = String(req.body?.target_node_id || '').trim();
+  const graphJson = req.body?.graph_json && typeof req.body.graph_json === 'object' ? req.body.graph_json : null;
+  const parserSettingsOverride =
+    req.body?.parser_settings_override && typeof req.body.parser_settings_override === 'object'
+      ? req.body.parser_settings_override
+      : null;
+  if (!targetNodeId) {
+    return res.status(400).json({ error: 'bad_request', details: 'target_node_id is required' });
+  }
+  if (!graphJson && deskId <= 0) {
+    return res.status(400).json({ error: 'bad_request', details: 'desk_id or graph_json is required' });
+  }
+
+  let client = null;
+  let runUid = buildRunUid('wf_preview');
+  let config = { ...DEFAULT_CONFIG };
+  try {
+    client = await pool.connect();
+    config = await loadRuntimeStorageConfig(client);
+    await ensureWorkflowAutomationTables(client, config);
+
+    const publishedDesk = deskId > 0 ? await loadPublishedDeskById(client, config, deskId) : null;
+    const effectiveGraph = applyToolSettingsOverrideToGraph(
+      graphJson || publishedDesk?.graph_json || {},
+      targetNodeId,
+      parserSettingsOverride,
+      'table_parser'
+    );
+    const deskRow = {
+      desk_id: deskId > 0 ? deskId : Math.trunc(Number(publishedDesk?.desk_id || 0)),
+      desk_name: String(req.body?.desk_name || publishedDesk?.desk_name || '').trim(),
+      desk_version_id: Math.trunc(Number(publishedDesk?.desk_version_id || 0)),
+      version_no: Math.trunc(Number(publishedDesk?.version_no || 0)),
+      graph_json: effectiveGraph
+    };
+    const overrideRows = deskRow.desk_id > 0 ? await loadProcessOverrides(client, config, deskRow.desk_id) : [];
+    const processes = discoverProcessesFromGraph({
+      deskId: deskRow.desk_id,
+      deskVersionId: deskRow.desk_version_id,
+      versionNo: deskRow.version_no,
+      graphJson: deskRow.graph_json,
+      overrideRows
+    });
+    const process = findProcessContainingNode(processes, targetNodeId);
+    if (!process) {
+      return res.status(404).json({ error: 'not_found', details: 'process for target node not found' });
+    }
+    const targetNode =
+      Array.isArray(process?.subgraph?.order)
+        ? process.subgraph.order.find((node) => String(node?.id || '').trim() === targetNodeId)
+        : null;
+    if (!targetNode || !isParserToolNode(targetNode)) {
+      return res.status(400).json({ error: 'bad_request', details: 'target node is not a parser node' });
+    }
+
+    const scopes = await resolveExecutionScopesForProcess(client, config, deskRow, process);
+    const previewScope = Array.isArray(scopes) && scopes.length ? scopes[0] : buildDefaultExecutionScopeForProcess(process);
+    const previewProcess = {
+      ...process,
+      subgraph: buildUpstreamSubgraphToTarget(process?.subgraph || {}, targetNodeId)
+    };
+
+    await insertProcessRunRow(client, config, {
+      run_uid: runUid,
+      desk_id: deskRow.desk_id,
+      desk_name: deskRow.desk_name || `desk_${deskRow.desk_id || 0}`,
+      desk_version_id: deskRow.desk_version_id,
+      start_node_id: String(previewProcess?.start_node_id || '').trim(),
+      process_code: String(previewProcess?.process_code || '').trim(),
+      scope_type: previewScope.scope_type,
+      scope_ref: previewScope.scope_ref,
+      tenant_id: previewScope.tenant_id,
+      context_json: previewScope.context_json || {},
+      run_policy: String(previewProcess?.run_policy || 'single_instance').trim(),
+      orchestration_mode: 'preview',
+      trigger_source: 'preview',
+      trigger_type: 'preview',
+      trigger_key: targetNodeId,
+      trigger_meta: {
+        preview_target_node_id: targetNodeId,
+        graph_source: graphJson ? 'editor_snapshot' : 'published_desk',
+        preview_scope: previewScope,
+        parser_settings_override: Boolean(parserSettingsOverride)
+      },
+      status: 'running',
+      created_by: String(req.body?.created_by || 'parser_preview').trim() || 'parser_preview'
+    });
+
+    const result = await executeProcessPreviewUntilNode(
+      client,
+      config,
+      deskRow,
+      previewProcess,
+      {
+        run_uid: runUid,
+        scope_type: previewScope.scope_type,
+        scope_ref: previewScope.scope_ref,
+        tenant_id: previewScope.tenant_id,
+        context_json: previewScope.context_json || {}
+      },
+      targetNodeId,
+      {}
+    );
+
+    await updateRunRow(client, config, runUid, {
+      status: result.status,
+      finished_at: new Date().toISOString(),
+      duration_ms: Number(result.duration_ms || 0),
+      summary_json: result.summary_json || {},
+      error_text: result.error_text || ''
+    });
+
+    return res.json({
+      run_uid: runUid,
+      process: {
+        start_node_id: String(previewProcess?.start_node_id || '').trim(),
+        process_code: String(previewProcess?.process_code || '').trim()
+      },
+      scope: previewScope,
+      target_step: result.target_step || null,
+      steps: Array.isArray(result.steps) ? result.steps : []
+    });
+  } catch (e) {
+    const errorText = String(e?.message || e || 'preview_parser_node_failed');
+    if (client) {
+      try {
+        await updateRunRow(client, config, runUid, {
+          status: 'failed',
+          finished_at: new Date().toISOString(),
+          duration_ms: 0,
+          summary_json: {},
+          error_text: errorText
+        });
+      } catch {
+        // ignore secondary preview run update failure
+      }
+    }
+    return res.status(500).json({ error: 'preview_parser_node_failed', details: errorText });
+  } finally {
+    if (client) client.release();
+  }
+}
+
 async function triggerProcessRunsHandler(req, res) {
   const deskId = Number(req.body?.desk_id || 0);
   const startNodeId = String(req.body?.start_node_id || '').trim();
@@ -8603,6 +8783,7 @@ workflowAutomationRouter.get('/process-runs', requireDataAdmin, listProcessRunsH
 workflowAutomationRouter.get('/process-runs/aggregation', requireDataAdmin, listRunAggregationHandler);
 workflowAutomationRouter.get('/process-runs/:run_uid', requireDataAdmin, getProcessRunHandler);
 workflowAutomationRouter.post('/process-runs/preview-api-node', requireDataAdmin, previewApiNodeProcessHandler);
+workflowAutomationRouter.post('/process-runs/preview-parser-node', requireDataAdmin, previewParserNodeProcessHandler);
 workflowAutomationRouter.post('/process-runs/trigger', requireDataAdmin, triggerProcessRunsHandler);
 workflowAutomationRouter.post('/desks/:desk_id/publish', requireDataAdmin, publishDeskHandler);
 workflowAutomationRouter.get('/desks/:desk_id/processes', requireDataAdmin, listDeskProcessesHandler);
@@ -8636,6 +8817,7 @@ export const workflowAutomationTestkit = {
   buildProcessStepObservabilityRow,
   processConfigFromStartNode,
   discoverProcessesFromGraph,
+  executeProcessPreviewUntilNode,
   resolveExecutionScopesFromValues,
   dependencyDispatchMode,
   dependencyDedupeMode,
@@ -8645,6 +8827,7 @@ export const workflowAutomationTestkit = {
   buildRunSummaryFromAggregation,
   composeNodeOutputEnvelope,
   normalizeNodeIoEnvelope,
+  applyToolSettingsOverrideToGraph,
   compareByOperator,
   parseCsvList,
   executeTableParserNode,

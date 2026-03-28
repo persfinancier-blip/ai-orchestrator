@@ -126,6 +126,59 @@ export function parserRuntimeRowsFromValue(value) {
   return [];
 }
 
+export function buildParserPreviewDataFromRuntimeStep(runtimeStep = null, options = {}) {
+  const outputValue = runtimeStep && typeof runtimeStep === 'object' ? runtimeStep.output_json : null;
+  const output = outputValue && typeof outputValue === 'object' ? outputValue : null;
+  if (!output) return null;
+
+  const rows = parserRuntimeRowsFromValue(output);
+  const requestedLimit = Math.trunc(Number(options?.previewLimit || options?.limit || 20));
+  const previewLimit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? requestedLimit : 20;
+  const sampleRows = rows.slice(0, previewLimit);
+  const columns = uniqueStrings([
+    ...parserResultPreviewColumnsFromRows(rows),
+    ...parserResultPreviewColumnsFromRows(sampleRows)
+  ]);
+  const parserBatch =
+    output?.meta && output.meta && typeof output.meta.parser_batch === 'object' ? output.meta.parser_batch : null;
+  const returnedRows = sampleRows.length;
+  const rowCount = Math.max(0, Number(output?.row_count || rows.length) || 0);
+  const batch = parserBatch
+    ? {
+        ...parserBatch,
+        returned_rows: Math.max(0, Number(parserBatch.returned_rows || returnedRows) || returnedRows),
+        batch_size: Math.max(1, Number(parserBatch.batch_size || previewLimit) || previewLimit),
+        has_more:
+          typeof parserBatch.has_more === 'boolean'
+            ? parserBatch.has_more
+            : rowCount > Math.max(0, Number(parserBatch.returned_rows || returnedRows) || returnedRows)
+      }
+    : {
+        offset: 0,
+        batch_size: previewLimit,
+        returned_rows: returnedRows,
+        has_more: rowCount > returnedRows,
+        next_cursor: null
+      };
+  const metrics = runtimeStep?.metrics_json && typeof runtimeStep.metrics_json === 'object' ? runtimeStep.metrics_json : {};
+
+  return {
+    row_count: rowCount,
+    column_count: columns.length,
+    columns,
+    sample_rows: sampleRows,
+    raw_row_count: rowCount,
+    raw_column_count: columns.length,
+    raw_columns: columns,
+    raw_sample_rows: sampleRows,
+    source_type: trim(output?.meta?.source_type),
+    source_ref: trim(output?.meta?.source_ref),
+    source_format: trim(output?.meta?.source_format),
+    batch,
+    stats: metrics
+  };
+}
+
 function readValueFromRow(row, candidates = []) {
   const source = row && typeof row === 'object' && !Array.isArray(row) ? row : null;
   if (!source) return { found: false, value: undefined, candidate: '' };

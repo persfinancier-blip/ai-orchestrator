@@ -2,10 +2,49 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  buildParserPreviewDataFromRuntimeStep,
   buildParserDraftPreviewUxState,
   buildParserResultPreviewState,
   buildParserRuntimeResultState
 } from '../desk/tabs/parserResultPreviewCore.js';
+
+test('parser preview data from runtime step: output envelope becomes draft preview payload', () => {
+  const preview = buildParserPreviewDataFromRuntimeStep(
+    {
+      output_json: {
+        contract_version: 'node_io_v1',
+        row_count: 2,
+        rows: [
+          { adv_id: 7, adv_title: 'Alpha' },
+          { adv_id: 9, adv_title: 'Beta' }
+        ],
+        meta: {
+          source_type: 'table_parser',
+          source_ref: 'workflow_preview',
+          source_format: 'json',
+          parser_batch: {
+            offset: 0,
+            batch_size: 20,
+            returned_rows: 2,
+            has_more: false,
+            next_cursor: null
+          }
+        }
+      },
+      metrics_json: { rows: 2 }
+    },
+    { previewLimit: 20 }
+  );
+
+  assert.ok(preview);
+  assert.equal(preview.row_count, 2);
+  assert.deepEqual(preview.columns, ['adv_id', 'adv_title']);
+  assert.deepEqual(preview.sample_rows[0], { adv_id: 7, adv_title: 'Alpha' });
+  assert.equal(preview.source_type, 'table_parser');
+  assert.equal(preview.source_ref, 'workflow_preview');
+  assert.equal(preview.source_format, 'json');
+  assert.equal(preview.batch.returned_rows, 2);
+});
 
 test('parser result preview state: fresh preview rows are normalized to publish aliases', () => {
   const state = buildParserResultPreviewState({
