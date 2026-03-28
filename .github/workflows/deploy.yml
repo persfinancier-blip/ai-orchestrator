@@ -43,4 +43,13 @@ jobs:
           port: ${{ secrets.DEPLOY_PORT }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
-            sudo systemctl reload apache2
+            if sudo /bin/systemctl list-unit-files apache2.service --no-legend 2>/dev/null | grep -q '^apache2\.service'; then
+              if sudo /bin/systemctl is-active --quiet apache2; then
+                sudo /bin/systemctl reload apache2
+                echo "Apache reloaded"
+              else
+                echo "apache2.service exists but is not active, skipping reload"
+              fi
+            else
+              echo "apache2.service is not installed, skipping reload"
+            fi
