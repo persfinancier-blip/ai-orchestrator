@@ -2072,21 +2072,6 @@
             <p>Consume-view блока `Выходные параметры` предыдущей ноды. Parser читает именно опубликованный upstream contract и не заводит поверх него отдельный parser-only список полей.</p>
           </div>
         </div>
-        {#if lastRuntimeStep}
-          <div class="preview-state-box preview-state-ok">
-            <strong>Runtime snapshot consume-side</strong>
-            <div>
-              Последний server run сохранил canonical input этой ноды. Поля ниже всё равно берутся из publish-блока upstream, а runtime здесь используется только как read-only marker.
-            </div>
-          </div>
-          <div class="preview-meta">
-            <span>Run: {lastRuntimeStep.run_uid || '-'}</span>
-            <span>Статус: {lastRuntimeStep.run_status || lastRuntimeStep.status || '-'}</span>
-            <span>Шаг: {lastRuntimeStep.step_order || '-'}</span>
-            <span>Строк: {runtimeRowCountFromValue(lastRuntimeStep.input_json)}</span>
-            <span>Runtime source: доступен</span>
-          </div>
-        {/if}
         {#if incomingNodes.length}
           <div class="parser-shell-summary">
             <span class="chip-chip readonly-chip">{incomingNodes.length} {incomingNodes.length === 1 ? 'источник' : 'источника'}</span>
@@ -2104,16 +2089,10 @@
                 </div>
                 <div class="parser-shell-description">{incomingNodeDescription(item)}</div>
                 <div class="parser-shell-summary">
-                  <span class="chip-chip readonly-chip">Kind: {descriptorOutputKindLabel(item.outputKind)}</span>
-                  <span class="chip-chip readonly-chip">Publish fields: {incomingContractFields(item).length}</span>
+                  <span class="chip-chip readonly-chip">Поля: {incomingContractFields(item).length}</span>
                   {#if item.detection?.detectedFormat}
                     <span class="chip-chip readonly-chip">Формат: {item.detection.detectedFormat}</span>
                   {/if}
-                  {#if item.detection?.recordPath}
-                    <span class="chip-chip readonly-chip">Строки: {item.detection.recordPath}</span>
-                  {/if}
-                  <span class="chip-chip readonly-chip">Runtime snapshot: {lastRuntimeStep ? 'да' : 'нет'}</span>
-                  <span class="chip-chip readonly-chip">Preview sample: {hasIncomingSampleSnapshot(item) ? 'да' : 'нет'}</span>
                 </div>
                 <div class="parser-contract-block">
                   <div class="parser-contract-head">
@@ -2162,46 +2141,19 @@
         <div class="parser-contract-block parser-flow-preview-block">
           <div class="parser-contract-head">
             <span>Preview входных строк</span>
-            <span>{inputFlowPreviewState.mode === 'rows' ? `${inputFlowPreviewState.liveRowsCount} строк` : 'read-only'}</span>
+            <span>{inputFlowPreviewState.mode === 'rows' ? `${inputFlowPreviewState.liveRowsCount} строк` : 'недоступен'}</span>
           </div>
-          <div class="preview-meta">
-            <span>{draftPreviewUxState.sourceLabel}</span>
-            <span>Run: {draftPreviewStep?.run_uid || '-'}</span>
-            <span>Строк: {inputFlowPreviewState.responseRowCount}</span>
-            <span>Колонок: {inputFlowPreviewState.mode === 'rows' ? inputFlowPreviewState.columns.length : incomingPreviewContractFields.length}</span>
-          </div>
-          <div class={`preview-state-box preview-state-${inputFlowPreviewState.statusTone}`}>
-            <strong>{inputFlowPreviewState.statusTitle}</strong>
-            <div>{inputFlowPreviewState.statusDescription}</div>
+          <div class={`preview-inline-status ${inputFlowPreviewState.isStalePreview ? 'preview-inline-status-warn' : ''}`}>
+            {#if inputFlowPreviewState.mode === 'rows'}
+              Preview входа: {inputFlowPreviewState.liveRowsCount} строк{inputFlowPreviewState.isStalePreview ? ' · устарел' : ''}
+            {:else}
+              {inputFlowPreviewState.statusTitle}
+            {/if}
           </div>
           {#if previewRunFreshError}
             <div class="inline-error">{previewError}</div>
           {/if}
-          {#if inputFlowPreviewState.alignmentTitle && (inputFlowPreviewState.responseRowCount || inputFlowPreviewState.matchedColumns.length || inputFlowPreviewState.unmatchedRawColumns.length || inputFlowPreviewState.missingContractColumns.length)}
-            <div class={`preview-state-box preview-state-${inputFlowPreviewState.alignmentTone}`}>
-              <strong>{inputFlowPreviewState.alignmentTitle}</strong>
-              <div>{inputFlowPreviewState.alignmentDescription}</div>
-            </div>
-            <div class="preview-meta">
-              <span>Matched contract fields: {previewListLabel(inputFlowPreviewState.matchedColumns)}</span>
-              <span>Unmatched raw keys: {previewListLabel(inputFlowPreviewState.unmatchedRawColumns)}</span>
-            </div>
-            <div class="preview-meta">
-              <span>Missing contract fields: {previewListLabel(inputFlowPreviewState.missingContractColumns)}</span>
-              <span>Alignment state: {inputFlowPreviewState.debug.alignmentState || '-'}</span>
-            </div>
-          {/if}
           {#if inputFlowPreviewState.mode === 'rows'}
-            {#if inputFlowPreviewState.isStalePreview}
-              <div class="preview-stale-banner">
-                Таблица ниже показывает canonical input из последнего preview-run. Для синхронной проверки входа и выхода запусти preview ещё раз.
-              </div>
-            {/if}
-            <div class="preview-columns">
-              {#each inputFlowPreviewState.columns as column}
-                <span>{column}</span>
-              {/each}
-            </div>
             <div class="preview-table-wrap" class:is-stale-wrap={inputFlowPreviewState.isStalePreview}>
               <table class="preview-table">
                 <thead>
@@ -2224,7 +2176,6 @@
             </div>
           {:else}
             <div class="empty-box">
-              <strong>{inputFlowPreviewState.statusTitle}</strong>
               <div>{inputFlowPreviewState.statusDescription}</div>
             </div>
           {/if}
@@ -3165,30 +3116,11 @@
             <p>Publish-view канонического выхода текущей parser node. Именно этот блок дальше становится consume-view следующей ноды, без отдельного конкурирующего потока полей.</p>
           </div>
         </div>
-        {#if lastRuntimeStep}
-          <div class={`preview-state-box preview-state-${runtimeResultState.statusTone}`}>
-            <strong>Runtime snapshot publish-side</strong>
-            <div>Последний server run сохранил snapshot канонического выхода этой ноды. Поля ниже всё равно берутся из publish contract editor flow, а runtime здесь используется только как marker.</div>
-          </div>
-          <div class="preview-meta">
-            <span>Run: {runtimeResultState.runUid || '-'}</span>
-            <span>Статус: {runtimeResultState.runStatus || lastRuntimeStep.status || '-'}</span>
-            <span>Строк: {runtimeResultState.rowCount}</span>
-            <span>Handoff: {runtimeResultState.handoffMatchesUpstream === null ? '-' : runtimeResultState.handoffMatchesUpstream ? 'совпадает' : 'отличается'}</span>
-            <span>Runtime source: {lastRuntimeStep.output_json ? 'доступен' : 'нет'}</span>
-          </div>
-        {/if}
         <div class="parser-shell-summary">
-          <span class="chip-chip readonly-chip">Kind: {outputDescriptorKindLabelValue}</span>
           <span class="chip-chip readonly-chip">Поля: {publishedDescriptorFields.length}</span>
           {#if outputDescriptorDetection?.detectedFormat}
             <span class="chip-chip readonly-chip">Формат: {outputDescriptorDetection.detectedFormat}</span>
           {/if}
-        </div>
-        <div class="preview-meta">
-          <span>Read mode: {outputDescriptorDetection?.readMode || '-'}</span>
-          <span>Payload path: {outputDescriptorDetection?.payloadPath || '-'}</span>
-          <span>Rows path: {outputDescriptorDetection?.recordPath || '-'}</span>
         </div>
         {#if publishedDescriptorFields.length}
           <div class="parser-shell-summary">
@@ -3220,56 +3152,22 @@
         {:else}
           <div class="inline-hint">Publish descriptor пуст: в `Входящие данные` пока нет валидных строк publish-модели.</div>
         {/if}
-        {#if selectedFieldRows.some((row) => !row.isValidForPublish)}
-          <div class="warnings-box">
-            {#each selectedFieldRows.filter((row) => !row.isValidForPublish) as row}
-              <div class="warning-line">{row.alias || row.path}: {row.statusLabel}</div>
-            {/each}
-          </div>
-        {/if}
         <div class="parser-contract-block parser-flow-preview-block">
           <div class="parser-contract-head">
             <span>Preview выходных строк</span>
-            <span>{outputFlowPreviewState.mode === 'rows' ? `${outputFlowPreviewState.liveRowsCount} строк` : 'read-only'}</span>
+            <span>{outputFlowPreviewState.mode === 'rows' ? `${outputFlowPreviewState.liveRowsCount} строк` : 'недоступен'}</span>
           </div>
-          <div class="preview-meta">
-            <span>{draftPreviewUxState.sourceLabel}</span>
-            <span>Run: {draftPreviewStep?.run_uid || '-'}</span>
-            <span>Строк: {outputFlowPreviewState.responseRowCount}</span>
-            <span>Колонок: {outputFlowPreviewState.mode === 'rows' ? outputFlowPreviewState.columns.length : publishedDescriptorFields.length}</span>
-          </div>
-          <div class={`preview-state-box preview-state-${outputFlowPreviewState.statusTone}`}>
-            <strong>{outputFlowPreviewState.statusTitle}</strong>
-            <div>{outputFlowPreviewState.statusDescription}</div>
+          <div class={`preview-inline-status ${outputFlowPreviewState.isStalePreview ? 'preview-inline-status-warn' : ''}`}>
+            {#if outputFlowPreviewState.mode === 'rows'}
+              Preview выхода: {outputFlowPreviewState.liveRowsCount} строк{outputFlowPreviewState.isStalePreview ? ' · устарел' : ''}
+            {:else}
+              {outputFlowPreviewState.statusTitle}
+            {/if}
           </div>
           {#if previewRunFreshError}
             <div class="inline-error">{previewError}</div>
           {/if}
-          {#if outputFlowPreviewState.alignmentTitle && (outputFlowPreviewState.responseRowCount || outputFlowPreviewState.matchedColumns.length || outputFlowPreviewState.unmatchedRawColumns.length || outputFlowPreviewState.missingContractColumns.length)}
-            <div class={`preview-state-box preview-state-${outputFlowPreviewState.alignmentTone}`}>
-              <strong>{outputFlowPreviewState.alignmentTitle}</strong>
-              <div>{outputFlowPreviewState.alignmentDescription}</div>
-            </div>
-            <div class="preview-meta">
-              <span>Matched contract fields: {previewListLabel(outputFlowPreviewState.matchedColumns)}</span>
-              <span>Unmatched raw keys: {previewListLabel(outputFlowPreviewState.unmatchedRawColumns)}</span>
-            </div>
-            <div class="preview-meta">
-              <span>Missing contract fields: {previewListLabel(outputFlowPreviewState.missingContractColumns)}</span>
-              <span>Alignment state: {outputFlowPreviewState.debug.alignmentState || '-'}</span>
-            </div>
-          {/if}
           {#if outputFlowPreviewState.mode === 'rows'}
-            {#if outputFlowPreviewState.isStalePreview}
-              <div class="preview-stale-banner">
-                Таблица ниже показывает canonical output из последнего preview-run. Чтобы синхронно обновить contract и строки, запусти preview ещё раз.
-              </div>
-            {/if}
-            <div class="preview-columns">
-              {#each outputFlowPreviewState.columns as column}
-                <span>{column}</span>
-              {/each}
-            </div>
             <div class="preview-table-wrap" class:is-stale-wrap={outputFlowPreviewState.isStalePreview}>
               <table class="preview-table">
                 <thead>
@@ -3292,7 +3190,6 @@
             </div>
           {:else}
             <div class="empty-box">
-              <strong>{outputFlowPreviewState.statusTitle}</strong>
               <div>{outputFlowPreviewState.statusDescription}</div>
             </div>
           {/if}
@@ -3307,7 +3204,7 @@
         <div class="parser-card-head">
           <div>
             <h3>Предпросмотр результата</h3>
-            <p>Запускает один server preview-run по текущему graph_json до этой parser node. Тот же run одновременно кормит preview входа в section 1 и preview выхода в section 3, а здесь остаётся детальная расшифровка результата.</p>
+            <p>Показывает итоговые строки результата parser по текущим настройкам.</p>
           </div>
         </div>
         <div class="preview-action-bar">
@@ -3324,305 +3221,27 @@
             {draftPreviewUxState.actionLabel}
           </button>
         </div>
-        <div class={`preview-state-box preview-state-${draftPreviewUxState.statusTone}`}>
-          <strong>{draftPreviewUxState.stateLabel}</strong>
-          <div>{draftPreviewUxState.statusDescription}</div>
-        </div>
-        {#if previewUpdatedAt}
-          <div class="preview-meta">
-            <span>Последний запуск preview: {new Date(previewUpdatedAt).toLocaleString('ru-RU')}</span>
-            <span>Попытки preview: {previewRunHasAnyAttempt ? 'есть' : 'нет'}</span>
-            <span>Текущий config signature: {previewConfigSignature ? 'есть' : 'нет'}</span>
-            <span>Источник draft preview: server preview-run</span>
-          </div>
-        {/if}
-        <div class="preview-flow-summaries">
-          <section class="preview-flow-summary">
-            <div class="subsection-head">
-              <h4>Input preview summary</h4>
-              <span>consume-side</span>
-            </div>
-            <div class={`preview-state-box preview-state-${inputFlowPreviewState.statusTone}`}>
-              <strong>{inputFlowPreviewState.statusTitle}</strong>
-              <div>{inputFlowPreviewState.statusDescription}</div>
-            </div>
-            <div class="preview-meta">
-              <span>Run: {draftPreviewStep?.run_uid || '-'}</span>
-              <span>Источник: {inputFlowPreviewState.effectiveInputSource?.label || draftPreviewUxState.sourceLabel}</span>
-            </div>
-            <div class="preview-meta">
-              <span>Строк в ответе: {inputFlowPreviewState.responseRowCount}</span>
-              <span>Строк в grid: {inputFlowPreviewState.preparedRowsCount}</span>
-              <span>Колонок: {inputFlowPreviewState.mode === 'rows' ? inputFlowPreviewState.columns.length : incomingPreviewContractFields.length}</span>
-            </div>
-            {#if inputFlowPreviewState.alignmentTitle && (inputFlowPreviewState.responseRowCount || inputFlowPreviewState.matchedColumns.length || inputFlowPreviewState.unmatchedRawColumns.length || inputFlowPreviewState.missingContractColumns.length)}
-              <div class={`preview-state-box preview-state-${inputFlowPreviewState.alignmentTone}`}>
-                <strong>{inputFlowPreviewState.alignmentTitle}</strong>
-                <div>{inputFlowPreviewState.alignmentDescription}</div>
-              </div>
-              <div class="preview-meta">
-                <span>Matched: {previewListLabel(inputFlowPreviewState.matchedColumns)}</span>
-                <span>Unmatched raw keys: {previewListLabel(inputFlowPreviewState.unmatchedRawColumns)}</span>
-                <span>Missing contract fields: {previewListLabel(inputFlowPreviewState.missingContractColumns)}</span>
-              </div>
-            {/if}
-            {#if inputFlowPreviewState.mode === 'rows'}
-              <div class="preview-columns">
-                {#each inputFlowPreviewState.columns as column}
-                  <span>{column}</span>
-                {/each}
-              </div>
-              <div class="preview-table-wrap" class:is-stale-wrap={inputFlowPreviewState.isStalePreview}>
-                <table class="preview-table">
-                  <thead>
-                    <tr>
-                      {#each inputFlowPreviewState.columns as column}
-                        <th>{column}</th>
-                      {/each}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {#each inputFlowPreviewState.rows as row}
-                      <tr>
-                        {#each inputFlowPreviewState.columns as column}
-                          <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
-                        {/each}
-                      </tr>
-                    {/each}
-                  </tbody>
-                </table>
-              </div>
-            {/if}
-          </section>
-          <section class="preview-flow-summary">
-            <div class="subsection-head">
-              <h4>Output preview summary</h4>
-              <span>publish-side</span>
-            </div>
-            <div class={`preview-state-box preview-state-${outputFlowPreviewState.statusTone}`}>
-              <strong>{outputFlowPreviewState.statusTitle}</strong>
-              <div>{outputFlowPreviewState.statusDescription}</div>
-            </div>
-            <div class="preview-meta">
-              <span>Run: {draftPreviewStep?.run_uid || '-'}</span>
-              <span>Источник: {outputFlowPreviewState.effectiveInputSource?.label || draftPreviewUxState.sourceLabel}</span>
-            </div>
-            <div class="preview-meta">
-              <span>Строк в ответе: {outputFlowPreviewState.responseRowCount}</span>
-              <span>Строк в grid: {outputFlowPreviewState.preparedRowsCount}</span>
-              <span>Колонок: {outputFlowPreviewState.mode === 'rows' ? outputFlowPreviewState.columns.length : publishedDescriptorFields.length}</span>
-            </div>
-            {#if outputFlowPreviewState.alignmentTitle && (outputFlowPreviewState.responseRowCount || outputFlowPreviewState.matchedColumns.length || outputFlowPreviewState.unmatchedRawColumns.length || outputFlowPreviewState.missingContractColumns.length)}
-              <div class={`preview-state-box preview-state-${outputFlowPreviewState.alignmentTone}`}>
-                <strong>{outputFlowPreviewState.alignmentTitle}</strong>
-                <div>{outputFlowPreviewState.alignmentDescription}</div>
-              </div>
-              <div class="preview-meta">
-                <span>Matched: {previewListLabel(outputFlowPreviewState.matchedColumns)}</span>
-                <span>Unmatched raw keys: {previewListLabel(outputFlowPreviewState.unmatchedRawColumns)}</span>
-                <span>Missing contract fields: {previewListLabel(outputFlowPreviewState.missingContractColumns)}</span>
-              </div>
-            {/if}
-            {#if outputFlowPreviewState.mode === 'rows'}
-              <div class="preview-columns">
-                {#each outputFlowPreviewState.columns as column}
-                  <span>{column}</span>
-                {/each}
-              </div>
-              <div class="preview-table-wrap" class:is-stale-wrap={outputFlowPreviewState.isStalePreview}>
-                <table class="preview-table">
-                  <thead>
-                    <tr>
-                      {#each outputFlowPreviewState.columns as column}
-                        <th>{column}</th>
-                      {/each}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {#each outputFlowPreviewState.rows as row}
-                      <tr>
-                        {#each outputFlowPreviewState.columns as column}
-                          <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
-                        {/each}
-                      </tr>
-                    {/each}
-                  </tbody>
-                </table>
-              </div>
-            {/if}
-          </section>
-        </div>
-        <div class="subsection-head">
-          <h4>Last runtime result</h4>
-        </div>
-        <div class={`preview-state-box preview-state-${runtimeResultState.statusTone}`}>
-          <strong>{runtimeResultState.statusTitle}</strong>
-          <div>{runtimeResultState.statusDescription}</div>
-        </div>
-        <div class="preview-meta">
-          <span>Run: {runtimeResultState.runUid || '-'}</span>
-          <span>Статус: {runtimeResultState.runStatus || (lastRuntimeStep?.status || '-')}</span>
-          <span>Строк: {runtimeResultState.rowCount}</span>
-          <span>Предыдущая нода: {runtimeResultState.previousNodeLabel || '-'}</span>
-        </div>
-        <div class="preview-meta">
-          <span>Handoff с upstream: {runtimeResultState.handoffMatchesUpstream === null ? '-' : runtimeResultState.handoffMatchesUpstream ? 'совпадает' : 'отличается'}</span>
-          <span>Descriptor справа: {publishedDescriptorFields.length ? `${publishedDescriptorFields.length} полей` : 'пуст'}</span>
-          <span>Draft preview ниже: отдельный слой</span>
-        </div>
-        {#if runtimeResultState.mode === 'rows'}
-          <div class="preview-columns">
-            {#each runtimeResultState.columns as column}
-              <span>{column}</span>
-            {/each}
-          </div>
-          <div class="preview-table-wrap">
-            <table class="preview-table">
-              <thead>
-                <tr>
-                  {#each runtimeResultState.columns as column}
-                    <th>{column}</th>
-                  {/each}
-                </tr>
-              </thead>
-              <tbody>
-                {#each runtimeResultState.rows as row}
-                  <tr>
-                    {#each runtimeResultState.columns as column}
-                      <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
-                    {/each}
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
-        {:else if runtimeResultState.showStructure}
-          <div class="preview-columns">
-            {#each runtimeResultState.structureFields as field}
-              <span>{field.name}</span>
-            {/each}
-          </div>
-          <div class="preview-table-wrap">
-            <table class="preview-table preview-structure-table">
-              <thead>
-                <tr>
-                  <th>Колонка</th>
-                  <th>Тип</th>
-                  <th>Path</th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each runtimeResultState.structureFields as field}
-                  <tr>
-                    <td>{field.name}</td>
-                    <td>{field.type || '-'}</td>
-                    <td>{field.path || '-'}</td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
-        {:else}
-          <div class="empty-box">Last runtime для этой ноды пока недоступен. Ниже остаётся только draft preview по текущим settings.</div>
-        {/if}
-        <div class="subsection-head">
-          <h4>Draft preview</h4>
-        </div>
-        <div class="preview-metrics">
-          <span>Режим: {previewResultState.modeLabel}</span>
-          <span>Строк в таблице: {previewResultState.mode === 'rows' ? previewResultState.preparedRowsCount : 0}</span>
-          <span>Строк в ответе preview: {previewResultState.responseRowCount}</span>
-          <span>
-            Колонок: {previewResultState.mode === 'rows'
-              ? previewResultState.columns.length
-              : previewResultState.showStructure
-              ? previewResultState.structureFields.length
-              : 0}
-          </span>
-          <span>Формат: {previewResultState.sourceFormat || '-'}</span>
-          <span>{draftPreviewUxState.sourceLabel}</span>
-        </div>
-        <div class="preview-meta">
-          <span>Пакет: {previewResultState.mode === 'rows' ? `${draftPreviewData?.batch?.returned_rows ?? 0} / ${draftPreviewData?.batch?.batch_size ?? '-'}` : '-'}</span>
-          <span>Есть ещё данные: {previewResultState.mode === 'rows' ? (draftPreviewData?.batch?.has_more ? 'да' : 'нет') : '-'}</span>
-          <span>
-            Обновлено: {previewResultState.mode !== 'no_preview_yet' && previewUpdatedAt && !previewResultState.isStalePreview
-              ? new Date(previewUpdatedAt).toLocaleString('ru-RU')
-              : '-'}
-          </span>
-          {#if previewResultState.isStalePreview && previewUpdatedAt}
-            <span>Последний preview: {new Date(previewUpdatedAt).toLocaleString('ru-RU')} (устарел)</span>
+        <div class={`preview-inline-status ${previewResultState.isStalePreview ? 'preview-inline-status-warn' : ''}`}>
+          {draftPreviewUxState.stateLabel}
+          {#if previewResultState.mode === 'rows'}
+            {' · '}
+            {previewResultState.preparedRowsCount} строк
+          {/if}
+          {#if previewUpdatedAt}
+            {' · '}
+            {new Date(previewUpdatedAt).toLocaleString('ru-RU')}
           {/if}
         </div>
         {#if previewRunFreshError}
           <div class="inline-error">{previewError}</div>
         {/if}
-        <div class={`preview-state-box preview-state-${previewResultState.statusTone}`}>
-          <strong>{previewResultState.statusTitle}</strong>
-          <div>{previewResultState.statusDescription}</div>
-        </div>
-        {#if previewResultState.alignmentTitle && (previewResultState.responseRowCount || previewResultState.matchedColumns.length || previewResultState.unmatchedRawColumns.length || previewResultState.missingContractColumns.length)}
-          <div class={`preview-state-box preview-state-${previewResultState.alignmentTone}`}>
-            <strong>{previewResultState.alignmentTitle}</strong>
-            <div>{previewResultState.alignmentDescription}</div>
-          </div>
-          <div class="preview-meta">
-            <span>Matched output columns: {previewListLabel(previewResultState.matchedColumns)}</span>
-            <span>Unmatched raw keys: {previewListLabel(previewResultState.unmatchedRawColumns)}</span>
-            <span>Missing contract fields: {previewListLabel(previewResultState.missingContractColumns)}</span>
-          </div>
-        {/if}
-        <details class="parser-preview-panel">
-          <summary class="parser-preview-summary">Debug preview pipeline</summary>
-          <div class="parser-preview-body">
-            <div class="preview-meta">
-              <span>Resolved source: {previewResultState.debug.resolvedInputSourceLabel || '-'}</span>
-              <span>Source key: {previewResultState.debug.resolvedInputSourceKey || '-'}</span>
-              <span>Success: {previewResultState.debug.previewSuccess ? 'да' : 'нет'}</span>
-              <span>Stale: {previewResultState.debug.stalePreview ? 'да' : 'нет'}</span>
-              <span>Error: {previewResultState.debug.previewError || '-'}</span>
-            </div>
-            <div class="preview-meta">
-              <span>Publish columns: {previewResultState.debug.effectivePublishColumns.length}</span>
-              <span>Preview row_count: {previewResultState.debug.previewResponseRowCount}</span>
-              <span>Prepared grid rows: {previewResultState.debug.preparedGridRowsCount}</span>
-              <span>Source resolved: {previewResultState.debug.sourceResolved ? 'да' : 'нет'}</span>
-            </div>
-            <div class="preview-meta">
-              <span>Grid columns: {previewResultState.debug.gridColumns.length ? previewResultState.debug.gridColumns.join(', ') : '-'}</span>
-            </div>
-            <div class="preview-meta">
-              <span>First prepared row keys: {previewResultState.debug.firstPreparedRowKeys.length ? previewResultState.debug.firstPreparedRowKeys.join(', ') : '-'}</span>
-            </div>
-            <div class="preview-meta">
-              <span>Columns without mapped values: {previewResultState.debug.columnsWithoutMappedValues.length ? previewResultState.debug.columnsWithoutMappedValues.join(', ') : '-'}</span>
-            </div>
-            <div class="preview-meta">
-              <span>Matched contract fields: {previewResultState.debug.matchedColumns.length ? previewResultState.debug.matchedColumns.join(', ') : '-'}</span>
-            </div>
-            <div class="preview-meta">
-              <span>Unmatched raw keys: {previewResultState.debug.unmatchedRawColumns.length ? previewResultState.debug.unmatchedRawColumns.join(', ') : '-'}</span>
-            </div>
-            <div class="preview-meta">
-              <span>Missing contract fields: {previewResultState.debug.missingContractColumns.length ? previewResultState.debug.missingContractColumns.join(', ') : '-'}</span>
-            </div>
-            <div class="preview-meta">
-              <span>Raw preview columns: {previewResultState.debug.rawPreviewColumns.length ? previewResultState.debug.rawPreviewColumns.join(', ') : '-'}</span>
-            </div>
-          </div>
-        </details>
         {#if previewResultState.mode === 'rows'}
           {#if previewResultState.isStalePreview}
             <div class="preview-stale-banner">
               Таблица ниже показывает последний draft preview по старым settings. Чтобы увидеть актуальные строки результата, нажми «Обновить предпросмотр».
             </div>
           {/if}
-          <div class="preview-columns">
-            {#each previewResultState.columns as column}
-              <span>{column}</span>
-            {/each}
-          </div>
-          <div class="preview-table-wrap" class:is-stale-wrap={previewResultState.isStalePreview}>
+          <div class="preview-table-wrap preview-table-wrap-large" class:is-stale-wrap={previewResultState.isStalePreview}>
             <table class="preview-table">
               <thead>
                 <tr>
@@ -3639,44 +3258,13 @@
                     {/each}
                   </tr>
                 {/each}
-              </tbody>
-            </table>
-          </div>
-        {:else if previewResultState.showStructure}
-          <div class="preview-structure-head">
-            <strong>Структура результата</strong>
-            <span>Показывается без живых строк</span>
-          </div>
-          <div class="preview-columns">
-            {#each previewResultState.structureFields as field}
-              <span>{field.name}</span>
-            {/each}
-          </div>
-          <div class="preview-table-wrap">
-            <table class="preview-table preview-structure-table">
-              <thead>
-                <tr>
-                  <th>Колонка</th>
-                  <th>Тип</th>
-                  <th>Path</th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each previewResultState.structureFields as field}
-                  <tr>
-                    <td>{field.name}</td>
-                    <td>{field.type || '-'}</td>
-                    <td>{field.path || '-'}</td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
+                </tbody>
+              </table>
+            </div>
         {:else}
           <div class="empty-box">
             <strong>{draftPreviewUxState.stateLabel}</strong>
             <div>{previewResultState.statusDescription}</div>
-            <div class="empty-box-hint">{draftPreviewUxState.sourceDescription}</div>
           </div>
         {/if}
       </section>
@@ -4051,20 +3639,13 @@
     border-radius: 12px;
     background: #fff;
   }
-  .preview-flow-summaries {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
+  .preview-inline-status {
+    font-size: 12px;
+    color: #475569;
+    line-height: 1.45;
   }
-  .preview-flow-summary {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 12px;
-    border: 1px solid #dbe4f0;
-    border-radius: 12px;
-    background: #fff;
+  .preview-inline-status-warn {
+    color: #92400e;
   }
   .preview-action-copy {
     min-width: 0;
@@ -4131,9 +3712,6 @@
     line-height: 1.5;
     color: #334155;
   }
-  .preview-state-box strong {
-    color: #0f172a;
-  }
   .preview-state-info {
     background: #f8fafc;
     border-color: #dbe4f0;
@@ -4168,6 +3746,9 @@
     border: 1px solid #e2e8f0;
     border-radius: 10px;
   }
+  .preview-table-wrap-large {
+    min-height: 320px;
+  }
   .preview-table-wrap.is-stale-wrap {
     border-color: #f59e0b;
     box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.12);
@@ -4196,11 +3777,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .preview-structure-table td {
-    white-space: normal;
-    overflow: visible;
-    text-overflow: clip;
-  }
   .preview-empty-cell {
     white-space: normal;
     color: #64748b;
@@ -4214,17 +3790,6 @@
     padding: 10px 12px;
     font-size: 12px;
     line-height: 1.5;
-  }
-  .preview-structure-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    font-size: 12px;
-    color: #64748b;
-  }
-  .preview-structure-head strong {
-    color: #0f172a;
   }
   .form-grid {
     display: grid;
@@ -4650,13 +4215,9 @@
       grid-template-columns: 1fr;
     }
     .preview-action-bar,
-    .preview-action-copy,
-    .preview-structure-head {
+    .preview-action-copy {
       flex-direction: column;
       align-items: flex-start;
-    }
-    .preview-flow-summaries {
-      grid-template-columns: 1fr;
     }
     .detect-summary-grid,
     .form-grid-2,
