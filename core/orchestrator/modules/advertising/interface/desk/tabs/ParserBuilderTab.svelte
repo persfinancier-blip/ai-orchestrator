@@ -174,6 +174,10 @@
     preparedGridRowsCount: number;
     firstPreparedRowKeys: string[];
     columnsWithoutMappedValues: string[];
+    matchedColumns: string[];
+    unmatchedRawColumns: string[];
+    missingContractColumns: string[];
+    alignmentState: string;
     stalePreview: boolean;
     previewError: string;
     previewSuccess: boolean;
@@ -198,6 +202,12 @@
     preparedRowsCount: number;
     sourceFormat?: string;
     isStalePreview: boolean;
+    alignmentTone: string;
+    alignmentTitle: string;
+    alignmentDescription: string;
+    matchedColumns: string[];
+    unmatchedRawColumns: string[];
+    missingContractColumns: string[];
     effectiveInputSource: ParserPreviewInputSource;
     debug: ParserPreviewDebugState;
   };
@@ -684,6 +694,10 @@
     }
   }
 
+  function previewListLabel(values: string[] | undefined | null) {
+    return Array.isArray(values) && values.length ? values.join(', ') : '-';
+  }
+
   let settings = normalizeSettings(initialSettings);
   let lastInitialSignature = JSON.stringify(settings);
   let columnsCache: Record<string, ColumnMeta[]> = {};
@@ -721,6 +735,12 @@
     preparedRowsCount: 0,
     sourceFormat: '',
     isStalePreview: false,
+    alignmentTone: 'info',
+    alignmentTitle: '',
+    alignmentDescription: '',
+    matchedColumns: [],
+    unmatchedRawColumns: [],
+    missingContractColumns: [],
     effectiveInputSource: {
       key: 'missing',
       label: 'Источник входа для preview не найден',
@@ -736,6 +756,10 @@
       preparedGridRowsCount: 0,
       firstPreparedRowKeys: [],
       columnsWithoutMappedValues: [],
+      matchedColumns: [],
+      unmatchedRawColumns: [],
+      missingContractColumns: [],
+      alignmentState: 'no_contract',
       stalePreview: false,
       previewError: '',
       previewSuccess: false,
@@ -2153,6 +2177,20 @@
           {#if previewRunFreshError}
             <div class="inline-error">{previewError}</div>
           {/if}
+          {#if inputFlowPreviewState.alignmentTitle && (inputFlowPreviewState.responseRowCount || inputFlowPreviewState.matchedColumns.length || inputFlowPreviewState.unmatchedRawColumns.length || inputFlowPreviewState.missingContractColumns.length)}
+            <div class={`preview-state-box preview-state-${inputFlowPreviewState.alignmentTone}`}>
+              <strong>{inputFlowPreviewState.alignmentTitle}</strong>
+              <div>{inputFlowPreviewState.alignmentDescription}</div>
+            </div>
+            <div class="preview-meta">
+              <span>Matched contract fields: {previewListLabel(inputFlowPreviewState.matchedColumns)}</span>
+              <span>Unmatched raw keys: {previewListLabel(inputFlowPreviewState.unmatchedRawColumns)}</span>
+            </div>
+            <div class="preview-meta">
+              <span>Missing contract fields: {previewListLabel(inputFlowPreviewState.missingContractColumns)}</span>
+              <span>Alignment state: {inputFlowPreviewState.debug.alignmentState || '-'}</span>
+            </div>
+          {/if}
           {#if inputFlowPreviewState.mode === 'rows'}
             {#if inputFlowPreviewState.isStalePreview}
               <div class="preview-stale-banner">
@@ -3207,6 +3245,20 @@
           {#if previewRunFreshError}
             <div class="inline-error">{previewError}</div>
           {/if}
+          {#if outputFlowPreviewState.alignmentTitle && (outputFlowPreviewState.responseRowCount || outputFlowPreviewState.matchedColumns.length || outputFlowPreviewState.unmatchedRawColumns.length || outputFlowPreviewState.missingContractColumns.length)}
+            <div class={`preview-state-box preview-state-${outputFlowPreviewState.alignmentTone}`}>
+              <strong>{outputFlowPreviewState.alignmentTitle}</strong>
+              <div>{outputFlowPreviewState.alignmentDescription}</div>
+            </div>
+            <div class="preview-meta">
+              <span>Matched contract fields: {previewListLabel(outputFlowPreviewState.matchedColumns)}</span>
+              <span>Unmatched raw keys: {previewListLabel(outputFlowPreviewState.unmatchedRawColumns)}</span>
+            </div>
+            <div class="preview-meta">
+              <span>Missing contract fields: {previewListLabel(outputFlowPreviewState.missingContractColumns)}</span>
+              <span>Alignment state: {outputFlowPreviewState.debug.alignmentState || '-'}</span>
+            </div>
+          {/if}
           {#if outputFlowPreviewState.mode === 'rows'}
             {#if outputFlowPreviewState.isStalePreview}
               <div class="preview-stale-banner">
@@ -3303,6 +3355,44 @@
               <span>Строк в grid: {inputFlowPreviewState.preparedRowsCount}</span>
               <span>Колонок: {inputFlowPreviewState.mode === 'rows' ? inputFlowPreviewState.columns.length : incomingPreviewContractFields.length}</span>
             </div>
+            {#if inputFlowPreviewState.alignmentTitle && (inputFlowPreviewState.responseRowCount || inputFlowPreviewState.matchedColumns.length || inputFlowPreviewState.unmatchedRawColumns.length || inputFlowPreviewState.missingContractColumns.length)}
+              <div class={`preview-state-box preview-state-${inputFlowPreviewState.alignmentTone}`}>
+                <strong>{inputFlowPreviewState.alignmentTitle}</strong>
+                <div>{inputFlowPreviewState.alignmentDescription}</div>
+              </div>
+              <div class="preview-meta">
+                <span>Matched: {previewListLabel(inputFlowPreviewState.matchedColumns)}</span>
+                <span>Unmatched raw keys: {previewListLabel(inputFlowPreviewState.unmatchedRawColumns)}</span>
+                <span>Missing contract fields: {previewListLabel(inputFlowPreviewState.missingContractColumns)}</span>
+              </div>
+            {/if}
+            {#if inputFlowPreviewState.mode === 'rows'}
+              <div class="preview-columns">
+                {#each inputFlowPreviewState.columns as column}
+                  <span>{column}</span>
+                {/each}
+              </div>
+              <div class="preview-table-wrap" class:is-stale-wrap={inputFlowPreviewState.isStalePreview}>
+                <table class="preview-table">
+                  <thead>
+                    <tr>
+                      {#each inputFlowPreviewState.columns as column}
+                        <th>{column}</th>
+                      {/each}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#each inputFlowPreviewState.rows as row}
+                      <tr>
+                        {#each inputFlowPreviewState.columns as column}
+                          <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
+                        {/each}
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            {/if}
           </section>
           <section class="preview-flow-summary">
             <div class="subsection-head">
@@ -3322,6 +3412,44 @@
               <span>Строк в grid: {outputFlowPreviewState.preparedRowsCount}</span>
               <span>Колонок: {outputFlowPreviewState.mode === 'rows' ? outputFlowPreviewState.columns.length : publishedDescriptorFields.length}</span>
             </div>
+            {#if outputFlowPreviewState.alignmentTitle && (outputFlowPreviewState.responseRowCount || outputFlowPreviewState.matchedColumns.length || outputFlowPreviewState.unmatchedRawColumns.length || outputFlowPreviewState.missingContractColumns.length)}
+              <div class={`preview-state-box preview-state-${outputFlowPreviewState.alignmentTone}`}>
+                <strong>{outputFlowPreviewState.alignmentTitle}</strong>
+                <div>{outputFlowPreviewState.alignmentDescription}</div>
+              </div>
+              <div class="preview-meta">
+                <span>Matched: {previewListLabel(outputFlowPreviewState.matchedColumns)}</span>
+                <span>Unmatched raw keys: {previewListLabel(outputFlowPreviewState.unmatchedRawColumns)}</span>
+                <span>Missing contract fields: {previewListLabel(outputFlowPreviewState.missingContractColumns)}</span>
+              </div>
+            {/if}
+            {#if outputFlowPreviewState.mode === 'rows'}
+              <div class="preview-columns">
+                {#each outputFlowPreviewState.columns as column}
+                  <span>{column}</span>
+                {/each}
+              </div>
+              <div class="preview-table-wrap" class:is-stale-wrap={outputFlowPreviewState.isStalePreview}>
+                <table class="preview-table">
+                  <thead>
+                    <tr>
+                      {#each outputFlowPreviewState.columns as column}
+                        <th>{column}</th>
+                      {/each}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#each outputFlowPreviewState.rows as row}
+                      <tr>
+                        {#each outputFlowPreviewState.columns as column}
+                          <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
+                        {/each}
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            {/if}
           </section>
         </div>
         <div class="subsection-head">
@@ -3433,6 +3561,17 @@
           <strong>{previewResultState.statusTitle}</strong>
           <div>{previewResultState.statusDescription}</div>
         </div>
+        {#if previewResultState.alignmentTitle && (previewResultState.responseRowCount || previewResultState.matchedColumns.length || previewResultState.unmatchedRawColumns.length || previewResultState.missingContractColumns.length)}
+          <div class={`preview-state-box preview-state-${previewResultState.alignmentTone}`}>
+            <strong>{previewResultState.alignmentTitle}</strong>
+            <div>{previewResultState.alignmentDescription}</div>
+          </div>
+          <div class="preview-meta">
+            <span>Matched output columns: {previewListLabel(previewResultState.matchedColumns)}</span>
+            <span>Unmatched raw keys: {previewListLabel(previewResultState.unmatchedRawColumns)}</span>
+            <span>Missing contract fields: {previewListLabel(previewResultState.missingContractColumns)}</span>
+          </div>
+        {/if}
         <details class="parser-preview-panel">
           <summary class="parser-preview-summary">Debug preview pipeline</summary>
           <div class="parser-preview-body">
@@ -3457,6 +3596,15 @@
             </div>
             <div class="preview-meta">
               <span>Columns without mapped values: {previewResultState.debug.columnsWithoutMappedValues.length ? previewResultState.debug.columnsWithoutMappedValues.join(', ') : '-'}</span>
+            </div>
+            <div class="preview-meta">
+              <span>Matched contract fields: {previewResultState.debug.matchedColumns.length ? previewResultState.debug.matchedColumns.join(', ') : '-'}</span>
+            </div>
+            <div class="preview-meta">
+              <span>Unmatched raw keys: {previewResultState.debug.unmatchedRawColumns.length ? previewResultState.debug.unmatchedRawColumns.join(', ') : '-'}</span>
+            </div>
+            <div class="preview-meta">
+              <span>Missing contract fields: {previewResultState.debug.missingContractColumns.length ? previewResultState.debug.missingContractColumns.join(', ') : '-'}</span>
             </div>
             <div class="preview-meta">
               <span>Raw preview columns: {previewResultState.debug.rawPreviewColumns.length ? previewResultState.debug.rawPreviewColumns.join(', ') : '-'}</span>

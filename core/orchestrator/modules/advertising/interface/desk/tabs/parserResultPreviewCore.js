@@ -214,12 +214,16 @@ function buildPreviewGridFromColumns(rows = [], columns = []) {
   const safeRows = normalizePreviewRows(rows);
   const safeColumns = uniqueStrings(columns);
   const mappedCounts = new Map(safeColumns.map((column) => [column, 0]));
+  const matchedSourceCandidates = new Set();
   const preparedRows = safeRows.map((row) => {
     const prepared = {};
     safeColumns.forEach((column) => {
       const resolved = readValueFromRow(row, [column]);
       prepared[column] = resolved.found ? resolved.value : '';
-      if (resolved.found) mappedCounts.set(column, (mappedCounts.get(column) || 0) + 1);
+      if (resolved.found) {
+        mappedCounts.set(column, (mappedCounts.get(column) || 0) + 1);
+        if (resolved.candidate) matchedSourceCandidates.add(resolved.candidate);
+      }
     });
     return prepared;
   });
@@ -227,7 +231,8 @@ function buildPreviewGridFromColumns(rows = [], columns = []) {
     rows: preparedRows,
     columns: safeColumns,
     columnsWithoutMappedValues: safeColumns.filter((column) => (mappedCounts.get(column) || 0) === 0),
-    firstPreparedRowKeys: Object.keys(preparedRows[0] || {})
+    firstPreparedRowKeys: Object.keys(preparedRows[0] || {}),
+    matchedSourceCandidates: uniqueStrings(Array.from(matchedSourceCandidates))
   };
 }
 
@@ -236,6 +241,7 @@ function buildPreviewGridFromStructure(rows = [], structureFields = []) {
   const safeFields = Array.isArray(structureFields) ? structureFields : [];
   const columns = uniqueStrings(safeFields.map((field) => field.name));
   const mappedCounts = new Map(columns.map((column) => [column, 0]));
+  const matchedSourceCandidates = new Set();
   const preparedRows = safeRows.map((row) => {
     const prepared = {};
     safeFields.forEach((field) => {
@@ -247,7 +253,10 @@ function buildPreviewGridFromStructure(rows = [], structureFields = []) {
       ]);
       const resolved = readValueFromRow(row, candidates);
       prepared[field.name] = resolved.found ? resolved.value : '';
-      if (resolved.found) mappedCounts.set(field.name, (mappedCounts.get(field.name) || 0) + 1);
+      if (resolved.found) {
+        mappedCounts.set(field.name, (mappedCounts.get(field.name) || 0) + 1);
+        if (resolved.candidate) matchedSourceCandidates.add(resolved.candidate);
+      }
     });
     return prepared;
   });
@@ -255,7 +264,8 @@ function buildPreviewGridFromStructure(rows = [], structureFields = []) {
     rows: preparedRows,
     columns,
     columnsWithoutMappedValues: columns.filter((column) => (mappedCounts.get(column) || 0) === 0),
-    firstPreparedRowKeys: Object.keys(preparedRows[0] || {})
+    firstPreparedRowKeys: Object.keys(preparedRows[0] || {}),
+    matchedSourceCandidates: uniqueStrings(Array.from(matchedSourceCandidates))
   };
 }
 
@@ -269,6 +279,87 @@ function isPreviewGridRenderable(grid = null) {
       Array.isArray(grid.columnsWithoutMappedValues) &&
       grid.columnsWithoutMappedValues.length < grid.columns.length
   );
+}
+
+function buildPreviewAlignmentState({
+  structureColumns = [],
+  structureGrid = null,
+  rawGrid = null,
+  inputView = false
+} = {}) {
+  const contractColumns = uniqueStrings(structureColumns);
+  const rawColumns = uniqueStrings(rawGrid?.columns);
+  const rawRowsCount = Array.isArray(rawGrid?.rows) ? rawGrid.rows.length : 0;
+  if (!rawColumns.length && rawRowsCount === 0) {
+    return {
+      state: 'no_contract',
+      tone: 'info',
+      title: '',
+      description: '',
+      matchedColumns: [],
+      unmatchedRawColumns: [],
+      missingContractColumns: []
+    };
+  }
+  const matchedColumns = contractColumns.filter(
+    (column) => !(Array.isArray(structureGrid?.columnsWithoutMappedValues) ? structureGrid.columnsWithoutMappedValues : []).includes(column)
+  );
+  const missingContractColumns = contractColumns.filter((column) => !matchedColumns.includes(column));
+  const matchedRawColumns = uniqueStrings(structureGrid?.matchedSourceCandidates);
+  const unmatchedRawColumns = uniqueStrings(
+    rawColumns.filter((column) => !matchedRawColumns.includes(column))
+  );
+
+  let state = 'no_contract';
+  if (contractColumns.length) {
+    if (!matchedColumns.length) state = 'unmatched';
+    else if (!missingContractColumns.length && !unmatchedRawColumns.length) state = 'aligned';
+    else state = 'partial';
+  }
+
+  const contractLabel = inputView ? 'consume contract' : 'publish contract';
+  if (state === 'aligned') {
+    return {
+      state,
+      tone: 'ok',
+      title: `Согласование с ${contractLabel}: полное`,
+      description: `Все колонки runtime preview совпали с ${contractLabel}.`,
+      matchedColumns,
+      unmatchedRawColumns,
+      missingContractColumns
+    };
+  }
+  if (state === 'partial') {
+    return {
+      state,
+      tone: 'warn',
+      title: `Согласование с ${contractLabel}: частичное`,
+      description: `Runtime rows показаны как есть. Часть колонок совпала с ${contractLabel}, часть требует проверки.`,
+      matchedColumns,
+      unmatchedRawColumns,
+      missingContractColumns
+    };
+  }
+  if (state === 'unmatched') {
+    return {
+      state,
+      tone: 'warn',
+      title: `Согласование с ${contractLabel}: не найдено`,
+      description: `Runtime rows показаны как есть, но ключи raw preview не удалось привязать к ${contractLabel}.`,
+      matchedColumns,
+      unmatchedRawColumns,
+      missingContractColumns
+    };
+  }
+  return {
+    state,
+    tone: 'info',
+    title: `Согласование с ${contractLabel}: не требуется`,
+    description: `Runtime rows показаны как есть без отдельного contract-alignment слоя.`,
+    matchedColumns,
+    unmatchedRawColumns,
+    missingContractColumns
+  };
 }
 
 function chooseEffectiveInputSource({
@@ -289,6 +380,10 @@ function createPreviewDebugState({
   preparedRowsCount = 0,
   firstPreparedRowKeys = [],
   columnsWithoutMappedValues = [],
+  matchedColumns = [],
+  unmatchedRawColumns = [],
+  missingContractColumns = [],
+  alignmentState = 'no_contract',
   stalePreview = false,
   previewError = '',
   previewSuccess = false,
@@ -303,6 +398,10 @@ function createPreviewDebugState({
     preparedGridRowsCount: Math.max(0, Number(preparedRowsCount) || 0),
     firstPreparedRowKeys: uniqueStrings(firstPreparedRowKeys),
     columnsWithoutMappedValues: uniqueStrings(columnsWithoutMappedValues),
+    matchedColumns: uniqueStrings(matchedColumns),
+    unmatchedRawColumns: uniqueStrings(unmatchedRawColumns),
+    missingContractColumns: uniqueStrings(missingContractColumns),
+    alignmentState: trim(alignmentState) || 'no_contract',
     stalePreview: Boolean(stalePreview),
     previewError: trim(previewError),
     previewSuccess: Boolean(previewSuccess),
@@ -330,6 +429,12 @@ function createPreviewState(base = {}) {
     preparedRowsCount: Math.max(0, Number(base.preparedRowsCount) || 0),
     sourceFormat: trim(base.sourceFormat),
     isStalePreview: Boolean(base.isStalePreview),
+    alignmentTone: trim(base.alignmentTone) || 'info',
+    alignmentTitle: trim(base.alignmentTitle),
+    alignmentDescription: trim(base.alignmentDescription),
+    matchedColumns: uniqueStrings(base.matchedColumns),
+    unmatchedRawColumns: uniqueStrings(base.unmatchedRawColumns),
+    missingContractColumns: uniqueStrings(base.missingContractColumns),
     effectiveInputSource: normalizePreviewSource(base.effectiveInputSource),
     debug: createPreviewDebugState(base.debug || {})
   };
@@ -466,7 +571,6 @@ export function buildParserResultPreviewState({
     ...(Array.isArray(previewData?.columns) ? previewData.columns : []),
     ...parserResultPreviewColumnsFromRows(previewRows)
   ]);
-
   const currentSignature = trim(currentConfigSignature);
   const lastAttemptSignature = trim(previewLastAttemptSignature);
   const lastSuccessSignature = trim(previewLastSuccessSignature);
@@ -481,51 +585,67 @@ export function buildParserResultPreviewState({
     lastResolvedInputSource,
     preferLastResolved: freshAttempt || freshSuccess || stalePreview
   });
-
-  const structuredGrid = buildPreviewGridFromStructure(previewRows, structureFields);
+  const structureGrid = buildPreviewGridFromStructure(previewRows, structureFields);
   const rawGrid = buildPreviewGridFromColumns(previewRows, previewColumns);
-  const canRenderStructuredRows =
-    structuredGrid.rows.length > 0 &&
-    structuredGrid.columns.length > 0 &&
-    structuredGrid.columnsWithoutMappedValues.length < structuredGrid.columns.length;
   const canRenderRawRows = rawGrid.rows.length > 0 && rawGrid.columns.length > 0;
+  const alignment = buildPreviewAlignmentState({
+    structureColumns,
+    structureGrid,
+    rawGrid,
+    inputView: false
+  });
 
-  const previewRowsRequireMapping = freshSuccess && structureColumns.length > 0;
-  const freshRowsRenderable = previewRowsRequireMapping ? canRenderStructuredRows : canRenderRawRows;
-  const freshGrid = previewRowsRequireMapping && canRenderStructuredRows ? structuredGrid : rawGrid;
-  const staleGrid = canRenderStructuredRows ? structuredGrid : rawGrid;
-  const displayGrid = stalePreview ? staleGrid : freshGrid;
-
-  if (freshSuccess && previewRows.length && effectiveInputSource.available && freshRowsRenderable) {
+  if (freshSuccess && previewRows.length && canRenderRawRows) {
+    const statusTone =
+      effectiveInputSource.available && (alignment.state === 'aligned' || alignment.state === 'no_contract') ? 'ok' : 'warn';
+    const statusTitle =
+      statusTone === 'ok'
+        ? 'Показаны реальные строки результата parser'
+        : 'Показаны реальные строки результата parser с диагностикой контракта';
+    const statusDescription = !effectiveInputSource.available
+      ? 'Runtime rows показаны как есть, но в UI не удалось подтвердить источник входа этого preview-run.'
+      : alignment.state === 'aligned'
+      ? 'Таблица ниже собрана из текущего runtime preview. Это живые строки результата parser.'
+      : alignment.description;
     return createPreviewState({
       mode: 'rows',
       modeLabel: 'Реальные строки результата',
-      statusTone: 'ok',
-      statusTitle: 'Показаны реальные строки результата parser',
-      statusDescription:
-        'Таблица ниже собрана из текущего runtime preview. Это живые строки результата, уже приведённые к publish-модели секции 3.',
-      rows: displayGrid.rows,
-      columns: displayGrid.columns,
+      statusTone,
+      statusTitle,
+      statusDescription,
+      rows: rawGrid.rows,
+      columns: rawGrid.columns,
       structureFields,
       showStructure: false,
-      liveRowsCount: displayGrid.rows.length,
-      liveColumnsCount: displayGrid.columns.length,
+      structureColumns,
+      liveRowsCount: rawGrid.rows.length,
+      liveColumnsCount: rawGrid.columns.length,
       responseRowCount: previewResponseRowCount,
-      preparedRowsCount: displayGrid.rows.length,
+      preparedRowsCount: rawGrid.rows.length,
       sourceFormat: trim(previewData?.source_format),
       isStalePreview: false,
+      alignmentTone: alignment.tone,
+      alignmentTitle: alignment.title,
+      alignmentDescription: alignment.description,
+      matchedColumns: alignment.matchedColumns,
+      unmatchedRawColumns: alignment.unmatchedRawColumns,
+      missingContractColumns: alignment.missingContractColumns,
       effectiveInputSource,
       debug: {
         effectiveInputSource,
         structureColumns,
         previewRowCount: previewResponseRowCount,
-        preparedRowsCount: displayGrid.rows.length,
-        firstPreparedRowKeys: displayGrid.firstPreparedRowKeys,
-        columnsWithoutMappedValues: displayGrid.columnsWithoutMappedValues,
+        preparedRowsCount: rawGrid.rows.length,
+        firstPreparedRowKeys: rawGrid.firstPreparedRowKeys,
+        columnsWithoutMappedValues: alignment.missingContractColumns,
+        matchedColumns: alignment.matchedColumns,
+        unmatchedRawColumns: alignment.unmatchedRawColumns,
+        missingContractColumns: alignment.missingContractColumns,
+        alignmentState: alignment.state,
         stalePreview: false,
         previewError: '',
         previewSuccess: true,
-        gridColumns: displayGrid.columns,
+        gridColumns: rawGrid.columns,
         rawPreviewColumns: previewColumns
       }
     });
@@ -549,6 +669,12 @@ export function buildParserResultPreviewState({
       preparedRowsCount: 0,
       sourceFormat: trim(previewData?.source_format),
       isStalePreview: false,
+      alignmentTone: alignment.tone,
+      alignmentTitle: alignment.title,
+      alignmentDescription: alignment.description,
+      matchedColumns: alignment.matchedColumns,
+      unmatchedRawColumns: alignment.unmatchedRawColumns,
+      missingContractColumns: alignment.missingContractColumns,
       effectiveInputSource,
       debug: {
         effectiveInputSource,
@@ -556,7 +682,11 @@ export function buildParserResultPreviewState({
         previewRowCount: 0,
         preparedRowsCount: 0,
         firstPreparedRowKeys: [],
-        columnsWithoutMappedValues: structureColumns,
+        columnsWithoutMappedValues: alignment.missingContractColumns,
+        matchedColumns: alignment.matchedColumns,
+        unmatchedRawColumns: alignment.unmatchedRawColumns,
+        missingContractColumns: alignment.missingContractColumns,
+        alignmentState: alignment.state,
         stalePreview: false,
         previewError,
         previewSuccess: false,
@@ -566,52 +696,13 @@ export function buildParserResultPreviewState({
     });
   }
 
-  if (freshSuccess && previewRows.length && !effectiveInputSource.available) {
-    return createPreviewState({
-      mode: 'preview_failed',
-      modeLabel: 'Preview без источника',
-      statusTone: 'error',
-      statusTitle: 'Не удалось подтвердить источник входа для preview',
-      statusDescription:
-        'Preview вернул строки результата, но в UI не сохранилась информация о том, какой вход был реально использован. Таблица скрыта, чтобы не показывать противоречивое состояние.',
-      rows: [],
-      columns: [],
-      structureFields,
-      showStructure: structureFields.length > 0,
-      structureColumns,
-      liveRowsCount: 0,
-      liveColumnsCount: 0,
-      responseRowCount: previewResponseRowCount,
-      preparedRowsCount: 0,
-      sourceFormat: trim(previewData?.source_format),
-      isStalePreview: false,
-      effectiveInputSource,
-      debug: {
-        effectiveInputSource,
-        structureColumns,
-        previewRowCount: previewResponseRowCount,
-        preparedRowsCount: 0,
-        firstPreparedRowKeys: [],
-        columnsWithoutMappedValues: structureColumns,
-        stalePreview: false,
-        previewError: 'preview_source_resolution_missing',
-        previewSuccess: false,
-        gridColumns: [],
-        rawPreviewColumns: previewColumns
-      }
-    });
-  }
-
-  if (freshSuccess && previewRows.length && !freshRowsRenderable) {
-    const mappingError = previewRowsRequireMapping
-      ? 'Preview rows получены, но их ключи не удалось сопоставить с publish columns секции 3.'
-      : 'Preview rows получены, но их не удалось подготовить к рендеру таблицы.';
+  if (freshSuccess && previewRows.length && !canRenderRawRows) {
     return createPreviewState({
       mode: 'preview_failed',
       modeLabel: 'Preview без готовой таблицы',
       statusTone: 'error',
       statusTitle: 'Не удалось подготовить preview rows для таблицы',
-      statusDescription: mappingError,
+      statusDescription: 'Preview rows получены, но их не удалось подготовить к raw-таблице для отображения.',
       rows: [],
       columns: [],
       structureFields,
@@ -623,55 +714,77 @@ export function buildParserResultPreviewState({
       preparedRowsCount: 0,
       sourceFormat: trim(previewData?.source_format),
       isStalePreview: false,
+      alignmentTone: alignment.tone,
+      alignmentTitle: alignment.title,
+      alignmentDescription: alignment.description,
+      matchedColumns: alignment.matchedColumns,
+      unmatchedRawColumns: alignment.unmatchedRawColumns,
+      missingContractColumns: alignment.missingContractColumns,
       effectiveInputSource,
       debug: {
         effectiveInputSource,
         structureColumns,
         previewRowCount: previewResponseRowCount,
         preparedRowsCount: 0,
-        firstPreparedRowKeys: [],
-        columnsWithoutMappedValues: previewRowsRequireMapping ? structuredGrid.columnsWithoutMappedValues : rawGrid.columnsWithoutMappedValues,
+        firstPreparedRowKeys: rawGrid.firstPreparedRowKeys,
+        columnsWithoutMappedValues: alignment.missingContractColumns,
+        matchedColumns: alignment.matchedColumns,
+        unmatchedRawColumns: alignment.unmatchedRawColumns,
+        missingContractColumns: alignment.missingContractColumns,
+        alignmentState: alignment.state,
         stalePreview: false,
         previewError: 'preview_grid_mapping_failed',
         previewSuccess: false,
-        gridColumns: previewRowsRequireMapping ? structuredGrid.columns : rawGrid.columns,
+        gridColumns: rawGrid.columns,
         rawPreviewColumns: previewColumns
       }
     });
   }
 
-  if (stalePreview && displayGrid.rows.length) {
-    const usesCurrentPublishColumns = canRenderStructuredRows;
+  if (stalePreview && canRenderRawRows) {
+    const statusDescription =
+      alignment.state === 'aligned'
+        ? 'Таблица ниже показывает последний draft preview по старым settings. Чтобы увидеть актуальные строки результата, обнови preview заново.'
+        : `${alignment.description} Ниже остаются raw rows последнего preview-run, уже помеченные как устаревшие.`;
     return createPreviewState({
       mode: 'rows',
       modeLabel: 'Последний preview устарел',
       statusTone: 'warn',
       statusTitle: 'Настройки изменились, предпросмотр устарел',
-      statusDescription: usesCurrentPublishColumns
-        ? 'Таблица ниже показывает последний draft preview по старым settings, но её строки уже приведены к текущей publish-модели настолько, насколько это возможно.'
-        : 'Таблица ниже показывает последний draft preview по старым settings с его исходными колонками. Чтобы увидеть актуальные строки результата, обнови предпросмотр заново.',
-      rows: displayGrid.rows,
-      columns: displayGrid.columns,
+      statusDescription,
+      rows: rawGrid.rows,
+      columns: rawGrid.columns,
       structureFields,
       showStructure: false,
-      liveRowsCount: displayGrid.rows.length,
-      liveColumnsCount: displayGrid.columns.length,
+      structureColumns,
+      liveRowsCount: rawGrid.rows.length,
+      liveColumnsCount: rawGrid.columns.length,
       responseRowCount: previewResponseRowCount,
-      preparedRowsCount: displayGrid.rows.length,
+      preparedRowsCount: rawGrid.rows.length,
       sourceFormat: trim(previewData?.source_format),
       isStalePreview: true,
+      alignmentTone: alignment.tone,
+      alignmentTitle: alignment.title,
+      alignmentDescription: alignment.description,
+      matchedColumns: alignment.matchedColumns,
+      unmatchedRawColumns: alignment.unmatchedRawColumns,
+      missingContractColumns: alignment.missingContractColumns,
       effectiveInputSource,
       debug: {
         effectiveInputSource,
         structureColumns,
         previewRowCount: previewResponseRowCount,
-        preparedRowsCount: displayGrid.rows.length,
-        firstPreparedRowKeys: displayGrid.firstPreparedRowKeys,
-        columnsWithoutMappedValues: displayGrid.columnsWithoutMappedValues,
+        preparedRowsCount: rawGrid.rows.length,
+        firstPreparedRowKeys: rawGrid.firstPreparedRowKeys,
+        columnsWithoutMappedValues: alignment.missingContractColumns,
+        matchedColumns: alignment.matchedColumns,
+        unmatchedRawColumns: alignment.unmatchedRawColumns,
+        missingContractColumns: alignment.missingContractColumns,
+        alignmentState: alignment.state,
         stalePreview: true,
         previewError: '',
         previewSuccess: false,
-        gridColumns: displayGrid.columns,
+        gridColumns: rawGrid.columns,
         rawPreviewColumns: previewColumns
       }
     });
@@ -697,6 +810,12 @@ export function buildParserResultPreviewState({
       preparedRowsCount: 0,
       sourceFormat: trim(previewData?.source_format),
       isStalePreview: false,
+      alignmentTone: alignment.tone,
+      alignmentTitle: alignment.title,
+      alignmentDescription: alignment.description,
+      matchedColumns: alignment.matchedColumns,
+      unmatchedRawColumns: alignment.unmatchedRawColumns,
+      missingContractColumns: alignment.missingContractColumns,
       effectiveInputSource,
       debug: {
         effectiveInputSource,
@@ -704,7 +823,11 @@ export function buildParserResultPreviewState({
         previewRowCount: 0,
         preparedRowsCount: 0,
         firstPreparedRowKeys: [],
-        columnsWithoutMappedValues: structureColumns,
+        columnsWithoutMappedValues: alignment.missingContractColumns,
+        matchedColumns: alignment.matchedColumns,
+        unmatchedRawColumns: alignment.unmatchedRawColumns,
+        missingContractColumns: alignment.missingContractColumns,
+        alignmentState: alignment.state,
         stalePreview: false,
         previewError: '',
         previewSuccess: false,
@@ -744,6 +867,12 @@ export function buildParserResultPreviewState({
       preparedRowsCount: 0,
       sourceFormat: trim(previewData?.source_format),
       isStalePreview: stalePreview,
+      alignmentTone: alignment.tone,
+      alignmentTitle: alignment.title,
+      alignmentDescription: alignment.description,
+      matchedColumns: alignment.matchedColumns,
+      unmatchedRawColumns: alignment.unmatchedRawColumns,
+      missingContractColumns: alignment.missingContractColumns,
       effectiveInputSource,
       debug: {
         effectiveInputSource,
@@ -751,10 +880,14 @@ export function buildParserResultPreviewState({
         previewRowCount: previewResponseRowCount,
         preparedRowsCount: 0,
         firstPreparedRowKeys: [],
-        columnsWithoutMappedValues: structureColumns,
+        columnsWithoutMappedValues: alignment.missingContractColumns,
+        matchedColumns: alignment.matchedColumns,
+        unmatchedRawColumns: alignment.unmatchedRawColumns,
+        missingContractColumns: alignment.missingContractColumns,
+        alignmentState: alignment.state,
         stalePreview,
         previewError,
-        previewSuccess: false,
+        previewSuccess: freshSuccess,
         gridColumns: [],
         rawPreviewColumns: previewColumns
       }
@@ -780,6 +913,12 @@ export function buildParserResultPreviewState({
     preparedRowsCount: 0,
     sourceFormat: trim(previewData?.source_format),
     isStalePreview: stalePreview,
+    alignmentTone: alignment.tone,
+    alignmentTitle: alignment.title,
+    alignmentDescription: alignment.description,
+    matchedColumns: alignment.matchedColumns,
+    unmatchedRawColumns: alignment.unmatchedRawColumns,
+    missingContractColumns: alignment.missingContractColumns,
     effectiveInputSource,
     debug: {
       effectiveInputSource,
@@ -788,6 +927,10 @@ export function buildParserResultPreviewState({
       preparedRowsCount: 0,
       firstPreparedRowKeys: [],
       columnsWithoutMappedValues: [],
+      matchedColumns: alignment.matchedColumns,
+      unmatchedRawColumns: alignment.unmatchedRawColumns,
+      missingContractColumns: alignment.missingContractColumns,
+      alignmentState: alignment.state,
       stalePreview,
       previewError,
       previewSuccess: false,
@@ -829,7 +972,6 @@ export function buildParserFlowPreviewState({
     ...(Array.isArray(previewData?.columns) ? previewData.columns : []),
     ...parserResultPreviewColumnsFromRows(previewRows)
   ]);
-
   const currentSignature = trim(currentConfigSignature);
   const lastAttemptSignature = trim(previewLastAttemptSignature);
   const lastSuccessSignature = trim(previewLastSuccessSignature);
@@ -843,73 +985,75 @@ export function buildParserFlowPreviewState({
     lastResolvedInputSource,
     preferLastResolved: freshAttempt || freshSuccess || stalePreview
   });
-
-  const structureGrid = buildPreviewGridFromStructure(previewRows, structureFields);
-  const directContractGrid = buildPreviewGridFromColumns(previewRows, structureColumns);
-  const rawGrid = buildPreviewGridFromColumns(previewRows, previewColumns);
   const inputView = kind === 'input';
-  const preferredFreshGrid = (() => {
-    if (!structureColumns.length) return rawGrid;
-    if (inputView) return structureGrid;
-    return directContractGrid;
-  })();
-  const preferredStaleGrid = (() => {
-    if (inputView) {
-      if (isPreviewGridRenderable(structureGrid)) return structureGrid;
-      return rawGrid;
-    }
-    if (!structureColumns.length) return rawGrid;
-    if (isPreviewGridRenderable(directContractGrid)) return directContractGrid;
-    return rawGrid;
-  })();
-  const freshRowsRenderable = isPreviewGridRenderable(preferredFreshGrid);
-  const staleRowsRenderable = isPreviewGridRenderable(preferredStaleGrid);
-  const mappingError = inputView
-    ? 'Preview rows получены, но их ключи не удалось сопоставить с consume columns секции 1.'
-    : 'Preview rows получены, но их ключи не удалось сопоставить с publish columns секции 3.';
+  const structureGrid = buildPreviewGridFromStructure(previewRows, structureFields);
+  const rawGrid = buildPreviewGridFromColumns(previewRows, previewColumns);
+  const canRenderRawRows = rawGrid.rows.length > 0 && rawGrid.columns.length > 0;
+  const alignment = buildPreviewAlignmentState({
+    structureColumns,
+    structureGrid,
+    rawGrid,
+    inputView
+  });
   const staleDescription = inputView
     ? 'Ниже остаётся canonical input текущей parser node из последнего preview-run. Настройки parser изменились, поэтому для синхронной проверки входа и выхода preview нужно обновить.'
     : 'Ниже остаётся canonical output текущей parser node из последнего preview-run. Настройки parser изменились, поэтому для синхронной проверки входа и выхода preview нужно обновить.';
 
-  if (freshSuccess && previewRows.length && effectiveInputSource.available && freshRowsRenderable) {
+  if (freshSuccess && previewRows.length && canRenderRawRows) {
+    const statusTone =
+      effectiveInputSource.available && (alignment.state === 'aligned' || alignment.state === 'no_contract') ? 'ok' : 'warn';
+    const statusDescription = !effectiveInputSource.available
+      ? 'Runtime rows показаны как есть, но в UI не удалось подтвердить источник входа этого preview-run.'
+      : alignment.state === 'aligned'
+      ? inputView
+        ? 'Таблица показывает canonical input текущей parser node из того же server preview-run, который используется для проверки выхода.'
+        : 'Таблица показывает canonical output текущей parser node из того же server preview-run, который подтверждает publish-блок section 3.'
+      : alignment.description;
     return createPreviewState({
       mode: 'rows',
       modeLabel: inputView ? 'Preview входных строк' : 'Preview выходных строк',
-      statusTone: 'ok',
+      statusTone,
       statusTitle: inputView ? 'Показаны реальные входные строки parser' : 'Показаны реальные выходные строки parser',
-      statusDescription: inputView
-        ? 'Таблица показывает canonical input текущей parser node из того же server preview-run, который используется для проверки выхода.'
-        : 'Таблица показывает canonical output текущей parser node из того же server preview-run, который подтверждает publish-блок section 3.',
-      rows: preferredFreshGrid.rows,
-      columns: preferredFreshGrid.columns,
+      statusDescription,
+      rows: rawGrid.rows,
+      columns: rawGrid.columns,
       structureFields,
       showStructure: false,
       structureColumns,
-      liveRowsCount: preferredFreshGrid.rows.length,
-      liveColumnsCount: preferredFreshGrid.columns.length,
+      liveRowsCount: rawGrid.rows.length,
+      liveColumnsCount: rawGrid.columns.length,
       responseRowCount: previewResponseRowCount,
-      preparedRowsCount: preferredFreshGrid.rows.length,
+      preparedRowsCount: rawGrid.rows.length,
       sourceFormat: trim(previewData?.source_format),
       isStalePreview: false,
+      alignmentTone: alignment.tone,
+      alignmentTitle: alignment.title,
+      alignmentDescription: alignment.description,
+      matchedColumns: alignment.matchedColumns,
+      unmatchedRawColumns: alignment.unmatchedRawColumns,
+      missingContractColumns: alignment.missingContractColumns,
       effectiveInputSource,
       debug: {
         effectiveInputSource,
         structureColumns,
         previewRowCount: previewResponseRowCount,
-        preparedRowsCount: preferredFreshGrid.rows.length,
-        firstPreparedRowKeys: preferredFreshGrid.firstPreparedRowKeys,
-        columnsWithoutMappedValues: preferredFreshGrid.columnsWithoutMappedValues,
+        preparedRowsCount: rawGrid.rows.length,
+        firstPreparedRowKeys: rawGrid.firstPreparedRowKeys,
+        columnsWithoutMappedValues: alignment.missingContractColumns,
+        matchedColumns: alignment.matchedColumns,
+        unmatchedRawColumns: alignment.unmatchedRawColumns,
+        missingContractColumns: alignment.missingContractColumns,
+        alignmentState: alignment.state,
         stalePreview: false,
         previewError: '',
         previewSuccess: true,
-        gridColumns: preferredFreshGrid.columns,
+        gridColumns: rawGrid.columns,
         rawPreviewColumns: previewColumns
       }
     });
   }
 
-  if (freshSuccess && previewRows.length && !freshRowsRenderable) {
-    const fallbackGrid = inputView ? structureGrid : preferredFreshGrid;
+  if (freshSuccess && previewRows.length && !canRenderRawRows) {
     return createPreviewState({
       mode: 'preview_failed',
       modeLabel: inputView ? 'Preview входа с ошибкой' : 'Preview выхода с ошибкой',
@@ -917,7 +1061,7 @@ export function buildParserFlowPreviewState({
       statusTitle: inputView
         ? 'Не удалось собрать preview входных строк parser'
         : 'Не удалось собрать preview выходных строк parser',
-      statusDescription: mappingError,
+      statusDescription: 'Preview rows получены, но их не удалось подготовить к raw-таблице для отображения.',
       rows: [],
       columns: [],
       structureFields,
@@ -929,21 +1073,28 @@ export function buildParserFlowPreviewState({
       preparedRowsCount: 0,
       sourceFormat: trim(previewData?.source_format),
       isStalePreview: false,
+      alignmentTone: alignment.tone,
+      alignmentTitle: alignment.title,
+      alignmentDescription: alignment.description,
+      matchedColumns: alignment.matchedColumns,
+      unmatchedRawColumns: alignment.unmatchedRawColumns,
+      missingContractColumns: alignment.missingContractColumns,
       effectiveInputSource,
       debug: {
         effectiveInputSource,
         structureColumns,
         previewRowCount: previewResponseRowCount,
         preparedRowsCount: 0,
-        firstPreparedRowKeys: fallbackGrid.firstPreparedRowKeys,
-        columnsWithoutMappedValues:
-          fallbackGrid.columnsWithoutMappedValues.length > 0
-            ? fallbackGrid.columnsWithoutMappedValues
-            : structureColumns,
+        firstPreparedRowKeys: rawGrid.firstPreparedRowKeys,
+        columnsWithoutMappedValues: alignment.missingContractColumns,
+        matchedColumns: alignment.matchedColumns,
+        unmatchedRawColumns: alignment.unmatchedRawColumns,
+        missingContractColumns: alignment.missingContractColumns,
+        alignmentState: alignment.state,
         stalePreview: false,
-        previewError: mappingError,
+        previewError: 'preview_grid_mapping_failed',
         previewSuccess: false,
-        gridColumns: fallbackGrid.columns,
+        gridColumns: rawGrid.columns,
         rawPreviewColumns: previewColumns
       }
     });
@@ -969,6 +1120,12 @@ export function buildParserFlowPreviewState({
       preparedRowsCount: 0,
       sourceFormat: trim(previewData?.source_format),
       isStalePreview: false,
+      alignmentTone: alignment.tone,
+      alignmentTitle: alignment.title,
+      alignmentDescription: alignment.description,
+      matchedColumns: alignment.matchedColumns,
+      unmatchedRawColumns: alignment.unmatchedRawColumns,
+      missingContractColumns: alignment.missingContractColumns,
       effectiveInputSource,
       debug: {
         effectiveInputSource,
@@ -976,7 +1133,11 @@ export function buildParserFlowPreviewState({
         previewRowCount: previewResponseRowCount,
         preparedRowsCount: 0,
         firstPreparedRowKeys: [],
-        columnsWithoutMappedValues: structureColumns,
+        columnsWithoutMappedValues: alignment.missingContractColumns,
+        matchedColumns: alignment.matchedColumns,
+        unmatchedRawColumns: alignment.unmatchedRawColumns,
+        missingContractColumns: alignment.missingContractColumns,
+        alignmentState: alignment.state,
         stalePreview: false,
         previewError,
         previewSuccess: false,
@@ -986,7 +1147,7 @@ export function buildParserFlowPreviewState({
     });
   }
 
-  if (stalePreview && staleRowsRenderable) {
+  if (stalePreview && canRenderRawRows) {
     return createPreviewState({
       mode: 'rows',
       modeLabel: inputView ? 'Preview входных строк' : 'Preview выходных строк',
@@ -994,30 +1155,40 @@ export function buildParserFlowPreviewState({
       statusTitle: inputView
         ? 'Показаны входные строки последнего preview-run'
         : 'Показаны выходные строки последнего preview-run',
-      statusDescription: staleDescription,
-      rows: preferredStaleGrid.rows,
-      columns: preferredStaleGrid.columns,
+      statusDescription: `${staleDescription} ${alignment.description}`,
+      rows: rawGrid.rows,
+      columns: rawGrid.columns,
       structureFields,
       showStructure: false,
       structureColumns,
-      liveRowsCount: preferredStaleGrid.rows.length,
-      liveColumnsCount: preferredStaleGrid.columns.length,
+      liveRowsCount: rawGrid.rows.length,
+      liveColumnsCount: rawGrid.columns.length,
       responseRowCount: previewResponseRowCount,
-      preparedRowsCount: preferredStaleGrid.rows.length,
+      preparedRowsCount: rawGrid.rows.length,
       sourceFormat: trim(previewData?.source_format),
       isStalePreview: true,
+      alignmentTone: alignment.tone,
+      alignmentTitle: alignment.title,
+      alignmentDescription: alignment.description,
+      matchedColumns: alignment.matchedColumns,
+      unmatchedRawColumns: alignment.unmatchedRawColumns,
+      missingContractColumns: alignment.missingContractColumns,
       effectiveInputSource,
       debug: {
         effectiveInputSource,
         structureColumns,
         previewRowCount: previewResponseRowCount,
-        preparedRowsCount: preferredStaleGrid.rows.length,
-        firstPreparedRowKeys: preferredStaleGrid.firstPreparedRowKeys,
-        columnsWithoutMappedValues: preferredStaleGrid.columnsWithoutMappedValues,
+        preparedRowsCount: rawGrid.rows.length,
+        firstPreparedRowKeys: rawGrid.firstPreparedRowKeys,
+        columnsWithoutMappedValues: alignment.missingContractColumns,
+        matchedColumns: alignment.matchedColumns,
+        unmatchedRawColumns: alignment.unmatchedRawColumns,
+        missingContractColumns: alignment.missingContractColumns,
+        alignmentState: alignment.state,
         stalePreview: true,
         previewError: '',
         previewSuccess: false,
-        gridColumns: preferredStaleGrid.columns,
+        gridColumns: rawGrid.columns,
         rawPreviewColumns: previewColumns
       }
     });
@@ -1051,6 +1222,12 @@ export function buildParserFlowPreviewState({
       preparedRowsCount: 0,
       sourceFormat: trim(previewData?.source_format),
       isStalePreview: stalePreview,
+      alignmentTone: alignment.tone,
+      alignmentTitle: alignment.title,
+      alignmentDescription: alignment.description,
+      matchedColumns: alignment.matchedColumns,
+      unmatchedRawColumns: alignment.unmatchedRawColumns,
+      missingContractColumns: alignment.missingContractColumns,
       effectiveInputSource,
       debug: {
         effectiveInputSource,
@@ -1058,10 +1235,14 @@ export function buildParserFlowPreviewState({
         previewRowCount: previewResponseRowCount,
         preparedRowsCount: 0,
         firstPreparedRowKeys: [],
-        columnsWithoutMappedValues: structureColumns,
+        columnsWithoutMappedValues: alignment.missingContractColumns,
+        matchedColumns: alignment.matchedColumns,
+        unmatchedRawColumns: alignment.unmatchedRawColumns,
+        missingContractColumns: alignment.missingContractColumns,
+        alignmentState: alignment.state,
         stalePreview,
         previewError: '',
-        previewSuccess: false,
+        previewSuccess: freshSuccess,
         gridColumns: [],
         rawPreviewColumns: previewColumns
       }
@@ -1087,6 +1268,12 @@ export function buildParserFlowPreviewState({
     preparedRowsCount: 0,
     sourceFormat: trim(previewData?.source_format),
     isStalePreview: stalePreview,
+    alignmentTone: alignment.tone,
+    alignmentTitle: alignment.title,
+    alignmentDescription: alignment.description,
+    matchedColumns: alignment.matchedColumns,
+    unmatchedRawColumns: alignment.unmatchedRawColumns,
+    missingContractColumns: alignment.missingContractColumns,
     effectiveInputSource,
     debug: {
       effectiveInputSource,
@@ -1095,6 +1282,10 @@ export function buildParserFlowPreviewState({
       preparedRowsCount: 0,
       firstPreparedRowKeys: [],
       columnsWithoutMappedValues: [],
+      matchedColumns: alignment.matchedColumns,
+      unmatchedRawColumns: alignment.unmatchedRawColumns,
+      missingContractColumns: alignment.missingContractColumns,
+      alignmentState: alignment.state,
       stalePreview,
       previewError: '',
       previewSuccess: false,
