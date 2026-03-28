@@ -259,6 +259,18 @@ function buildPreviewGridFromStructure(rows = [], structureFields = []) {
   };
 }
 
+function isPreviewGridRenderable(grid = null) {
+  return Boolean(
+    grid &&
+      Array.isArray(grid.rows) &&
+      grid.rows.length > 0 &&
+      Array.isArray(grid.columns) &&
+      grid.columns.length > 0 &&
+      Array.isArray(grid.columnsWithoutMappedValues) &&
+      grid.columnsWithoutMappedValues.length < grid.columns.length
+  );
+}
+
 function chooseEffectiveInputSource({
   currentInputSource = null,
   lastResolvedInputSource = null,
@@ -787,75 +799,321 @@ export function buildParserResultPreviewState({
 
 export function buildParserFlowPreviewState({
   viewKind = 'result',
-  ...rest
+  previewData = null,
+  previewError = '',
+  publishedDescriptorFields = [],
+  currentConfigSignature = '',
+  previewLastAttemptSignature = '',
+  previewLastSuccessSignature = '',
+  currentInputSource = null,
+  lastResolvedInputSource = null
 } = {}) {
-  const base = buildParserResultPreviewState(rest);
   const kind = trim(viewKind).toLowerCase();
-  if (kind === 'result') return base;
+  if (kind === 'result') {
+    return buildParserResultPreviewState({
+      previewData,
+      previewError,
+      publishedDescriptorFields,
+      currentConfigSignature,
+      previewLastAttemptSignature,
+      previewLastSuccessSignature,
+      currentInputSource,
+      lastResolvedInputSource
+    });
+  }
 
-  const staleDescription =
-    kind === 'input'
-      ? 'Ниже остаётся canonical input текущей parser node из последнего preview-run. Настройки parser изменились, поэтому для синхронной проверки входа и выхода preview нужно обновить.'
-      : 'Ниже остаётся canonical output текущей parser node из последнего preview-run. Настройки parser изменились, поэтому для синхронной проверки входа и выхода preview нужно обновить.';
+  const structureFields = normalizeStructureFields(publishedDescriptorFields);
+  const structureColumns = uniqueStrings(structureFields.map((field) => field.name));
+  const previewRows = normalizePreviewRows(previewData?.sample_rows);
+  const previewColumns = uniqueStrings([
+    ...(Array.isArray(previewData?.columns) ? previewData.columns : []),
+    ...parserResultPreviewColumnsFromRows(previewRows)
+  ]);
 
-  if (base.mode === 'rows') {
-    return {
-      ...base,
-      modeLabel: kind === 'input' ? 'Preview входных строк' : 'Preview выходных строк',
-      statusTitle:
-        base.isStalePreview
-          ? kind === 'input'
-            ? 'Показаны входные строки последнего preview-run'
-            : 'Показаны выходные строки последнего preview-run'
-          : kind === 'input'
-          ? 'Показаны реальные входные строки parser'
-          : 'Показаны реальные выходные строки parser',
-      statusDescription: base.isStalePreview
-        ? staleDescription
-        : kind === 'input'
+  const currentSignature = trim(currentConfigSignature);
+  const lastAttemptSignature = trim(previewLastAttemptSignature);
+  const lastSuccessSignature = trim(previewLastSuccessSignature);
+  const freshAttempt = Boolean(currentSignature) && lastAttemptSignature === currentSignature;
+  const freshSuccess = Boolean(currentSignature) && lastSuccessSignature === currentSignature;
+  const freshError = Boolean(trim(previewError)) && freshAttempt && !freshSuccess;
+  const stalePreview = Boolean(lastSuccessSignature) && Boolean(currentSignature) && lastSuccessSignature !== currentSignature;
+  const previewResponseRowCount = Math.max(0, Number(previewData?.row_count || previewRows.length) || 0);
+  const effectiveInputSource = chooseEffectiveInputSource({
+    currentInputSource,
+    lastResolvedInputSource,
+    preferLastResolved: freshAttempt || freshSuccess || stalePreview
+  });
+
+  const structureGrid = buildPreviewGridFromStructure(previewRows, structureFields);
+  const directContractGrid = buildPreviewGridFromColumns(previewRows, structureColumns);
+  const rawGrid = buildPreviewGridFromColumns(previewRows, previewColumns);
+  const inputView = kind === 'input';
+  const preferredFreshGrid = (() => {
+    if (!structureColumns.length) return rawGrid;
+    if (inputView) return structureGrid;
+    if (isPreviewGridRenderable(directContractGrid)) return directContractGrid;
+    if (isPreviewGridRenderable(structureGrid)) return structureGrid;
+    return directContractGrid;
+  })();
+  const preferredStaleGrid = (() => {
+    if (inputView) {
+      if (isPreviewGridRenderable(structureGrid)) return structureGrid;
+      return rawGrid;
+    }
+    if (isPreviewGridRenderable(directContractGrid)) return directContractGrid;
+    if (isPreviewGridRenderable(structureGrid)) return structureGrid;
+    return rawGrid;
+  })();
+  const freshRowsRenderable = isPreviewGridRenderable(preferredFreshGrid);
+  const staleRowsRenderable = isPreviewGridRenderable(preferredStaleGrid);
+  const mappingError = inputView
+    ? 'Preview rows получены, но их ключи не удалось сопоставить с consume columns секции 1.'
+    : 'Preview rows получены, но их ключи не удалось сопоставить с publish columns секции 3.';
+  const staleDescription = inputView
+    ? 'Ниже остаётся canonical input текущей parser node из последнего preview-run. Настройки parser изменились, поэтому для синхронной проверки входа и выхода preview нужно обновить.'
+    : 'Ниже остаётся canonical output текущей parser node из последнего preview-run. Настройки parser изменились, поэтому для синхронной проверки входа и выхода preview нужно обновить.';
+
+  if (freshSuccess && previewRows.length && effectiveInputSource.available && freshRowsRenderable) {
+    return createPreviewState({
+      mode: 'rows',
+      modeLabel: inputView ? 'Preview входных строк' : 'Preview выходных строк',
+      statusTone: 'ok',
+      statusTitle: inputView ? 'Показаны реальные входные строки parser' : 'Показаны реальные выходные строки parser',
+      statusDescription: inputView
         ? 'Таблица показывает canonical input текущей parser node из того же server preview-run, который используется для проверки выхода.'
-        : 'Таблица показывает canonical output текущей parser node из того же server preview-run, который подтверждает publish-блок section 3.'
-    };
+        : 'Таблица показывает canonical output текущей parser node из того же server preview-run, который подтверждает publish-блок section 3.',
+      rows: preferredFreshGrid.rows,
+      columns: preferredFreshGrid.columns,
+      structureFields,
+      showStructure: false,
+      structureColumns,
+      liveRowsCount: preferredFreshGrid.rows.length,
+      liveColumnsCount: preferredFreshGrid.columns.length,
+      responseRowCount: previewResponseRowCount,
+      preparedRowsCount: preferredFreshGrid.rows.length,
+      sourceFormat: trim(previewData?.source_format),
+      isStalePreview: false,
+      effectiveInputSource,
+      debug: {
+        effectiveInputSource,
+        structureColumns,
+        previewRowCount: previewResponseRowCount,
+        preparedRowsCount: preferredFreshGrid.rows.length,
+        firstPreparedRowKeys: preferredFreshGrid.firstPreparedRowKeys,
+        columnsWithoutMappedValues: preferredFreshGrid.columnsWithoutMappedValues,
+        stalePreview: false,
+        previewError: '',
+        previewSuccess: true,
+        gridColumns: preferredFreshGrid.columns,
+        rawPreviewColumns: previewColumns
+      }
+    });
   }
 
-  if (base.mode === 'no_preview_yet') {
-    return {
-      ...base,
-      modeLabel: kind === 'input' ? 'Preview входа не запускался' : 'Preview выхода не запускался',
-      statusTitle: kind === 'input' ? 'Preview входных строк ещё не запускался' : 'Preview выходных строк ещё не запускался',
-      statusDescription:
-        kind === 'input'
-          ? 'После запуска server preview-run здесь появятся canonical input rows текущей parser node.'
-          : 'После запуска server preview-run здесь появятся canonical output rows текущей parser node.'
-    };
+  if (freshSuccess && previewRows.length && !freshRowsRenderable) {
+    const fallbackGrid = inputView ? structureGrid : preferredFreshGrid;
+    return createPreviewState({
+      mode: 'preview_failed',
+      modeLabel: inputView ? 'Preview входа с ошибкой' : 'Preview выхода с ошибкой',
+      statusTone: 'error',
+      statusTitle: inputView
+        ? 'Не удалось собрать preview входных строк parser'
+        : 'Не удалось собрать preview выходных строк parser',
+      statusDescription: mappingError,
+      rows: [],
+      columns: [],
+      structureFields,
+      showStructure: structureFields.length > 0,
+      structureColumns,
+      liveRowsCount: 0,
+      liveColumnsCount: 0,
+      responseRowCount: previewResponseRowCount,
+      preparedRowsCount: 0,
+      sourceFormat: trim(previewData?.source_format),
+      isStalePreview: false,
+      effectiveInputSource,
+      debug: {
+        effectiveInputSource,
+        structureColumns,
+        previewRowCount: previewResponseRowCount,
+        preparedRowsCount: 0,
+        firstPreparedRowKeys: fallbackGrid.firstPreparedRowKeys,
+        columnsWithoutMappedValues:
+          fallbackGrid.columnsWithoutMappedValues.length > 0
+            ? fallbackGrid.columnsWithoutMappedValues
+            : structureColumns,
+        stalePreview: false,
+        previewError: mappingError,
+        previewSuccess: false,
+        gridColumns: fallbackGrid.columns,
+        rawPreviewColumns: previewColumns
+      }
+    });
   }
 
-  if (base.mode === 'preview_failed') {
-    return {
-      ...base,
-      modeLabel: kind === 'input' ? 'Preview входа с ошибкой' : 'Preview выхода с ошибкой',
-      statusTitle:
-        kind === 'input'
-          ? 'Не удалось собрать preview входных строк parser'
-          : 'Не удалось собрать preview выходных строк parser'
-    };
+  if (freshError) {
+    return createPreviewState({
+      mode: 'preview_failed',
+      modeLabel: inputView ? 'Preview входа с ошибкой' : 'Preview выхода с ошибкой',
+      statusTone: 'error',
+      statusTitle: inputView
+        ? 'Не удалось собрать preview входных строк parser'
+        : 'Не удалось собрать preview выходных строк parser',
+      statusDescription: trim(previewError) || 'Не удалось собрать preview.',
+      rows: [],
+      columns: [],
+      structureFields,
+      showStructure: structureFields.length > 0,
+      structureColumns,
+      liveRowsCount: 0,
+      liveColumnsCount: 0,
+      responseRowCount: previewResponseRowCount,
+      preparedRowsCount: 0,
+      sourceFormat: trim(previewData?.source_format),
+      isStalePreview: false,
+      effectiveInputSource,
+      debug: {
+        effectiveInputSource,
+        structureColumns,
+        previewRowCount: previewResponseRowCount,
+        preparedRowsCount: 0,
+        firstPreparedRowKeys: [],
+        columnsWithoutMappedValues: structureColumns,
+        stalePreview: false,
+        previewError,
+        previewSuccess: false,
+        gridColumns: [],
+        rawPreviewColumns: previewColumns
+      }
+    });
   }
 
-  if (base.mode === 'shape_only') {
-    return {
-      ...base,
-      modeLabel: kind === 'input' ? 'Preview входа без строк' : 'Preview выхода без строк',
-      statusTitle:
-        kind === 'input'
-          ? 'Preview входа не вернул живые строки'
-          : 'Preview выхода не вернул живые строки'
-    };
+  if (stalePreview && staleRowsRenderable) {
+    return createPreviewState({
+      mode: 'rows',
+      modeLabel: inputView ? 'Preview входных строк' : 'Preview выходных строк',
+      statusTone: 'warn',
+      statusTitle: inputView
+        ? 'Показаны входные строки последнего preview-run'
+        : 'Показаны выходные строки последнего preview-run',
+      statusDescription: staleDescription,
+      rows: preferredStaleGrid.rows,
+      columns: preferredStaleGrid.columns,
+      structureFields,
+      showStructure: false,
+      structureColumns,
+      liveRowsCount: preferredStaleGrid.rows.length,
+      liveColumnsCount: preferredStaleGrid.columns.length,
+      responseRowCount: previewResponseRowCount,
+      preparedRowsCount: preferredStaleGrid.rows.length,
+      sourceFormat: trim(previewData?.source_format),
+      isStalePreview: true,
+      effectiveInputSource,
+      debug: {
+        effectiveInputSource,
+        structureColumns,
+        previewRowCount: previewResponseRowCount,
+        preparedRowsCount: preferredStaleGrid.rows.length,
+        firstPreparedRowKeys: preferredStaleGrid.firstPreparedRowKeys,
+        columnsWithoutMappedValues: preferredStaleGrid.columnsWithoutMappedValues,
+        stalePreview: true,
+        previewError: '',
+        previewSuccess: false,
+        gridColumns: preferredStaleGrid.columns,
+        rawPreviewColumns: previewColumns
+      }
+    });
   }
 
-  return base;
+  if (structureFields.length) {
+    return createPreviewState({
+      mode: 'shape_only',
+      modeLabel: inputView ? 'Preview входа без строк' : 'Preview выхода без строк',
+      statusTone: stalePreview ? 'warn' : freshSuccess ? 'info' : 'warn',
+      statusTitle: inputView ? 'Preview входа не вернул живые строки' : 'Preview выхода не вернул живые строки',
+      statusDescription: freshSuccess && previewResponseRowCount === 0
+        ? inputView
+          ? 'Server preview-run отработал, но для текущего parser input не вернул строк. Ниже остаётся только consume-структура входа.'
+          : 'Server preview-run отработал, но для текущего parser output не вернул строк. Ниже остаётся только publish-структура выхода.'
+        : stalePreview
+        ? staleDescription
+        : !effectiveInputSource.available
+        ? effectiveInputSource.description
+        : inputView
+        ? 'После запуска server preview-run здесь появятся canonical input rows текущей parser node.'
+        : 'После запуска server preview-run здесь появятся canonical output rows текущей parser node.',
+      rows: [],
+      columns: [],
+      structureFields,
+      showStructure: true,
+      structureColumns,
+      liveRowsCount: 0,
+      liveColumnsCount: structureColumns.length,
+      responseRowCount: previewResponseRowCount,
+      preparedRowsCount: 0,
+      sourceFormat: trim(previewData?.source_format),
+      isStalePreview: stalePreview,
+      effectiveInputSource,
+      debug: {
+        effectiveInputSource,
+        structureColumns,
+        previewRowCount: previewResponseRowCount,
+        preparedRowsCount: 0,
+        firstPreparedRowKeys: [],
+        columnsWithoutMappedValues: structureColumns,
+        stalePreview,
+        previewError: '',
+        previewSuccess: false,
+        gridColumns: [],
+        rawPreviewColumns: previewColumns
+      }
+    });
+  }
+
+  return createPreviewState({
+    mode: 'no_preview_yet',
+    modeLabel: inputView ? 'Preview входа не запускался' : 'Preview выхода не запускался',
+    statusTone: 'info',
+    statusTitle: inputView ? 'Preview входных строк ещё не запускался' : 'Preview выходных строк ещё не запускался',
+    statusDescription: inputView
+      ? 'После запуска server preview-run здесь появятся canonical input rows текущей parser node.'
+      : 'После запуска server preview-run здесь появятся canonical output rows текущей parser node.',
+    rows: [],
+    columns: [],
+    structureFields: [],
+    showStructure: false,
+    structureColumns: [],
+    liveRowsCount: 0,
+    liveColumnsCount: 0,
+    responseRowCount: previewResponseRowCount,
+    preparedRowsCount: 0,
+    sourceFormat: trim(previewData?.source_format),
+    isStalePreview: stalePreview,
+    effectiveInputSource,
+    debug: {
+      effectiveInputSource,
+      structureColumns: [],
+      previewRowCount: previewResponseRowCount,
+      preparedRowsCount: 0,
+      firstPreparedRowKeys: [],
+      columnsWithoutMappedValues: [],
+      stalePreview,
+      previewError: '',
+      previewSuccess: false,
+      gridColumns: [],
+      rawPreviewColumns: previewColumns
+    }
+  });
 }
 
-export function buildParserDraftPreviewUxState({ previewState = null, previewLoading = false, inputSource = null } = {}) {
+export function buildParserDraftPreviewUxState({
+  previewState = null,
+  previewLoading = false,
+  inputSource = null,
+  runError = '',
+  hasFreshPreviewRun = false,
+  isStalePreviewRun = false
+} = {}) {
   const state = previewState && typeof previewState === 'object' ? previewState : {};
   const source = normalizePreviewSource(state.effectiveInputSource || inputSource);
   const sourceLabel = trim(source.label) || 'Источник входа для preview не найден';
@@ -871,6 +1129,45 @@ export function buildParserDraftPreviewUxState({ previewState = null, previewLoa
       statusDescription: 'Собираем предпросмотр результата по текущим настройкам parser.',
       actionLabel: 'Собираем предпросмотр...',
       actionDisabled: true,
+      sourceLabel,
+      sourceDescription
+    };
+  }
+
+  if (trim(runError)) {
+    return {
+      state: 'preview_failed',
+      stateLabel: 'Ошибка предпросмотра',
+      statusTone: 'error',
+      statusDescription: trim(runError) || 'Не удалось собрать предпросмотр результата.',
+      actionLabel: 'Повторить предпросмотр',
+      actionDisabled: false,
+      sourceLabel,
+      sourceDescription
+    };
+  }
+
+  if (isStalePreviewRun) {
+    return {
+      state: 'stale_preview',
+      stateLabel: 'Предпросмотр устарел',
+      statusTone: 'warn',
+      statusDescription: 'Настройки изменились, поэтому таблицы preview ниже больше не считаются актуальными.',
+      actionLabel: 'Обновить предпросмотр',
+      actionDisabled: false,
+      sourceLabel,
+      sourceDescription
+    };
+  }
+
+  if (hasFreshPreviewRun) {
+    return {
+      state: 'preview_ready',
+      stateLabel: 'Предпросмотр актуален',
+      statusTone: 'ok',
+      statusDescription: 'Server preview-run успешно завершился. Ниже показаны input/output детали этого же запуска.',
+      actionLabel: 'Обновить предпросмотр',
+      actionDisabled: false,
       sourceLabel,
       sourceDescription
     };

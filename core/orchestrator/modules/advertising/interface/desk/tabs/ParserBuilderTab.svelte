@@ -29,7 +29,6 @@
     buildParserFlowPreviewState,
     buildParserPreviewDataFromRuntimeValue,
     buildParserPreviewDataFromRuntimeStep,
-    buildParserResultPreviewState,
     buildParserRuntimeResultState,
     buildParserDraftPreviewUxState
   } from './parserResultPreviewCore.js';
@@ -896,6 +895,18 @@
   $: publishedDescriptorFields = descriptorFields(outputDescriptor);
   $: previewConfigSignature = buildPreviewConfigSignature(settings);
   $: previewInputSource = resolvePreviewInputSource();
+  $: previewRunHasAnyAttempt = Boolean(String(previewLastAttemptSignature || '').trim());
+  $: previewRunFreshSuccess =
+    Boolean(String(previewConfigSignature || '').trim()) && previewLastSuccessSignature === previewConfigSignature;
+  $: previewRunFreshError =
+    Boolean(String(previewError || '').trim()) &&
+    Boolean(String(previewConfigSignature || '').trim()) &&
+    previewLastAttemptSignature === previewConfigSignature &&
+    previewLastSuccessSignature !== previewConfigSignature;
+  $: previewRunStale =
+    Boolean(String(previewLastSuccessSignature || '').trim()) &&
+    Boolean(String(previewConfigSignature || '').trim()) &&
+    previewLastSuccessSignature !== previewConfigSignature;
   $: draftPreviewData = buildParserPreviewDataFromRuntimeStep(draftPreviewStep, {
     previewLimit: settings.previewLimit
   });
@@ -931,20 +942,14 @@
     currentInputSource: previewInputSource,
     lastResolvedInputSource: previewLastResolvedInputSource
   });
-  $: previewResultState = buildParserResultPreviewState({
-    previewData: draftPreviewData,
-    previewError,
-    publishedDescriptorFields,
-    currentConfigSignature: previewConfigSignature,
-    previewLastAttemptSignature,
-    previewLastSuccessSignature,
-    currentInputSource: previewInputSource,
-    lastResolvedInputSource: previewLastResolvedInputSource
-  });
+  $: previewResultState = outputFlowPreviewState;
   $: draftPreviewUxState = buildParserDraftPreviewUxState({
-    previewState: previewResultState,
+    previewState: outputFlowPreviewState,
     previewLoading,
-    inputSource: previewInputSource
+    inputSource: previewInputSource,
+    runError: previewRunFreshError ? previewError : '',
+    hasFreshPreviewRun: previewRunFreshSuccess,
+    isStalePreviewRun: previewRunStale
   });
   $: runtimeResultState = buildParserRuntimeResultState({
     runtimeStep: lastRuntimeStep,
@@ -2145,7 +2150,7 @@
             <strong>{inputFlowPreviewState.statusTitle}</strong>
             <div>{inputFlowPreviewState.statusDescription}</div>
           </div>
-          {#if previewError && draftPreviewUxState.state === 'preview_failed'}
+          {#if previewRunFreshError}
             <div class="inline-error">{previewError}</div>
           {/if}
           {#if inputFlowPreviewState.mode === 'rows'}
@@ -3199,7 +3204,7 @@
             <strong>{outputFlowPreviewState.statusTitle}</strong>
             <div>{outputFlowPreviewState.statusDescription}</div>
           </div>
-          {#if previewError && draftPreviewUxState.state === 'preview_failed'}
+          {#if previewRunFreshError}
             <div class="inline-error">{previewError}</div>
           {/if}
           {#if outputFlowPreviewState.mode === 'rows'}
@@ -3274,10 +3279,51 @@
         {#if previewUpdatedAt}
           <div class="preview-meta">
             <span>Последний запуск preview: {new Date(previewUpdatedAt).toLocaleString('ru-RU')}</span>
+            <span>Попытки preview: {previewRunHasAnyAttempt ? 'есть' : 'нет'}</span>
             <span>Текущий config signature: {previewConfigSignature ? 'есть' : 'нет'}</span>
             <span>Источник draft preview: server preview-run</span>
           </div>
         {/if}
+        <div class="preview-flow-summaries">
+          <section class="preview-flow-summary">
+            <div class="subsection-head">
+              <h4>Input preview summary</h4>
+              <span>consume-side</span>
+            </div>
+            <div class={`preview-state-box preview-state-${inputFlowPreviewState.statusTone}`}>
+              <strong>{inputFlowPreviewState.statusTitle}</strong>
+              <div>{inputFlowPreviewState.statusDescription}</div>
+            </div>
+            <div class="preview-meta">
+              <span>Run: {draftPreviewStep?.run_uid || '-'}</span>
+              <span>Источник: {inputFlowPreviewState.effectiveInputSource?.label || draftPreviewUxState.sourceLabel}</span>
+            </div>
+            <div class="preview-meta">
+              <span>Строк в ответе: {inputFlowPreviewState.responseRowCount}</span>
+              <span>Строк в grid: {inputFlowPreviewState.preparedRowsCount}</span>
+              <span>Колонок: {inputFlowPreviewState.mode === 'rows' ? inputFlowPreviewState.columns.length : incomingPreviewContractFields.length}</span>
+            </div>
+          </section>
+          <section class="preview-flow-summary">
+            <div class="subsection-head">
+              <h4>Output preview summary</h4>
+              <span>publish-side</span>
+            </div>
+            <div class={`preview-state-box preview-state-${outputFlowPreviewState.statusTone}`}>
+              <strong>{outputFlowPreviewState.statusTitle}</strong>
+              <div>{outputFlowPreviewState.statusDescription}</div>
+            </div>
+            <div class="preview-meta">
+              <span>Run: {draftPreviewStep?.run_uid || '-'}</span>
+              <span>Источник: {outputFlowPreviewState.effectiveInputSource?.label || draftPreviewUxState.sourceLabel}</span>
+            </div>
+            <div class="preview-meta">
+              <span>Строк в ответе: {outputFlowPreviewState.responseRowCount}</span>
+              <span>Строк в grid: {outputFlowPreviewState.preparedRowsCount}</span>
+              <span>Колонок: {outputFlowPreviewState.mode === 'rows' ? outputFlowPreviewState.columns.length : publishedDescriptorFields.length}</span>
+            </div>
+          </section>
+        </div>
         <div class="subsection-head">
           <h4>Last runtime result</h4>
         </div>
@@ -3380,7 +3426,7 @@
             <span>Последний preview: {new Date(previewUpdatedAt).toLocaleString('ru-RU')} (устарел)</span>
           {/if}
         </div>
-        {#if previewError && draftPreviewUxState.state === 'preview_failed'}
+        {#if previewRunFreshError}
           <div class="inline-error">{previewError}</div>
         {/if}
         <div class={`preview-state-box preview-state-${previewResultState.statusTone}`}>
@@ -3852,6 +3898,21 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
+    padding: 12px;
+    border: 1px solid #dbe4f0;
+    border-radius: 12px;
+    background: #fff;
+  }
+  .preview-flow-summaries {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .preview-flow-summary {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
     padding: 12px;
     border: 1px solid #dbe4f0;
     border-radius: 12px;
@@ -4445,6 +4506,9 @@
     .preview-structure-head {
       flex-direction: column;
       align-items: flex-start;
+    }
+    .preview-flow-summaries {
+      grid-template-columns: 1fr;
     }
     .detect-summary-grid,
     .form-grid-2,

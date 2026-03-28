@@ -103,6 +103,32 @@ test('parser flow preview state: input view uses canonical input rows from the s
   assert.match(state.statusTitle, /входн/i);
 });
 
+test('parser flow preview state: input mapping failure mentions consume columns section 1', () => {
+  const state = buildParserFlowPreviewState({
+    viewKind: 'input',
+    previewData: {
+      row_count: 1,
+      columns: ['legacy_key'],
+      sample_rows: [{ legacy_key: 'value' }],
+      source_format: 'json'
+    },
+    publishedDescriptorFields: [{ alias: 'id', type: 'text', path: 'id' }],
+    currentConfigSignature: 'cfg:input:map-fail',
+    previewLastAttemptSignature: 'cfg:input:map-fail',
+    previewLastSuccessSignature: 'cfg:input:map-fail',
+    currentInputSource: {
+      key: 'server_preview_run',
+      label: 'РСЃС‚РѕС‡РЅРёРє РІС…РѕРґР° РґР»СЏ preview: server preview-run',
+      description: 'Один и тот же server preview-run для input/output.',
+      available: true
+    }
+  });
+
+  assert.equal(state.mode, 'preview_failed');
+  assert.match(state.statusDescription, /consume columns секции 1/i);
+  assert.deepEqual(state.columns, []);
+});
+
 test('parser result preview state: fresh preview rows are normalized to publish aliases', () => {
   const state = buildParserResultPreviewState({
     previewData: {
@@ -209,6 +235,32 @@ test('parser result preview state: fresh preview does not show success when rows
   assert.equal(state.preparedRowsCount, 0);
   assert.equal(state.debug.previewResponseRowCount, 1);
   assert.match(state.statusDescription, /publish columns|подготовить/i);
+});
+
+test('parser flow preview state: output mapping failure mentions publish columns section 3', () => {
+  const state = buildParserFlowPreviewState({
+    viewKind: 'output',
+    previewData: {
+      row_count: 1,
+      columns: ['legacy_key'],
+      sample_rows: [{ legacy_key: 'value' }],
+      source_format: 'json'
+    },
+    publishedDescriptorFields: [{ alias: 'adv_id', type: 'text', path: 'missing.path' }],
+    currentConfigSignature: 'cfg:output:map-fail',
+    previewLastAttemptSignature: 'cfg:output:map-fail',
+    previewLastSuccessSignature: 'cfg:output:map-fail',
+    currentInputSource: {
+      key: 'server_preview_run',
+      label: 'РСЃС‚РѕС‡РЅРёРє РІС…РѕРґР° РґР»СЏ preview: server preview-run',
+      description: 'Один и тот же server preview-run для input/output.',
+      available: true
+    }
+  });
+
+  assert.equal(state.mode, 'preview_failed');
+  assert.match(state.statusDescription, /publish columns секции 3/i);
+  assert.deepEqual(state.columns, []);
 });
 
 test('parser result preview state: successful preview keeps the actually used source label even if current source is now missing', () => {
