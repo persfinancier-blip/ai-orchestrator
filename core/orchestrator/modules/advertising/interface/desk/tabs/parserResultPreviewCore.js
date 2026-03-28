@@ -20,6 +20,32 @@ export function parserResultPreviewColumnsFromRows(rows) {
   );
 }
 
+export function parserRuntimeRowsFromValue(value) {
+  const src = value && typeof value === 'object' ? value : null;
+  if (src && trim(src.contract_version) === 'node_io_v1' && Array.isArray(src.rows)) {
+    return src.rows
+      .map((row) => {
+        if (row && typeof row === 'object' && !Array.isArray(row)) return row;
+        return { value: row };
+      })
+      .filter(Boolean);
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((row) => {
+        if (row && typeof row === 'object' && !Array.isArray(row)) return row;
+        return { value: row };
+      })
+      .filter(Boolean);
+  }
+  if (src && !Array.isArray(src)) {
+    const keys = Object.keys(src);
+    if ((src.error !== undefined && keys.length <= 2) || src.end === true) return [];
+    return [src];
+  }
+  return [];
+}
+
 function normalizeStructureFields(fields) {
   return (Array.isArray(fields) ? fields : [])
     .map((field) => {
@@ -34,6 +60,119 @@ function normalizeStructureFields(fields) {
       };
     })
     .filter(Boolean);
+}
+
+export function buildParserRuntimeResultState({ runtimeStep = null, publishedDescriptorFields = [] } = {}) {
+  const structureFields = normalizeStructureFields(publishedDescriptorFields);
+  const structureColumns = uniqueStrings(structureFields.map((field) => field.name));
+  const runtimeOutput = runtimeStep && typeof runtimeStep === 'object' ? runtimeStep.output_json : null;
+  const rows = parserRuntimeRowsFromValue(runtimeOutput);
+  const rowColumns = uniqueStrings([
+    ...structureColumns,
+    ...parserResultPreviewColumnsFromRows(rows)
+  ]);
+  const previousOutput =
+    runtimeStep?.previous_step && typeof runtimeStep.previous_step === 'object' ? runtimeStep.previous_step.output_json : undefined;
+  const handoffMatches =
+    previousOutput === undefined
+      ? null
+      : (() => {
+          try {
+            return JSON.stringify(previousOutput ?? null) === JSON.stringify(runtimeStep?.input_json ?? null);
+          } catch {
+            return false;
+          }
+        })();
+  const previousNodeLabel = trim(runtimeStep?.previous_step?.node_name || runtimeStep?.previous_step?.node_id);
+
+  if (!runtimeStep || typeof runtimeStep !== 'object') {
+    return {
+      mode: 'no_data',
+      modeLabel: 'Last runtime не найден',
+      statusTone: 'info',
+      statusTitle: 'Для этой ноды ещё нет сохранённого runtime результата',
+      statusDescription: 'После server run здесь можно будет отдельно увидеть последний canonical output этой ноды и compare с draft preview ниже.',
+      rows: [],
+      columns: [],
+      structureFields,
+      showStructure: false,
+      rowCount: 0,
+      handoffMatchesUpstream: null,
+      previousNodeLabel: '',
+      runUid: '',
+      runStatus: ''
+    };
+  }
+
+  if (rows.length) {
+    return {
+      mode: 'rows',
+      modeLabel: 'Last runtime rows',
+      statusTone: 'ok',
+      statusTitle: 'Показан последний сохранённый runtime результат ноды',
+      statusDescription:
+        handoffMatches === true
+          ? `Canonical handoff с предыдущей нодой${previousNodeLabel ? ` (${previousNodeLabel})` : ''} совпадает.`
+          : handoffMatches === false
+          ? `Canonical input этой ноды отличается от сохранённого output предыдущего шага${previousNodeLabel ? ` (${previousNodeLabel})` : ''}.`
+          : 'Показаны строки последнего server run для этой ноды.',
+      rows,
+      columns: rowColumns,
+      structureFields,
+      showStructure: false,
+      rowCount: Math.max(0, Number(runtimeOutput?.row_count || rows.length) || 0),
+      handoffMatchesUpstream: handoffMatches,
+      previousNodeLabel,
+      runUid: trim(runtimeStep?.run_uid),
+      runStatus: trim(runtimeStep?.run_status)
+    };
+  }
+
+  if (structureFields.length) {
+    return {
+      mode: 'shape_only',
+      modeLabel: 'Last runtime без строк',
+      statusTone: trim(runtimeStep?.status).toLowerCase() === 'error' ? 'error' : 'warn',
+      statusTitle:
+        trim(runtimeStep?.status).toLowerCase() === 'error'
+          ? 'Последний runtime этой ноды завершился ошибкой'
+          : 'Последний runtime не сохранил строк результата',
+      statusDescription:
+        trim(runtimeStep?.status).toLowerCase() === 'error'
+          ? 'Строки runtime результата недоступны, поэтому ниже остаётся только текущая publish-структура.'
+          : 'Ниже показана publish-структура текущей ноды. Это не live rows, а shape последнего известного результата.',
+      rows: [],
+      columns: [],
+      structureFields,
+      showStructure: true,
+      structureColumns: structureColumns,
+      rowCount: 0,
+      handoffMatchesUpstream: handoffMatches,
+      previousNodeLabel,
+      runUid: trim(runtimeStep?.run_uid),
+      runStatus: trim(runtimeStep?.run_status)
+    };
+  }
+
+  return {
+    mode: 'no_data',
+    modeLabel: 'Last runtime без данных',
+    statusTone: trim(runtimeStep?.status).toLowerCase() === 'error' ? 'error' : 'info',
+    statusTitle:
+      trim(runtimeStep?.status).toLowerCase() === 'error'
+        ? 'Последний runtime этой ноды завершился ошибкой'
+        : 'Последний runtime не дал данных для отображения',
+    statusDescription: 'Для этой ноды нет ни сохранённых строк результата, ни publish-структуры для shape-only режима.',
+    rows: [],
+    columns: [],
+    structureFields,
+    showStructure: false,
+    rowCount: 0,
+    handoffMatchesUpstream: handoffMatches,
+    previousNodeLabel,
+    runUid: trim(runtimeStep?.run_uid),
+    runStatus: trim(runtimeStep?.run_status)
+  };
 }
 
 export function buildParserResultPreviewState({

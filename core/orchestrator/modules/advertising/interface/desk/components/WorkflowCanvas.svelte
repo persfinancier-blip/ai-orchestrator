@@ -251,6 +251,47 @@
     scope_type?: string;
     scope_ref?: string;
   };
+  type ProcessRunStepRow = {
+    id?: number;
+    run_uid: string;
+    step_order: number;
+    node_id: string;
+    node_name: string;
+    node_type: string;
+    status: string;
+    started_at: string;
+    finished_at?: string;
+    duration_ms?: number;
+    input_json?: any;
+    output_json?: any;
+    request_payload?: any;
+    response_payload?: any;
+    metrics_json?: any;
+    error_text?: string;
+  };
+  type ProcessRunDetail = {
+    run: ProcessRunRow & Record<string, any>;
+    steps: ProcessRunStepRow[];
+  };
+  type RuntimeNodeSnapshot = {
+    run_uid: string;
+    run_status: string;
+    run_started_at: string;
+    run_finished_at?: string;
+    step_order: number;
+    node_id: string;
+    node_name: string;
+    node_type: string;
+    status: string;
+    input_json?: any;
+    output_json?: any;
+    request_payload?: any;
+    response_payload?: any;
+    metrics_json?: any;
+    error_text?: string;
+    previous_step: ProcessRunStepRow | null;
+    next_step: ProcessRunStepRow | null;
+  };
   type WorkflowJobRow = {
     job_id: number;
     status: string;
@@ -424,6 +465,12 @@
   let outdatedPublishedProcesses: DeskProcessSummary[] = [];
   let processCodeConflicts: ProcessCodeConflict[] = [];
   let processRuns: ProcessRunRow[] = [];
+  let runtimeInspectorRunUid = '';
+  let runtimeInspectorRunDetail: ProcessRunDetail | null = null;
+  let runtimeInspectorLoading = false;
+  let runtimeInspectorError = '';
+  let runtimeInspectorSelectedStepOrder = 0;
+  let runtimeInspectorAutoSyncKey = '';
   let workflowJobs: WorkflowJobRow[] = [];
   let apiLibrarySelection: ApiTemplateSelectionChangePayload | null = null;
   let apiTemplateUsageExpanded = false;
@@ -512,6 +559,28 @@
     workflowLogEnabled && !workflowLogCurrentSource
       ? 'Подключённый источник workflow log недоступен или не соответствует системному шаблону.'
       : '';
+  $: if (!processRuns.length && !runtimeInspectorLoading) {
+    runtimeInspectorRunUid = '';
+    runtimeInspectorRunDetail = null;
+    runtimeInspectorSelectedStepOrder = 0;
+    runtimeInspectorAutoSyncKey = '';
+  }
+  $: if (
+    runtimeInspectorRunUid &&
+    processRuns.length &&
+    !processRuns.some((run) => String(run?.run_uid || '').trim() === String(runtimeInspectorRunUid || '').trim())
+  ) {
+    runtimeInspectorRunUid = '';
+    runtimeInspectorRunDetail = null;
+    runtimeInspectorSelectedStepOrder = 0;
+  }
+  $: if (processRuns.length && !runtimeInspectorRunUid && !runtimeInspectorLoading) {
+    const initialRun = settingsNode ? latestRunForNode(settingsNode.id) : processRuns[0];
+    if (initialRun?.run_uid) {
+      runtimeInspectorAutoSyncKey = `initial:${initialRun.run_uid}`;
+      void loadRuntimeInspectorRun(initialRun.run_uid, { focusNodeId: settingsNode?.id || '' });
+    }
+  }
   $: if (!settingsModalOpen || !settingsNodeId) {
     apiLibrarySelection = null;
     apiTemplateUsageExpanded = false;
@@ -521,6 +590,15 @@
     apiLibrarySelection = null;
     apiTemplateUsageExpanded = false;
     apiTemplateUsageRefreshTick += 1;
+  }
+  $: if (settingsModalOpen && settingsNode && processRuns.length && !runtimeInspectorLoading) {
+    const preferredRun = latestRunForNode(settingsNode.id);
+    const hasSnapshotForNode = Boolean(runtimeSnapshotForNode(settingsNode));
+    const syncKey = `${settingsNode.id}:${preferredRun?.run_uid || ''}`;
+    if (preferredRun?.run_uid && !hasSnapshotForNode && runtimeInspectorAutoSyncKey !== syncKey) {
+      runtimeInspectorAutoSyncKey = syncKey;
+      void loadRuntimeInspectorRun(preferredRun.run_uid, { focusNodeId: settingsNode.id });
+    }
   }
   $: deskCurrentSignature = deskSignatureFromState({
     nodes,
@@ -1190,6 +1268,171 @@
 
   function publishedProcessByNodeId(startNodeId: string) {
     return publishedProcesses.find((p) => String(p?.start_node_id || '').trim() === String(startNodeId || '').trim()) || null;
+  }
+
+  function runtimeRowsFromValue(value: any) {
+    const src = value && typeof value === 'object' ? value : null;
+    if (src && String(src.contract_version || '').trim() === 'node_io_v1' && Array.isArray(src.rows)) {
+      return src.rows
+        .map((row: any) => {
+          if (row && typeof row === 'object' && !Array.isArray(row)) return row;
+          return { value: row };
+        })
+        .slice(0, 25);
+    }
+    if (Array.isArray(value)) {
+      return value
+        .map((row: any) => {
+          if (row && typeof row === 'object' && !Array.isArray(row)) return row;
+          return { value: row };
+        })
+        .slice(0, 25);
+    }
+    if (value && typeof value === 'object' && !Array.isArray(value)) return [value];
+    return [];
+  }
+
+  function runtimeColumnsFromRows(rows: Array<Record<string, any>>) {
+    return Array.from(
+      new Set(
+        (Array.isArray(rows) ? rows : [])
+          .flatMap((row) => (row && typeof row === 'object' ? Object.keys(row) : []))
+          .map((item) => String(item || '').trim())
+          .filter(Boolean)
+      )
+    );
+  }
+
+  function runtimeRowCountFromValue(value: any) {
+    if (value && typeof value === 'object' && !Array.isArray(value) && String(value?.contract_version || '').trim() === 'node_io_v1') {
+      return Math.max(0, Number(value?.row_count || (Array.isArray(value?.rows) ? value.rows.length : 0)) || 0);
+    }
+    if (Array.isArray(value)) return value.length;
+    if (value === undefined || value === null || value === '') return 0;
+    return 1;
+  }
+
+  function runtimeJsonText(value: any, fallback = '{}') {
+    try {
+      return JSON.stringify(value ?? {}, null, 2);
+    } catch {
+      return fallback;
+    }
+  }
+
+  function runtimeValuesSemanticallyMatch(left: any, right: any) {
+    try {
+      return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+    } catch {
+      return false;
+    }
+  }
+
+  function startNodeIdsForNode(nodeId: string) {
+    const wanted = String(nodeId || '').trim();
+    if (!wanted) return [];
+    const startIds = new Set<string>();
+    const visit = (currentId: string, seen = new Set<string>()) => {
+      const normalizedId = String(currentId || '').trim();
+      if (!normalizedId || seen.has(normalizedId)) return;
+      seen.add(normalizedId);
+      const node = nodes.find((item) => item.id === normalizedId);
+      if (!node) return;
+      if (node.type === 'tool' && toolCfg(node).toolType === 'start_process') {
+        startIds.add(normalizedId);
+        return;
+      }
+      const incoming = edges.filter((edge) => edge.to === normalizedId);
+      incoming.forEach((edge) => visit(String(edge.from || '').trim(), new Set(seen)));
+    };
+    visit(wanted);
+    return [...startIds];
+  }
+
+  function latestRunForNode(nodeId: string) {
+    const startIds = new Set(startNodeIdsForNode(nodeId));
+    if (!startIds.size) return processRuns[0] || null;
+    return processRuns.find((run) => startIds.has(String(run?.start_node_id || '').trim())) || null;
+  }
+
+  async function loadRuntimeInspectorRun(runUid: string, options: { focusNodeId?: string; preserveStep?: boolean } = {}) {
+    const safeRunUid = String(runUid || '').trim();
+    if (!safeRunUid) {
+      runtimeInspectorRunUid = '';
+      runtimeInspectorRunDetail = null;
+      runtimeInspectorSelectedStepOrder = 0;
+      runtimeInspectorError = '';
+      return;
+    }
+    runtimeInspectorLoading = true;
+    runtimeInspectorError = '';
+    try {
+      const payload = await workflowApiJson<ProcessRunDetail>(`${API_BASE}/process-runs/${encodeURIComponent(safeRunUid)}`, {
+        method: 'GET',
+        headers: { Accept: 'application/json', 'X-AO-ROLE': API_ROLE }
+      });
+      const detail: ProcessRunDetail = {
+        run: payload?.run && typeof payload.run === 'object' ? payload.run : ({} as any),
+        steps: Array.isArray(payload?.steps) ? payload.steps : []
+      };
+      runtimeInspectorRunUid = safeRunUid;
+      runtimeInspectorRunDetail = detail;
+      if (!options.preserveStep) {
+        const focusNodeId = String(options.focusNodeId || '').trim();
+        const focusStep = focusNodeId
+          ? detail.steps.find((step) => String(step?.node_id || '').trim() === focusNodeId)
+          : detail.steps[0];
+        runtimeInspectorSelectedStepOrder = Math.max(0, Number(focusStep?.step_order || detail.steps[0]?.step_order || 0));
+      }
+    } catch (e: any) {
+      runtimeInspectorError = String(e?.message || e || 'Не удалось загрузить runtime run');
+      runtimeInspectorRunDetail = null;
+      runtimeInspectorSelectedStepOrder = 0;
+    } finally {
+      runtimeInspectorLoading = false;
+    }
+  }
+
+  function runtimeInspectorSteps() {
+    return Array.isArray(runtimeInspectorRunDetail?.steps) ? runtimeInspectorRunDetail.steps : [];
+  }
+
+  function runtimeInspectorSelectedStep() {
+    const steps = runtimeInspectorSteps();
+    if (!steps.length) return null;
+    return (
+      steps.find((step) => Math.max(0, Number(step?.step_order || 0)) === Math.max(0, Number(runtimeInspectorSelectedStepOrder || 0))) ||
+      steps[0]
+    );
+  }
+
+  function runtimeSnapshotForNode(node: WorkflowNode | null | undefined): RuntimeNodeSnapshot | null {
+    if (!node || !runtimeInspectorRunDetail) return null;
+    const steps = runtimeInspectorSteps();
+    const currentIndex = steps.findIndex((step) => String(step?.node_id || '').trim() === String(node.id || '').trim());
+    if (currentIndex < 0) return null;
+    const current = steps[currentIndex];
+    const previous = currentIndex > 0 ? steps[currentIndex - 1] : null;
+    const next = currentIndex + 1 < steps.length ? steps[currentIndex + 1] : null;
+    return {
+      run_uid: String(runtimeInspectorRunDetail.run?.run_uid || '').trim(),
+      run_status: String(runtimeInspectorRunDetail.run?.status || '').trim(),
+      run_started_at: String(runtimeInspectorRunDetail.run?.started_at || '').trim(),
+      run_finished_at: String(runtimeInspectorRunDetail.run?.finished_at || '').trim(),
+      step_order: Math.max(0, Number(current?.step_order || 0)),
+      node_id: String(current?.node_id || '').trim(),
+      node_name: String(current?.node_name || '').trim(),
+      node_type: String(current?.node_type || '').trim(),
+      status: String(current?.status || '').trim(),
+      input_json: current?.input_json,
+      output_json: current?.output_json,
+      request_payload: current?.request_payload,
+      response_payload: current?.response_payload,
+      metrics_json: current?.metrics_json,
+      error_text: String(current?.error_text || '').trim(),
+      previous_step: previous || null,
+      next_step: next || null
+    };
   }
 
   function hashQueryParams() {
@@ -5986,6 +6229,167 @@
               </div>
             </div>
           </div>
+          <div class="ops-card">
+            <h5>Runtime inspector</h5>
+            <div class="ops-note">
+              Read-only просмотр server runtime truth. Здесь отдельно показаны canonical input/output шага и transport/debug payload, без подмены desk descriptor или preview.
+            </div>
+            {#if processRuns.length}
+              <label class="sec-label runtime-run-picker">
+                <span>Run</span>
+                <select
+                  value={runtimeInspectorRunUid}
+                  on:change={(e) => loadRuntimeInspectorRun(selectValue(e), { focusNodeId: settingsNode?.id || '' })}
+                  disabled={runtimeInspectorLoading}
+                >
+                  {#each processRuns.slice(0, 30) as run (run.run_uid)}
+                    <option value={run.run_uid}>
+                      {run.start_node_id} · {run.status} · {run.started_at || run.run_uid}
+                    </option>
+                  {/each}
+                </select>
+              </label>
+              {#if runtimeInspectorLoading}
+                <div class="empty">Загрузка runtime run...</div>
+              {:else if runtimeInspectorError}
+                <div class="ops-error">{runtimeInspectorError}</div>
+              {:else if runtimeInspectorRunDetail}
+                <div class="preview-meta">
+                  <span>Run UID: {runtimeInspectorRunDetail.run?.run_uid || '-'}</span>
+                  <span>Статус: {runtimeInspectorRunDetail.run?.status || '-'}</span>
+                  <span>Старт: {runtimeInspectorRunDetail.run?.started_at || '-'}</span>
+                  <span>Шагов: {runtimeInspectorSteps().length}</span>
+                </div>
+                <div class="runtime-step-strip">
+                  {#each runtimeInspectorSteps() as step}
+                    <button
+                      type="button"
+                      class="mini runtime-step-pill"
+                      class:active={Math.max(0, Number(step?.step_order || 0)) === Math.max(0, Number(runtimeInspectorSelectedStepOrder || 0))}
+                      on:click={() => (runtimeInspectorSelectedStepOrder = Math.max(0, Number(step?.step_order || 0)))}
+                    >
+                      {step.step_order}. {step.node_name || step.node_id} · {step.status}
+                    </button>
+                  {/each}
+                </div>
+                {@const selectedRuntimeStep = runtimeInspectorSelectedStep()}
+                {#if selectedRuntimeStep}
+                  {@const selectedRuntimeSteps = runtimeInspectorSteps()}
+                  {@const selectedRuntimeIndex = selectedRuntimeSteps.findIndex((step) => Math.max(0, Number(step?.step_order || 0)) === Math.max(0, Number(selectedRuntimeStep?.step_order || 0)))}
+                  {@const previousRuntimeStep = selectedRuntimeIndex > 0 ? selectedRuntimeSteps[selectedRuntimeIndex - 1] : null}
+                  {@const currentInputRows = runtimeRowsFromValue(selectedRuntimeStep.input_json)}
+                  {@const currentInputColumns = runtimeColumnsFromRows(currentInputRows)}
+                  {@const currentOutputRows = runtimeRowsFromValue(selectedRuntimeStep.output_json)}
+                  {@const currentOutputColumns = runtimeColumnsFromRows(currentOutputRows)}
+                  <div class="runtime-step-card">
+                    <div class="parser-shell-summary">
+                      <span class="chip-chip readonly-chip">Шаг {selectedRuntimeStep.step_order}</span>
+                      <span class="chip-chip readonly-chip">{selectedRuntimeStep.node_name || selectedRuntimeStep.node_id}</span>
+                      <span class="chip-chip readonly-chip">Тип: {selectedRuntimeStep.node_type || '-'}</span>
+                      <span class="chip-chip readonly-chip">Статус: {selectedRuntimeStep.status || '-'}</span>
+                    </div>
+                    <div class="preview-meta">
+                      <span>Canonical input rows: {runtimeRowCountFromValue(selectedRuntimeStep.input_json)}</span>
+                      <span>Canonical output rows: {runtimeRowCountFromValue(selectedRuntimeStep.output_json)}</span>
+                      <span>Request/debug: {selectedRuntimeStep.request_payload !== undefined ? 'есть' : 'нет'}</span>
+                      <span>Response/debug: {selectedRuntimeStep.response_payload !== undefined ? 'есть' : 'нет'}</span>
+                    </div>
+                    {#if previousRuntimeStep}
+                      <div class="inline-hint">
+                        Handoff от предыдущей ноды `{previousRuntimeStep.node_name || previousRuntimeStep.node_id}` к текущей:
+                        {runtimeValuesSemanticallyMatch(previousRuntimeStep.output_json, selectedRuntimeStep.input_json)
+                          ? ' canonical output и canonical input совпадают по сохранённому значению.'
+                          : ' вход и выход различаются, смотри canonical JSON ниже.'}
+                      </div>
+                    {/if}
+                    {#if settingsNode && String(settingsNode.id || '').trim() === String(selectedRuntimeStep.node_id || '').trim()}
+                      <div class="inline-hint">Этот runtime step соответствует ноде, которая сейчас открыта в редакторе.</div>
+                    {/if}
+                    <div class="runtime-io-grid">
+                      <details class="runtime-io-card" open>
+                        <summary>Canonical input</summary>
+                        {#if currentInputColumns.length}
+                          <div class="preview-columns">
+                            {#each currentInputColumns as column}
+                              <span>{column}</span>
+                            {/each}
+                          </div>
+                        {/if}
+                        {#if currentInputRows.length}
+                          <div class="preview-table-wrap compact-preview-wrap">
+                            <table class="preview-table">
+                              <thead>
+                                <tr>
+                                  {#each currentInputColumns as column}
+                                    <th>{column}</th>
+                                  {/each}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {#each currentInputRows.slice(0, 5) as row}
+                                  <tr>
+                                    {#each currentInputColumns as column}
+                                      <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
+                                    {/each}
+                                  </tr>
+                                {/each}
+                              </tbody>
+                            </table>
+                          </div>
+                        {/if}
+                        <pre>{runtimeJsonText(selectedRuntimeStep.input_json, '{}')}</pre>
+                      </details>
+                      <details class="runtime-io-card" open>
+                        <summary>Canonical output</summary>
+                        {#if currentOutputColumns.length}
+                          <div class="preview-columns">
+                            {#each currentOutputColumns as column}
+                              <span>{column}</span>
+                            {/each}
+                          </div>
+                        {/if}
+                        {#if currentOutputRows.length}
+                          <div class="preview-table-wrap compact-preview-wrap">
+                            <table class="preview-table">
+                              <thead>
+                                <tr>
+                                  {#each currentOutputColumns as column}
+                                    <th>{column}</th>
+                                  {/each}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {#each currentOutputRows.slice(0, 5) as row}
+                                  <tr>
+                                    {#each currentOutputColumns as column}
+                                      <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
+                                    {/each}
+                                  </tr>
+                                {/each}
+                              </tbody>
+                            </table>
+                          </div>
+                        {/if}
+                        <pre>{runtimeJsonText(selectedRuntimeStep.output_json, '{}')}</pre>
+                      </details>
+                      <details class="runtime-io-card">
+                        <summary>Request / debug</summary>
+                        <pre>{runtimeJsonText(selectedRuntimeStep.request_payload, '{}')}</pre>
+                      </details>
+                      <details class="runtime-io-card">
+                        <summary>Response / debug</summary>
+                        <pre>{runtimeJsonText(selectedRuntimeStep.response_payload, '{}')}</pre>
+                      </details>
+                    </div>
+                  </div>
+                {/if}
+              {:else}
+                <div class="empty">Выбери запуск, чтобы увидеть сохранённый server runtime path.</div>
+              {/if}
+            {:else}
+              <div class="empty">Серверных запусков пока нет. Сначала опубликуй и запусти процесс.</div>
+            {/if}
+          </div>
         </div>
       </div>
     </aside>
@@ -6609,6 +7013,7 @@
                 sourcePort: 'out',
                 upstreamDescriptors: incomingDescriptorForNode(settingsNode)?.upstreamDescriptors || []
               })}
+              lastRuntimeStep={runtimeSnapshotForNode(settingsNode)}
               embeddedMode={false}
               on:configChange={(event) => replaceToolSettings(settingsNode.id, event.detail?.settings || {})}
             />
@@ -7030,6 +7435,71 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .runtime-run-picker {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .runtime-run-picker select {
+    width: 100%;
+    min-width: 0;
+  }
+  .runtime-step-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .runtime-step-pill {
+    border: 1px solid #cbd5e1;
+    border-radius: 999px;
+    background: #fff;
+    color: #334155;
+  }
+  .runtime-step-pill.active {
+    border-color: #2563eb;
+    background: #dbeafe;
+    color: #1d4ed8;
+  }
+  .runtime-step-card {
+    border: 1px solid #dbeafe;
+    border-radius: 10px;
+    background: #eff6ff;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .runtime-io-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .runtime-io-card {
+    border: 1px solid #bfdbfe;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 6px;
+  }
+  .runtime-io-card summary {
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    color: #0f172a;
+  }
+  .runtime-io-card pre {
+    margin: 8px 0 0;
+    max-height: 220px;
+    overflow: auto;
+    font-size: 11px;
+    line-height: 1.4;
+    color: #0f172a;
+    background: #f8fafc;
+    border-radius: 6px;
+    padding: 8px;
+  }
+  .compact-preview-wrap {
+    max-height: 180px;
+  }
   .source-pill {
     border: 1px solid #cbd5e1;
     border-radius: 8px;
@@ -7435,6 +7905,9 @@
       grid-template-columns: 1fr;
     }
     .ops-columns {
+      grid-template-columns: 1fr;
+    }
+    .runtime-io-grid {
       grid-template-columns: 1fr;
     }
   }

@@ -21,6 +21,7 @@ const {
   buildDependencyDispatchDedupeKey,
   buildRunAggregationSnapshot,
   buildRunSummaryFromAggregation,
+  buildProcessStepObservabilityRow,
   normalizeNodeIoEnvelope,
   composeNodeOutputEnvelope,
   executeTableParserNode,
@@ -185,6 +186,45 @@ test('node io contract for first nodes: normalize input + envelope output', () =
   assert.equal(output.row_count, 3);
   assert.equal(output.meta.node_type, 'table_parser');
   assert.equal(output.meta.source_type, 'input');
+});
+
+test('step observability contract: canonical handoff is separate from request/response debug', () => {
+  const apiOutput = composeNodeOutputEnvelope(
+    { run_uid: 'run_obs', process_code: 'proc_obs' },
+    { id: 'api_1', type: 'tool', config: { name: 'API', toolType: 'api_request' } },
+    [{ id: 10, name: 'Alpha' }],
+    { source_type: 'api_request', request_count: 1 },
+    { response_preview: { responses: [{ response: [{ id: 10, name: 'Alpha' }] }] } }
+  );
+  const parserOutput = composeNodeOutputEnvelope(
+    { run_uid: 'run_obs', process_code: 'proc_obs' },
+    { id: 'parser_1', type: 'tool', config: { name: 'Parser', toolType: 'table_parser' } },
+    [{ product_id: 10, title: 'Alpha' }],
+    { source_type: 'table_parser' },
+    { parsed_rows: 1 }
+  );
+  const parserRequestPayload = {
+    mode: 'table_parser',
+    input_contract: normalizeNodeIoEnvelope(apiOutput, { run_uid: 'run_obs', process_code: 'proc_obs' })
+  };
+  const stepRow = buildProcessStepObservabilityRow({
+    run_uid: 'run_obs',
+    step_order: 2,
+    node: { id: 'parser_1', type: 'tool', config: { name: 'Parser', toolType: 'table_parser' } },
+    status: 'ok',
+    input_value: apiOutput,
+    output_value: parserOutput,
+    request_payload: parserRequestPayload,
+    response_payload: parserOutput,
+    metrics_json: { payloadCount: 1 }
+  });
+
+  assert.deepEqual(stepRow.input_json, apiOutput);
+  assert.deepEqual(stepRow.output_json, parserOutput);
+  assert.deepEqual(stepRow.request_payload, parserRequestPayload);
+  assert.deepEqual(stepRow.response_payload, parserOutput);
+  assert.deepEqual(stepRow.request_payload.input_contract, apiOutput);
+  assert.notDeepEqual(stepRow.input_json, stepRow.request_payload);
 });
 
 test('first nodes runtime contract: table_parser -> db_write (process_bus fallback)', async () => {

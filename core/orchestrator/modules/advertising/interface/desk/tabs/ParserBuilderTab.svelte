@@ -25,7 +25,7 @@
     resolveIncomingParserField,
     serializeParserPublishRows
   } from '../../shared/parserPublishContractCore.js';
-  import { buildParserResultPreviewState } from './parserResultPreviewCore.js';
+  import { buildParserResultPreviewState, buildParserRuntimeResultState } from './parserResultPreviewCore.js';
 
   type ExistingTable = { schema_name: string; table_name: string };
   type ColumnMeta = { name: string; type?: string };
@@ -176,6 +176,50 @@
     sourceFormat?: string;
     isStalePreview: boolean;
   };
+  type ParserLastRuntimeStep = {
+    run_uid: string;
+    run_status: string;
+    run_started_at: string;
+    run_finished_at?: string;
+    step_order: number;
+    node_id: string;
+    node_name: string;
+    node_type: string;
+    status: string;
+    input_json?: any;
+    output_json?: any;
+    request_payload?: any;
+    response_payload?: any;
+    metrics_json?: any;
+    error_text?: string;
+    previous_step?: {
+      node_id?: string;
+      node_name?: string;
+      output_json?: any;
+    } | null;
+    next_step?: {
+      node_id?: string;
+      node_name?: string;
+      input_json?: any;
+    } | null;
+  };
+  type ParserRuntimeResultState = {
+    mode: 'rows' | 'shape_only' | 'no_data';
+    modeLabel: string;
+    statusTone: string;
+    statusTitle: string;
+    statusDescription: string;
+    rows: Array<Record<string, any>>;
+    columns: string[];
+    structureFields: ParserResultPreviewField[];
+    showStructure: boolean;
+    structureColumns?: string[];
+    rowCount: number;
+    handoffMatchesUpstream: boolean | null;
+    previousNodeLabel: string;
+    runUid: string;
+    runStatus: string;
+  };
   type ParserEditorStep = 'input' | 'fields' | 'result';
   type ParserChangeStep = 'incoming' | 'lookup' | 'filters' | 'computed' | 'dedupe' | 'grouping';
 
@@ -187,6 +231,7 @@
   export let embeddedMode = false;
   export let incomingDescriptor: NodeDescriptorFlow | null = null;
   export let outputDescriptor: NodeDescriptor | null = null;
+  export let lastRuntimeStep: ParserLastRuntimeStep | null = null;
 
   const dispatch = createEventDispatcher<{
     configChange: { settings: ParserSettings };
@@ -620,6 +665,23 @@
     sourceFormat: '',
     isStalePreview: false
   };
+  let runtimeResultState: ParserRuntimeResultState = {
+    mode: 'no_data',
+    modeLabel: 'Last runtime не найден',
+    statusTone: 'info',
+    statusTitle: 'Для этой ноды ещё нет сохранённого runtime результата',
+    statusDescription: 'После server run здесь можно будет увидеть последний canonical output этой ноды отдельно от draft preview.',
+    rows: [],
+    columns: [],
+    structureFields: [],
+    showStructure: false,
+    structureColumns: [],
+    rowCount: 0,
+    handoffMatchesUpstream: null,
+    previousNodeLabel: '',
+    runUid: '',
+    runStatus: ''
+  };
 
   $: {
     const next = normalizeSettings(initialSettings);
@@ -733,6 +795,10 @@
     currentConfigSignature: previewConfigSignature,
     previewLastAttemptSignature,
     previewLastSuccessSignature
+  });
+  $: runtimeResultState = buildParserRuntimeResultState({
+    runtimeStep: lastRuntimeStep,
+    publishedDescriptorFields
   });
   $: outputDescriptorDetection = outputDescriptor?.detection && typeof outputDescriptor.detection === 'object' ? outputDescriptor.detection : {};
   $: outputDescriptorKind = String(outputDescriptor?.outputKind || 'unknown').trim() || 'unknown';
@@ -1275,6 +1341,30 @@
     );
   }
 
+  function runtimeRowsFromValue(value: any) {
+    const src = value && typeof value === 'object' ? value : null;
+    if (src && String(src.contract_version || '').trim() === 'node_io_v1' && Array.isArray(src.rows)) {
+      return src.rows
+        .map((row: any) => {
+          if (row && typeof row === 'object' && !Array.isArray(row)) return row;
+          return { value: row };
+        })
+        .filter((row: any) => row && typeof row === 'object');
+    }
+    return previewRowsFromValue(value);
+  }
+
+  function runtimeColumnsFromValue(value: any) {
+    return previewColumnsFromRows(runtimeRowsFromValue(value));
+  }
+
+  function runtimeRowCountFromValue(value: any) {
+    if (value && typeof value === 'object' && !Array.isArray(value) && String(value?.contract_version || '').trim() === 'node_io_v1') {
+      return Math.max(0, Number(value?.row_count || (Array.isArray(value?.rows) ? value.rows.length : 0)) || 0);
+    }
+    return runtimeRowsFromValue(value).length;
+  }
+
   function inputValueFromIncomingSample(item: NodeDescriptor | null | undefined) {
     const value =
       item?.sample?.samplePayload ?? item?.sample?.sampleRaw ?? (Array.isArray(item?.sample?.sampleRows) ? item.sample.sampleRows : null);
@@ -1717,6 +1807,53 @@
             <p>Consume-side единого descriptor flow. Здесь parser читает опубликованный upstream descriptor и может сразу брать его поля в результат.</p>
           </div>
         </div>
+        {#if lastRuntimeStep}
+          {@const runtimeInputRows = runtimeRowsFromValue(lastRuntimeStep.input_json)}
+          {@const runtimeInputColumns = runtimeColumnsFromValue(lastRuntimeStep.input_json)}
+          <div class="preview-state-box preview-state-ok">
+            <strong>Last runtime consume truth</strong>
+            <div>
+              Сохранённый server input этой ноды из run `{lastRuntimeStep.run_uid || '-'}`. Descriptor ниже остаётся expected contract, а этот блок показывает, что реально пришло в parser.
+            </div>
+          </div>
+          <div class="preview-meta">
+            <span>Run: {lastRuntimeStep.run_uid || '-'}</span>
+            <span>Статус: {lastRuntimeStep.run_status || lastRuntimeStep.status || '-'}</span>
+            <span>Шаг: {lastRuntimeStep.step_order || '-'}</span>
+            <span>Строк: {runtimeRowCountFromValue(lastRuntimeStep.input_json)}</span>
+          </div>
+          {#if runtimeInputColumns.length}
+            <div class="preview-columns">
+              {#each runtimeInputColumns as column}
+                <span>{column}</span>
+              {/each}
+            </div>
+          {/if}
+          {#if runtimeInputRows.length}
+            <div class="preview-table-wrap">
+              <table class="preview-table">
+                <thead>
+                  <tr>
+                    {#each runtimeInputColumns as column}
+                      <th>{column}</th>
+                    {/each}
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each runtimeInputRows.slice(0, 5) as row}
+                    <tr>
+                      {#each runtimeInputColumns as column}
+                        <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
+                      {/each}
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {:else}
+            <div class="empty-box">В последнем runtime для этой ноды не было строк canonical input.</div>
+          {/if}
+        {/if}
         {#if incomingNodes.length}
           <div class="parser-shell-summary">
             <span class="chip-chip readonly-chip">{incomingNodes.length} {incomingNodes.length === 1 ? 'источник' : 'источника'}</span>
@@ -2732,6 +2869,31 @@
             <p>Publish-side того же descriptor flow. Правая колонка показывает, что parser публикует для следующей ноды, без отдельной editable schema.</p>
           </div>
         </div>
+        {#if lastRuntimeStep}
+          <div class={`preview-state-box preview-state-${runtimeResultState.statusTone}`}>
+            <strong>Last runtime publish truth</strong>
+            <div>{runtimeResultState.statusDescription}</div>
+          </div>
+          <div class="preview-meta">
+            <span>Run: {runtimeResultState.runUid || '-'}</span>
+            <span>Статус: {runtimeResultState.runStatus || lastRuntimeStep.status || '-'}</span>
+            <span>Строк: {runtimeResultState.rowCount}</span>
+            <span>Handoff: {runtimeResultState.handoffMatchesUpstream === null ? '-' : runtimeResultState.handoffMatchesUpstream ? 'совпадает' : 'отличается'}</span>
+          </div>
+          {#if runtimeResultState.mode === 'rows'}
+            <div class="preview-columns">
+              {#each runtimeResultState.columns as column}
+                <span>{column}</span>
+              {/each}
+            </div>
+          {:else if runtimeResultState.showStructure}
+            <div class="preview-columns">
+              {#each runtimeResultState.structureFields as field}
+                <span>{field.name}</span>
+              {/each}
+            </div>
+          {/if}
+        {/if}
         <div class="parser-shell-summary">
           <span class="chip-chip readonly-chip">Kind: {outputDescriptorKindLabelValue}</span>
           <span class="chip-chip readonly-chip">Поля: {publishedDescriptorFields.length}</span>
@@ -2791,11 +2953,87 @@
         <div class="parser-card-head">
           <div>
             <h3>Предпросмотр результата</h3>
-            <p>Это итоговый tabular preview результата parser, а не preview сырого входа. Здесь видно, что реально выйдет из ноды и уйдёт дальше.</p>
+            <p>Секция 4 теперь явно разделяет last runtime truth и draft preview. Runtime показывает сохранённый server result, а preview ниже остаётся отдельным черновым запуском по текущим settings.</p>
           </div>
           <button type="button" class="mini-btn" on:click={previewNow} disabled={previewLoading}>
             {previewLoading ? 'Обновление...' : 'Обновить preview'}
           </button>
+        </div>
+        <div class="subsection-head">
+          <h4>Last runtime result</h4>
+        </div>
+        <div class={`preview-state-box preview-state-${runtimeResultState.statusTone}`}>
+          <strong>{runtimeResultState.statusTitle}</strong>
+          <div>{runtimeResultState.statusDescription}</div>
+        </div>
+        <div class="preview-meta">
+          <span>Run: {runtimeResultState.runUid || '-'}</span>
+          <span>Статус: {runtimeResultState.runStatus || (lastRuntimeStep?.status || '-')}</span>
+          <span>Строк: {runtimeResultState.rowCount}</span>
+          <span>Предыдущая нода: {runtimeResultState.previousNodeLabel || '-'}</span>
+        </div>
+        <div class="preview-meta">
+          <span>Handoff с upstream: {runtimeResultState.handoffMatchesUpstream === null ? '-' : runtimeResultState.handoffMatchesUpstream ? 'совпадает' : 'отличается'}</span>
+          <span>Descriptor справа: {publishedDescriptorFields.length ? `${publishedDescriptorFields.length} полей` : 'пуст'}</span>
+          <span>Draft preview ниже: отдельный слой</span>
+        </div>
+        {#if runtimeResultState.mode === 'rows'}
+          <div class="preview-columns">
+            {#each runtimeResultState.columns as column}
+              <span>{column}</span>
+            {/each}
+          </div>
+          <div class="preview-table-wrap">
+            <table class="preview-table">
+              <thead>
+                <tr>
+                  {#each runtimeResultState.columns as column}
+                    <th>{column}</th>
+                  {/each}
+                </tr>
+              </thead>
+              <tbody>
+                {#each runtimeResultState.rows as row}
+                  <tr>
+                    {#each runtimeResultState.columns as column}
+                      <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
+                    {/each}
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {:else if runtimeResultState.showStructure}
+          <div class="preview-columns">
+            {#each runtimeResultState.structureFields as field}
+              <span>{field.name}</span>
+            {/each}
+          </div>
+          <div class="preview-table-wrap">
+            <table class="preview-table preview-structure-table">
+              <thead>
+                <tr>
+                  <th>Колонка</th>
+                  <th>Тип</th>
+                  <th>Path</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each runtimeResultState.structureFields as field}
+                  <tr>
+                    <td>{field.name}</td>
+                    <td>{field.type || '-'}</td>
+                    <td>{field.path || '-'}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {:else}
+          <div class="empty-box">Last runtime для этой ноды пока недоступен. Ниже остаётся только draft preview по текущим settings.</div>
+        {/if}
+        <div class="subsection-head">
+          <h4>Draft preview</h4>
         </div>
         <div class="preview-metrics">
           <span>Режим: {previewResultState.modeLabel}</span>

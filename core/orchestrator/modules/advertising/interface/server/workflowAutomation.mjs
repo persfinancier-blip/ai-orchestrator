@@ -2410,6 +2410,8 @@ async function writeChunkLog(client, config, payload = {}) {
         duration_ms,
         input_json,
         output_json,
+        request_payload,
+        response_payload,
         metrics_json,
         error_text
       )
@@ -2435,9 +2437,9 @@ async function writeChunkLog(client, config, payload = {}) {
       payload?.started_at ? String(payload.started_at) : new Date().toISOString(),
       payload?.finished_at ? String(payload.finished_at) : new Date().toISOString(),
       Math.max(0, Math.trunc(Number(payload?.duration_ms || 0))),
-      stableJsonString(payload?.input_json || {}),
-      stableJsonString(payload?.output_json || {}),
-      stableJsonString(payload?.metrics_json || {}),
+      stableJsonString(payload?.input_json === undefined ? {} : payload.input_json),
+      stableJsonString(payload?.output_json === undefined ? {} : payload.output_json),
+      stableJsonString(payload?.metrics_json === undefined ? {} : payload.metrics_json),
       String(payload?.error_text || '').trim()
     ]
   );
@@ -3003,6 +3005,7 @@ async function handleProcessNodeJob(client, config, job, payload = {}) {
   let errorText = '';
   let providerCode = '';
   let endpointCode = '';
+  const inputValue = payload?.input_value;
   const chunkKey = String(payload?.chunk_key || `node_${nodeIndex}`).trim() || `node_${nodeIndex}`;
   const chunkNo = Math.max(1, Math.trunc(Number(payload?.chunk_no || nodeIndex + 1)));
   try {
@@ -3055,23 +3058,22 @@ async function handleProcessNodeJob(client, config, job, payload = {}) {
   }
   const durationMs = Date.now() - stepStarted;
   const stepOrder = nodeIndex + 1;
-  await insertProcessStepRow(client, config, {
+  const stepRow = buildProcessStepObservabilityRow({
     run_uid: runUid,
     step_order: stepOrder,
-    node_id: String(node?.id || ''),
-    node_name: String(node?.config?.name || node?.id || '').trim(),
-    node_type: String(node?.config?.toolType || node?.type || '').trim(),
+    node,
     status,
     started_at: new Date(stepStarted).toISOString(),
     finished_at: new Date().toISOString(),
     duration_ms: durationMs,
-    input_json: reqPayload,
-    output_json: output,
+    input_value: inputValue,
+    output_value: output,
     request_payload: reqPayload,
     response_payload: respPayload,
     metrics_json: metrics,
     error_text: errorText
   });
+  await insertProcessStepRow(client, config, stepRow);
 
   await writeChunkLog(client, config, {
     job_id: Number(job?.job_id || 0),
@@ -3092,9 +3094,9 @@ async function handleProcessNodeJob(client, config, job, payload = {}) {
     started_at: new Date(stepStarted).toISOString(),
     finished_at: new Date().toISOString(),
     duration_ms: durationMs,
-    input_json: reqPayload,
-    output_json: output,
-    metrics_json: metrics,
+    input_json: stepRow.input_json,
+    output_json: stepRow.output_json,
+    metrics_json: stepRow.metrics_json,
     error_text: errorText
   });
 
@@ -5194,6 +5196,7 @@ async function executeWorkflowRun(client, config, deskRow, runMeta) {
   for (const node of order) {
     stepNo += 1;
     const stepStarted = Date.now();
+    const inputValue = lastOutput;
     let status = 'ok';
     let requestPayload = {};
     let responsePayload = {};
@@ -6519,14 +6522,48 @@ async function insertProcessStepRow(client, config, payload) {
       payload?.started_at ? String(payload.started_at) : new Date().toISOString(),
       payload?.finished_at ? String(payload.finished_at) : new Date().toISOString(),
       Math.max(0, Math.trunc(Number(payload?.duration_ms || 0))),
-      JSON.stringify(payload?.input_json || {}),
-      JSON.stringify(payload?.output_json || {}),
-      JSON.stringify(payload?.request_payload || {}),
-      JSON.stringify(payload?.response_payload || {}),
-      JSON.stringify(payload?.metrics_json || {}),
+      JSON.stringify(payload?.input_json === undefined ? {} : payload.input_json),
+      JSON.stringify(payload?.output_json === undefined ? {} : payload.output_json),
+      JSON.stringify(payload?.request_payload === undefined ? {} : payload.request_payload),
+      JSON.stringify(payload?.response_payload === undefined ? {} : payload.response_payload),
+      JSON.stringify(payload?.metrics_json === undefined ? {} : payload.metrics_json),
       String(payload?.error_text || '').trim()
     ]
   );
+}
+
+function buildProcessStepObservabilityRow({
+  run_uid,
+  step_order,
+  node,
+  status,
+  started_at,
+  finished_at,
+  duration_ms,
+  input_value,
+  output_value,
+  request_payload,
+  response_payload,
+  metrics_json,
+  error_text
+} = {}) {
+  return {
+    run_uid: String(run_uid || '').trim(),
+    step_order: Math.max(1, Math.trunc(Number(step_order || 1))),
+    node_id: String(node?.id || '').trim(),
+    node_name: String(node?.config?.name || node?.id || '').trim(),
+    node_type: String(node?.config?.toolType || node?.type || '').trim(),
+    status: String(status || 'ok').trim(),
+    started_at: started_at ? String(started_at) : new Date().toISOString(),
+    finished_at: finished_at ? String(finished_at) : new Date().toISOString(),
+    duration_ms: Math.max(0, Math.trunc(Number(duration_ms || 0))),
+    input_json: input_value === undefined ? {} : input_value,
+    output_json: output_value === undefined ? {} : output_value,
+    request_payload: request_payload === undefined ? {} : request_payload,
+    response_payload: response_payload === undefined ? {} : response_payload,
+    metrics_json: metrics_json === undefined ? {} : metrics_json,
+    error_text: String(error_text || '').trim()
+  };
 }
 
 async function acquireProcessLock(client, config, lockData) {
@@ -7183,6 +7220,7 @@ async function executeProcessPreviewUntilNode(client, config, deskRow, processDe
     const node = order[index];
     const stepOrder = index + 1;
     const stepStarted = Date.now();
+    const inputValue = lastOutput;
     let status = 'ok';
     let reqPayload = {};
     let respPayload = {};
@@ -7211,23 +7249,21 @@ async function executeProcessPreviewUntilNode(client, config, deskRow, processDe
       lastOutput = outputValue;
     }
     const durationMs = Date.now() - stepStarted;
-    const stepRow = {
+    const stepRow = buildProcessStepObservabilityRow({
       run_uid: runUid,
       step_order: stepOrder,
-      node_id: String(node?.id || ''),
-      node_name: String(node?.config?.name || node?.id || '').trim(),
-      node_type: String(node?.config?.toolType || node?.type || '').trim(),
+      node,
       status,
       started_at: new Date(stepStarted).toISOString(),
       finished_at: new Date(stepStarted + durationMs).toISOString(),
       duration_ms: durationMs,
-      input_json: reqPayload,
-      output_json: outputValue,
+      input_value: inputValue,
+      output_value: outputValue,
       request_payload: reqPayload,
       response_payload: respPayload,
       metrics_json: metrics,
       error_text: errorText
-    };
+    });
     await insertProcessStepRow(client, config, stepRow);
     steps.push(stepRow);
     if (status === 'error') break;
@@ -7311,23 +7347,25 @@ async function executeProcessRunV2(client, config, deskRow, processDef, runMeta)
       lastOutput = outputValue;
     }
     const stepDuration = Date.now() - stepStarted;
-    await insertProcessStepRow(client, config, {
-      run_uid: runUid,
-      step_order: stepNo,
-      node_id: String(node?.id || ''),
-      node_name: String(node?.config?.name || node?.id || '').trim(),
-      node_type: String(node?.config?.toolType || node?.type || '').trim(),
-      status,
-      started_at: new Date(stepStarted).toISOString(),
-      finished_at: new Date(stepStarted + stepDuration).toISOString(),
-      duration_ms: stepDuration,
-      input_json: reqPayload,
-      output_json: outputValue,
-      request_payload: reqPayload,
-      response_payload: respPayload,
-      metrics_json: metrics,
-      error_text: errorText
-    });
+    await insertProcessStepRow(
+      client,
+      config,
+      buildProcessStepObservabilityRow({
+        run_uid: runUid,
+        step_order: stepNo,
+        node,
+        status,
+        started_at: new Date(stepStarted).toISOString(),
+        finished_at: new Date(stepStarted + stepDuration).toISOString(),
+        duration_ms: stepDuration,
+        input_value: inputValue,
+        output_value: outputValue,
+        request_payload: reqPayload,
+        response_payload: respPayload,
+        metrics_json: metrics,
+        error_text: errorText
+      })
+    );
     if (status === 'error') break;
   }
 
@@ -8595,6 +8633,7 @@ export const workflowAutomationTestkit = {
   dedupeScopes,
   scopeSignature,
   buildScopeSqlFilter,
+  buildProcessStepObservabilityRow,
   processConfigFromStartNode,
   discoverProcessesFromGraph,
   resolveExecutionScopesFromValues,

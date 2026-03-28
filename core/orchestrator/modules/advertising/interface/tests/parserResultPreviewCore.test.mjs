@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildParserResultPreviewState } from '../desk/tabs/parserResultPreviewCore.js';
+import { buildParserResultPreviewState, buildParserRuntimeResultState } from '../desk/tabs/parserResultPreviewCore.js';
 
 test('parser result preview state: rows mode uses fresh preview rows and keeps publish contract columns primary', () => {
   const state = buildParserResultPreviewState({
@@ -98,4 +98,66 @@ test('parser result preview state: no_preview_yet mode stays empty when there is
   assert.equal(state.showStructure, false);
   assert.deepEqual(state.rows, []);
   assert.deepEqual(state.columns, []);
+});
+
+test('parser runtime result state: rows mode uses last runtime output and keeps publish columns primary', () => {
+  const state = buildParserRuntimeResultState({
+    runtimeStep: {
+      run_uid: 'run_rt_1',
+      run_status: 'completed',
+      status: 'ok',
+      input_json: {
+        contract_version: 'node_io_v1',
+        rows: [{ id: 7, name: 'Alpha' }],
+        row_count: 1
+      },
+      output_json: {
+        contract_version: 'node_io_v1',
+        rows: [{ product_key: 7, product_name: 'Alpha' }],
+        row_count: 1
+      },
+      previous_step: {
+        node_name: 'API',
+        output_json: {
+          contract_version: 'node_io_v1',
+          rows: [{ id: 7, name: 'Alpha' }],
+          row_count: 1
+        }
+      }
+    },
+    publishedDescriptorFields: [
+      { alias: 'product_key', type: 'numeric', path: 'id' },
+      { alias: 'product_name', type: 'text', path: 'name' }
+    ]
+  });
+
+  assert.equal(state.mode, 'rows');
+  assert.deepEqual(state.columns, ['product_key', 'product_name']);
+  assert.equal(state.rowCount, 1);
+  assert.equal(state.handoffMatchesUpstream, true);
+});
+
+test('parser runtime result state: shape_only mode stays honest when runtime step has no rows', () => {
+  const state = buildParserRuntimeResultState({
+    runtimeStep: {
+      run_uid: 'run_rt_2',
+      run_status: 'completed',
+      status: 'ok',
+      input_json: {
+        contract_version: 'node_io_v1',
+        rows: [{ id: 7 }],
+        row_count: 1
+      },
+      output_json: {
+        contract_version: 'node_io_v1',
+        rows: [],
+        row_count: 0
+      }
+    },
+    publishedDescriptorFields: [{ alias: 'product_key', type: 'numeric', path: 'id' }]
+  });
+
+  assert.equal(state.mode, 'shape_only');
+  assert.equal(state.showStructure, true);
+  assert.deepEqual(state.structureColumns, ['product_key']);
 });
