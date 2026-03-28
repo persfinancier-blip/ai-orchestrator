@@ -160,6 +160,21 @@
     origin?: string;
   };
   type ParserResultPreviewMode = 'rows' | 'shape_only' | 'no_preview_yet' | 'preview_failed';
+  type ParserPreviewDebugState = {
+    resolvedInputSourceKey: string;
+    resolvedInputSourceLabel: string;
+    effectivePublishColumns: string[];
+    previewResponseRowCount: number;
+    preparedGridRowsCount: number;
+    firstPreparedRowKeys: string[];
+    columnsWithoutMappedValues: string[];
+    stalePreview: boolean;
+    previewError: string;
+    previewSuccess: boolean;
+    sourceResolved: boolean;
+    gridColumns: string[];
+    rawPreviewColumns: string[];
+  };
   type ParserResultPreviewState = {
     mode: ParserResultPreviewMode;
     modeLabel: string;
@@ -173,8 +188,12 @@
     structureColumns?: string[];
     liveRowsCount: number;
     liveColumnsCount: number;
+    responseRowCount: number;
+    preparedRowsCount: number;
     sourceFormat?: string;
     isStalePreview: boolean;
+    effectiveInputSource: ParserPreviewInputSource;
+    debug: ParserPreviewDebugState;
   };
   type ParserPreviewInputSourceKind = 'last_runtime_input' | 'upstream_sample' | 'manual_sample' | 'legacy_source' | 'missing';
   type ParserPreviewInputSource = {
@@ -660,6 +679,7 @@
   let previewUpdatedAt = '';
   let previewLastAttemptSignature = '';
   let previewLastSuccessSignature = '';
+  let previewLastResolvedInputSource: ParserPreviewInputSource | null = null;
   let parserPipelineModel: ParserPipelineViewModel = emptyParserPipelineModel();
   let activeStep: ParserEditorStep = 'input';
   let activeChangeStep: ParserChangeStep = 'incoming';
@@ -680,8 +700,32 @@
     structureColumns: [],
     liveRowsCount: 0,
     liveColumnsCount: 0,
+    responseRowCount: 0,
+    preparedRowsCount: 0,
     sourceFormat: '',
-    isStalePreview: false
+    isStalePreview: false,
+    effectiveInputSource: {
+      key: 'missing',
+      label: 'Источник входа для preview не найден',
+      description: 'Для запуска предпросмотра нужен last runtime input, upstream sample или manual sample.',
+      available: false,
+      value: null
+    },
+    debug: {
+      resolvedInputSourceKey: 'missing',
+      resolvedInputSourceLabel: 'Источник входа для preview не найден',
+      effectivePublishColumns: [],
+      previewResponseRowCount: 0,
+      preparedGridRowsCount: 0,
+      firstPreparedRowKeys: [],
+      columnsWithoutMappedValues: [],
+      stalePreview: false,
+      previewError: '',
+      previewSuccess: false,
+      sourceResolved: false,
+      gridColumns: [],
+      rawPreviewColumns: []
+    }
   };
   let previewInputSource: ParserPreviewInputSource = {
     key: 'missing',
@@ -829,7 +873,9 @@
     publishedDescriptorFields,
     currentConfigSignature: previewConfigSignature,
     previewLastAttemptSignature,
-    previewLastSuccessSignature
+    previewLastSuccessSignature,
+    currentInputSource: previewInputSource,
+    lastResolvedInputSource: previewLastResolvedInputSource
   });
   $: previewInputSource = resolvePreviewInputSource();
   $: draftPreviewUxState = buildParserDraftPreviewUxState({
@@ -1280,6 +1326,7 @@
     try {
       let inputValue = settings.sampleInput;
       const source = resolvePreviewInputSource();
+      previewLastResolvedInputSource = source;
       if (source.key === 'last_runtime_input' || source.key === 'upstream_sample' || source.key === 'manual_sample') {
         inputValue = source.value;
       } else if (source.key === 'missing') {
@@ -3153,7 +3200,8 @@
         </div>
         <div class="preview-metrics">
           <span>Режим: {previewResultState.modeLabel}</span>
-          <span>Живых строк: {previewResultState.mode === 'rows' ? previewResultState.liveRowsCount : 0}</span>
+          <span>Строк в таблице: {previewResultState.mode === 'rows' ? previewResultState.preparedRowsCount : 0}</span>
+          <span>Строк в ответе preview: {previewResultState.responseRowCount}</span>
           <span>
             Колонок: {previewResultState.mode === 'rows'
               ? previewResultState.columns.length
@@ -3183,6 +3231,36 @@
           <strong>{previewResultState.statusTitle}</strong>
           <div>{previewResultState.statusDescription}</div>
         </div>
+        <details class="parser-preview-panel">
+          <summary class="parser-preview-summary">Debug preview pipeline</summary>
+          <div class="parser-preview-body">
+            <div class="preview-meta">
+              <span>Resolved source: {previewResultState.debug.resolvedInputSourceLabel || '-'}</span>
+              <span>Source key: {previewResultState.debug.resolvedInputSourceKey || '-'}</span>
+              <span>Success: {previewResultState.debug.previewSuccess ? 'да' : 'нет'}</span>
+              <span>Stale: {previewResultState.debug.stalePreview ? 'да' : 'нет'}</span>
+              <span>Error: {previewResultState.debug.previewError || '-'}</span>
+            </div>
+            <div class="preview-meta">
+              <span>Publish columns: {previewResultState.debug.effectivePublishColumns.length}</span>
+              <span>Preview row_count: {previewResultState.debug.previewResponseRowCount}</span>
+              <span>Prepared grid rows: {previewResultState.debug.preparedGridRowsCount}</span>
+              <span>Source resolved: {previewResultState.debug.sourceResolved ? 'да' : 'нет'}</span>
+            </div>
+            <div class="preview-meta">
+              <span>Grid columns: {previewResultState.debug.gridColumns.length ? previewResultState.debug.gridColumns.join(', ') : '-'}</span>
+            </div>
+            <div class="preview-meta">
+              <span>First prepared row keys: {previewResultState.debug.firstPreparedRowKeys.length ? previewResultState.debug.firstPreparedRowKeys.join(', ') : '-'}</span>
+            </div>
+            <div class="preview-meta">
+              <span>Columns without mapped values: {previewResultState.debug.columnsWithoutMappedValues.length ? previewResultState.debug.columnsWithoutMappedValues.join(', ') : '-'}</span>
+            </div>
+            <div class="preview-meta">
+              <span>Raw preview columns: {previewResultState.debug.rawPreviewColumns.length ? previewResultState.debug.rawPreviewColumns.join(', ') : '-'}</span>
+            </div>
+          </div>
+        </details>
         {#if previewResultState.mode === 'rows'}
           {#if previewResultState.isStalePreview}
             <div class="preview-stale-banner">

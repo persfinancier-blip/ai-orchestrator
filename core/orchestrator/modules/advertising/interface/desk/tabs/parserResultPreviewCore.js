@@ -12,11 +12,91 @@ function uniqueStrings(values) {
   );
 }
 
+function normalizePath(value) {
+  return trim(value).replace(/\[(\w+)\]/g, '.$1').replace(/^\.+/, '').replace(/\.+/g, '.');
+}
+
+function parsePathParts(path) {
+  const normalized = normalizePath(path);
+  if (!normalized) return [];
+  return normalized
+    .split('.')
+    .map((part) => trim(part))
+    .filter(Boolean)
+    .map((part) => (/^\d+$/.test(part) ? Number(part) : part));
+}
+
+function hasOwn(source, key) {
+  return Boolean(source) && Object.prototype.hasOwnProperty.call(source, key);
+}
+
+function getByPath(source, path) {
+  const parts = parsePathParts(path);
+  if (!parts.length) return { found: false, value: undefined };
+  let current = source;
+  for (const part of parts) {
+    if (current == null) return { found: false, value: undefined };
+    if (typeof part === 'number') {
+      if (!Array.isArray(current) || part >= current.length) return { found: false, value: undefined };
+      current = current[part];
+      continue;
+    }
+    if (!hasOwn(current, part)) return { found: false, value: undefined };
+    current = current[part];
+  }
+  return { found: true, value: current };
+}
+
+function parserLeaf(path) {
+  const normalized = normalizePath(path);
+  return normalized
+    .split('.')
+    .map((part) => trim(part))
+    .filter(Boolean)
+    .slice(-1)[0] || normalized;
+}
+
+function normalizePreviewRows(rows) {
+  return (Array.isArray(rows) ? rows : []).filter(
+    (row) => row && typeof row === 'object' && !Array.isArray(row)
+  );
+}
+
+function normalizePreviewSource(source) {
+  const safe = source && typeof source === 'object' ? source : {};
+  const key = trim(safe.key) || 'missing';
+  const label = trim(safe.label) || 'Источник входа для preview не найден';
+  const description =
+    trim(safe.description) ||
+    'Для запуска предпросмотра нужен last runtime input, upstream sample или manual sample.';
+  return {
+    key,
+    label,
+    description,
+    available: Boolean(safe.available) && key !== 'missing',
+    value: safe.value
+  };
+}
+
+function normalizeStructureFields(fields) {
+  return (Array.isArray(fields) ? fields : [])
+    .map((field) => {
+      const name = trim(field?.alias || field?.name || field?.path);
+      if (!name) return null;
+      return {
+        name,
+        alias: trim(field?.alias || field?.name || field?.path),
+        type: trim(field?.type),
+        path: normalizePath(field?.path),
+        origin: trim(field?.origin)
+      };
+    })
+    .filter(Boolean);
+}
+
 export function parserResultPreviewColumnsFromRows(rows) {
   return uniqueStrings(
-    (Array.isArray(rows) ? rows : []).flatMap((row) =>
-      row && typeof row === 'object' && !Array.isArray(row) ? Object.keys(row) : []
-    )
+    normalizePreviewRows(rows).flatMap((row) => Object.keys(row || {}))
   );
 }
 
@@ -46,20 +126,137 @@ export function parserRuntimeRowsFromValue(value) {
   return [];
 }
 
-function normalizeStructureFields(fields) {
-  return (Array.isArray(fields) ? fields : [])
-    .map((field) => {
-      const name = trim(field?.alias || field?.name || field?.path);
-      if (!name) return null;
-      return {
-        name,
-        alias: trim(field?.alias),
-        type: trim(field?.type),
-        path: trim(field?.path),
-        origin: trim(field?.origin)
-      };
-    })
-    .filter(Boolean);
+function readValueFromRow(row, candidates = []) {
+  const source = row && typeof row === 'object' && !Array.isArray(row) ? row : null;
+  if (!source) return { found: false, value: undefined, candidate: '' };
+  for (const rawCandidate of Array.isArray(candidates) ? candidates : []) {
+    const candidate = trim(rawCandidate);
+    if (!candidate) continue;
+    if (hasOwn(source, candidate)) {
+      return { found: true, value: source[candidate], candidate };
+    }
+    const normalizedCandidate = normalizePath(candidate);
+    if (normalizedCandidate && normalizedCandidate !== candidate && hasOwn(source, normalizedCandidate)) {
+      return { found: true, value: source[normalizedCandidate], candidate: normalizedCandidate };
+    }
+    if (!normalizedCandidate) continue;
+    const nested = getByPath(source, normalizedCandidate);
+    if (nested.found) return { found: true, value: nested.value, candidate: normalizedCandidate };
+  }
+  return { found: false, value: undefined, candidate: '' };
+}
+
+function buildPreviewGridFromColumns(rows = [], columns = []) {
+  const safeRows = normalizePreviewRows(rows);
+  const safeColumns = uniqueStrings(columns);
+  const mappedCounts = new Map(safeColumns.map((column) => [column, 0]));
+  const preparedRows = safeRows.map((row) => {
+    const prepared = {};
+    safeColumns.forEach((column) => {
+      const resolved = readValueFromRow(row, [column]);
+      prepared[column] = resolved.found ? resolved.value : '';
+      if (resolved.found) mappedCounts.set(column, (mappedCounts.get(column) || 0) + 1);
+    });
+    return prepared;
+  });
+  return {
+    rows: preparedRows,
+    columns: safeColumns,
+    columnsWithoutMappedValues: safeColumns.filter((column) => (mappedCounts.get(column) || 0) === 0),
+    firstPreparedRowKeys: Object.keys(preparedRows[0] || {})
+  };
+}
+
+function buildPreviewGridFromStructure(rows = [], structureFields = []) {
+  const safeRows = normalizePreviewRows(rows);
+  const safeFields = Array.isArray(structureFields) ? structureFields : [];
+  const columns = uniqueStrings(safeFields.map((field) => field.name));
+  const mappedCounts = new Map(columns.map((column) => [column, 0]));
+  const preparedRows = safeRows.map((row) => {
+    const prepared = {};
+    safeFields.forEach((field) => {
+      const candidates = uniqueStrings([
+        field?.name,
+        field?.alias,
+        field?.path,
+        parserLeaf(field?.path)
+      ]);
+      const resolved = readValueFromRow(row, candidates);
+      prepared[field.name] = resolved.found ? resolved.value : '';
+      if (resolved.found) mappedCounts.set(field.name, (mappedCounts.get(field.name) || 0) + 1);
+    });
+    return prepared;
+  });
+  return {
+    rows: preparedRows,
+    columns,
+    columnsWithoutMappedValues: columns.filter((column) => (mappedCounts.get(column) || 0) === 0),
+    firstPreparedRowKeys: Object.keys(preparedRows[0] || {})
+  };
+}
+
+function chooseEffectiveInputSource({
+  currentInputSource = null,
+  lastResolvedInputSource = null,
+  preferLastResolved = false
+} = {}) {
+  const currentSource = normalizePreviewSource(currentInputSource);
+  const lastSource = normalizePreviewSource(lastResolvedInputSource);
+  if (preferLastResolved && (lastSource.available || lastSource.key !== 'missing')) return lastSource;
+  return currentSource.key ? currentSource : lastSource;
+}
+
+function createPreviewDebugState({
+  effectiveInputSource,
+  structureColumns = [],
+  previewRowCount = 0,
+  preparedRowsCount = 0,
+  firstPreparedRowKeys = [],
+  columnsWithoutMappedValues = [],
+  stalePreview = false,
+  previewError = '',
+  previewSuccess = false,
+  gridColumns = [],
+  rawPreviewColumns = []
+} = {}) {
+  return {
+    resolvedInputSourceKey: trim(effectiveInputSource?.key),
+    resolvedInputSourceLabel: trim(effectiveInputSource?.label),
+    effectivePublishColumns: uniqueStrings(structureColumns),
+    previewResponseRowCount: Math.max(0, Number(previewRowCount) || 0),
+    preparedGridRowsCount: Math.max(0, Number(preparedRowsCount) || 0),
+    firstPreparedRowKeys: uniqueStrings(firstPreparedRowKeys),
+    columnsWithoutMappedValues: uniqueStrings(columnsWithoutMappedValues),
+    stalePreview: Boolean(stalePreview),
+    previewError: trim(previewError),
+    previewSuccess: Boolean(previewSuccess),
+    sourceResolved: Boolean(effectiveInputSource?.available),
+    gridColumns: uniqueStrings(gridColumns),
+    rawPreviewColumns: uniqueStrings(rawPreviewColumns)
+  };
+}
+
+function createPreviewState(base = {}) {
+  return {
+    mode: base.mode || 'no_preview_yet',
+    modeLabel: base.modeLabel || '',
+    statusTone: base.statusTone || 'info',
+    statusTitle: base.statusTitle || '',
+    statusDescription: base.statusDescription || '',
+    rows: Array.isArray(base.rows) ? base.rows : [],
+    columns: uniqueStrings(base.columns),
+    structureFields: Array.isArray(base.structureFields) ? base.structureFields : [],
+    showStructure: Boolean(base.showStructure),
+    structureColumns: uniqueStrings(base.structureColumns),
+    liveRowsCount: Math.max(0, Number(base.liveRowsCount) || 0),
+    liveColumnsCount: Math.max(0, Number(base.liveColumnsCount) || 0),
+    responseRowCount: Math.max(0, Number(base.responseRowCount) || 0),
+    preparedRowsCount: Math.max(0, Number(base.preparedRowsCount) || 0),
+    sourceFormat: trim(base.sourceFormat),
+    isStalePreview: Boolean(base.isStalePreview),
+    effectiveInputSource: normalizePreviewSource(base.effectiveInputSource),
+    debug: createPreviewDebugState(base.debug || {})
+  };
 }
 
 export function buildParserRuntimeResultState({ runtimeStep = null, publishedDescriptorFields = [] } = {}) {
@@ -91,7 +288,8 @@ export function buildParserRuntimeResultState({ runtimeStep = null, publishedDes
       modeLabel: 'Last runtime не найден',
       statusTone: 'info',
       statusTitle: 'Для этой ноды ещё нет сохранённого runtime результата',
-      statusDescription: 'После server run здесь можно будет отдельно увидеть последний canonical output этой ноды и compare с draft preview ниже.',
+      statusDescription:
+        'После server run здесь можно будет отдельно увидеть последний canonical output этой ноды и сравнить его с draft preview ниже.',
       rows: [],
       columns: [],
       structureFields,
@@ -129,23 +327,22 @@ export function buildParserRuntimeResultState({ runtimeStep = null, publishedDes
   }
 
   if (structureFields.length) {
+    const runtimeFailed = trim(runtimeStep?.status).toLowerCase() === 'error';
     return {
       mode: 'shape_only',
       modeLabel: 'Last runtime без строк',
-      statusTone: trim(runtimeStep?.status).toLowerCase() === 'error' ? 'error' : 'warn',
-      statusTitle:
-        trim(runtimeStep?.status).toLowerCase() === 'error'
-          ? 'Последний runtime этой ноды завершился ошибкой'
-          : 'Последний runtime не сохранил строк результата',
-      statusDescription:
-        trim(runtimeStep?.status).toLowerCase() === 'error'
-          ? 'Строки runtime результата недоступны, поэтому ниже остаётся только текущая publish-структура.'
-          : 'Ниже показана publish-структура текущей ноды. Это не live rows, а shape последнего известного результата.',
+      statusTone: runtimeFailed ? 'error' : 'warn',
+      statusTitle: runtimeFailed
+        ? 'Последний runtime этой ноды завершился ошибкой'
+        : 'Последний runtime не сохранил строк результата',
+      statusDescription: runtimeFailed
+        ? 'Строки runtime результата недоступны, поэтому ниже остаётся только текущая publish-структура.'
+        : 'Ниже показана publish-структура текущей ноды. Это не live rows, а shape последнего известного результата.',
       rows: [],
       columns: [],
       structureFields,
       showStructure: true,
-      structureColumns: structureColumns,
+      structureColumns,
       rowCount: 0,
       handoffMatchesUpstream: handoffMatches,
       previousNodeLabel,
@@ -162,7 +359,8 @@ export function buildParserRuntimeResultState({ runtimeStep = null, publishedDes
       trim(runtimeStep?.status).toLowerCase() === 'error'
         ? 'Последний runtime этой ноды завершился ошибкой'
         : 'Последний runtime не дал данных для отображения',
-    statusDescription: 'Для этой ноды нет ни сохранённых строк результата, ни publish-структуры для shape-only режима.',
+    statusDescription:
+      'Для этой ноды нет ни сохранённых строк результата, ни publish-структуры для shape-only режима.',
     rows: [],
     columns: [],
     structureFields,
@@ -181,13 +379,13 @@ export function buildParserResultPreviewState({
   publishedDescriptorFields = [],
   currentConfigSignature = '',
   previewLastAttemptSignature = '',
-  previewLastSuccessSignature = ''
+  previewLastSuccessSignature = '',
+  currentInputSource = null,
+  lastResolvedInputSource = null
 } = {}) {
   const structureFields = normalizeStructureFields(publishedDescriptorFields);
   const structureColumns = uniqueStrings(structureFields.map((field) => field.name));
-  const previewRows = (Array.isArray(previewData?.sample_rows) ? previewData.sample_rows : []).filter(
-    (row) => row && typeof row === 'object' && !Array.isArray(row)
-  );
+  const previewRows = normalizePreviewRows(previewData?.sample_rows);
   const previewColumns = uniqueStrings([
     ...(Array.isArray(previewData?.columns) ? previewData.columns : []),
     ...parserResultPreviewColumnsFromRows(previewRows)
@@ -201,32 +399,64 @@ export function buildParserResultPreviewState({
   const freshSuccess = Boolean(currentSignature) && lastSuccessSignature === currentSignature;
   const freshError = Boolean(trim(previewError)) && freshAttempt && !freshSuccess;
   const stalePreview = Boolean(lastSuccessSignature) && Boolean(currentSignature) && lastSuccessSignature !== currentSignature;
-  const liveRows = freshSuccess ? previewRows : [];
-  const liveColumns = freshSuccess ? previewColumns : [];
-  const liveRowsCount = freshSuccess ? Math.max(0, Number(previewData?.row_count || liveRows.length) || 0) : 0;
-  const liveDisplayColumns = structureColumns.length ? structureColumns : liveColumns;
-  const structureDisplayColumns = structureColumns;
+  const previewResponseRowCount = Math.max(0, Number(previewData?.row_count || previewRows.length) || 0);
+  const effectiveInputSource = chooseEffectiveInputSource({
+    currentInputSource,
+    lastResolvedInputSource,
+    preferLastResolved: freshAttempt || freshSuccess || stalePreview
+  });
 
-  if (freshSuccess && liveRows.length) {
-    return {
+  const structuredGrid = buildPreviewGridFromStructure(previewRows, structureFields);
+  const rawGrid = buildPreviewGridFromColumns(previewRows, previewColumns);
+  const canRenderStructuredRows =
+    structuredGrid.rows.length > 0 &&
+    structuredGrid.columns.length > 0 &&
+    structuredGrid.columnsWithoutMappedValues.length < structuredGrid.columns.length;
+  const canRenderRawRows = rawGrid.rows.length > 0 && rawGrid.columns.length > 0;
+
+  const previewRowsRequireMapping = freshSuccess && structureColumns.length > 0;
+  const freshRowsRenderable = previewRowsRequireMapping ? canRenderStructuredRows : canRenderRawRows;
+  const freshGrid = previewRowsRequireMapping && canRenderStructuredRows ? structuredGrid : rawGrid;
+  const staleGrid = canRenderStructuredRows ? structuredGrid : rawGrid;
+  const displayGrid = stalePreview ? staleGrid : freshGrid;
+
+  if (freshSuccess && previewRows.length && effectiveInputSource.available && freshRowsRenderable) {
+    return createPreviewState({
       mode: 'rows',
       modeLabel: 'Реальные строки результата',
       statusTone: 'ok',
       statusTitle: 'Показаны реальные строки результата parser',
-      statusDescription: 'Таблица ниже собрана из текущего runtime preview. Это живые строки результата, а не fallback-структура.',
-      rows: liveRows,
-      columns: liveDisplayColumns,
+      statusDescription:
+        'Таблица ниже собрана из текущего runtime preview. Это живые строки результата, уже приведённые к publish-модели секции 3.',
+      rows: displayGrid.rows,
+      columns: displayGrid.columns,
       structureFields,
       showStructure: false,
-      liveRowsCount,
-      liveColumnsCount: liveDisplayColumns.length,
+      liveRowsCount: displayGrid.rows.length,
+      liveColumnsCount: displayGrid.columns.length,
+      responseRowCount: previewResponseRowCount,
+      preparedRowsCount: displayGrid.rows.length,
       sourceFormat: trim(previewData?.source_format),
-      isStalePreview: false
-    };
+      isStalePreview: false,
+      effectiveInputSource,
+      debug: {
+        effectiveInputSource,
+        structureColumns,
+        previewRowCount: previewResponseRowCount,
+        preparedRowsCount: displayGrid.rows.length,
+        firstPreparedRowKeys: displayGrid.firstPreparedRowKeys,
+        columnsWithoutMappedValues: displayGrid.columnsWithoutMappedValues,
+        stalePreview: false,
+        previewError: '',
+        previewSuccess: true,
+        gridColumns: displayGrid.columns,
+        rawPreviewColumns: previewColumns
+      }
+    });
   }
 
   if (freshError) {
-    return {
+    return createPreviewState({
       mode: 'preview_failed',
       modeLabel: 'Preview с ошибкой',
       statusTone: 'error',
@@ -236,53 +466,176 @@ export function buildParserResultPreviewState({
       columns: [],
       structureFields,
       showStructure: structureFields.length > 0,
-      structureColumns: structureDisplayColumns,
+      structureColumns,
       liveRowsCount: 0,
       liveColumnsCount: 0,
+      responseRowCount: 0,
+      preparedRowsCount: 0,
       sourceFormat: trim(previewData?.source_format),
-      isStalePreview: false
-    };
+      isStalePreview: false,
+      effectiveInputSource,
+      debug: {
+        effectiveInputSource,
+        structureColumns,
+        previewRowCount: 0,
+        preparedRowsCount: 0,
+        firstPreparedRowKeys: [],
+        columnsWithoutMappedValues: structureColumns,
+        stalePreview: false,
+        previewError,
+        previewSuccess: false,
+        gridColumns: [],
+        rawPreviewColumns: previewColumns
+      }
+    });
   }
 
-  if (stalePreview && previewRows.length) {
-    const staleDisplayColumns = structureColumns.length ? structureColumns : previewColumns;
-    return {
+  if (freshSuccess && previewRows.length && !effectiveInputSource.available) {
+    return createPreviewState({
+      mode: 'preview_failed',
+      modeLabel: 'Preview без источника',
+      statusTone: 'error',
+      statusTitle: 'Не удалось подтвердить источник входа для preview',
+      statusDescription:
+        'Preview вернул строки результата, но в UI не сохранилась информация о том, какой вход был реально использован. Таблица скрыта, чтобы не показывать противоречивое состояние.',
+      rows: [],
+      columns: [],
+      structureFields,
+      showStructure: structureFields.length > 0,
+      structureColumns,
+      liveRowsCount: 0,
+      liveColumnsCount: 0,
+      responseRowCount: previewResponseRowCount,
+      preparedRowsCount: 0,
+      sourceFormat: trim(previewData?.source_format),
+      isStalePreview: false,
+      effectiveInputSource,
+      debug: {
+        effectiveInputSource,
+        structureColumns,
+        previewRowCount: previewResponseRowCount,
+        preparedRowsCount: 0,
+        firstPreparedRowKeys: [],
+        columnsWithoutMappedValues: structureColumns,
+        stalePreview: false,
+        previewError: 'preview_source_resolution_missing',
+        previewSuccess: false,
+        gridColumns: [],
+        rawPreviewColumns: previewColumns
+      }
+    });
+  }
+
+  if (freshSuccess && previewRows.length && !freshRowsRenderable) {
+    const mappingError = previewRowsRequireMapping
+      ? 'Preview rows получены, но их ключи не удалось сопоставить с publish columns секции 3.'
+      : 'Preview rows получены, но их не удалось подготовить к рендеру таблицы.';
+    return createPreviewState({
+      mode: 'preview_failed',
+      modeLabel: 'Preview без готовой таблицы',
+      statusTone: 'error',
+      statusTitle: 'Не удалось подготовить preview rows для таблицы',
+      statusDescription: mappingError,
+      rows: [],
+      columns: [],
+      structureFields,
+      showStructure: structureFields.length > 0,
+      structureColumns,
+      liveRowsCount: 0,
+      liveColumnsCount: 0,
+      responseRowCount: previewResponseRowCount,
+      preparedRowsCount: 0,
+      sourceFormat: trim(previewData?.source_format),
+      isStalePreview: false,
+      effectiveInputSource,
+      debug: {
+        effectiveInputSource,
+        structureColumns,
+        previewRowCount: previewResponseRowCount,
+        preparedRowsCount: 0,
+        firstPreparedRowKeys: [],
+        columnsWithoutMappedValues: previewRowsRequireMapping ? structuredGrid.columnsWithoutMappedValues : rawGrid.columnsWithoutMappedValues,
+        stalePreview: false,
+        previewError: 'preview_grid_mapping_failed',
+        previewSuccess: false,
+        gridColumns: previewRowsRequireMapping ? structuredGrid.columns : rawGrid.columns,
+        rawPreviewColumns: previewColumns
+      }
+    });
+  }
+
+  if (stalePreview && displayGrid.rows.length) {
+    const usesCurrentPublishColumns = canRenderStructuredRows;
+    return createPreviewState({
       mode: 'rows',
       modeLabel: 'Последний preview устарел',
       statusTone: 'warn',
       statusTitle: 'Настройки изменились, предпросмотр устарел',
-      statusDescription:
-        'Таблица ниже показывает последний draft preview по старым settings. Чтобы увидеть актуальные строки результата, обнови предпросмотр заново.',
-      rows: previewRows,
-      columns: staleDisplayColumns,
+      statusDescription: usesCurrentPublishColumns
+        ? 'Таблица ниже показывает последний draft preview по старым settings, но её строки уже приведены к текущей publish-модели настолько, насколько это возможно.'
+        : 'Таблица ниже показывает последний draft preview по старым settings с его исходными колонками. Чтобы увидеть актуальные строки результата, обнови предпросмотр заново.',
+      rows: displayGrid.rows,
+      columns: displayGrid.columns,
       structureFields,
       showStructure: false,
-      liveRowsCount: Math.max(0, Number(previewData?.row_count || previewRows.length) || 0),
-      liveColumnsCount: staleDisplayColumns.length,
+      liveRowsCount: displayGrid.rows.length,
+      liveColumnsCount: displayGrid.columns.length,
+      responseRowCount: previewResponseRowCount,
+      preparedRowsCount: displayGrid.rows.length,
       sourceFormat: trim(previewData?.source_format),
-      isStalePreview: true
-    };
+      isStalePreview: true,
+      effectiveInputSource,
+      debug: {
+        effectiveInputSource,
+        structureColumns,
+        previewRowCount: previewResponseRowCount,
+        preparedRowsCount: displayGrid.rows.length,
+        firstPreparedRowKeys: displayGrid.firstPreparedRowKeys,
+        columnsWithoutMappedValues: displayGrid.columnsWithoutMappedValues,
+        stalePreview: true,
+        previewError: '',
+        previewSuccess: false,
+        gridColumns: displayGrid.columns,
+        rawPreviewColumns: previewColumns
+      }
+    });
   }
 
   if (!hasAnyAttempt) {
-    return {
+    return createPreviewState({
       mode: 'no_preview_yet',
       modeLabel: 'Preview ещё не запускался',
       statusTone: 'info',
       statusTitle: 'Preview результата ещё не запускался',
       statusDescription: structureFields.length
         ? 'Живые строки результата ещё не запрашивались. Ниже можно посмотреть текущую структуру publish result, но это не реальные data rows.'
-        : 'Пока нет ни живых строк preview, ни структуры publish result. Настрой секции 2-3 и нажми «Обновить preview».',
+        : 'Пока нет ни живых строк preview, ни структуры publish result. Настрой секции 2-3 и нажми «Запустить предпросмотр результата».',
       rows: [],
       columns: [],
       structureFields,
       showStructure: structureFields.length > 0,
-      structureColumns: structureDisplayColumns,
+      structureColumns,
       liveRowsCount: 0,
       liveColumnsCount: 0,
+      responseRowCount: 0,
+      preparedRowsCount: 0,
       sourceFormat: trim(previewData?.source_format),
-      isStalePreview: false
-    };
+      isStalePreview: false,
+      effectiveInputSource,
+      debug: {
+        effectiveInputSource,
+        structureColumns,
+        previewRowCount: 0,
+        preparedRowsCount: 0,
+        firstPreparedRowKeys: [],
+        columnsWithoutMappedValues: structureColumns,
+        stalePreview: false,
+        previewError: '',
+        previewSuccess: false,
+        gridColumns: [],
+        rawPreviewColumns: previewColumns
+      }
+    });
   }
 
   if (structureFields.length) {
@@ -291,55 +644,86 @@ export function buildParserResultPreviewState({
     if (stalePreview) {
       statusDescription =
         'После последнего preview настройки parser изменились. Живые строки ниже больше не считаются актуальными, поэтому показана только текущая структура результата.';
-    } else if (freshSuccess && liveRowsCount === 0) {
+    } else if (freshSuccess && previewResponseRowCount === 0) {
       statusDescription =
         'Preview отработал на текущих settings, но не вернул строк результата. Ниже показана только структура publish result.';
-    } else if (freshAttempt && !freshSuccess) {
-      statusDescription =
-        'Для текущих settings живые preview rows пока недоступны. Ниже показана только структура publish result без строк.';
+    } else if (!effectiveInputSource.available) {
+      statusDescription = effectiveInputSource.description;
     }
 
-    return {
+    return createPreviewState({
       mode: 'shape_only',
       modeLabel: 'Только структура результата',
-      statusTone: 'warn',
-      statusTitle: 'Пока доступна только структура результата',
+      statusTone: stalePreview ? 'warn' : freshSuccess ? 'info' : 'warn',
+      statusTitle: freshSuccess && previewResponseRowCount === 0 ? 'Preview не вернул строки результата' : 'Пока доступна только структура результата',
       statusDescription,
       rows: [],
       columns: [],
       structureFields,
       showStructure: true,
-      structureColumns: structureDisplayColumns,
-      liveRowsCount,
-      liveColumnsCount: structureDisplayColumns.length,
+      structureColumns,
+      liveRowsCount: 0,
+      liveColumnsCount: structureColumns.length,
+      responseRowCount: previewResponseRowCount,
+      preparedRowsCount: 0,
       sourceFormat: trim(previewData?.source_format),
-      isStalePreview: stalePreview
-    };
+      isStalePreview: stalePreview,
+      effectiveInputSource,
+      debug: {
+        effectiveInputSource,
+        structureColumns,
+        previewRowCount: previewResponseRowCount,
+        preparedRowsCount: 0,
+        firstPreparedRowKeys: [],
+        columnsWithoutMappedValues: structureColumns,
+        stalePreview,
+        previewError,
+        previewSuccess: false,
+        gridColumns: [],
+        rawPreviewColumns: previewColumns
+      }
+    });
   }
 
-  return {
+  return createPreviewState({
     mode: 'no_preview_yet',
     modeLabel: 'Preview ещё не запускался',
     statusTone: stalePreview ? 'warn' : 'info',
     statusTitle: stalePreview ? 'Старый preview больше не актуален' : 'Preview результата ещё не запускался',
     statusDescription: stalePreview
       ? 'После изменения настроек актуальный preview ещё не собран. Сначала обнови preview.'
-      : 'Пока нет ни живых строк preview, ни структуры publish result. Настрой секции 2-3 и нажми «Обновить preview».',
+      : 'Пока нет ни живых строк preview, ни структуры publish result. Настрой секции 2-3 и нажми «Запустить предпросмотр результата».',
     rows: [],
     columns: [],
     structureFields: [],
     showStructure: false,
     structureColumns: [],
-    liveRowsCount,
+    liveRowsCount: 0,
     liveColumnsCount: 0,
+    responseRowCount: previewResponseRowCount,
+    preparedRowsCount: 0,
     sourceFormat: trim(previewData?.source_format),
-    isStalePreview: stalePreview
-  };
+    isStalePreview: stalePreview,
+    effectiveInputSource,
+    debug: {
+      effectiveInputSource,
+      structureColumns: [],
+      previewRowCount: previewResponseRowCount,
+      preparedRowsCount: 0,
+      firstPreparedRowKeys: [],
+      columnsWithoutMappedValues: [],
+      stalePreview,
+      previewError,
+      previewSuccess: false,
+      gridColumns: [],
+      rawPreviewColumns: previewColumns
+    }
+  });
 }
 
 export function buildParserDraftPreviewUxState({ previewState = null, previewLoading = false, inputSource = null } = {}) {
   const state = previewState && typeof previewState === 'object' ? previewState : {};
-  const source = inputSource && typeof inputSource === 'object' ? inputSource : {};
+  const source = normalizePreviewSource(state.effectiveInputSource || inputSource);
   const sourceLabel = trim(source.label) || 'Источник входа для preview не найден';
   const sourceDescription =
     trim(source.description) ||
@@ -388,11 +772,11 @@ export function buildParserDraftPreviewUxState({ previewState = null, previewLoa
     return {
       state: 'preview_ready',
       stateLabel: 'Предпросмотр актуален',
-      statusTone: 'ok',
+      statusTone: state.mode === 'rows' ? 'ok' : 'info',
       statusDescription:
         state.mode === 'rows'
           ? 'Показаны актуальные draft preview rows по текущим настройкам parser.'
-          : 'Предпросмотр выполнен, но для текущих настроек доступны только структура результата без строк.',
+          : 'Предпросмотр выполнен, но для текущих настроек доступна только структура результата без строк.',
       actionLabel: 'Обновить предпросмотр',
       actionDisabled: false,
       sourceLabel,

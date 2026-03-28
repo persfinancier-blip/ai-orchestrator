@@ -1,33 +1,45 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildParserResultPreviewState, buildParserRuntimeResultState, buildParserDraftPreviewUxState } from '../desk/tabs/parserResultPreviewCore.js';
+import {
+  buildParserDraftPreviewUxState,
+  buildParserResultPreviewState,
+  buildParserRuntimeResultState
+} from '../desk/tabs/parserResultPreviewCore.js';
 
-test('parser result preview state: rows mode uses fresh preview rows and keeps publish contract columns primary', () => {
+test('parser result preview state: fresh preview rows are normalized to publish aliases', () => {
   const state = buildParserResultPreviewState({
     previewData: {
       row_count: 2,
-      columns: ['product_key', 'price', 'runtime_only'],
+      columns: ['meta.id', 'price'],
       sample_rows: [
-        { product_key: 7, price: 12.5, runtime_only: 'x' },
-        { product_key: 100, price: 0, runtime_only: 'y' }
+        { meta: { id: 7 }, price: 12.5 },
+        { meta: { id: 100 }, price: 0 }
       ],
       source_format: 'json'
     },
     publishedDescriptorFields: [
       { alias: 'product_key', type: 'numeric', path: 'meta.id' },
-      { alias: 'price', type: 'numeric', path: 'price' },
-      { alias: 'missing_in_sample', type: 'text', path: 'missing' }
+      { alias: 'price', type: 'numeric', path: 'price' }
     ],
     currentConfigSignature: 'cfg:1',
     previewLastAttemptSignature: 'cfg:1',
-    previewLastSuccessSignature: 'cfg:1'
+    previewLastSuccessSignature: 'cfg:1',
+    currentInputSource: {
+      key: 'upstream_sample',
+      label: 'Источник входа для preview: upstream sample',
+      description: 'Для draft preview будет использован sample snapshot upstream.',
+      available: true
+    }
   });
 
   assert.equal(state.mode, 'rows');
   assert.equal(state.liveRowsCount, 2);
-  assert.deepEqual(state.columns, ['product_key', 'price', 'missing_in_sample']);
-  assert.equal(state.showStructure, false);
+  assert.equal(state.preparedRowsCount, 2);
+  assert.deepEqual(state.columns, ['product_key', 'price']);
+  assert.deepEqual(state.rows[0], { product_key: 7, price: 12.5 });
+  assert.equal(state.debug.previewSuccess, true);
+  assert.deepEqual(state.debug.columnsWithoutMappedValues, []);
 });
 
 test('parser result preview state: no_preview_yet mode exists before preview run and can still show structure', () => {
@@ -48,10 +60,10 @@ test('parser result preview state: no_preview_yet mode exists before preview run
     state.structureFields.map((field) => field.name),
     ['product_key', 'product_name']
   );
-  assert.match(state.statusDescription, /ещё не запрашивались/i);
+  assert.match(state.statusDescription, /ещё не запускался|не запрашивались/i);
 });
 
-test('parser result preview state: stale preview keeps last rows visible but marks them as outdated', () => {
+test('parser result preview state: stale preview keeps last rows visible and falls back to last preview columns when current publish alias no longer maps', () => {
   const state = buildParserResultPreviewState({
     previewData: {
       row_count: 1,
@@ -61,43 +73,81 @@ test('parser result preview state: stale preview keeps last rows visible but mar
     publishedDescriptorFields: [{ alias: 'new_name', type: 'text', path: 'product.name' }],
     currentConfigSignature: 'cfg:3:new',
     previewLastAttemptSignature: 'cfg:3:old',
-    previewLastSuccessSignature: 'cfg:3:old'
+    previewLastSuccessSignature: 'cfg:3:old',
+    lastResolvedInputSource: {
+      key: 'upstream_sample',
+      label: 'Источник входа для preview: upstream sample',
+      description: 'Для draft preview будет использован sample snapshot upstream.',
+      available: true
+    }
   });
 
   assert.equal(state.mode, 'rows');
   assert.equal(state.isStalePreview, true);
-  assert.deepEqual(state.columns, ['new_name']);
+  assert.deepEqual(state.columns, ['old_name']);
   assert.deepEqual(state.rows, [{ old_name: 'legacy' }]);
+  assert.deepEqual(state.debug.effectivePublishColumns, ['new_name']);
 });
 
-test('parser result preview state: preview_failed mode keeps error honest and can still show structure', () => {
+test('parser result preview state: fresh preview does not show success when rows cannot be mapped to publish columns', () => {
   const state = buildParserResultPreviewState({
-    previewData: null,
-    previewError: 'parser_preview_failed:test',
-    publishedDescriptorFields: [{ alias: 'product_key', type: 'numeric', path: 'meta.id' }],
+    previewData: {
+      row_count: 1,
+      columns: ['old_name'],
+      sample_rows: [{ old_name: 'legacy' }]
+    },
+    publishedDescriptorFields: [{ alias: 'new_name', type: 'text', path: 'missing.path' }],
     currentConfigSignature: 'cfg:4',
     previewLastAttemptSignature: 'cfg:4',
-    previewLastSuccessSignature: ''
+    previewLastSuccessSignature: 'cfg:4',
+    currentInputSource: {
+      key: 'upstream_sample',
+      label: 'Источник входа для preview: upstream sample',
+      description: 'Для draft preview будет использован sample snapshot upstream.',
+      available: true
+    }
   });
 
   assert.equal(state.mode, 'preview_failed');
   assert.equal(state.showStructure, true);
-  assert.match(state.statusDescription, /parser_preview_failed:test/);
+  assert.equal(state.preparedRowsCount, 0);
+  assert.equal(state.debug.previewResponseRowCount, 1);
+  assert.match(state.statusDescription, /publish columns|подготовить/i);
 });
 
-test('parser result preview state: no_preview_yet mode stays empty when there is no shape or live preview', () => {
+test('parser result preview state: successful preview keeps the actually used source label even if current source is now missing', () => {
   const state = buildParserResultPreviewState({
-    previewData: null,
-    publishedDescriptorFields: [],
+    previewData: {
+      row_count: 1,
+      columns: ['product_key'],
+      sample_rows: [{ product_key: 7 }]
+    },
+    publishedDescriptorFields: [{ alias: 'product_key', type: 'numeric', path: 'meta.id' }],
     currentConfigSignature: 'cfg:5',
-    previewLastAttemptSignature: '',
-    previewLastSuccessSignature: ''
+    previewLastAttemptSignature: 'cfg:5',
+    previewLastSuccessSignature: 'cfg:5',
+    currentInputSource: {
+      key: 'missing',
+      label: 'Источник входа для preview не найден',
+      description: 'Нет current source.',
+      available: false
+    },
+    lastResolvedInputSource: {
+      key: 'last_runtime_input',
+      label: 'Источник входа для preview: last runtime input',
+      description: 'Для draft preview будет использован канонический input этой ноды из последнего server run.',
+      available: true
+    }
   });
 
-  assert.equal(state.mode, 'no_preview_yet');
-  assert.equal(state.showStructure, false);
-  assert.deepEqual(state.rows, []);
-  assert.deepEqual(state.columns, []);
+  const ux = buildParserDraftPreviewUxState({
+    previewState: state,
+    inputSource: state.effectiveInputSource
+  });
+
+  assert.equal(state.mode, 'rows');
+  assert.equal(state.effectiveInputSource.key, 'last_runtime_input');
+  assert.equal(ux.sourceLabel, 'Источник входа для preview: last runtime input');
 });
 
 test('parser runtime result state: rows mode uses last runtime output and keeps publish columns primary', () => {
