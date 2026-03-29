@@ -2610,19 +2610,25 @@
                 <div class="rules-grid-head">Статус</div>
                 <div class="rules-grid-head"></div>
                 {#each selectedFieldRows as row, index}
-                  <div class="parser-source-cell" class:is-highlighted={highlightedPublishFieldPath === row.path}>
+                  <div
+                    class="parser-source-cell"
+                    class:is-highlighted={highlightedPublishFieldPath === row.path}
+                    title={`Path: ${row.path || '-'}${row.sourceType ? ` · Тип upstream: ${row.sourceType}` : ''}${row.sourceAlias || row.sourceName ? ` · Alias upstream: ${row.sourceAlias || row.sourceName}` : ''}`}
+                  >
                     <div class="parser-source-cell-title">{row.sourceAlias || row.sourceName || row.path}</div>
                     <div class="parser-source-cell-meta">
-                      <span>Path: {row.path}</span>
-                      <span>Alias upstream: {row.sourceAlias || row.sourceName || '-'}</span>
-                      <span>Тип upstream: {row.sourceType || '-'}</span>
+                      <span title={row.path || '-'}>{row.path || '-'}</span>
+                      <span>Тип: {row.sourceType || '-'}</span>
+                      {#if row.sourceName && row.sourceAlias && row.sourceName !== row.sourceAlias}
+                        <span>Имя: {row.sourceName}</span>
+                      {/if}
                       {#if !row.sourceSupported}
-                        <span>Complex field: добавлено вручную</span>
+                        <span>Complex/manual</span>
                       {/if}
                     </div>
                   </div>
-                  <input value={row.alias} on:input={(e) => updateSelectedFieldRow(index, { alias: inputValue(e) })} placeholder="alias" />
-                  <select value={row.type} on:change={(e) => updateSelectedFieldRow(index, { type: selectValue(e) })}>
+                  <input class="parser-publish-control" value={row.alias} on:input={(e) => updateSelectedFieldRow(index, { alias: inputValue(e) })} placeholder="alias" />
+                  <select class="parser-publish-control" value={row.type} on:change={(e) => updateSelectedFieldRow(index, { type: selectValue(e) })}>
                     <option value="">Без приведения</option>
                     <option value="text">Текст</option>
                     <option value="integer">Целое число</option>
@@ -2631,9 +2637,9 @@
                     <option value="json">JSON</option>
                     <option value="timestamp">Дата и время</option>
                   </select>
-                  <input value={row.defaultValue} on:input={(e) => updateSelectedFieldRow(index, { defaultValue: inputValue(e) })} placeholder="по умолчанию" />
-                  <div class={`parser-status-chip status-${row.status.replace(/\s+/g, '-')}`} title={row.statusHint}>{row.statusLabel}</div>
-                  <button type="button" class="icon-btn danger-icon-btn" on:click={() => removeSelectedField(index)}>x</button>
+                  <input class="parser-publish-control" value={row.defaultValue} on:input={(e) => updateSelectedFieldRow(index, { defaultValue: inputValue(e) })} placeholder="по умолчанию" />
+                  <div class={`parser-status-chip parser-publish-control status-${row.status.replace(/\s+/g, '-')}`} title={row.statusHint}>{row.statusLabel}</div>
+                  <button type="button" class="icon-btn danger-icon-btn parser-publish-control" on:click={() => removeSelectedField(index)}>x</button>
                 {/each}
               </div>
             {:else}
@@ -3962,6 +3968,8 @@
   }
   .rules-grid-parser-publish {
     grid-template-columns: minmax(220px, 1.25fr) minmax(0, 0.95fr) minmax(170px, 0.65fr) minmax(0, 0.95fr) minmax(160px, 0.7fr) auto;
+    align-items: start;
+    row-gap: 10px;
   }
   .rules-grid:not(.rules-grid-filters):not(.rules-grid-aggregates):not(.rules-grid-parser-publish) {
     grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(170px, 0.6fr) minmax(0, 1fr) auto;
@@ -3971,15 +3979,26 @@
     color: #64748b;
     font-weight: 600;
   }
+  .rules-grid-parser-publish > .rules-grid-head {
+    align-self: end;
+  }
+  .rules-grid-parser-publish > .parser-publish-control {
+    min-height: 40px;
+    height: 40px;
+    align-self: start;
+  }
   .parser-source-cell {
-    min-height: 100%;
+    min-height: 40px;
     border: 1px solid #dbe4f0;
     border-radius: 10px;
-    padding: 8px 10px;
+    padding: 7px 10px;
     background: #fff;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    justify-content: center;
+    gap: 3px;
+    align-self: start;
+    overflow: hidden;
   }
   .parser-source-cell.is-highlighted {
     border-color: #93c5fd;
@@ -3989,18 +4008,27 @@
     font-size: 12px;
     font-weight: 600;
     color: #0f172a;
+    line-height: 1.25;
     word-break: break-word;
   }
   .parser-source-cell-meta {
     display: flex;
-    flex-direction: column;
-    gap: 2px;
+    flex-wrap: wrap;
+    gap: 3px 8px;
     font-size: 11px;
     color: #64748b;
-    word-break: break-word;
+    line-height: 1.25;
+    min-width: 0;
+  }
+  .parser-source-cell-meta span {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .parser-status-chip {
-    min-height: 34px;
+    min-height: 40px;
     border-radius: 999px;
     padding: 0 10px;
     display: inline-flex;
@@ -4038,8 +4066,8 @@
   .danger-icon-btn {
     color: #b91c1c;
     border-color: #fecaca;
-    width: 34px;
-    height: 34px;
+    width: 40px;
+    height: 40px;
     border-radius: 10px;
     display: inline-flex;
     align-items: center;
@@ -4232,6 +4260,12 @@
     .preview-action-copy {
       flex-direction: column;
       align-items: flex-start;
+    }
+    .rules-grid-parser-publish {
+      grid-template-columns: 1fr;
+    }
+    .rules-grid-parser-publish > .rules-grid-head {
+      display: none;
     }
     .parser-contract-chip {
       width: 100%;
