@@ -3112,7 +3112,7 @@
     return uniqueDescriptorFields(outputMode === 'named_output_params' ? mappedOutputFields : selectedContractFields);
   }
 
-  function descriptorFieldsFromWriteNode(node: WorkflowNode): NodeDescriptorField[] {
+  function descriptorFieldsFromWriteNode(node: WorkflowNode, upstreamDescriptors: NodeDescriptor[] = []): NodeDescriptorField[] {
     const settings = toolCfg(node).settings || {};
     const fieldMappings = tryList(settings.fieldMappingsJson || settings.fieldMappings || settings.field_mappings);
     const targetColumns = uniqueDescriptorFields(
@@ -3130,6 +3130,27 @@
         )
         .filter((item: NodeDescriptorField | null): item is NodeDescriptorField => Boolean(item))
     );
+    if (targetColumns.length) return targetColumns;
+    const sourceMode = String(settings.sourceMode || settings.source_mode || 'node').trim().toLowerCase();
+    if (sourceMode === 'node') {
+      return uniqueDescriptorFields(
+        upstreamDescriptors
+          .flatMap((descriptor) => descriptorFields(descriptor))
+          .map((field, index) =>
+            normalizeDescriptorField(
+              {
+                name: String(field?.alias || field?.name || field?.path || '').trim(),
+                alias: String(field?.alias || field?.name || field?.path || '').trim(),
+                path: String(field?.path || field?.alias || field?.name || '').trim(),
+                type: String(field?.type || '').trim(),
+                origin: 'write_passthrough'
+              },
+              index
+            )
+          )
+          .filter((item: NodeDescriptorField | null): item is NodeDescriptorField => Boolean(item))
+      );
+    }
     return targetColumns;
   }
 
@@ -3137,7 +3158,7 @@
     if (isApiNode(node) || isApiToolNode(node)) return descriptorFieldsFromApiNode(node);
     if (isParserToolNode(node)) return descriptorFieldsFromParserNode(node, upstreamDescriptors);
     if (isTableNodeTool(node)) return descriptorFieldsFromTableNode(node);
-    if (isWriteToolNode(node)) return descriptorFieldsFromWriteNode(node);
+    if (isWriteToolNode(node)) return descriptorFieldsFromWriteNode(node, upstreamDescriptors);
     return [];
   }
 
@@ -7051,12 +7072,16 @@
               apiJson={workflowApiJson}
               headers={workflowApiHeaders}
               existingTables={apiBuilderExistingTables}
+              workflowDeskId={deskId}
+              workflowNodeId={settingsNode.id}
+              workflowGraph={captureDeskState()}
               initialSettings={toolCfg(settingsNode).settings || {}}
               incomingDescriptor={incomingDescriptorForNode(settingsNode)}
               outputDescriptor={buildNodeOutputDescriptor(settingsNode, {
                 sourcePort: 'out',
                 upstreamDescriptors: incomingDescriptorForNode(settingsNode)?.upstreamDescriptors || []
               })}
+              lastRuntimeStep={runtimeSnapshotForNode(settingsNode)}
               embeddedMode={false}
               on:configChange={(event) => replaceToolSettings(settingsNode.id, event.detail?.settings || {})}
             />
