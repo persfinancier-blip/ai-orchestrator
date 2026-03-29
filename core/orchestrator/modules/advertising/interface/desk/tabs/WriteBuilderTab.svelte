@@ -662,7 +662,7 @@
 <section class="panel" class:panel-embedded={embeddedMode}>
   <div class="write-layout">
     <section class="write-column">
-      <div class="write-card">
+      <div class="write-card write-card-shell">
         <div class="write-card-head">
           <div>
             <h3>Входящие параметры</h3>
@@ -670,14 +670,14 @@
           </div>
         </div>
 
-        <div class="meta-row">
+        <div class="meta-row meta-row-shell">
           <span>{section1FieldItems.length} полей</span>
           <span>Формат: {descriptorOutputKindLabel(primaryIncomingDescriptor?.outputKind || 'unknown')}</span>
           <span>Источник: {settings.sourceMode === 'table' ? 'таблица' : 'upstream publish block'}</span>
         </div>
 
         {#if section1FieldItems.length}
-          <div class="field-chip-wrap">
+          <div class="field-chip-wrap field-chip-wrap-shell">
             {#each section1FieldItems as field}
               <span class="field-chip" title={fieldMeta(field)}>
                 <strong>{fieldDisplayName(field)}</strong>
@@ -691,7 +691,7 @@
           <div class="empty-box">Входной контракт пока не определён.</div>
         {/if}
 
-        <div class="compact-preview">
+        <div class="compact-preview compact-preview-shell">
           <div class="compact-preview-head">
             <strong>Preview входа</strong>
             <span class="hint">{compactInputStatus}</span>
@@ -968,7 +968,7 @@
     </section>
 
     <section class="write-column">
-      <div class="write-card">
+      <div class="write-card write-card-shell">
         <div class="write-card-head">
           <div>
             <h3>Выходные параметры</h3>
@@ -976,14 +976,14 @@
           </div>
         </div>
 
-        <div class="meta-row">
+        <div class="meta-row meta-row-shell">
           <span>{outputDescriptorFields.length} полей</span>
           <span>Формат: {descriptorOutputKindLabel(outputDescriptor?.outputKind || 'unknown')}</span>
           <span>{compactOutputStatus}</span>
         </div>
 
         {#if outputDescriptorFields.length}
-          <div class="field-chip-wrap">
+          <div class="field-chip-wrap field-chip-wrap-shell">
             {#each outputDescriptorFields as field}
               <span class="field-chip" title={fieldMeta(field)}>
                 <strong>{fieldDisplayName(field)}</strong>
@@ -997,7 +997,7 @@
           <div class="empty-box">Publish contract пока не определён.</div>
         {/if}
 
-        <div class="compact-preview">
+        <div class="compact-preview compact-preview-shell">
           <div class="compact-preview-head">
             <strong>Preview выхода</strong>
             <span class="hint">{compactOutputStatus}</span>
@@ -1130,6 +1130,12 @@
     min-width: 0;
   }
 
+  .write-card-shell {
+    gap: 10px;
+    padding: 14px;
+    background: #fbfdff;
+  }
+
   .write-card-head,
   .subsection-head {
     display: flex;
@@ -1151,6 +1157,12 @@
     line-height: 1.45;
   }
 
+  .write-card-shell .write-card-head p {
+    font-size: 11px;
+    line-height: 1.4;
+    max-width: 30ch;
+  }
+
   .meta-row,
   .result-status-row,
   .row-actions {
@@ -1158,6 +1170,10 @@
     flex-wrap: wrap;
     gap: 8px;
     align-items: center;
+  }
+
+  .meta-row-shell {
+    gap: 6px;
   }
 
   .meta-row span,
@@ -1170,27 +1186,38 @@
     font-size: 11px;
   }
 
+  .meta-row-shell span {
+    background: #f8fafc;
+  }
+
   .field-chip-wrap {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
   }
 
+  .field-chip-wrap-shell {
+    gap: 6px;
+  }
+
   .field-chip {
     display: inline-flex;
-    align-items: center;
-    gap: 8px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
     max-width: 100%;
-    padding: 6px 10px;
-    border: 1px solid #dbe4f0;
-    border-radius: 999px;
+    padding: 7px 10px;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
     background: #fff;
+    box-sizing: border-box;
   }
 
   .field-chip strong {
     color: #0f172a;
     font-size: 12px;
     font-weight: 600;
+    line-height: 1.2;
   }
 
   .field-chip small {
@@ -1199,7 +1226,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 240px;
+    max-width: 170px;
   }
 
   .compact-preview {
@@ -1209,11 +1236,24 @@
     min-width: 0;
   }
 
+  .compact-preview-shell {
+    gap: 6px;
+  }
+
   .compact-preview-head {
     display: flex;
     justify-content: space-between;
     gap: 10px;
     align-items: center;
+  }
+
+  .compact-preview-shell .preview-table-wrap {
+    max-height: 176px;
+  }
+
+  .compact-preview-shell .empty-box {
+    padding: 10px 12px;
+    font-size: 11px;
   }
 
   .subsection {
@@ -1354,12 +1394,35 @@
   }
 
   .result-grid-wrap {
-    max-height: 420px;
+    min-height: 320px;
+    max-height: 540px;
   }
 
   .result-table th,
   .result-table td {
     white-space: nowrap;
+  }
+
+  .result-card {
+    gap: 12px;
+    padding: 18px;
+    background: #fff;
+  }
+
+  .result-card .write-card-head p {
+    max-width: 48ch;
+  }
+
+  .result-status-row .hint {
+    font-size: 11px;
+  }
+
+  .result-status-row span:nth-of-type(2) {
+    display: none;
+  }
+
+  .result-status-row span.hint:nth-of-type(n + 4) {
+    display: none;
   }
 
   .mapping-status {
