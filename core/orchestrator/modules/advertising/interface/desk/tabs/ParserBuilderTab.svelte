@@ -2100,30 +2100,26 @@
                     <span>{incomingContractFields(item).length ? `${incomingContractFields(item).length} полей` : 'контракт не определён'}</span>
                   </div>
                   {#if incomingContractFields(item).length}
-                    <div class="parser-contract-list">
+                    <div class="parser-contract-chip-wrap">
                       {#each incomingContractFields(item) as field}
-                        <div class="parser-contract-item" class:is-selected={incomingFieldSelected(field)}>
-                          <div class="parser-contract-name">{field.alias || field.name || field.path || 'Поле'}</div>
-                          <div class="parser-contract-meta">
+                        <button
+                          type="button"
+                          class="parser-contract-chip parser-contract-chip-actionable"
+                          class:is-selected={incomingFieldSelected(field)}
+                          title={`${field.alias || field.name || field.path || 'Поле'}${field.path ? ` · ${field.path}` : ''}${field.type ? ` · ${field.type}` : ''}`}
+                          on:click={() => useIncomingField(field)}
+                        >
+                          <span class="parser-contract-chip-main">{field.alias || field.name || field.path || 'Поле'}</span>
+                          <span class="parser-contract-chip-meta">
                             {#if field.name && field.alias && field.name !== field.alias}
-                              <span>Имя: {field.name}</span>
-                            {/if}
-                            {#if field.alias}
-                              <span>Alias: {field.alias}</span>
+                              <span>{field.name}</span>
                             {/if}
                             {#if field.type}
-                              <span>Тип: {field.type}</span>
+                              <span>{field.type}</span>
                             {/if}
-                            {#if field.path}
-                              <span>Path: {field.path}</span>
-                            {/if}
-                          </div>
-                          <div class="parser-contract-actions">
-                            <button type="button" class="mini-btn parser-contract-add-btn" on:click={() => useIncomingField(field)}>
-                              {incomingFieldSelected(field) ? 'Открыть в полях' : 'В результат'}
-                            </button>
-                          </div>
-                        </div>
+                          </span>
+                          <span class="parser-contract-chip-badge">{incomingFieldSelected(field) ? 'В результате' : 'В результат'}</span>
+                        </button>
                       {/each}
                     </div>
                   {:else}
@@ -3127,25 +3123,21 @@
             <span class="chip-chip readonly-chip">{publishedDescriptorFields.length} {publishedDescriptorFields.length === 1 ? 'поле' : publishedDescriptorFields.length < 5 ? 'поля' : 'полей'}</span>
             <span class="inline-hint">Publish descriptor текущей ноды</span>
           </div>
-          <div class="parser-contract-list">
+          <div class="parser-contract-chip-wrap">
             {#each publishedDescriptorFields as field}
-              <div class="parser-contract-item">
-                <div class="parser-contract-name">{field.alias || field.name}</div>
-                <div class="parser-contract-meta">
-                  <span>Имя: {field.name}</span>
-                  {#if field.alias}
-                    <span>Alias: {field.alias}</span>
+              <div
+                class="parser-contract-chip parser-contract-chip-readonly"
+                title={`${field.alias || field.name || 'Поле'}${field.path ? ` · ${field.path}` : ''}${field.type ? ` · ${field.type}` : ''}`}
+              >
+                <span class="parser-contract-chip-main">{field.alias || field.name}</span>
+                <span class="parser-contract-chip-meta">
+                  {#if field.name && field.alias && field.name !== field.alias}
+                    <span>{field.name}</span>
                   {/if}
                   {#if field.type}
-                    <span>Тип: {field.type}</span>
+                    <span>{field.type}</span>
                   {/if}
-                  {#if field.path}
-                    <span>Path: {field.path}</span>
-                  {/if}
-                  {#if field.origin}
-                    <span>Источник: {field.origin}</span>
-                  {/if}
-                </div>
+                </span>
               </div>
             {/each}
           </div>
@@ -3477,45 +3469,67 @@
     font-size: 11px;
     color: #475569;
   }
-  .parser-contract-list {
+  .parser-contract-chip-wrap {
     display: flex;
-    flex-direction: column;
-    gap: 6px;
+    flex-wrap: wrap;
+    gap: 8px;
   }
-  .parser-contract-item {
+  .parser-contract-chip {
+    appearance: none;
     border: 1px solid #e2e8f0;
-    border-radius: 8px;
+    border-radius: 999px;
     background: #fff;
-    padding: 8px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+    padding: 7px 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    max-width: 100%;
+    color: #0f172a;
   }
-  .parser-contract-item.is-selected {
+  .parser-contract-chip.is-selected {
     border-color: #c7d2fe;
     background: #f8faff;
   }
-  .parser-contract-name {
+  .parser-contract-chip-actionable {
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+  }
+  .parser-contract-chip-actionable:hover {
+    border-color: #93c5fd;
+    background: #f8fbff;
+  }
+  .parser-contract-chip-readonly {
+    cursor: default;
+  }
+  .parser-contract-chip-main {
     font-size: 12px;
     font-weight: 600;
-    color: #0f172a;
-    word-break: break-word;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .parser-contract-meta {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+  .parser-contract-chip-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     font-size: 11px;
     color: #64748b;
-    word-break: break-word;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .parser-contract-actions {
-    margin-top: 4px;
-    display: flex;
-    justify-content: flex-start;
-  }
-  .parser-contract-add-btn {
-    padding: 6px 10px;
+  .parser-contract-chip-badge {
+    flex-shrink: 0;
+    border-radius: 999px;
+    background: #eff6ff;
+    color: #1d4ed8;
+    padding: 3px 8px;
+    font-size: 10px;
+    line-height: 1.2;
+    font-weight: 600;
   }
   .parser-contract-fallback {
     font-size: 11px;
@@ -4218,6 +4232,10 @@
     .preview-action-copy {
       flex-direction: column;
       align-items: flex-start;
+    }
+    .parser-contract-chip {
+      width: 100%;
+      justify-content: space-between;
     }
     .detect-summary-grid,
     .form-grid-2,
