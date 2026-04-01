@@ -245,3 +245,42 @@ test('table builder write create: created binding is immediately usable by write
   assert.equal(preview.mapping_summary.rows_ready, 1);
   assert.equal(preview.mapping_rows.some((row) => row.sourceField === 'id' && row.targetField === 'id'), true);
 });
+
+test('table builder write create: accepts builder-like columns and partitioning', async () => {
+  const client = createWriteNodeCreateClient();
+  const result = await createWriteNodeTargetTable(
+    client,
+    {
+      schema_name: 'ao_data',
+      table_name: 'silver_ads_partitioned',
+      template_name: 'write_silver_ads_partitioned',
+      data_level: 'silver',
+      table_class: 'silver_table',
+      description: 'builder-like create test',
+      template_kind: 'data',
+      partitioning: { enabled: true, column: 'event_date', interval: 'month' },
+      columns: [
+        { field_name: 'ao_source', field_type: 'text', description: 'dedupe check' },
+        { field_name: 'event_date', field_type: 'date', description: 'partition key' },
+        { field_name: 'adv_id', field_type: 'text', description: 'business key' },
+        { field_name: 'adv_title', field_type: 'text', description: 'title' }
+      ]
+    },
+    TEST_RUNTIME
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.columns.filter((item) => item.field_name === 'ao_source').length, 1);
+  assert.equal(result.columns.some((item) => item.field_name === 'event_date'), true);
+  assert.equal(result.columns.some((item) => item.field_name === 'adv_id'), true);
+  assert.equal(result.columns.some((item) => item.field_name === 'ao_contract_version'), true);
+  assert.equal(
+    client.calls.some((item) => item.sql.includes('PARTITION BY RANGE ("event_date")')),
+    true
+  );
+  const templateInsert = client.calls.find((item) => item.sql.startsWith('INSERT INTO "ao_system"."table_templates_store"'));
+  assert.ok(templateInsert);
+  assert.equal(templateInsert.params.includes(true), true);
+  assert.equal(templateInsert.params.includes('event_date'), true);
+  assert.equal(templateInsert.params.includes('month'), true);
+});

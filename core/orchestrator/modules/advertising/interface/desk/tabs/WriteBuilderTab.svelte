@@ -6,6 +6,16 @@
     descriptorSampleRows,
     descriptorOutputKindLabel
   } from '../data/nodeDescriptorFlow';
+  import {
+    TABLE_FIELD_TYPE_OPTIONS,
+    loadTableTemplatesCatalog,
+    normalizeTemplateKind,
+    withRequiredTableFields,
+    normalizeColumns,
+    isRequiredTableField,
+    buildTemplateColumnsWithUpstreamFields,
+    inferDataLevel
+  } from '../../shared/tableTemplateBuilderFlow.mjs';
 
   export let apiBase = '';
   export let apiJson;
@@ -42,8 +52,6 @@
   };
   const IDENT_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
   const CREATE_TARGET_CLASS_OPTIONS = ['custom', 'bronze_raw', 'silver_table', 'showcase_table'];
-  const CREATE_TARGET_LEVEL_OPTIONS = ['bronze', 'silver', 'gold'];
-
   const str = (value) => String(value ?? '').trim();
 
   function normalizeWriteMode(value) {
@@ -232,14 +240,6 @@
     return kind || 'Не определён';
   }
 
-  function dataLevelLabel(value) {
-    const raw = str(value).toLowerCase();
-    if (raw === 'bronze') return 'Бронза';
-    if (raw === 'silver') return 'Серебро';
-    if (raw === 'gold') return 'Золото';
-    return value;
-  }
-
   function tableClassLabel(value) {
     const raw = str(value).toLowerCase();
     if (raw === 'custom') return 'Пользовательская';
@@ -383,6 +383,98 @@
     return `${str(schema)}.${str(table)}`;
   }
 
+  function createFieldDraftRow(column, origin = 'template') {
+    return {
+      field_name: str(column?.field_name || ''),
+      field_type: str(column?.field_type || 'text') || 'text',
+      description: str(column?.description || ''),
+      origin
+    };
+  }
+
+  function normalizeCreateColumnsPayload(rows) {
+    return normalizeColumns(
+      (Array.isArray(rows) ? rows : []).map((row) => ({
+        field_name: str(row?.field_name || ''),
+        field_type: str(row?.field_type || 'text') || 'text',
+        description: str(row?.description || '')
+      }))
+    );
+  }
+
+  function availableUpstreamFieldsForCreateTarget() {
+    return (Array.isArray(section1FieldItems) ? section1FieldItems : [])
+      .map((field) => ({
+        name: str(field?.name || ''),
+        alias: str(field?.alias || field?.name || ''),
+        path: str(field?.path || ''),
+        type: str(field?.type || '')
+      }))
+      .filter((field) => field.alias || field.name);
+  }
+
+  function applyCreateTargetTemplate(template) {
+    if (!template || typeof template !== 'object') return;
+    selectedCreateTemplateId = str(template.id || '');
+    createTargetSchema = str(template.schema_name || '');
+    createTargetTable = str(template.table_name || '');
+    createTableClass = str(template.table_class || 'custom') || 'custom';
+    createDataLevel = str(template.data_level || 'bronze') || 'bronze';
+    createDescription = str(template.description || '');
+    createPartitionEnabled = Boolean(template.partition_enabled);
+    createPartitionColumn = str(template.partition_column || '');
+    createPartitionInterval = str(template.partition_interval || 'day') === 'month' ? 'month' : 'day';
+    createTargetColumns = withRequiredTableFields(template.columns || []).map((column) => createFieldDraftRow(column, 'template'));
+    createTargetError = '';
+    createTargetSuccess = '';
+  }
+
+  function onCreateTemplateSelected(templateId) {
+    selectedCreateTemplateId = str(templateId);
+    const template = createTableTemplates.find((item) => str(item?.id) === selectedCreateTemplateId) || null;
+    if (!template) {
+      createTargetColumns = [];
+      createPartitionEnabled = false;
+      createPartitionColumn = '';
+      createPartitionInterval = 'day';
+      return;
+    }
+    applyCreateTargetTemplate(template);
+  }
+
+  function addFieldsFromUpstreamDataset() {
+    const existingTemplateNames = new Set(
+      normalizeCreateColumnsPayload(createTargetColumns).map((column) => str(column?.field_name || '').toLowerCase())
+    );
+    const merged = buildTemplateColumnsWithUpstreamFields(
+      normalizeCreateColumnsPayload(createTargetColumns),
+      availableUpstreamFieldsForCreateTarget()
+    );
+    createTargetColumns = merged.map((column) =>
+      createFieldDraftRow(column, existingTemplateNames.has(str(column.field_name || '').toLowerCase()) ? 'template' : 'upstream')
+    );
+  }
+
+  function addBlankCreateTargetField() {
+    createTargetColumns = [...createTargetColumns, createFieldDraftRow({ field_name: '', field_type: 'text', description: '' }, 'manual')];
+  }
+
+  function updateCreateTargetField(index, key, value) {
+    createTargetColumns = createTargetColumns.map((row, rowIndex) =>
+      rowIndex === index ? { ...row, [key]: value } : row
+    );
+  }
+
+  function removeCreateTargetField(index) {
+    const row = createTargetColumns[index];
+    if (!row) return;
+    if (isRequiredTableField(row.field_name)) return;
+    createTargetColumns = createTargetColumns.filter((_, rowIndex) => rowIndex !== index);
+    if (!createTargetColumns.length) {
+      createTargetColumns = withRequiredTableFields([]).map((column) => createFieldDraftRow(column, 'template'));
+    }
+  }
+
   function normalizeCreateTargetError(message) {
     const details = str(message);
     if (!details) return 'Не удалось создать таблицу для ноды записи.';
@@ -401,6 +493,14 @@
     if (details === 'write_node_table_class_not_allowed') {
       return 'Для ноды записи недоступны workflow/system-классы шаблонов.';
     }
+    if (details === 'invalid_partition_column') return 'Укажи корректную колонку партиционирования.';
+    if (details === 'invalid_partition_interval') return 'Интервал партиционирования может быть только day или month.';
+    if (details.startsWith('invalid_field_name:')) {
+      return `В списке полей есть недопустимое имя: ${details.split(':').slice(1).join(':')}.`;
+    }
+    if (details.startsWith('invalid_field_type:') || details.startsWith('invalid_field_type_sql:')) {
+      return `В списке полей есть недопустимый тип: ${details.split(':').slice(1).join(':')}.`;
+    }
     return details;
   }
 
@@ -409,8 +509,8 @@
     createTargetError = '';
     createTargetSuccess = '';
     if (!createTargetSchema) createTargetSchema = str(settings.targetSchema || 'ao_data');
-    if (!createDataLevel) createDataLevel = 'bronze';
     if (!createTableClass) createTableClass = 'custom';
+    if (!createTableTemplates.length && !createTemplatesLoading) void loadCreateTargetTemplates();
   }
 
   function activateExistingTargetMode() {
@@ -434,9 +534,10 @@
     createTargetSuccess = '';
     const schema_name = str(createTargetSchema);
     const table_name = str(createTargetTable);
-    const template_name = str(createTemplateName);
+    const template_name = [schema_name, table_name].filter(Boolean).join('.');
     const description = str(createDescription);
-    const upstream_fields = upstreamFieldsForCreateTarget();
+    const upstream_fields = availableUpstreamFieldsForCreateTarget();
+    const columns = normalizeCreateColumnsPayload(createTargetColumns);
 
     if (!schema_name) {
       createTargetError = 'Укажи схему.';
@@ -444,10 +545,6 @@
     }
     if (!table_name) {
       createTargetError = 'Укажи имя таблицы.';
-      return;
-    }
-    if (!template_name) {
-      createTargetError = 'Укажи имя шаблона.';
       return;
     }
     if (!IDENT_RE.test(schema_name)) {
@@ -458,8 +555,21 @@
       createTargetError = 'Имя таблицы: только латиница, цифры и _, первый символ — буква или _.';
       return;
     }
-    if (!upstream_fields.length) {
+    if (false && !upstream_fields.length) {
       createTargetError = 'Во входном каноническом потоке нет полей для создания таблицы.';
+      return;
+    }
+
+    if (!selectedCreateTemplateId) {
+      createTargetError = 'Сначала выбери шаблон таблицы.';
+      return;
+    }
+    if (!columns.length) {
+      createTargetError = 'Добавь хотя бы одно поле в структуру таблицы.';
+      return;
+    }
+    if (createPartitionEnabled && !str(createPartitionColumn)) {
+      createTargetError = 'Укажи колонку партиционирования.';
       return;
     }
 
@@ -472,9 +582,14 @@
           schema_name,
           table_name,
           template_name,
-          data_level: createDataLevel || 'bronze',
+          data_level: createDataLevel || inferDataLevel(schema_name, createTableClass || 'custom') || 'bronze',
           table_class: createTableClass || 'custom',
           description,
+          template_kind: 'data',
+          columns,
+          partitioning: createPartitionEnabled
+            ? { enabled: true, column: str(createPartitionColumn), interval: str(createPartitionInterval || 'day') || 'day' }
+            : { enabled: false },
           upstream_fields
         })
       });
@@ -517,6 +632,25 @@
       columnsCache = { ...columnsCache, [key]: cols };
     } catch {
       columnsCache = { ...columnsCache, [key]: [] };
+    }
+  }
+
+  async function loadCreateTargetTemplates() {
+    createTemplatesLoading = true;
+    createTemplatesError = '';
+    try {
+      const payload = await loadTableTemplatesCatalog(apiBase, apiJson);
+      createTableTemplates = (Array.isArray(payload?.templates) ? payload.templates : []).filter(
+        (item) => normalizeTemplateKind(item?.template_kind) === 'data'
+      );
+      const schema = str(payload?.storage_schema || '');
+      const table = str(payload?.storage_table || '');
+      createTemplatesStorageLabel = schema && table ? `${schema}.${table}` : '';
+    } catch (e) {
+      createTemplatesError = String(e?.message || e || 'Не удалось загрузить шаблоны таблиц');
+      createTableTemplates = [];
+    } finally {
+      createTemplatesLoading = false;
     }
   }
 
@@ -699,13 +833,21 @@
   let draftPreviewStep = null;
   let targetMode = 'existing';
   let locallyCreatedTables = [];
+  let createTableTemplates = [];
+  let createTemplatesLoading = false;
+  let createTemplatesError = '';
+  let createTemplatesStorageLabel = '';
+  let selectedCreateTemplateId = '';
   let availableTables = [];
   let createTargetSchema = '';
   let createTargetTable = '';
-  let createTemplateName = '';
   let createDataLevel = 'bronze';
   let createTableClass = 'custom';
   let createDescription = '';
+  let createPartitionEnabled = false;
+  let createPartitionColumn = '';
+  let createPartitionInterval = 'day';
+  let createTargetColumns = [];
   let createTargetLoading = false;
   let createTargetError = '';
   let createTargetSuccess = '';
@@ -835,6 +977,7 @@
 
   onMount(() => {
     void loadDrafts(storeIdFromSettings(initialSettings));
+    void loadCreateTargetTemplates();
   });
 </script>
 
@@ -986,31 +1129,31 @@
           </div>
           {#if targetMode === 'create'}
             <div class="create-target-box">
-              <div class="form-grid form-grid-3">
+              <div class="create-template-head">
                 <label>
-                  Схема
-                  <input value={createTargetSchema} on:input={(e) => (createTargetSchema = inputValue(e))} placeholder="Например: ao_data" />
-                </label>
-                <label>
-                  Имя таблицы
-                  <input value={createTargetTable} on:input={(e) => (createTargetTable = inputValue(e))} placeholder="Например: silver_ads_new" />
-                </label>
-                <label>
-                  Имя шаблона
-                  <input value={createTemplateName} on:input={(e) => (createTemplateName = inputValue(e))} placeholder="Например: Запись silver ads" />
-                </label>
-              </div>
-              <div class="form-grid form-grid-3">
-                <label>
-                  Уровень данных
-                  <select value={createDataLevel} on:change={(e) => (createDataLevel = selectValue(e))}>
-                    {#each CREATE_TARGET_LEVEL_OPTIONS as level}
-                      <option value={level}>{dataLevelLabel(level)}</option>
+                  Шаблон таблицы
+                  <select value={selectedCreateTemplateId} on:change={(e) => onCreateTemplateSelected(selectValue(e))}>
+                    <option value="">Выбери шаблон</option>
+                    {#each createTableTemplates as template}
+                      <option value={template.id}>{template.name}</option>
                     {/each}
                   </select>
                 </label>
+                <div class="create-template-actions">
+                  <button type="button" class="mini-btn" on:click={loadCreateTargetTemplates} disabled={createTemplatesLoading}>
+                    {createTemplatesLoading ? 'Обновляем шаблоны...' : 'Обновить шаблоны'}
+                  </button>
+                  {#if createTemplatesStorageLabel}
+                    <span class="hint">Источник: {createTemplatesStorageLabel}</span>
+                  {/if}
+                </div>
+              </div>
+
+              <div class="inline-hint">Имя нового шаблона сервер соберёт автоматически из схемы и названия таблицы.</div>
+
+              <div class="form-grid form-grid-3 builder-create-grid">
                 <label>
-                  Класс таблицы
+                  Класс
                   <select value={createTableClass} on:change={(e) => (createTableClass = selectValue(e))}>
                     {#each CREATE_TARGET_CLASS_OPTIONS as tableClass}
                       <option value={tableClass}>{tableClassLabel(tableClass)}</option>
@@ -1018,15 +1161,88 @@
                   </select>
                 </label>
                 <label>
-                  Описание
-                  <input value={createDescription} on:input={(e) => (createDescription = inputValue(e))} placeholder="Короткое описание таблицы" />
+                  Схема
+                  <input value={createTargetSchema} on:input={(e) => (createTargetSchema = inputValue(e))} placeholder="Например: ao_data" />
+                </label>
+                <label>
+                  Название таблицы
+                  <input value={createTargetTable} on:input={(e) => (createTargetTable = inputValue(e))} placeholder="Например: silver_ads_new" />
                 </label>
               </div>
 
+              <div class="form-grid">
+                <label>
+                  Описание таблицы
+                  <textarea rows="2" value={createDescription} on:input={(e) => (createDescription = textareaValue(e))} placeholder="Короткое описание таблицы"></textarea>
+                </label>
+              </div>
+
+              <div class="partition-block">
+                <button type="button" class="partition-btn write-partition-btn" class:active={createPartitionEnabled} on:click={() => (createPartitionEnabled = !createPartitionEnabled)}>
+                  {#if createPartitionEnabled}
+                    <span class="partition-indicator">●</span>
+                  {/if}
+                  <span>Партиционирование</span>
+                </button>
+                {#if createPartitionEnabled}
+                  <div class="form-grid form-grid-2 partition-form">
+                    <label>
+                      Колонка партиционирования
+                      <input value={createPartitionColumn} on:input={(e) => (createPartitionColumn = inputValue(e))} placeholder="event_date / ingested_at / ..." />
+                    </label>
+                    <label>
+                      Интервал
+                      <select value={createPartitionInterval} on:change={(e) => (createPartitionInterval = selectValue(e))}>
+                        <option value="day">day</option>
+                        <option value="month">month</option>
+                      </select>
+                    </label>
+                  </div>
+                {/if}
+              </div>
+
               <div class="create-target-fields">
-                <div class="compact-preview-head">
-                  <strong>Поля из канонического входного потока</strong>
-                  <span class="hint">{section1FieldItems.length} полей</span>
+                <div class="subsection-head">
+                  <h4>Преднастроенные поля шаблона</h4>
+                  <div class="row-actions">
+                    <button type="button" class="mini-btn" on:click={addBlankCreateTargetField}>Добавить поле</button>
+                  </div>
+                </div>
+                {#if createTemplatesError}
+                  <div class="inline-error">{createTemplatesError}</div>
+                {/if}
+                {#if createTargetColumns.length}
+                  {#each createTargetColumns as column, index}
+                    <div class="field-row create-field-row">
+                      <input value={column.field_name} on:input={(e) => updateCreateTargetField(index, 'field_name', inputValue(e))} placeholder="имя поля" />
+                      <select value={column.field_type} on:change={(e) => updateCreateTargetField(index, 'field_type', selectValue(e))}>
+                        {#each TABLE_FIELD_TYPE_OPTIONS as typeOption}
+                          <option value={typeOption.value}>{typeOption.label}</option>
+                        {/each}
+                      </select>
+                      <input value={column.description} on:input={(e) => updateCreateTargetField(index, 'description', inputValue(e))} placeholder="описание" />
+                      <button
+                        type="button"
+                        class="danger-btn icon-btn"
+                        on:click={() => removeCreateTargetField(index)}
+                        disabled={isRequiredTableField(column.field_name)}
+                        title={isRequiredTableField(column.field_name) ? 'Обязательное поле' : 'Удалить поле'}
+                      >x</button>
+                    </div>
+                  {/each}
+                {:else}
+                  <div class="empty-box">Выбери шаблон таблицы, чтобы увидеть преднастроенные поля.</div>
+                {/if}
+              </div>
+
+              <div class="create-target-fields">
+                <div class="subsection-head">
+                  <h4>Поля из набора входных данных</h4>
+                  <div class="row-actions">
+                    <button type="button" class="mini-btn" on:click={addFieldsFromUpstreamDataset} disabled={!section1FieldItems.length}>
+                      Добавить поля из набора входных данных
+                    </button>
+                  </div>
                 </div>
                 {#if section1FieldItems.length}
                   <div class="field-chip-wrap field-chip-wrap-shell">
@@ -1040,16 +1256,17 @@
                     {/each}
                   </div>
                 {:else}
-                  <div class="empty-box">Во входном каноническом потоке пока нет полей для создания таблицы.</div>
+                  <div class="empty-box">Во входном каноническом потоке пока нет полей для добавления.</div>
                 {/if}
-                <div class="inline-hint">Системные поля `ao_*` сервер добавит автоматически.</div>
+                <div class="inline-hint">Системные поля ao_* добавляются через общий server path и не дублируются второй раз.</div>
               </div>
 
               <div class="row-actions">
-                <button type="button" class="primary-btn" on:click={createTargetTableNow} disabled={createTargetLoading || !section1FieldItems.length}>
-                  {createTargetLoading ? 'Создаём таблицу...' : 'Создать и привязать таблицу'}
+                <button type="button" class="primary-btn" on:click={createTargetTableNow} disabled={createTargetLoading || !createTargetColumns.length}>
+                  {createTargetLoading ? 'Создаём таблицу...' : 'Создать таблицу и привязать'}
                 </button>
               </div>
+
               {#if createTargetError}
                 <div class="inline-error">{createTargetError}</div>
               {:else if createTargetSuccess}
@@ -1570,6 +1787,79 @@
     min-width: 0;
   }
 
+  .create-template-head {
+    display: grid;
+    grid-template-columns: minmax(240px, 1fr) auto;
+    gap: 12px;
+    align-items: end;
+  }
+
+  .create-template-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-start;
+    justify-content: flex-end;
+    min-width: 0;
+  }
+
+  .builder-create-grid {
+    align-items: end;
+  }
+
+  .partition-block {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    border: 1px dashed #dbe4f0;
+    border-radius: 14px;
+    background: #fff;
+  }
+
+  .partition-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid #cbd5e1;
+    border-radius: 999px;
+    background: #fff;
+    color: #334155;
+    padding: 8px 12px;
+    cursor: pointer;
+  }
+
+  .partition-btn.active {
+    border-color: #0f172a;
+    background: #0f172a;
+    color: #fff;
+  }
+
+  .partition-indicator {
+    font-size: 10px;
+    line-height: 1;
+  }
+
+  .write-partition-btn {
+    align-self: flex-start;
+  }
+
+  .partition-form {
+    margin-top: 4px;
+  }
+
+  .create-field-row {
+    display: grid;
+    grid-template-columns: minmax(180px, 1.2fr) minmax(150px, 0.9fr) minmax(220px, 1.6fr) auto;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .create-field-row .icon-btn {
+    min-width: 40px;
+    padding: 10px 0;
+  }
+
   .form-grid {
     display: grid;
     gap: 12px;
@@ -1581,6 +1871,19 @@
 
   .form-grid-3 {
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+
+  @media (max-width: 1280px) {
+    .create-template-head {
+      grid-template-columns: 1fr;
+      align-items: stretch;
+    }
+  }
+
+  @media (max-width: 980px) {
+    .create-field-row {
+      grid-template-columns: 1fr;
+    }
   }
 
   label {

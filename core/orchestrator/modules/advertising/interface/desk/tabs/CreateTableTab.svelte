@@ -2,6 +2,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { CLIENT_MODULE_TEMPLATES } from '../../shared/clientModuleTemplates.mjs';
+  import { loadTableTemplatesCatalog } from '../../shared/tableTemplateBuilderFlow.mjs';
 
   export type Role = 'viewer' | 'operator' | 'data_admin';
   export type ExistingTable = { schema_name: string; table_name: string };
@@ -700,61 +701,13 @@
   }
 
   async function loadTemplatesFromStorage() {
-    const isValid = await checkStorageTable(storage_schema, storage_table);
-    if (!isValid) {
-      loadTableTemplatesFallback();
-      return;
-    }
-    try {
-      const j = await apiJson<{ rows: any[] }>(
-        `${apiBase}/preview?schema=${encodeURIComponent(storage_schema)}&table=${encodeURIComponent(storage_table)}&limit=5000`
-      );
-      const rows = Array.isArray(j?.rows) ? j.rows : [];
-      const custom: DataContract[] = [];
-      for (const r of rows) {
-        const parsedColumns = Array.isArray(r?.columns)
-          ? r.columns
-          : (() => {
-              try {
-                const x = JSON.parse(String(r?.columns || '[]'));
-                return Array.isArray(x) ? x : [];
-              } catch {
-                return [];
-              }
-            })();
-        const name = String(r?.template_name || '').trim();
-        if (!name) continue;
-        const rawMode = String(r?.contract_mode || 'safe_add_only').trim();
-        custom.push({
-          id: uid(),
-          name,
-          schema_name: String(r?.schema_name || ''),
-          table_name: String(r?.table_name || ''),
-          table_class: String(r?.table_class || 'custom'),
-          data_level: normalizeDataLevel(r?.data_level),
-          template_kind: inferTemplateKindFromRow(r),
-          description: String(r?.description || ''),
-          columns: parsedColumns.map((c: any) => ({
-            field_name: String(c?.field_name || ''),
-            field_type: normalizeFieldType(c?.field_type || c?.type || 'text'),
-            description: String(c?.description || '')
-          })),
-          partition_enabled: Boolean(r?.partition_enabled),
-          partition_column: String(r?.partition_column || 'event_date'),
-          partition_interval: String(r?.partition_interval || 'day') === 'month' ? 'month' : 'day',
-          contract_version: Number(r?.contract_version || 1) > 0 ? Number(r?.contract_version || 1) : 1,
-          contract_mode: rawMode === 'strict_sync' ? 'strict_sync' : 'safe_add_only',
-          storage_ctids: r?.__ctid ? [String(r.__ctid)] : []
-        });
-      }
-      tableTemplates = mergeTemplates(builtinTableTemplates(), custom);
-      error = '';
-    } catch (e: any) {
-      storage_status = 'error';
-      storage_status_message = storageInstruction('Ошибка загрузки шаблонов из таблицы.');
-      loadTableTemplatesFallback();
-      error = e?.message || String(e);
-    }
+    const payload = await loadTableTemplatesCatalog(apiBase, apiJson);
+    tableTemplates = Array.isArray(payload?.templates) ? payload.templates : builtinTableTemplates();
+    storage_schema = String(payload?.storage_schema || storage_schema || STORAGE_DEFAULT_SCHEMA);
+    storage_table = String(payload?.storage_table || storage_table || STORAGE_DEFAULT_TABLE);
+    storage_status = (payload?.storage_status as any) || 'error';
+    storage_status_message = String(payload?.storage_status_message || '');
+    error = '';
   }
 
   function loadTableTemplatesFallback() {

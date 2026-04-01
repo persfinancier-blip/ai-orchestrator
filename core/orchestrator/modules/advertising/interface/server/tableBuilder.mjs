@@ -2411,13 +2411,13 @@ async function insertTemplateRowToStorage(client, templatesQn, config, payload) 
     schema_name: payload.schema_name,
     table_name: payload.table_name,
     data_level: payload.data_level,
-    template_kind: 'data',
+    template_kind: payload.template_kind || 'data',
     table_class: payload.table_class,
     description: payload.description,
     columns: JSON.stringify(payload.columns),
-    partition_enabled: false,
-    partition_column: '',
-    partition_interval: 'day',
+    partition_enabled: Boolean(payload.partitioning?.enabled),
+    partition_column: String(payload.partitioning?.column || ''),
+    partition_interval: String(payload.partitioning?.interval || 'day'),
     ao_source: 'write_node_create_api',
     ao_run_id: runId,
     ao_created_at: new Date().toISOString(),
@@ -2443,6 +2443,14 @@ export async function createWriteNodeTargetTable(client, rawPayload, runtime = {
   const template_kind = String(rawPayload?.template_kind || 'data').trim().toLowerCase() || 'data';
   const data_level = normalizeWriteNodeDataLevel(rawPayload?.data_level);
   const table_class = normalizeWriteNodeTableClass(rawPayload?.table_class || 'custom');
+  const partitioning = rawPayload?.partitioning && typeof rawPayload.partitioning === 'object'
+    ? {
+        enabled: Boolean(rawPayload.partitioning?.enabled),
+        column: String(rawPayload.partitioning?.column || '').trim(),
+        interval: String(rawPayload.partitioning?.interval || 'day').trim() || 'day'
+      }
+    : { enabled: false };
+  const explicitColumns = Array.isArray(rawPayload?.columns) ? rawPayload.columns : [];
   const upstream_fields = Array.isArray(rawPayload?.upstream_fields) ? rawPayload.upstream_fields : [];
 
   if (!isIdent(schema_name)) throw new Error('invalid_schema_name');
@@ -2459,7 +2467,9 @@ export async function createWriteNodeTargetTable(client, rawPayload, runtime = {
       : await loadRuntimeConfig(client);
   const templatesQn = runtime.templatesQn || (runtime.skipEnsure ? qname(config.templates_schema, config.templates_table) : await ensureTemplatesStorageTable(client, config));
   const contractsQn = runtime.contractsQn || (runtime.skipEnsure ? qname(config.contracts_schema, config.contracts_table) : await ensureContractsTable(client, config));
-  const columns = buildWriteNodeTargetColumns(upstream_fields);
+  const columns = explicitColumns.length
+    ? withSystemContractColumns(explicitColumns)
+    : buildWriteNodeTargetColumns(upstream_fields);
 
   await client.query('BEGIN');
   try {
@@ -2475,6 +2485,8 @@ export async function createWriteNodeTargetTable(client, rawPayload, runtime = {
       table_class,
       description,
       columns,
+      template_kind,
+      partitioning,
       contractsQn
     });
 
@@ -2487,7 +2499,7 @@ export async function createWriteNodeTargetTable(client, rawPayload, runtime = {
         description,
         created_by,
         columns,
-        partitioning: { enabled: false },
+        partitioning,
         fail_if_exists: true
       },
       { contractsQn, contracts_schema: config.contracts_schema }
@@ -4372,6 +4384,8 @@ tableBuilderRouter.post('/tables/create-from-write-node', requireDataAdmin, asyn
         table_class: req.body?.table_class,
         description: req.body?.description,
         template_kind: req.body?.template_kind,
+        columns: req.body?.columns,
+        partitioning: req.body?.partitioning,
         upstream_fields: req.body?.upstream_fields,
         created_by: req.header('X-AO-ROLE') || 'write_node'
       },
@@ -4385,6 +4399,11 @@ tableBuilderRouter.post('/tables/create-from-write-node', requireDataAdmin, asyn
       details === 'invalid_table_name' ||
       details === 'template_name_required' ||
       details === 'write_node_upstream_fields_empty' ||
+      details === 'invalid_partition_column' ||
+      details === 'invalid_partition_interval' ||
+      details.startsWith('invalid_field_name:') ||
+      details.startsWith('invalid_field_type:') ||
+      details.startsWith('invalid_field_type_sql:') ||
       details.startsWith('invalid_upstream_field_name:') ||
       details.startsWith('write_node_template_kind_not_allowed:') ||
       details === 'write_node_table_class_not_allowed'
