@@ -40,6 +40,9 @@
     previewLimit: '20',
     channel: ''
   };
+  const IDENT_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+  const CREATE_TARGET_CLASS_OPTIONS = ['custom', 'bronze_raw', 'silver_table', 'showcase_table'];
+  const CREATE_TARGET_LEVEL_OPTIONS = ['bronze', 'silver', 'gold'];
 
   const str = (value) => String(value ?? '').trim();
 
@@ -166,6 +169,17 @@
       previewLimit: settingsValue.previewLimit,
       channel: settingsValue.channel
     };
+  }
+
+  function mergeTables(base = [], extra = []) {
+    const map = new Map();
+    for (const item of [...(Array.isArray(base) ? base : []), ...(Array.isArray(extra) ? extra : [])]) {
+      const schema_name = str(item?.schema_name || '');
+      const table_name = str(item?.table_name || '');
+      if (!schema_name || !table_name) continue;
+      map.set(`${schema_name}.${table_name}`.toLowerCase(), { schema_name, table_name });
+    }
+    return [...map.values()];
   }
 
   function uniqueStrings(items = []) {
@@ -337,6 +351,118 @@
 
   function tableCacheKey(schema, table) {
     return `${str(schema)}.${str(table)}`;
+  }
+
+  function normalizeCreateTargetError(message) {
+    const details = str(message);
+    if (!details) return 'Не удалось создать таблицу для write-node.';
+    if (details === 'invalid_schema_name') return 'Схема: только латиница, цифры и _, первый символ — буква или _.';
+    if (details === 'invalid_table_name') return 'Имя таблицы: только латиница, цифры и _, первый символ — буква или _.';
+    if (details === 'template_name_required') return 'Укажи имя шаблона таблицы.';
+    if (details === 'template_name_conflict') return 'Шаблон с таким именем уже существует.';
+    if (details === 'table_name_conflict') return 'Таблица с таким schema.table уже существует.';
+    if (details === 'write_node_upstream_fields_empty') return 'Во входном каноническом потоке нет полей для создания таблицы.';
+    if (details.startsWith('invalid_upstream_field_name:')) {
+      return `Во входном потоке есть неподходящее имя поля: ${details.split(':').slice(1).join(':')}.`;
+    }
+    if (details.startsWith('write_node_template_kind_not_allowed:')) {
+      return 'Из write-node можно создавать только обычные data tables.';
+    }
+    if (details === 'write_node_table_class_not_allowed') {
+      return 'Для write-node недоступны workflow/system template classes.';
+    }
+    return details;
+  }
+
+  function activateCreateTargetMode() {
+    targetMode = 'create';
+    createTargetError = '';
+    createTargetSuccess = '';
+    if (!createTargetSchema) createTargetSchema = str(settings.targetSchema || 'ao_data');
+    if (!createDataLevel) createDataLevel = 'bronze';
+    if (!createTableClass) createTableClass = 'custom';
+  }
+
+  function activateExistingTargetMode() {
+    targetMode = 'existing';
+    createTargetError = '';
+  }
+
+  function upstreamFieldsForCreateTarget() {
+    return (Array.isArray(section1FieldItems) ? section1FieldItems : [])
+      .map((field) => ({
+        name: str(field?.name || ''),
+        alias: str(field?.alias || field?.name || ''),
+        path: str(field?.path || ''),
+        type: str(field?.type || '')
+      }))
+      .filter((field) => field.alias || field.name);
+  }
+
+  async function createTargetTableNow() {
+    createTargetError = '';
+    createTargetSuccess = '';
+    const schema_name = str(createTargetSchema);
+    const table_name = str(createTargetTable);
+    const template_name = str(createTemplateName);
+    const description = str(createDescription);
+    const upstream_fields = upstreamFieldsForCreateTarget();
+
+    if (!schema_name) {
+      createTargetError = 'Укажи схему.';
+      return;
+    }
+    if (!table_name) {
+      createTargetError = 'Укажи имя таблицы.';
+      return;
+    }
+    if (!template_name) {
+      createTargetError = 'Укажи имя шаблона.';
+      return;
+    }
+    if (!IDENT_RE.test(schema_name)) {
+      createTargetError = 'Схема: только латиница, цифры и _, первый символ — буква или _.';
+      return;
+    }
+    if (!IDENT_RE.test(table_name)) {
+      createTargetError = 'Имя таблицы: только латиница, цифры и _, первый символ — буква или _.';
+      return;
+    }
+    if (!upstream_fields.length) {
+      createTargetError = 'Во входном каноническом потоке нет полей для создания таблицы.';
+      return;
+    }
+
+    createTargetLoading = true;
+    try {
+      const payload = await apiJson(`${apiBase}/tables/create-from-write-node`, {
+        method: 'POST',
+        headers: typeof headers === 'function' ? headers() : {},
+        body: JSON.stringify({
+          schema_name,
+          table_name,
+          template_name,
+          data_level: createDataLevel || 'bronze',
+          table_class: createTableClass || 'custom',
+          description,
+          upstream_fields
+        })
+      });
+      locallyCreatedTables = mergeTables(locallyCreatedTables, [
+        { schema_name: payload?.schema_name || schema_name, table_name: payload?.table_name || table_name }
+      ]);
+      const next = cloneSettings(settings);
+      next.targetSchema = str(payload?.schema_name || schema_name);
+      next.targetTable = str(payload?.table_name || table_name);
+      dispatchSettings(next);
+      await ensureColumnsFor(next.targetSchema, next.targetTable);
+      targetMode = 'existing';
+      createTargetSuccess = `Создана и привязана таблица ${next.targetSchema}.${next.targetTable}.`;
+    } catch (e) {
+      createTargetError = normalizeCreateTargetError(e?.message || e);
+    } finally {
+      createTargetLoading = false;
+    }
   }
 
   async function ensureColumnsFor(schema, table) {
@@ -541,6 +667,18 @@
   let previewError = '';
   let previewUpdatedAt = '';
   let draftPreviewStep = null;
+  let targetMode = 'existing';
+  let locallyCreatedTables = [];
+  let availableTables = [];
+  let createTargetSchema = '';
+  let createTargetTable = '';
+  let createTemplateName = '';
+  let createDataLevel = 'bronze';
+  let createTableClass = 'custom';
+  let createDescription = '';
+  let createTargetLoading = false;
+  let createTargetError = '';
+  let createTargetSuccess = '';
 
   let incomingDescriptors = [];
   let primaryIncomingDescriptor = null;
@@ -593,13 +731,20 @@
   $: incomingDescriptorFields = descriptorFields(primaryIncomingDescriptor);
   $: incomingDescriptorRows = descriptorSampleRows(primaryIncomingDescriptor);
   $: incomingDescriptorColumns = descriptorSampleColumns(primaryIncomingDescriptor);
+  $: availableTables = mergeTables(existingTables, locallyCreatedTables);
   $: targetColumnOptions = columnOptionsFor(settings.targetSchema, settings.targetTable);
   $: sourceTableColumnOptions = columnOptionsFor(settings.sourceSchema, settings.sourceTable);
   $: explicitMappings = parseFieldMappings(settings.fieldMappingsJson);
   $: outputDescriptorFields = descriptorFields(outputDescriptor);
   $: section1FieldItems =
     settings.sourceMode === 'table'
-      ? sourceTableColumnOptions.map((name) => ({ name, alias: name, type: '', path: name }))
+      ? sourceTableColumnOptions.map((name) => ({
+          name,
+          alias: name,
+          type:
+            columnsCache[tableCacheKey(settings.sourceSchema, settings.sourceTable)]?.find((item) => item?.name === name)?.type || '',
+          path: name
+        }))
       : incomingDescriptorFields;
   $: canonicalInputContractColumns =
     settings.sourceMode === 'table'
@@ -652,6 +797,10 @@
 
   $: if (settings.targetSchema && settings.targetTable) {
     void ensureColumnsFor(settings.targetSchema, settings.targetTable);
+  }
+
+  $: if (!createTargetSchema) {
+    createTargetSchema = str(settings.targetSchema || 'ao_data');
   }
 
   onMount(() => {
@@ -795,29 +944,111 @@
 
         <div class="subsection">
           <div class="subsection-head">
-            <h4>Куда записывать</h4>
+            <h4>Write target</h4>
           </div>
-          <div class="form-grid form-grid-2">
-            <label>
-              Схема назначения
-              <select value={settings.targetSchema} on:change={(e) => patchSetting('targetSchema', selectValue(e))}>
-                <option value="">Выбери схему</option>
-                {#each uniqueStrings(existingTables.map((item) => item.schema_name)) as schemaName}
-                  <option value={schemaName}>{schemaName}</option>
-                {/each}
-              </select>
-            </label>
-            <label>
-              Таблица назначения
-              <select value={settings.targetTable} on:change={(e) => patchSetting('targetTable', selectValue(e))}>
-                <option value="">Выбери таблицу</option>
-                {#each existingTables.filter((item) => !settings.targetSchema || item.schema_name === settings.targetSchema) as item}
-                  <option value={item.table_name}>{item.table_name}</option>
-                {/each}
-              </select>
-            </label>
+          <div class="mode-switch">
+            <button type="button" class:selected={targetMode === 'existing'} class="mode-switch-btn" on:click={activateExistingTargetMode}>
+              Use existing table
+            </button>
+            <button type="button" class:selected={targetMode === 'create'} class="mode-switch-btn" on:click={activateCreateTargetMode}>
+              Create new table
+            </button>
           </div>
-          <div class="inline-hint">{currentTargetColumnsHint() || 'Выбери таблицу назначения.'}</div>
+          {#if targetMode === 'create'}
+            <div class="create-target-box">
+              <div class="form-grid form-grid-3">
+                <label>
+                  Schema
+                  <input value={createTargetSchema} on:input={(e) => (createTargetSchema = inputValue(e))} placeholder="for example: ao_data" />
+                </label>
+                <label>
+                  Table name
+                  <input value={createTargetTable} on:input={(e) => (createTargetTable = inputValue(e))} placeholder="for example: silver_ads_new" />
+                </label>
+                <label>
+                  Template name
+                  <input value={createTemplateName} on:input={(e) => (createTemplateName = inputValue(e))} placeholder="for example: Silver ads from write" />
+                </label>
+              </div>
+              <div class="form-grid form-grid-3">
+                <label>
+                  Data level
+                  <select value={createDataLevel} on:change={(e) => (createDataLevel = selectValue(e))}>
+                    {#each CREATE_TARGET_LEVEL_OPTIONS as level}
+                      <option value={level}>{level}</option>
+                    {/each}
+                  </select>
+                </label>
+                <label>
+                  Table class
+                  <select value={createTableClass} on:change={(e) => (createTableClass = selectValue(e))}>
+                    {#each CREATE_TARGET_CLASS_OPTIONS as tableClass}
+                      <option value={tableClass}>{tableClass}</option>
+                    {/each}
+                  </select>
+                </label>
+                <label>
+                  Description
+                  <input value={createDescription} on:input={(e) => (createDescription = inputValue(e))} placeholder="Short table description" />
+                </label>
+              </div>
+
+              <div class="create-target-fields">
+                <div class="compact-preview-head">
+                  <strong>Fields from canonical upstream output</strong>
+                  <span class="hint">{section1FieldItems.length} fields</span>
+                </div>
+                {#if section1FieldItems.length}
+                  <div class="field-chip-wrap field-chip-wrap-shell">
+                    {#each section1FieldItems as field}
+                      <span class="field-chip" title={fieldMeta(field)}>
+                        <strong>{fieldDisplayName(field)}</strong>
+                        {#if fieldAuxLabel(field)}
+                          <small>{fieldAuxLabel(field)}</small>
+                        {/if}
+                      </span>
+                    {/each}
+                  </div>
+                {:else}
+                  <div class="empty-box">No fields are available in the canonical upstream flow yet.</div>
+                {/if}
+                <div class="inline-hint">System ao_* fields will be added by the server through tableBuilder.</div>
+              </div>
+
+              <div class="row-actions">
+                <button type="button" class="primary-btn" on:click={createTargetTableNow} disabled={createTargetLoading || !section1FieldItems.length}>
+                  {createTargetLoading ? 'Creating table...' : 'Create and bind table'}
+                </button>
+              </div>
+              {#if createTargetError}
+                <div class="inline-error">{createTargetError}</div>
+              {:else if createTargetSuccess}
+                <div class="inline-success">{createTargetSuccess}</div>
+              {/if}
+            </div>
+          {:else}
+            <div class="form-grid form-grid-2">
+              <label>
+                Target schema
+                <select value={settings.targetSchema} on:change={(e) => patchSetting('targetSchema', selectValue(e))}>
+                  <option value="">Choose schema</option>
+                  {#each uniqueStrings(availableTables.map((item) => item.schema_name)) as schemaName}
+                    <option value={schemaName}>{schemaName}</option>
+                  {/each}
+                </select>
+              </label>
+              <label>
+                Target table
+                <select value={settings.targetTable} on:change={(e) => patchSetting('targetTable', selectValue(e))}>
+                  <option value="">Choose table</option>
+                  {#each availableTables.filter((item) => !settings.targetSchema || item.schema_name === settings.targetSchema) as item}
+                    <option value={item.table_name}>{item.table_name}</option>
+                  {/each}
+                </select>
+              </label>
+            </div>
+            <div class="inline-hint">{createTargetSuccess || currentTargetColumnsHint() || 'Choose a target table.'}</div>
+          {/if}
         </div>
 
         <div class="subsection">
@@ -1269,6 +1500,34 @@
     padding-top: 0;
   }
 
+  .mode-switch {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .mode-switch-btn {
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    color: #334155;
+    border-radius: 999px;
+    padding: 8px 12px;
+    cursor: pointer;
+  }
+
+  .mode-switch-btn.selected {
+    border-color: #0f172a;
+    background: #0f172a;
+    color: #fff;
+  }
+
+  .create-target-box,
+  .create-target-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
   .form-grid {
     display: grid;
     gap: 12px;
@@ -1476,6 +1735,14 @@
     border: 1px solid #fecaca;
     background: #fef2f2;
     color: #b91c1c;
+    border-radius: 12px;
+    padding: 10px 12px;
+  }
+
+  .inline-success {
+    border: 1px solid #bbf7d0;
+    background: #f0fdf4;
+    color: #166534;
     border-radius: 12px;
     padding: 10px 12px;
   }

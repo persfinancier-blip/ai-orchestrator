@@ -2128,6 +2128,397 @@ function normalizeColumns(columns) {
   return out;
 }
 
+function withSystemContractColumns(columns) {
+  const base = normalizeColumns(columns);
+  const seen = new Set(base.map((item) => String(item.field_name || '').trim().toLowerCase()));
+  const extras = SYSTEM_CONTRACT_COLUMNS
+    .map((item) => ({
+      field_name: item.name,
+      field_type: normalizeContractFieldType(item.type) || 'text',
+      description: 'Системное поле контракта данных.'
+    }))
+    .filter((item) => !seen.has(String(item.field_name || '').trim().toLowerCase()));
+  return [...base, ...extras];
+}
+
+function normalizeWriteNodeDataLevel(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'silver') return 'silver';
+  if (raw === 'gold' || raw === 'showcase') return 'gold';
+  return 'bronze';
+}
+
+function normalizeWriteNodeTableClass(value) {
+  const raw = String(value || 'custom').trim();
+  const lower = raw.toLowerCase();
+  if (!raw) return 'custom';
+  if (lower.includes('system_log') || lower.includes('workflow_log') || lower.includes('system_storage')) {
+    throw new Error('write_node_table_class_not_allowed');
+  }
+  return raw;
+}
+
+export function buildWriteNodeTargetColumns(upstreamFields) {
+  const rows = Array.isArray(upstreamFields) ? upstreamFields : [];
+  const businessColumns = [];
+  const seen = new Set();
+  for (const raw of rows) {
+    const field_name = String(raw?.alias || raw?.name || raw?.field_name || '').trim();
+    if (!field_name) continue;
+    if (!isIdent(field_name)) throw new Error(`invalid_upstream_field_name:${field_name}`);
+    const key = field_name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const field_type = normalizeContractFieldType(raw?.type || raw?.field_type || '') || 'text';
+    const description =
+      String(raw?.description || '').trim() ||
+      (String(raw?.path || '').trim() ? `Источник: ${String(raw.path).trim()}` : '');
+    businessColumns.push({ field_name, field_type, description });
+  }
+  if (!businessColumns.length) throw new Error('write_node_upstream_fields_empty');
+  return withSystemContractColumns(businessColumns);
+}
+
+async function getLatestContractMetaWithQn(client, contractsQn, schema, table) {
+  const r = await client.query(
+    `
+    SELECT contract_name, version
+    FROM ${contractsQn}
+    WHERE schema_name = $1
+      AND table_name = $2
+      AND lifecycle_state = 'active'
+    ORDER BY version DESC, created_at DESC, id DESC
+    LIMIT 1
+    `,
+    [schema, table]
+  );
+  let row = r.rows?.[0] || null;
+  if (!row) {
+    const fallback = await client.query(
+      `
+      SELECT contract_name, version
+      FROM ${contractsQn}
+      WHERE schema_name = $1
+        AND table_name = $2
+        AND lifecycle_state <> 'deleted_by_user'
+      ORDER BY version DESC, created_at DESC, id DESC
+      LIMIT 1
+      `,
+      [schema, table]
+    );
+    row = fallback.rows?.[0] || null;
+  }
+  return {
+    contract_name: String(row?.contract_name || defaultContractName(schema, table)),
+    version: Number(row?.version || 1) || 1
+  };
+}
+
+async function createPhysicalTableWithContractTx(
+  client,
+  {
+    schema_name,
+    table_name,
+    table_class,
+    description,
+    created_by,
+    columns,
+    partitioning = { enabled: false },
+    test_row = null,
+    fail_if_exists = false
+  },
+  contractRuntime = null
+) {
+  let partition_enabled = !!partitioning?.enabled;
+  const partition_column = String(partitioning?.column || '').trim();
+  const partition_interval = String(partitioning?.interval || 'day').trim();
+
+  if (!isIdent(schema_name)) throw new Error('invalid_schema_name');
+  if (!isIdent(table_name)) throw new Error('invalid_table_name');
+  const normalizedColumns = normalizeColumns(columns);
+  const createClause = fail_if_exists ? 'CREATE TABLE' : 'CREATE TABLE IF NOT EXISTS';
+
+  if (partition_enabled) {
+    if (!isIdent(partition_column)) throw new Error('invalid_partition_column');
+    if (!['day', 'month'].includes(partition_interval)) throw new Error('invalid_partition_interval');
+  }
+
+  await client.query(`CREATE SCHEMA IF NOT EXISTS ${qi(schema_name)}`);
+
+  const colDDL = normalizedColumns
+    .map((c) => {
+      const sqlType = fieldTypeToSql(c.field_type);
+      if (!sqlType) throw new Error(`invalid_field_type_sql:${c.field_type}`);
+      return `${qi(c.field_name)} ${sqlType}${c.field_name === partition_column ? ' NOT NULL' : ''}`;
+    })
+    .join(',\n  ');
+
+    if (partition_enabled) {
+      await client.query(
+      `${createClause} ${qname(schema_name, table_name)} (
+        ${colDDL}
+      ) PARTITION BY RANGE (${qi(partition_column)});`
+      );
+
+    const tableComment = description
+      ? `${description} | partition:${partition_column}:${partition_interval} | by:${created_by} | class:${table_class}`
+      : `partition:${partition_column}:${partition_interval} | by:${created_by} | class:${table_class}`;
+    await client.query(`COMMENT ON TABLE ${qname(schema_name, table_name)} IS ${qlit(tableComment)}`);
+
+    for (const c of normalizedColumns) {
+      if (c.description) {
+        await client.query(
+          `COMMENT ON COLUMN ${qname(schema_name, table_name)}.${qi(c.field_name)} IS ${qlit(c.description)}`
+        );
+      }
+    }
+
+    const base = new Date();
+    const yyyy = base.getUTCFullYear();
+    const mm = String(base.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(base.getUTCDate()).padStart(2, '0');
+
+    if (partition_interval === 'day') {
+      const from = `${yyyy}-${mm}-${dd}`;
+      const toDate = new Date(Date.UTC(yyyy, base.getUTCMonth(), base.getUTCDate() + 1));
+      const to = `${toDate.getUTCFullYear()}-${String(toDate.getUTCMonth() + 1).padStart(2, '0')}-${String(toDate.getUTCDate()).padStart(2, '0')}`;
+
+      const pToday = `${table_name}__p_${yyyy}${mm}${dd}`;
+      const pDefault = `${table_name}__p_default`;
+
+      await client.query(
+        `CREATE TABLE IF NOT EXISTS ${qname(schema_name, pToday)}
+         PARTITION OF ${qname(schema_name, table_name)}
+         FOR VALUES FROM (${qlit(from)}) TO (${qlit(to)});`
+      );
+
+      await client.query(
+        `CREATE TABLE IF NOT EXISTS ${qname(schema_name, pDefault)}
+         PARTITION OF ${qname(schema_name, table_name)} DEFAULT;`
+      );
+    } else {
+      const from = `${yyyy}-${mm}-01`;
+      const nextMonth = new Date(Date.UTC(yyyy, base.getUTCMonth() + 1, 1));
+      const to = `${nextMonth.getUTCFullYear()}-${String(nextMonth.getUTCMonth() + 1).padStart(2, '0')}-01`;
+
+      const pMonth = `${table_name}__p_${yyyy}${mm}`;
+      const pDefault = `${table_name}__p_default`;
+
+      await client.query(
+        `CREATE TABLE IF NOT EXISTS ${qname(schema_name, pMonth)}
+         PARTITION OF ${qname(schema_name, table_name)}
+         FOR VALUES FROM (${qlit(from)}) TO (${qlit(to)});`
+      );
+
+      await client.query(
+        `CREATE TABLE IF NOT EXISTS ${qname(schema_name, pDefault)}
+         PARTITION OF ${qname(schema_name, table_name)} DEFAULT;`
+      );
+    }
+    } else {
+      await client.query(
+      `${createClause} ${qname(schema_name, table_name)} (
+        ${colDDL}
+      );`
+      );
+
+    const tableComment = description
+      ? `${description} | by:${created_by} | class:${table_class}`
+      : `by:${created_by} | class:${table_class}`;
+    await client.query(`COMMENT ON TABLE ${qname(schema_name, table_name)} IS ${qlit(tableComment)}`);
+
+    for (const c of normalizedColumns) {
+      if (c.description) {
+        await client.query(
+          `COMMENT ON COLUMN ${qname(schema_name, table_name)}.${qi(c.field_name)} IS ${qlit(c.description)}`
+        );
+      }
+    }
+  }
+
+  if (test_row && typeof test_row === 'object' && !Array.isArray(test_row)) {
+    const enrichedTestRow = await enrichRowWithContractFields(client, schema_name, table_name, test_row);
+    const keys = Object.keys(enrichedTestRow).filter((k) => isIdent(k));
+    if (keys.length) {
+      const cols = keys.map((k) => qi(k)).join(', ');
+      const vals = keys.map((_, i) => `$${i + 1}`).join(', ');
+      const params = keys.map((k) => enrichedTestRow[k]);
+      await client.query(`INSERT INTO ${qname(schema_name, table_name)} (${cols}) VALUES (${vals})`, params);
+    }
+  }
+
+  if (contractRuntime?.contractsQn) {
+    await createContractVersionWithQn(client, contractRuntime.contractsQn, {
+      schema: schema_name,
+      table: table_name,
+      description,
+      columns: normalizedColumns,
+      reason: 'table_created',
+      by: created_by,
+      contracts_schema: contractRuntime.contracts_schema || DEFAULT_CONFIG.contracts_schema
+    });
+  } else {
+    await createContractVersion(client, {
+      schema: schema_name,
+      table: table_name,
+      description,
+      columns: normalizedColumns,
+      reason: 'table_created',
+      by: created_by
+    });
+  }
+
+  return { schema_name, table_name, columns: normalizedColumns };
+}
+
+async function findTemplateByName(client, templatesQn, templateName) {
+  const r = await client.query(
+    `
+    SELECT id, template_name, schema_name, table_name
+    FROM ${templatesQn}
+    WHERE lower(template_name) = lower($1)
+    LIMIT 1
+    `,
+    [templateName]
+  );
+  return r.rows?.[0] || null;
+}
+
+async function physicalTableExists(client, schema, table) {
+  const r = await client.query(
+    `
+    SELECT 1
+    FROM information_schema.tables
+    WHERE table_schema = $1
+      AND table_name = $2
+    LIMIT 1
+    `,
+    [schema, table]
+  );
+  return Boolean(r.rows?.length);
+}
+
+async function insertTemplateRowToStorage(client, templatesQn, config, payload) {
+  const storageContract = await getLatestContractMetaWithQn(
+    client,
+    payload.contractsQn,
+    config.templates_schema,
+    config.templates_table
+  );
+  const runId = `write_node_table_${Date.now()}`;
+  const row = {
+    template_name: payload.template_name,
+    schema_name: payload.schema_name,
+    table_name: payload.table_name,
+    data_level: payload.data_level,
+    template_kind: 'data',
+    table_class: payload.table_class,
+    description: payload.description,
+    columns: JSON.stringify(payload.columns),
+    partition_enabled: false,
+    partition_column: '',
+    partition_interval: 'day',
+    ao_source: 'write_node_create_api',
+    ao_run_id: runId,
+    ao_created_at: new Date().toISOString(),
+    ao_updated_at: new Date().toISOString(),
+    ao_contract_schema: config.contracts_schema,
+    ao_contract_name: storageContract.contract_name,
+    ao_contract_version: storageContract.version
+  };
+  const keys = Object.keys(row).filter((key) => isIdent(key));
+  const cols = keys.map((key) => qi(key)).join(', ');
+  const vals = keys.map((_, idx) => `$${idx + 1}`).join(', ');
+  const params = keys.map((key) => row[key]);
+  const r = await client.query(`INSERT INTO ${templatesQn} (${cols}) VALUES (${vals}) RETURNING id`, params);
+  return Number(r.rows?.[0]?.id || 0) || 0;
+}
+
+export async function createWriteNodeTargetTable(client, rawPayload, runtime = {}) {
+  const schema_name = String(rawPayload?.schema_name || '').trim();
+  const table_name = String(rawPayload?.table_name || '').trim();
+  const template_name = String(rawPayload?.template_name || '').trim();
+  const description = String(rawPayload?.description || '').trim();
+  const created_by = String(rawPayload?.created_by || 'write_node').trim() || 'write_node';
+  const template_kind = String(rawPayload?.template_kind || 'data').trim().toLowerCase() || 'data';
+  const data_level = normalizeWriteNodeDataLevel(rawPayload?.data_level);
+  const table_class = normalizeWriteNodeTableClass(rawPayload?.table_class || 'custom');
+  const upstream_fields = Array.isArray(rawPayload?.upstream_fields) ? rawPayload.upstream_fields : [];
+
+  if (!isIdent(schema_name)) throw new Error('invalid_schema_name');
+  if (!isIdent(table_name)) throw new Error('invalid_table_name');
+  if (!template_name) throw new Error('template_name_required');
+  if (template_kind !== 'data') throw new Error(`write_node_template_kind_not_allowed:${template_kind}`);
+
+  const config =
+    runtime.config && typeof runtime.config === 'object'
+      ? {
+          ...DEFAULT_CONFIG,
+          ...runtime.config
+        }
+      : await loadRuntimeConfig(client);
+  const templatesQn = runtime.templatesQn || (runtime.skipEnsure ? qname(config.templates_schema, config.templates_table) : await ensureTemplatesStorageTable(client, config));
+  const contractsQn = runtime.contractsQn || (runtime.skipEnsure ? qname(config.contracts_schema, config.contracts_table) : await ensureContractsTable(client, config));
+  const columns = buildWriteNodeTargetColumns(upstream_fields);
+
+  await client.query('BEGIN');
+  try {
+    const existingTemplate = await findTemplateByName(client, templatesQn, template_name);
+    if (existingTemplate) throw new Error('template_name_conflict');
+    if (await physicalTableExists(client, schema_name, table_name)) throw new Error('table_name_conflict');
+
+    const templateId = await insertTemplateRowToStorage(client, templatesQn, config, {
+      schema_name,
+      table_name,
+      template_name,
+      data_level,
+      table_class,
+      description,
+      columns,
+      contractsQn
+    });
+
+    await createPhysicalTableWithContractTx(
+      client,
+      {
+        schema_name,
+        table_name,
+        table_class,
+        description,
+        created_by,
+        columns,
+        partitioning: { enabled: false },
+        fail_if_exists: true
+      },
+      { contractsQn, contracts_schema: config.contracts_schema }
+    );
+
+    const contract = await getLatestContractMetaWithQn(client, contractsQn, schema_name, table_name);
+    await client.query('COMMIT');
+    return {
+      ok: true,
+      schema_name,
+      table_name,
+      template_name,
+      template_id: templateId,
+      data_level,
+      table_class,
+      contract: {
+        schema_name,
+        table_name,
+        contract_name: contract.contract_name,
+        version: contract.version
+      },
+      columns
+    };
+  } catch (e) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {}
+    throw e;
+  }
+}
+
 async function listExistingTables(client) {
   const r = await client.query(`
     SELECT n.nspname AS schema_name, c.relname AS table_name
@@ -3942,125 +4333,17 @@ tableBuilderRouter.post('/tables/create', requireDataAdmin, async (req, res) => 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-
-    // schema
-    await client.query(`CREATE SCHEMA IF NOT EXISTS ${qi(schema_name)}`);
-
-    // create table
-    const colDDL = columns
-      .map((c) => {
-        const sqlType = fieldTypeToSql(c.field_type);
-        if (!sqlType) throw new Error(`invalid_field_type_sql:${c.field_type}`);
-        return `${qi(c.field_name)} ${sqlType}${c.field_name === partition_column ? ' NOT NULL' : ''}`;
-      })
-      .join(',\n  ');
-
-    if (partition_enabled) {
-      await client.query(
-        `CREATE TABLE IF NOT EXISTS ${qname(schema_name, table_name)} (
-          ${colDDL}
-        ) PARTITION BY RANGE (${qi(partition_column)});`
-      );
-
-      // NOTE: COMMENT IS must be literal/NULL (no $1)
-      const tableComment = description
-        ? `${description} | partition:${partition_column}:${partition_interval} | by:${created_by} | class:${table_class}`
-        : `partition:${partition_column}:${partition_interval} | by:${created_by} | class:${table_class}`;
-      await client.query(`COMMENT ON TABLE ${qname(schema_name, table_name)} IS ${qlit(tableComment)}`);
-
-      for (const c of columns) {
-        if (c.description) {
-          await client.query(
-            `COMMENT ON COLUMN ${qname(schema_name, table_name)}.${qi(c.field_name)} IS ${qlit(c.description)}`
-          );
-        }
-      }
-
-      // create partitions
-      // day => today + next day; month => current month + next month
-      const base = new Date();
-      const yyyy = base.getUTCFullYear();
-      const mm = String(base.getUTCMonth() + 1).padStart(2, '0');
-      const dd = String(base.getUTCDate()).padStart(2, '0');
-
-      if (partition_interval === 'day') {
-        const from = `${yyyy}-${mm}-${dd}`;
-        const toDate = new Date(Date.UTC(yyyy, base.getUTCMonth(), base.getUTCDate() + 1));
-        const to = `${toDate.getUTCFullYear()}-${String(toDate.getUTCMonth() + 1).padStart(2, '0')}-${String(toDate.getUTCDate()).padStart(2, '0')}`;
-
-        const pToday = `${table_name}__p_${yyyy}${mm}${dd}`;
-        const pDefault = `${table_name}__p_default`;
-
-        await client.query(
-          `CREATE TABLE IF NOT EXISTS ${qname(schema_name, pToday)}
-           PARTITION OF ${qname(schema_name, table_name)}
-           FOR VALUES FROM (${qlit(from)}) TO (${qlit(to)});`
-        );
-
-        await client.query(
-          `CREATE TABLE IF NOT EXISTS ${qname(schema_name, pDefault)}
-           PARTITION OF ${qname(schema_name, table_name)} DEFAULT;`
-        );
-      } else {
-        // month
-        const from = `${yyyy}-${mm}-01`;
-        const nextMonth = new Date(Date.UTC(yyyy, base.getUTCMonth() + 1, 1));
-        const to = `${nextMonth.getUTCFullYear()}-${String(nextMonth.getUTCMonth() + 1).padStart(2, '0')}-01`;
-
-        const pMonth = `${table_name}__p_${yyyy}${mm}`;
-        const pDefault = `${table_name}__p_default`;
-
-        await client.query(
-          `CREATE TABLE IF NOT EXISTS ${qname(schema_name, pMonth)}
-           PARTITION OF ${qname(schema_name, table_name)}
-           FOR VALUES FROM (${qlit(from)}) TO (${qlit(to)});`
-        );
-
-        await client.query(
-          `CREATE TABLE IF NOT EXISTS ${qname(schema_name, pDefault)}
-           PARTITION OF ${qname(schema_name, table_name)} DEFAULT;`
-        );
-      }
-    } else {
-      await client.query(
-        `CREATE TABLE IF NOT EXISTS ${qname(schema_name, table_name)} (
-          ${colDDL}
-        );`
-      );
-
-      const tableComment = description
-        ? `${description} | by:${created_by} | class:${table_class}`
-        : `by:${created_by} | class:${table_class}`;
-      await client.query(`COMMENT ON TABLE ${qname(schema_name, table_name)} IS ${qlit(tableComment)}`);
-
-      for (const c of columns) {
-        if (c.description) {
-          await client.query(
-            `COMMENT ON COLUMN ${qname(schema_name, table_name)}.${qi(c.field_name)} IS ${qlit(c.description)}`
-          );
-        }
-      }
-    }
-
-    // optional: insert test row
-    if (test_row && typeof test_row === 'object' && !Array.isArray(test_row)) {
-      const enrichedTestRow = await enrichRowWithContractFields(client, schema_name, table_name, test_row);
-      const keys = Object.keys(enrichedTestRow).filter((k) => isIdent(k));
-      if (keys.length) {
-        const cols = keys.map((k) => qi(k)).join(', ');
-        const vals = keys.map((_, i) => `$${i + 1}`).join(', ');
-        const params = keys.map((k) => enrichedTestRow[k]);
-        await client.query(`INSERT INTO ${qname(schema_name, table_name)} (${cols}) VALUES (${vals})`, params);
-      }
-    }
-
-    await createContractVersion(client, {
-      schema: schema_name,
-      table: table_name,
+    await createPhysicalTableWithContractTx(client, {
+      schema_name,
+      table_name,
+      table_class,
       description,
+      created_by,
       columns,
-      reason: 'table_created',
-      by: created_by
+      partitioning: partition_enabled
+        ? { enabled: true, column: partition_column, interval: partition_interval }
+        : { enabled: false },
+      test_row
     });
 
     await client.query('COMMIT');
@@ -4071,6 +4354,47 @@ tableBuilderRouter.post('/tables/create', requireDataAdmin, async (req, res) => 
       await client.query('ROLLBACK');
     } catch {}
     return res.status(500).json({ error: 'create_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+tableBuilderRouter.post('/tables/create-from-write-node', requireDataAdmin, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const payload = await createWriteNodeTargetTable(
+      client,
+      {
+        schema_name: req.body?.schema_name,
+        table_name: req.body?.table_name,
+        template_name: req.body?.template_name,
+        data_level: req.body?.data_level,
+        table_class: req.body?.table_class,
+        description: req.body?.description,
+        template_kind: req.body?.template_kind,
+        upstream_fields: req.body?.upstream_fields,
+        created_by: req.header('X-AO-ROLE') || 'write_node'
+      },
+      {}
+    );
+    return res.json(payload);
+  } catch (e) {
+    const details = String(e?.message || e || 'create_from_write_node_failed');
+    if (
+      details === 'invalid_schema_name' ||
+      details === 'invalid_table_name' ||
+      details === 'template_name_required' ||
+      details === 'write_node_upstream_fields_empty' ||
+      details.startsWith('invalid_upstream_field_name:') ||
+      details.startsWith('write_node_template_kind_not_allowed:') ||
+      details === 'write_node_table_class_not_allowed'
+    ) {
+      return res.status(400).json({ error: 'bad_request', details });
+    }
+    if (details === 'template_name_conflict' || details === 'table_name_conflict') {
+      return res.status(409).json({ error: 'conflict', details });
+    }
+    return res.status(500).json({ error: 'create_from_write_node_failed', details });
   } finally {
     client.release();
   }
