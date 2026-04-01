@@ -17,6 +17,7 @@
   } from '../data/workflowEditor';
   import {
     emptyNodeDescriptor,
+    descriptorFields,
     normalizeDescriptorField,
     uniqueDescriptorFields,
     type NodeDescriptor,
