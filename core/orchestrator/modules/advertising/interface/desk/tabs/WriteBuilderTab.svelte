@@ -213,10 +213,40 @@
   function fieldMeta(field) {
     const parts = [];
     if (field?.name) parts.push(`Имя: ${field.name}`);
-    if (field?.alias) parts.push(`Alias: ${field.alias}`);
-    if (field?.path) parts.push(`Path: ${field.path}`);
+    if (field?.alias) parts.push(`Псевдоним: ${field.alias}`);
+    if (field?.path) parts.push(`Путь: ${field.path}`);
     if (field?.type) parts.push(`Тип: ${field.type}`);
     return parts.join(' · ');
+  }
+
+  function outputKindLabelRu(kind) {
+    const raw = str(kind).toLowerCase();
+    if (raw === 'row set') return 'Набор строк';
+    if (raw === 'tabular contract') return 'Табличный контракт';
+    if (raw === 'structured object') return 'Структурированный объект';
+    if (raw === 'text payload') return 'Текстовый пакет';
+    if (raw === 'archive/container') return 'Архив / контейнер';
+    if (raw === 'link/reference') return 'Ссылка / указатель';
+    if (raw === 'mixed') return 'Смешанный';
+    if (raw === 'unknown') return 'Не определён';
+    return kind || 'Не определён';
+  }
+
+  function dataLevelLabel(value) {
+    const raw = str(value).toLowerCase();
+    if (raw === 'bronze') return 'Бронза';
+    if (raw === 'silver') return 'Серебро';
+    if (raw === 'gold') return 'Золото';
+    return value;
+  }
+
+  function tableClassLabel(value) {
+    const raw = str(value).toLowerCase();
+    if (raw === 'custom') return 'Пользовательская';
+    if (raw === 'bronze_raw') return 'Сырая таблица';
+    if (raw === 'silver_table') return 'Серебряная таблица';
+    if (raw === 'showcase_table') return 'Витрина';
+    return value;
   }
 
   function fieldAuxLabel(field) {
@@ -355,7 +385,7 @@
 
   function normalizeCreateTargetError(message) {
     const details = str(message);
-    if (!details) return 'Не удалось создать таблицу для write-node.';
+    if (!details) return 'Не удалось создать таблицу для ноды записи.';
     if (details === 'invalid_schema_name') return 'Схема: только латиница, цифры и _, первый символ — буква или _.';
     if (details === 'invalid_table_name') return 'Имя таблицы: только латиница, цифры и _, первый символ — буква или _.';
     if (details === 'template_name_required') return 'Укажи имя шаблона таблицы.';
@@ -366,10 +396,10 @@
       return `Во входном потоке есть неподходящее имя поля: ${details.split(':').slice(1).join(':')}.`;
     }
     if (details.startsWith('write_node_template_kind_not_allowed:')) {
-      return 'Из write-node можно создавать только обычные data tables.';
+      return 'Из ноды записи можно создавать только обычные таблицы данных.';
     }
     if (details === 'write_node_table_class_not_allowed') {
-      return 'Для write-node недоступны workflow/system template classes.';
+      return 'Для ноды записи недоступны workflow/system-классы шаблонов.';
     }
     return details;
   }
@@ -699,8 +729,8 @@
   let canonicalOutputPreviewColumns = [];
   let currentWriteResultColumns = [];
   let currentWriteResultRows = [];
-  let compactInputStatus = 'Preview входа пока не запускался';
-  let compactOutputStatus = 'Preview выхода пока не запускался';
+  let compactInputStatus = 'Предпросмотр входа пока не запускался';
+  let compactOutputStatus = 'Предпросмотр выхода пока не запускался';
   let previewStatusText = 'Предпросмотр не запускался';
   let selectedDraft = null;
   let filteredDrafts = [];
@@ -764,25 +794,25 @@
     : outputDescriptorFields.map((field) => fieldDisplayName(field)).filter(Boolean);
   $: currentWriteResultRows = canonicalOutputPreviewRows;
   $: compactInputStatus = previewLoading
-    ? 'Preview входа собирается...'
+    ? 'Предпросмотр входа собирается...'
     : previewError
-    ? 'Preview входа недоступен'
+    ? 'Предпросмотр входа недоступен'
     : canonicalInputPreviewRows.length
-    ? `Preview входа: ${canonicalInputPreviewRows.length} строк`
+    ? `Предпросмотр входа: ${canonicalInputPreviewRows.length} строк`
     : draftPreviewStep
-    ? 'Preview входа не вернул строк'
-    : 'Preview входа пока не запускался';
+    ? 'Предпросмотр входа не вернул строк'
+    : 'Предпросмотр входа пока не запускался';
   $: compactOutputStatus = previewLoading
-    ? 'Preview выхода собирается...'
+    ? 'Предпросмотр выхода собирается...'
     : previewError
-    ? 'Preview выхода недоступен'
+    ? 'Предпросмотр выхода недоступен'
     : canonicalOutputPreviewRows.length
-    ? `Preview выхода: ${canonicalOutputPreviewRows.length} строк`
+    ? `Предпросмотр выхода: ${canonicalOutputPreviewRows.length} строк`
     : draftPreviewStep
     ? currentWriteResultColumns.length
-      ? 'Preview вернул структуру без строк'
-      : 'Preview выхода не вернул строк'
-    : 'Preview выхода пока не запускался';
+      ? 'Предпросмотр вернул структуру без строк'
+      : 'Предпросмотр выхода не вернул строк'
+    : 'Предпросмотр выхода пока не запускался';
   $: previewStatusText = previewLoading
     ? 'Предпросмотр собирается'
     : previewError
@@ -815,14 +845,14 @@
         <div class="write-card-head">
           <div>
             <h3>Входящие параметры</h3>
-            <p>Consume-view publish-блока предыдущей ноды.</p>
+            <p>Входное представление блока «Выходные параметры» предыдущей ноды.</p>
           </div>
         </div>
 
         <div class="meta-row meta-row-shell">
           <span>{section1FieldItems.length} полей</span>
-          <span>Формат: {descriptorOutputKindLabel(primaryIncomingDescriptor?.outputKind || 'unknown')}</span>
-          <span>Источник: {settings.sourceMode === 'table' ? 'таблица' : 'upstream publish block'}</span>
+          <span>Формат: {outputKindLabelRu(descriptorOutputKindLabel(primaryIncomingDescriptor?.outputKind || 'unknown'))}</span>
+          <span>Источник: {settings.sourceMode === 'table' ? 'таблица' : 'блок «Выходные параметры» предыдущей ноды'}</span>
         </div>
 
         {#if section1FieldItems.length}
@@ -842,7 +872,7 @@
 
         <div class="compact-preview compact-preview-shell">
           <div class="compact-preview-head">
-            <strong>Preview входа</strong>
+            <strong>Предпросмотр входа</strong>
             <span class="hint">{compactInputStatus}</span>
           </div>
           {#if canonicalInputPreviewRows.length && canonicalInputPreviewColumns.length}
@@ -871,9 +901,9 @@
               {#if previewError}
                 {previewError}
               {:else if settings.sourceMode === 'table'}
-                {currentTableColumnsHint() || 'Выбери таблицу-источник и запусти preview.'}
+                {currentTableColumnsHint() || 'Выбери таблицу-источник и запусти предпросмотр.'}
               {:else}
-                Запусти preview, чтобы увидеть canonical input текущей ноды.
+                Запусти предпросмотр, чтобы увидеть канонический вход текущей ноды.
               {/if}
             </div>
           {/if}
@@ -926,7 +956,7 @@
           {#if settings.sourceMode === 'table'}
             <div class="form-grid form-grid-2">
               <label>
-                Payload-колонка
+                Колонка с данными
                 <select value={settings.sourceColumn} on:change={(e) => patchSetting('sourceColumn', selectValue(e))}>
                   <option value="">Взять строки таблицы как есть</option>
                   {#each sourceTableColumnOptions as column}
@@ -935,7 +965,7 @@
                 </select>
               </label>
               <label>
-                Канал process bus
+                Канал процесса
                 <input value={settings.channel} on:input={(e) => patchSetting('channel', inputValue(e))} placeholder="Необязательно" />
               </label>
             </div>
@@ -944,59 +974,59 @@
 
         <div class="subsection">
           <div class="subsection-head">
-            <h4>Write target</h4>
+            <h4>Таблица назначения</h4>
           </div>
           <div class="mode-switch">
             <button type="button" class:selected={targetMode === 'existing'} class="mode-switch-btn" on:click={activateExistingTargetMode}>
-              Use existing table
+              Использовать существующую таблицу
             </button>
             <button type="button" class:selected={targetMode === 'create'} class="mode-switch-btn" on:click={activateCreateTargetMode}>
-              Create new table
+              Создать новую таблицу
             </button>
           </div>
           {#if targetMode === 'create'}
             <div class="create-target-box">
               <div class="form-grid form-grid-3">
                 <label>
-                  Schema
-                  <input value={createTargetSchema} on:input={(e) => (createTargetSchema = inputValue(e))} placeholder="for example: ao_data" />
+                  Схема
+                  <input value={createTargetSchema} on:input={(e) => (createTargetSchema = inputValue(e))} placeholder="Например: ao_data" />
                 </label>
                 <label>
-                  Table name
-                  <input value={createTargetTable} on:input={(e) => (createTargetTable = inputValue(e))} placeholder="for example: silver_ads_new" />
+                  Имя таблицы
+                  <input value={createTargetTable} on:input={(e) => (createTargetTable = inputValue(e))} placeholder="Например: silver_ads_new" />
                 </label>
                 <label>
-                  Template name
-                  <input value={createTemplateName} on:input={(e) => (createTemplateName = inputValue(e))} placeholder="for example: Silver ads from write" />
+                  Имя шаблона
+                  <input value={createTemplateName} on:input={(e) => (createTemplateName = inputValue(e))} placeholder="Например: Запись silver ads" />
                 </label>
               </div>
               <div class="form-grid form-grid-3">
                 <label>
-                  Data level
+                  Уровень данных
                   <select value={createDataLevel} on:change={(e) => (createDataLevel = selectValue(e))}>
                     {#each CREATE_TARGET_LEVEL_OPTIONS as level}
-                      <option value={level}>{level}</option>
+                      <option value={level}>{dataLevelLabel(level)}</option>
                     {/each}
                   </select>
                 </label>
                 <label>
-                  Table class
+                  Класс таблицы
                   <select value={createTableClass} on:change={(e) => (createTableClass = selectValue(e))}>
                     {#each CREATE_TARGET_CLASS_OPTIONS as tableClass}
-                      <option value={tableClass}>{tableClass}</option>
+                      <option value={tableClass}>{tableClassLabel(tableClass)}</option>
                     {/each}
                   </select>
                 </label>
                 <label>
-                  Description
-                  <input value={createDescription} on:input={(e) => (createDescription = inputValue(e))} placeholder="Short table description" />
+                  Описание
+                  <input value={createDescription} on:input={(e) => (createDescription = inputValue(e))} placeholder="Короткое описание таблицы" />
                 </label>
               </div>
 
               <div class="create-target-fields">
                 <div class="compact-preview-head">
-                  <strong>Fields from canonical upstream output</strong>
-                  <span class="hint">{section1FieldItems.length} fields</span>
+                  <strong>Поля из канонического входного потока</strong>
+                  <span class="hint">{section1FieldItems.length} полей</span>
                 </div>
                 {#if section1FieldItems.length}
                   <div class="field-chip-wrap field-chip-wrap-shell">
@@ -1010,14 +1040,14 @@
                     {/each}
                   </div>
                 {:else}
-                  <div class="empty-box">No fields are available in the canonical upstream flow yet.</div>
+                  <div class="empty-box">Во входном каноническом потоке пока нет полей для создания таблицы.</div>
                 {/if}
-                <div class="inline-hint">System ao_* fields will be added by the server through tableBuilder.</div>
+                <div class="inline-hint">Системные поля `ao_*` сервер добавит автоматически.</div>
               </div>
 
               <div class="row-actions">
                 <button type="button" class="primary-btn" on:click={createTargetTableNow} disabled={createTargetLoading || !section1FieldItems.length}>
-                  {createTargetLoading ? 'Creating table...' : 'Create and bind table'}
+                  {createTargetLoading ? 'Создаём таблицу...' : 'Создать и привязать таблицу'}
                 </button>
               </div>
               {#if createTargetError}
@@ -1029,25 +1059,25 @@
           {:else}
             <div class="form-grid form-grid-2">
               <label>
-                Target schema
+                Схема назначения
                 <select value={settings.targetSchema} on:change={(e) => patchSetting('targetSchema', selectValue(e))}>
-                  <option value="">Choose schema</option>
+                  <option value="">Выбери схему</option>
                   {#each uniqueStrings(availableTables.map((item) => item.schema_name)) as schemaName}
                     <option value={schemaName}>{schemaName}</option>
                   {/each}
                 </select>
               </label>
               <label>
-                Target table
+                Таблица назначения
                 <select value={settings.targetTable} on:change={(e) => patchSetting('targetTable', selectValue(e))}>
-                  <option value="">Choose table</option>
+                  <option value="">Выбери таблицу</option>
                   {#each availableTables.filter((item) => !settings.targetSchema || item.schema_name === settings.targetSchema) as item}
                     <option value={item.table_name}>{item.table_name}</option>
                   {/each}
                 </select>
               </label>
             </div>
-            <div class="inline-hint">{createTargetSuccess || currentTargetColumnsHint() || 'Choose a target table.'}</div>
+            <div class="inline-hint">{createTargetSuccess || currentTargetColumnsHint() || 'Выбери таблицу назначения.'}</div>
           {/if}
         </div>
 
@@ -1059,9 +1089,9 @@
             <label>
               Что делать
               <select value={settings.writeMode} on:change={(e) => patchSetting('writeMode', selectValue(e))}>
-                <option value="insert">Insert</option>
-                <option value="update_by_key">Update по ключу</option>
-                <option value="upsert">Upsert</option>
+                <option value="insert">Добавлять новые строки</option>
+                <option value="update_by_key">Обновлять по ключу</option>
+                <option value="upsert">Обновлять или добавлять</option>
               </select>
             </label>
             <label>
@@ -1083,11 +1113,11 @@
           </div>
           <div class="form-grid form-grid-2">
             <label>
-              Batch size
+              Размер батча
               <input type="number" min="1" value={settings.batchSize} on:input={(e) => patchSetting('batchSize', inputValue(e))} />
             </label>
             <label>
-              Preview limit
+              Лимит предпросмотра
               <input type="number" min="1" value={settings.previewLimit} on:input={(e) => patchSetting('previewLimit', inputValue(e))} />
             </label>
           </div>
@@ -1156,11 +1186,11 @@
           <div class="form-grid form-grid-2">
             <label>
               Название шаблона
-              <input value={templateNameInput} on:input={(e) => (templateNameInput = inputValue(e))} placeholder="Например: WB silver write" />
+              <input value={templateNameInput} on:input={(e) => (templateNameInput = inputValue(e))} placeholder="Например: Запись WB silver" />
             </label>
             <label>
-              Привязка к store
-              <input value={settings.templateStoreId} on:input={(e) => patchSetting('templateStoreId', inputValue(e))} placeholder="store id" />
+              Идентификатор хранилища
+              <input value={settings.templateStoreId} on:input={(e) => patchSetting('templateStoreId', inputValue(e))} placeholder="Например: 42" />
             </label>
           </div>
           <label>
@@ -1203,13 +1233,13 @@
         <div class="write-card-head">
           <div>
             <h3>Выходные параметры</h3>
-            <p>Publish-view текущей write-node.</p>
+            <p>Публикуемое представление текущей ноды записи.</p>
           </div>
         </div>
 
         <div class="meta-row meta-row-shell">
           <span>{outputDescriptorFields.length} полей</span>
-          <span>Формат: {descriptorOutputKindLabel(outputDescriptor?.outputKind || 'unknown')}</span>
+          <span>Формат: {outputKindLabelRu(descriptorOutputKindLabel(outputDescriptor?.outputKind || 'unknown'))}</span>
           <span>{compactOutputStatus}</span>
         </div>
 
@@ -1225,12 +1255,12 @@
             {/each}
           </div>
         {:else}
-          <div class="empty-box">Publish contract пока не определён.</div>
+          <div class="empty-box">Выходной контракт пока не определён.</div>
         {/if}
 
         <div class="compact-preview compact-preview-shell">
           <div class="compact-preview-head">
-            <strong>Preview выхода</strong>
+            <strong>Предпросмотр выхода</strong>
             <span class="hint">{compactOutputStatus}</span>
           </div>
           {#if canonicalOutputPreviewRows.length && canonicalOutputPreviewColumns.length}
@@ -1259,9 +1289,9 @@
               {#if previewError}
                 {previewError}
               {:else if currentWriteResultColumns.length}
-                Preview вернул структуру без строк.
+                Предпросмотр вернул структуру без строк.
               {:else}
-                Запусти preview, чтобы увидеть canonical output текущей ноды.
+                Запусти предпросмотр, чтобы увидеть канонический выход текущей ноды.
               {/if}
             </div>
           {/if}
@@ -1274,7 +1304,7 @@
     <div class="write-card-head">
       <div>
         <h3>Предпросмотр результата</h3>
-        <p>Один server preview-run по текущему graph_json до write-node.</p>
+        <p>Один серверный запуск предпросмотра по текущему графу до ноды записи.</p>
       </div>
       <button type="button" class="primary-btn" on:click={previewNow} disabled={previewLoading}>
         {previewLoading ? 'Собираем...' : draftPreviewStep ? 'Обновить предпросмотр' : 'Запустить предпросмотр'}
@@ -1283,10 +1313,10 @@
 
     <div class="result-status-row">
       <span class="status-pill">{previewStatusText}</span>
-      <span class="hint">Run: {draftPreviewStep?.run_uid || '—'}</span>
+      <span class="hint">Запуск: {draftPreviewStep?.run_uid || '—'}</span>
       <span class="hint">Обновлено: {previewUpdatedAt ? new Date(previewUpdatedAt).toLocaleString('ru-RU') : '—'}</span>
       {#if lastRuntimeStep?.run_uid}
-        <span class="hint">Last runtime: {lastRuntimeStep.run_uid}</span>
+        <span class="hint">Последний серверный запуск: {lastRuntimeStep.run_uid}</span>
       {/if}
     </div>
 
@@ -1314,14 +1344,14 @@
         </table>
       </div>
     {:else if currentWriteResultColumns.length}
-      <div class="empty-box">Preview-run завершился без строк. Ниже показана структура publish-result.</div>
+      <div class="empty-box">Предпросмотр завершился без строк. Ниже показана структура публикуемого результата.</div>
       <div class="field-chip-wrap">
         {#each currentWriteResultColumns as column}
           <span class="field-chip"><strong>{column}</strong></span>
         {/each}
       </div>
     {:else}
-      <div class="empty-box">Запусти preview, чтобы увидеть табличный результат write-node.</div>
+      <div class="empty-box">Запусти предпросмотр, чтобы увидеть табличный результат ноды записи.</div>
     {/if}
   </section>
 </section>
@@ -1340,7 +1370,7 @@
 
   .write-layout {
     display: grid;
-    grid-template-columns: minmax(260px, 0.95fr) minmax(420px, 1.45fr) minmax(260px, 0.95fr);
+    grid-template-columns: minmax(220px, 0.9fr) minmax(0, 1.55fr) minmax(220px, 0.9fr);
     gap: 16px;
     min-width: 0;
     align-items: start;
@@ -1373,6 +1403,7 @@
     justify-content: space-between;
     align-items: flex-start;
     gap: 12px;
+    flex-wrap: wrap;
   }
 
   .write-card-head h3,
@@ -1407,6 +1438,10 @@
     gap: 6px;
   }
 
+  .row-actions {
+    justify-content: flex-end;
+  }
+
   .meta-row span,
   .status-pill {
     padding: 4px 8px;
@@ -1436,7 +1471,7 @@
     flex-direction: column;
     align-items: flex-start;
     gap: 2px;
-    max-width: 100%;
+    max-width: min(100%, 220px);
     padding: 7px 10px;
     border: 1px solid #e2e8f0;
     border-radius: 12px;
@@ -1476,6 +1511,7 @@
     justify-content: space-between;
     gap: 10px;
     align-items: center;
+    flex-wrap: wrap;
   }
 
   .compact-preview-shell .preview-table-wrap {
@@ -1501,9 +1537,10 @@
   }
 
   .mode-switch {
-    display: inline-flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 8px;
+    width: 100%;
   }
 
   .mode-switch-btn {
@@ -1513,6 +1550,10 @@
     border-radius: 999px;
     padding: 8px 12px;
     cursor: pointer;
+    width: 100%;
+    min-width: 0;
+    white-space: normal;
+    text-align: center;
   }
 
   .mode-switch-btn.selected {
@@ -1526,6 +1567,7 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
+    min-width: 0;
   }
 
   .form-grid {
@@ -1534,11 +1576,11 @@
   }
 
   .form-grid-2 {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   }
 
   .form-grid-3 {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   }
 
   label {
@@ -1563,6 +1605,7 @@
   textarea {
     width: 100%;
     min-width: 0;
+    box-sizing: border-box;
     padding: 10px 12px;
     border: 1px solid #cbd5e1;
     border-radius: 12px;
@@ -1583,6 +1626,7 @@
     padding: 10px 14px;
     cursor: pointer;
     transition: opacity 0.15s ease;
+    min-width: 0;
   }
 
   .primary-btn {
@@ -1771,15 +1815,24 @@
     background: #eff6ff;
   }
 
-  @media (max-width: 1180px) {
+  @media (max-width: 1360px) {
     .write-layout {
       grid-template-columns: 1fr;
     }
   }
 
   @media (max-width: 900px) {
+    .field-chip {
+      max-width: 100%;
+    }
+
+    .row-actions > button {
+      flex: 1 1 180px;
+    }
+
     .form-grid-2,
-    .form-grid-3 {
+    .form-grid-3,
+    .mode-switch {
       grid-template-columns: 1fr;
     }
   }
