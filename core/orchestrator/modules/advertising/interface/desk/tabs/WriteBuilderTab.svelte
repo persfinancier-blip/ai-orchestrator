@@ -654,8 +654,8 @@
     }
   }
 
-  function columnOptionsFor(schema, table) {
-    return (columnsCache[tableCacheKey(schema, table)] || []).map((item) => item.name);
+  function columnOptionsFor(schema, table, cache = columnsCache) {
+    return ((cache && cache[tableCacheKey(schema, table)]) || []).map((item) => item.name);
   }
 
   async function loadDrafts(selectStoreId = 0) {
@@ -904,8 +904,8 @@
   $: incomingDescriptorRows = descriptorSampleRows(primaryIncomingDescriptor);
   $: incomingDescriptorColumns = descriptorSampleColumns(primaryIncomingDescriptor);
   $: availableTables = mergeTables(existingTables, locallyCreatedTables);
-  $: targetColumnOptions = columnOptionsFor(settings.targetSchema, settings.targetTable);
-  $: sourceTableColumnOptions = columnOptionsFor(settings.sourceSchema, settings.sourceTable);
+  $: targetColumnOptions = columnOptionsFor(settings.targetSchema, settings.targetTable, columnsCache);
+  $: sourceTableColumnOptions = columnOptionsFor(settings.sourceSchema, settings.sourceTable, columnsCache);
   $: explicitMappings = parseFieldMappings(settings.fieldMappingsJson);
   $: outputDescriptorFields = descriptorFields(outputDescriptor);
   $: section1FieldItems =
