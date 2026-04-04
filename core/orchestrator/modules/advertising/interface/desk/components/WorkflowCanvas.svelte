@@ -7,6 +7,14 @@
   import { buildAliasFromPath, normalizeTemplatePath } from '../tabs/outputContractCore.js';
   import { buildParserPublishDescriptorFields } from '../../shared/parserPublishContractCore.js';
   import {
+    buildDeskExecutionStateSummary,
+    buildNodeProcessVisualState,
+    buildProcessStatusModel,
+    pickDominantProcessModel,
+    pickProcessActiveJob,
+    pickProcessFocusRun
+  } from '../data/workflowProcessStatusCore.js';
+  import {
     tools,
     toolPorts,
     type ApiRequestTemplate,
@@ -248,6 +256,10 @@
     trigger_type: string;
     started_at: string;
     finished_at?: string;
+    duration_ms?: number;
+    summary_json?: Record<string, any>;
+    trigger_meta?: Record<string, any>;
+    source_run_uid?: string;
     error_text?: string;
     scope_type?: string;
     scope_ref?: string;
@@ -302,9 +314,11 @@
     attempt_no: number;
     max_attempts: number;
     error_text?: string;
+    last_error?: string;
     created_at?: string;
     updated_at?: string;
   };
+  type WorkflowJobDetail = WorkflowJobRow & Record<string, any>;
   type NodeDescriptorContext = {
     sourcePort?: string;
     upstreamDescriptors?: NodeDescriptor[];
@@ -466,6 +480,7 @@
   let outdatedPublishedProcesses: DeskProcessSummary[] = [];
   let processCodeConflicts: ProcessCodeConflict[] = [];
   let processRuns: ProcessRunRow[] = [];
+  let processStatusModels: any[] = [];
   let runtimeInspectorRunUid = '';
   let runtimeInspectorRunDetail: ProcessRunDetail | null = null;
   let runtimeInspectorLoading = false;
@@ -473,6 +488,14 @@
   let runtimeInspectorSelectedStepOrder = 0;
   let runtimeInspectorAutoSyncKey = '';
   let workflowJobs: WorkflowJobRow[] = [];
+  let processStatusRunDetails: Record<string, ProcessRunDetail> = {};
+  let workflowJobDetails: Record<string, WorkflowJobDetail> = {};
+  let schedulerDetailsOpen = false;
+  let workflowLogDetailsOpen = false;
+  let runsJobsDetailsOpen = false;
+  let runtimeInspectorDetailsOpen = false;
+  let processStatusClock = Date.now();
+  let processStatusClockTimer: any = null;
   let apiLibrarySelection: ApiTemplateSelectionChangePayload | null = null;
   let apiTemplateUsageExpanded = false;
   let apiTemplateUsageRefreshTick = 0;
@@ -922,47 +945,33 @@
   $: ensureStartProcessCodes();
   $: enabledPublishedProcesses = publishedProcesses.filter((p) => Boolean(p?.is_enabled));
   $: enabledAutomaticProcesses = enabledPublishedProcesses.filter((p) => String(p?.trigger_type || '').trim() !== 'manual');
+  $: processStatusModels = draftProcesses.map((draftProcess) => {
+    const publishedProcess = publishedProcessByNodeId(draftProcess.start_node_id);
+    const relevantRuns = processRuns.filter(
+      (run) => String(run?.start_node_id || '').trim() === String(draftProcess.start_node_id || '').trim()
+    );
+    const focusRun = pickProcessFocusRun({ publishedProcess, processRuns: relevantRuns });
+    const activeJob = focusRun?.run_uid ? pickProcessActiveJob(workflowJobs, focusRun.run_uid) : null;
+    return buildProcessStatusModel({
+      draftProcess,
+      publishedProcess,
+      publishedDeskReady,
+      publishedDeskVersionId,
+      deskDirty,
+      schedulerEnabled: Boolean(schedulerView.enabled),
+      processRuns: relevantRuns,
+      workflowJobs,
+      runDetail: focusRun?.run_uid ? processStatusRunDetails[String(focusRun.run_uid).trim()] || null : null,
+      activeJobDetail: activeJob?.job_id ? workflowJobDetails[String(activeJob.job_id)] || null : null,
+      nowMs: processStatusClock
+    });
+  });
   $: deskExecutionState = (() => {
-    if (!deskId) {
-      return {
-        mode: 'idle',
-        label: 'Рабочий стол ещё не создан',
-        hint: 'Сначала сохрани рабочий стол, чтобы сервер мог работать с его процессами.'
-      };
-    }
-    if (!publishedDeskReady) {
-      return {
-        mode: 'idle',
-        label: 'Не выполняется: рабочий стол не опубликован',
-        hint: 'Пока рабочий стол не опубликован, сервер не запускает его процессы автоматически.'
-      };
-    }
-    if (!enabledPublishedProcesses.length) {
-      return {
-        mode: 'idle',
-        label: 'Не выполняется: нет включённых процессов',
-        hint: 'Опубликовать недостаточно. Нужен хотя бы один включённый старт-процесс.'
-      };
-    }
-    if (!enabledAutomaticProcesses.length) {
-      return {
-        mode: 'manual',
-        label: 'Автоматически не выполняется: только ручной запуск',
-        hint: 'Сейчас все включённые процессы запускаются только кнопкой "Ручной запуск".'
-      };
-    }
-    if (!schedulerView.enabled) {
-      return {
-        mode: 'blocked',
-        label: 'Не выполняется: планировщик выключен',
-        hint: 'Процессы готовы к запуску, но серверный планировщик сейчас выключен.'
-      };
-    }
-    return {
-      mode: 'active',
-      label: 'Выполняется на сервере',
-      hint: `Автоматически работают ${enabledAutomaticProcesses.length} включённ${enabledAutomaticProcesses.length === 1 ? 'ый процесс' : enabledAutomaticProcesses.length < 5 ? 'ых процесса' : 'ых процессов'}.`
-    };
+    return buildDeskExecutionStateSummary({
+      deskId,
+      publishedDeskReady,
+      processModels: processStatusModels
+    });
   })();
 
   function prettyJson(value: any) {
@@ -1436,6 +1445,135 @@
     };
   }
 
+  async function loadProcessStatusRunDetail(runUid: string) {
+    const safeRunUid = String(runUid || '').trim();
+    if (!safeRunUid || processStatusRunDetails[safeRunUid]) return processStatusRunDetails[safeRunUid] || null;
+    const payload = await workflowApiJson<ProcessRunDetail>(`${API_BASE}/process-runs/${encodeURIComponent(safeRunUid)}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json', 'X-AO-ROLE': API_ROLE }
+    });
+    const detail: ProcessRunDetail = {
+      run: payload?.run && typeof payload.run === 'object' ? payload.run : ({} as any),
+      steps: Array.isArray(payload?.steps) ? payload.steps : []
+    };
+    processStatusRunDetails = { ...processStatusRunDetails, [safeRunUid]: detail };
+    return detail;
+  }
+
+  async function loadWorkflowJobDetail(jobId: number) {
+    const safeJobId = Math.max(0, Math.trunc(Number(jobId || 0)));
+    const cacheKey = String(safeJobId);
+    if (!safeJobId || workflowJobDetails[cacheKey]) return workflowJobDetails[cacheKey] || null;
+    const payload = await workflowApiJson<{ job?: WorkflowJobDetail }>(`${API_BASE}/workflow-jobs/${safeJobId}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json', 'X-AO-ROLE': API_ROLE }
+    });
+    const detail = payload?.job && typeof payload.job === 'object' ? payload.job : null;
+    if (detail) {
+      workflowJobDetails = { ...workflowJobDetails, [cacheKey]: detail };
+    }
+    return detail;
+  }
+
+  async function refreshProcessStatusDetails() {
+    if (!deskId) {
+      processStatusRunDetails = {};
+      workflowJobDetails = {};
+      return;
+    }
+    const nextRunUids = new Set<string>();
+    const nextJobIds = new Set<number>();
+    draftProcesses.forEach((draftProcess) => {
+      const publishedProcess = publishedProcessByNodeId(draftProcess.start_node_id);
+      const relevantRuns = processRuns.filter(
+        (run) => String(run?.start_node_id || '').trim() === String(draftProcess.start_node_id || '').trim()
+      );
+      const focusRun = pickProcessFocusRun({ publishedProcess, processRuns: relevantRuns });
+      const activeJob = focusRun?.run_uid ? pickProcessActiveJob(workflowJobs, focusRun.run_uid) : null;
+      const runUid = String(focusRun?.run_uid || '').trim();
+      const jobId = Math.max(0, Math.trunc(Number(activeJob?.job_id || 0)));
+      if (runUid) nextRunUids.add(runUid);
+      if (jobId > 0) nextJobIds.add(jobId);
+    });
+
+    const staleRunKeys = Object.keys(processStatusRunDetails).filter((runUid) => !nextRunUids.has(String(runUid || '').trim()));
+    if (staleRunKeys.length) {
+      const nextCache = { ...processStatusRunDetails };
+      staleRunKeys.forEach((runUid) => delete nextCache[runUid]);
+      processStatusRunDetails = nextCache;
+    }
+    const staleJobKeys = Object.keys(workflowJobDetails).filter((jobId) => !nextJobIds.has(Math.trunc(Number(jobId || 0))));
+    if (staleJobKeys.length) {
+      const nextCache = { ...workflowJobDetails };
+      staleJobKeys.forEach((jobId) => delete nextCache[jobId]);
+      workflowJobDetails = nextCache;
+    }
+
+    const missingRuns = [...nextRunUids].filter((runUid) => !processStatusRunDetails[runUid]);
+    for (const runUid of missingRuns) {
+      try {
+        await loadProcessStatusRunDetail(runUid);
+      } catch (e: any) {
+        banner = String(e?.message || e || 'Не удалось загрузить детали server run');
+      }
+    }
+
+    const missingJobs = [...nextJobIds].filter((jobId) => !workflowJobDetails[String(jobId)]);
+    for (const jobId of missingJobs) {
+      try {
+        await loadWorkflowJobDetail(jobId);
+      } catch (e: any) {
+        banner = String(e?.message || e || 'Не удалось загрузить детали workflow job');
+      }
+    }
+  }
+
+  function processStatusByStartNodeId(startNodeId: string) {
+    return processStatusModels.find((item) => String(item?.startNodeId || '').trim() === String(startNodeId || '').trim()) || null;
+  }
+
+  function processModelsForNode(nodeId: string) {
+    const startIds = startNodeIdsForNode(nodeId);
+    return startIds.map((startId) => processStatusByStartNodeId(startId)).filter(Boolean);
+  }
+
+  function processIndicatorForNode(node: WorkflowNode | null | undefined) {
+    if (!node) return null;
+    if (node.type === 'tool' && toolCfg(node).toolType === 'start_process') {
+      return buildNodeProcessVisualState({
+        nodeId: node.id,
+        isStartNode: true,
+        processModel: processStatusByStartNodeId(node.id)
+      });
+    }
+    const dominant = pickDominantProcessModel(processModelsForNode(node.id));
+    return buildNodeProcessVisualState({
+      nodeId: node.id,
+      isStartNode: false,
+      processModel: dominant
+    });
+  }
+
+  function durationMsFromBounds(startedAt: string, finishedAt = '') {
+    const startTs = Date.parse(String(startedAt || '').trim());
+    if (!Number.isFinite(startTs)) return 0;
+    const finishTs = finishedAt ? Date.parse(String(finishedAt || '').trim()) : processStatusClock;
+    const safeFinishTs = Number.isFinite(finishTs) ? finishTs : processStatusClock;
+    return Math.max(0, safeFinishTs - startTs);
+  }
+
+  function processDurationLabel(model: any) {
+    if (!model?.runStartedAt) return '-';
+    return formatDurationShort(durationMsFromBounds(model.runStartedAt, model.runFinishedAt || ''));
+  }
+
+  function openRuntimeInspectorForRun(runUid: string, focusNodeId = '') {
+    const safeRunUid = String(runUid || '').trim();
+    if (!safeRunUid) return;
+    runtimeInspectorDetailsOpen = true;
+    void loadRuntimeInspectorRun(safeRunUid, { focusNodeId });
+  }
+
   function hashQueryParams() {
     const rawHash = String(window.location.hash || '');
     const idx = rawHash.indexOf('?');
@@ -1705,12 +1843,18 @@
     chainRunPaused = false;
     chainRunStopRequested = false;
     chainCurrentNodeId = '';
+    processStatusRunDetails = {};
+    workflowJobDetails = {};
     workflowLogEnabled = Boolean(workflowLog.enabled);
     workflowLogTemplateId = String(workflowLog.template_id || WORKFLOW_LOG_TEMPLATE_ID).trim() || WORKFLOW_LOG_TEMPLATE_ID;
     workflowLogSourceKey = String(workflowLog.source_key || '').trim();
     workflowLogPickerOpen = false;
     workflowLogPickValue = workflowLogSourceKey || String(firstCompatibleWorkflowLogSource()?.key || '').trim();
     workflowLogSourceError = '';
+    schedulerDetailsOpen = false;
+    workflowLogDetailsOpen = false;
+    runsJobsDetailsOpen = false;
+    runtimeInspectorDetailsOpen = false;
     deskSignatureMute = false;
   }
 
@@ -2100,6 +2244,8 @@
     if (!deskId) {
       processRuns = [];
       workflowJobs = [];
+      processStatusRunDetails = {};
+      workflowJobDetails = {};
       return;
     }
     const [runsResp, jobsResp] = await Promise.all([
@@ -2142,6 +2288,7 @@
     monitorBusy = true;
     try {
       await Promise.all([refreshSchedulerState(), refreshDeskProcesses(), refreshRunsAndJobs()]);
+      await refreshProcessStatusDetails();
     } catch (e: any) {
       banner = String(e?.message || e || 'Ошибка обновления мониторинга');
     } finally {
@@ -2219,6 +2366,7 @@
       );
       banner = enabled ? `Процесс ${startNodeId} включен` : `Процесс ${startNodeId} выключен`;
       await refreshRunsAndJobs();
+      await refreshProcessStatusDetails();
     } catch (e: any) {
       banner = String(e?.message || e || 'Ошибка переключения процесса');
     } finally {
@@ -5946,6 +6094,10 @@
   onMount(async () => {
     resetCanvas();
     window.addEventListener('ao:create-table-node', onCreateTableNodeEvent as EventListener);
+    processStatusClock = Date.now();
+    processStatusClockTimer = setInterval(() => {
+      processStatusClock = Date.now();
+    }, 1000);
     await loadNodeRegistry();
     await loadDynamicSourceCatalog();
     await loadWorkflowDeskFromServer();
@@ -5958,6 +6110,10 @@
     window.removeEventListener('ao:create-table-node', onCreateTableNodeEvent as EventListener);
     stopNodeModalResize();
     clearDeskAutosaveTimer();
+    if (processStatusClockTimer) {
+      clearInterval(processStatusClockTimer);
+      processStatusClockTimer = null;
+    }
   });
 </script>
 
@@ -6079,340 +6235,411 @@
           </div>
         {/if}
         <div class="ops-grid ops-grid-side">
-          <div class="ops-card">
-            <h5>Планировщик</h5>
-            <div class="kv"><span>Состояние</span><strong>{schedulerView.enabled ? 'Включен' : 'Выключен'}</strong></div>
-            <div class="kv"><span>Последний тик</span><strong>{schedulerView.last_tick_at || '-'}</strong></div>
-            <div class="kv"><span>Тик воркера</span><strong>{schedulerView.worker_last_tick_at || '-'}</strong></div>
-            <div class="kv"><span>Очередь</span><strong>{schedulerView.queue_depth} / в работе {schedulerView.queue_running}</strong></div>
-            <div class="kv"><span>Ошибочные задания</span><strong>{schedulerView.queue_dead_letter}</strong></div>
-            <div class="kv"><span>Событий в ожидании</span><strong>{schedulerView.dependency_event_backlog}</strong></div>
-            {#if schedulerView.last_error}
-              <div class="ops-error">Ошибка планировщика: {schedulerView.last_error}</div>
-            {/if}
-            {#if schedulerView.worker_last_error}
-              <div class="ops-error">Ошибка воркера: {schedulerView.worker_last_error}</div>
-            {/if}
-          </div>
-          <div class="ops-card">
-            <h5>Журнал выполнения</h5>
-            <div class="ops-note">
-              Это системный журнал выполнения рабочего стола. Он подключается по системному шаблону и не создает вторую таблицу.
-            </div>
-            <div class="kv"><span>Состояние</span><strong>{workflowLogEnabled ? 'Подключен' : 'Выключен'}</strong></div>
-            <div class="kv"><span>Системный шаблон</span><strong>Bronze системный лог workflow</strong></div>
-            <div class="process-actions">
-              <button
-                class="mini toggle-btn"
-                class:active={workflowLogEnabled}
-                on:click={toggleWorkflowLogEnabled}
-                type="button"
-              >
-                {workflowLogEnabled ? 'Вести журнал: вкл' : 'Вести журнал: выкл'}
-              </button>
-            </div>
-            <div class="ops-subhead">Источник журнала выполнения</div>
-            <button
-              type="button"
-              class="source-pill"
-              on:click={toggleWorkflowLogPicker}
-              disabled={!workflowLogCompatibleSources.length}
-              title={workflowLogCurrentSource?.description || 'Выбери системный источник журнала выполнения'}
-            >
-              {workflowLogCurrentSource?.name || 'Выбери системный источник'}
-            </button>
-            {#if workflowLogPickerOpen}
-              <div class="storage-picker">
-                <select bind:value={workflowLogPickValue}>
-                  {#if !workflowLogPickValue}
-                    <option value="">Выбери источник</option>
-                  {/if}
-                  {#each workflowLogCompatibleSources as source (source.key)}
-                    <option value={source.key}>{source.name}</option>
-                  {/each}
-                </select>
-                <button type="button" class="mini" on:click={applyWorkflowLogSourceChoice} disabled={!workflowLogPickValue}>
-                  Подключить
-                </button>
+          <div class="ops-card process-status-board">
+            <div class="process-board-head">
+              <div>
+                <h5>Состояние процессов</h5>
+                <div class="ops-note">
+                  Здесь собран один пользовательский статус поверх опубликованной версии, Start-настроек, server runs, steps и jobs.
+                </div>
               </div>
-            {/if}
-            {#if workflowLogCurrentSource}
-              <div class="ops-note">
-                {workflowLogCurrentSource.description || 'Подключенный источник использует системный run log и связанные шаги, очередь и агрегаты.'}
+              <div class="process-board-chips">
+                <span class="desk-status-chip">Версия: {publishedDeskVersionId || '-'}</span>
+                <span class={deskDirty ? 'desk-status-chip warn' : 'desk-status-chip ok'}>
+                  {deskDirty ? 'Есть неопубликованные изменения' : 'Черновик синхронизирован'}
+                </span>
+                <span class={`desk-status-chip desk-status-chip-${deskExecutionState.mode}`} title={deskExecutionState.hint}>
+                  {deskExecutionState.label}
+                </span>
               </div>
-              <div class="system-source-list">
-                {#if workflowLogCurrentSource.primary}
-                  <div class="system-source-row">
-                    <span>{workflowLogCurrentSource.primary.label}</span>
-                    <code>{workflowLogCurrentSource.primary.qname}</code>
-                  </div>
-                {/if}
-                {#each workflowLogCurrentSource.details || [] as detail (detail.key)}
-                  <div class="system-source-row">
-                    <span>{detail.label}</span>
-                    <code>{detail.qname}</code>
-                  </div>
+            </div>
+            {#if processStatusModels.length}
+              <div class="process-status-list">
+                {#each processStatusModels as processModel (processModel.startNodeId)}
+                  {@const draftProcess = draftProcesses.find((item) => item.start_node_id === processModel.startNodeId)}
+                  <article class={`process-status-card tone-${processModel.statusTone}`}>
+                    <div class="process-status-card-head">
+                      <div class="process-status-main">
+                        <strong>{processModel.name || processModel.startNodeId}</strong>
+                        <div class="process-status-meta">
+                          <span>Код: {processModel.processCode || '-'}</span>
+                          <span>Триггер: {triggerLabel(processModel.triggerType)}</span>
+                          {#if draftProcess}
+                            <span>{draftProcessScopeBadge(draftProcess)}</span>
+                          {/if}
+                        </div>
+                      </div>
+                      <div class="process-status-actions">
+                        <button
+                          class="mini toggle-btn"
+                          class:active={Boolean(processModel.isEnabled)}
+                          title={processModel.isPublished ? (processModel.isEnabled ? 'Отключить опубликованный процесс' : 'Включить опубликованный процесс') : 'Сначала опубликуй рабочий стол'}
+                          on:click={() => togglePublishedProcess(processModel.startNodeId, !Boolean(processModel.isEnabled))}
+                          disabled={processModel.enableActionDisabled || Boolean(processBusyByNode[processModel.startNodeId])}
+                        >
+                          {processModel.enableActionLabel}
+                        </button>
+                        <button
+                          class="mini primary"
+                          on:click={() => triggerPublishedProcess(processModel.startNodeId)}
+                          disabled={processModel.actionDisabled || triggerBusy}
+                        >
+                          {processModel.actionLabel}
+                        </button>
+                        <button
+                          class="mini"
+                          on:click={() =>
+                            openRuntimeInspectorForRun(
+                              processModel.runUid,
+                              processModel.currentStep.nodeId || processModel.failedStep.nodeId || processModel.startNodeId
+                            )}
+                          disabled={!processModel.runUid}
+                        >
+                          Открыть детали
+                        </button>
+                      </div>
+                    </div>
+                    <div class="process-status-strip">
+                      <span class={`process-state-pill tone-${processModel.statusTone}`}>{processModel.statusLabel}</span>
+                      <span class={processModel.isPublished ? 'clean-flag' : 'dirty-flag'}>
+                        {processModel.isPublished ? 'Опубликован' : 'Не опубликован'}
+                      </span>
+                      <span class={processModel.isEnabled ? 'clean-flag' : 'dirty-flag'}>
+                        {processModel.isEnabled ? 'Включён' : 'Выключен'}
+                      </span>
+                      {#if processModel.runUid}
+                        <code>{processModel.runUid}</code>
+                      {/if}
+                    </div>
+                    <div class="process-status-message">{processModel.primaryMessage}</div>
+                    <div class="process-status-grid">
+                      <div class="process-status-kv">
+                        <span>Последний / активный run</span>
+                        <strong>{processModel.runUid || '-'}</strong>
+                      </div>
+                      <div class="process-status-kv">
+                        <span>Старт</span>
+                        <strong>{processModel.runStartedAt || '-'}</strong>
+                      </div>
+                      <div class="process-status-kv">
+                        <span>Длительность</span>
+                        <strong>{processModel.runUid ? processDurationLabel(processModel) : '-'}</strong>
+                      </div>
+                      <div class="process-status-kv">
+                        <span>Текущий шаг</span>
+                        <strong>{processModel.currentStep.nodeName || '-'}</strong>
+                      </div>
+                      <div class="process-status-kv">
+                        <span>Последний успешный шаг</span>
+                        <strong>{processModel.lastSuccessfulStep.nodeName || '-'}</strong>
+                      </div>
+                      <div class="process-status-kv">
+                        <span>Ошибка на шаге</span>
+                        <strong>{processModel.failedStep.nodeName || '-'}</strong>
+                      </div>
+                    </div>
+                  </article>
                 {/each}
               </div>
-            {:else if workflowLogEnabled}
-              <div class="ops-error">Выбери совместимый системный источник журнала выполнения.</div>
-            {:else}
-              <div class="ops-note">Журнал выполнения не подключен к настройкам этого рабочего стола.</div>
-            {/if}
-            {#if !workflowLogCompatibleSources.length}
-              <div class="ops-error">Нет доступных системных источников workflow log. Проверь server runtime и bootstrap workflow automation.</div>
-            {/if}
-            {#if workflowLogSourceError}
-              <div class="ops-error">{workflowLogSourceError}</div>
-            {/if}
-          </div>
-          <div class="ops-card">
-            <h5>Процессы рабочего стола ({draftProcesses.length})</h5>
-            {#if draftProcesses.length}
-              {#each draftProcesses as p (p.start_node_id)}
-                {@const publishedProcess = publishedProcessByNodeId(p.start_node_id)}
-                <div class="process-row">
-                  <div class="process-main">
-                    <strong>{p.name || p.start_node_id}</strong>
-                    <span title="Внутренний код процесса">Код: {p.process_code}</span>
-                    <span>Тип запуска: {triggerLabel(p.trigger_type)}</span>
-                    <span>{draftProcessScopeBadge(p)}</span>
-                    <span class={publishedProcess ? 'clean-flag' : 'dirty-flag'}>
-                      {publishedProcess ? 'Опубликован' : 'Не опубликован'}
-                    </span>
-                  </div>
-                  <div class="process-actions">
-                    <button
-                      class="mini toggle-btn"
-                      title={publishedProcess ? (Boolean(publishedProcess.is_enabled) ? 'Отключить процесс в автозапуске' : 'Включить процесс в автозапуске') : 'Сначала опубликуйте рабочий стол'}
-                      class:active={Boolean(publishedProcess?.is_enabled)}
-                      on:click={() => togglePublishedProcess(p.start_node_id, !Boolean(publishedProcess?.is_enabled))}
-                      disabled={!publishedProcess || Boolean(processBusyByNode[p.start_node_id])}
-                    >
-                      {publishedProcess ? (Boolean(publishedProcess.is_enabled) ? 'Включен' : 'Выключен') : 'Не опубликован'}
-                    </button>
-                    <button
-                      class="mini"
-                      title={publishedProcess ? 'Запустить только этот процесс вручную.' : 'Сначала опубликуйте рабочий стол'}
-                      on:click={() => triggerPublishedProcess(p.start_node_id)}
-                      disabled={!publishedProcess || triggerBusy || !Boolean(publishedProcess.is_enabled)}
-                    >
-                      Запустить
-                    </button>
-                  </div>
-                  {#if publishedProcess?.last_run}
-                    <div class="process-last">
-                      Последний запуск: {publishedProcess.last_run.status || '-'} / {triggerLabel(publishedProcess.last_run.trigger_type || p.trigger_type)} / {publishedProcess.last_run.started_at || '-'}
-                    </div>
-                  {:else}
-                    <div class="process-last">Этот процесс еще не опубликован на сервере.</div>
-                  {/if}
-                </div>
-              {/each}
             {:else}
               <div class="empty">На рабочем столе нет старт-процессов.</div>
             {/if}
             {#if outdatedPublishedProcesses.length}
               <div class="issue warn">
-                В опубликованной версии еще есть {outdatedPublishedProcesses.length} процесс(а), которых нет на рабочем столе.
-                Нажмите «Опубликовать рабочий стол», чтобы удалить их с сервера.
+                В опубликованной версии ещё есть {outdatedPublishedProcesses.length} процесс(а), которых нет на рабочем столе.
+                Нажми «Опубликовать рабочий стол», чтобы синхронизировать сервер.
               </div>
             {/if}
           </div>
-          <div class="ops-card">
-            <h5>Запуски и очередь</h5>
-            <div class="ops-columns">
-              <div>
-                <div class="ops-subhead">Запуски ({processRuns.length})</div>
-                {#if processRuns.length}
-                  {#each processRuns.slice(0, 8) as run (run.run_uid)}
-                    <div class="compact-row">
-                      <span>{run.status}</span>
-                      <span>{run.start_node_id}</span>
-                      <code>{run.run_uid}</code>
-                    </div>
-                  {/each}
-                {:else}
-                  <div class="empty">Нет запусков</div>
-                {/if}
-              </div>
-              <div>
-                <div class="ops-subhead">Задания очереди ({workflowJobs.length})</div>
-                {#if workflowJobs.length}
-                  {#each workflowJobs.slice(0, 8) as job (`${job.job_id}`)}
-                    <div class="compact-row">
-                      <span>{job.status}</span>
-                      <span>{job.job_type}</span>
-                      <span>#{job.job_id}</span>
-                    </div>
-                  {/each}
-                {:else}
-                  <div class="empty">Нет jobs</div>
-                {/if}
-              </div>
+          <details class="ops-card ops-card-details" bind:open={schedulerDetailsOpen}>
+            <summary>Планировщик</summary>
+            <div class="ops-card-body">
+              <div class="kv"><span>Состояние</span><strong>{schedulerView.enabled ? 'Включен' : 'Выключен'}</strong></div>
+              <div class="kv"><span>Последний тик</span><strong>{schedulerView.last_tick_at || '-'}</strong></div>
+              <div class="kv"><span>Тик воркера</span><strong>{schedulerView.worker_last_tick_at || '-'}</strong></div>
+              <div class="kv"><span>Очередь</span><strong>{schedulerView.queue_depth} / в работе {schedulerView.queue_running}</strong></div>
+              <div class="kv"><span>Ошибочные задания</span><strong>{schedulerView.queue_dead_letter}</strong></div>
+              <div class="kv"><span>Событий в ожидании</span><strong>{schedulerView.dependency_event_backlog}</strong></div>
+              {#if schedulerView.last_error}
+                <div class="ops-error">Ошибка планировщика: {schedulerView.last_error}</div>
+              {/if}
+              {#if schedulerView.worker_last_error}
+                <div class="ops-error">Ошибка воркера: {schedulerView.worker_last_error}</div>
+              {/if}
             </div>
-          </div>
-          <div class="ops-card">
-            <h5>Runtime inspector</h5>
-            <div class="ops-note">
-              Read-only просмотр server runtime truth. Здесь отдельно показаны canonical input/output шага и transport/debug payload, без подмены desk descriptor или preview.
-            </div>
-            {#if processRuns.length}
-              <label class="sec-label runtime-run-picker">
-                <span>Run</span>
-                <select
-                  value={runtimeInspectorRunUid}
-                  on:change={(e) => loadRuntimeInspectorRun(selectValue(e), { focusNodeId: settingsNode?.id || '' })}
-                  disabled={runtimeInspectorLoading}
+          </details>
+          <details class="ops-card ops-card-details" bind:open={workflowLogDetailsOpen}>
+            <summary>Журнал выполнения</summary>
+            <div class="ops-card-body">
+              <div class="ops-note">
+                Это системный журнал выполнения рабочего стола. Он подключается по системному шаблону и не создает вторую таблицу.
+              </div>
+              <div class="kv"><span>Состояние</span><strong>{workflowLogEnabled ? 'Подключен' : 'Выключен'}</strong></div>
+              <div class="kv"><span>Системный шаблон</span><strong>Bronze системный лог workflow</strong></div>
+              <div class="process-actions">
+                <button
+                  class="mini toggle-btn"
+                  class:active={workflowLogEnabled}
+                  on:click={toggleWorkflowLogEnabled}
+                  type="button"
                 >
-                  {#each processRuns.slice(0, 30) as run (run.run_uid)}
-                    <option value={run.run_uid}>
-                      {run.start_node_id} · {run.status} · {run.started_at || run.run_uid}
-                    </option>
-                  {/each}
-                </select>
-              </label>
-              {#if runtimeInspectorLoading}
-                <div class="empty">Загрузка runtime run...</div>
-              {:else if runtimeInspectorError}
-                <div class="ops-error">{runtimeInspectorError}</div>
-              {:else if runtimeInspectorRunDetail}
-                <div class="preview-meta">
-                  <span>Run UID: {runtimeInspectorRunDetail.run?.run_uid || '-'}</span>
-                  <span>Статус: {runtimeInspectorRunDetail.run?.status || '-'}</span>
-                  <span>Старт: {runtimeInspectorRunDetail.run?.started_at || '-'}</span>
-                  <span>Шагов: {runtimeInspectorSteps().length}</span>
+                  {workflowLogEnabled ? 'Вести журнал: вкл' : 'Вести журнал: выкл'}
+                </button>
+              </div>
+              <div class="ops-subhead">Источник журнала выполнения</div>
+              <button
+                type="button"
+                class="source-pill"
+                on:click={toggleWorkflowLogPicker}
+                disabled={!workflowLogCompatibleSources.length}
+                title={workflowLogCurrentSource?.description || 'Выбери системный источник журнала выполнения'}
+              >
+                {workflowLogCurrentSource?.name || 'Выбери системный источник'}
+              </button>
+              {#if workflowLogPickerOpen}
+                <div class="storage-picker">
+                  <select bind:value={workflowLogPickValue}>
+                    {#if !workflowLogPickValue}
+                      <option value="">Выбери источник</option>
+                    {/if}
+                    {#each workflowLogCompatibleSources as source (source.key)}
+                      <option value={source.key}>{source.name}</option>
+                    {/each}
+                  </select>
+                  <button type="button" class="mini" on:click={applyWorkflowLogSourceChoice} disabled={!workflowLogPickValue}>
+                    Подключить
+                  </button>
                 </div>
-                <div class="runtime-step-strip">
-                  {#each runtimeInspectorSteps() as step}
-                    <button
-                      type="button"
-                      class="mini runtime-step-pill"
-                      class:active={Math.max(0, Number(step?.step_order || 0)) === Math.max(0, Number(runtimeInspectorSelectedStepOrder || 0))}
-                      on:click={() => (runtimeInspectorSelectedStepOrder = Math.max(0, Number(step?.step_order || 0)))}
-                    >
-                      {step.step_order}. {step.node_name || step.node_id} · {step.status}
-                    </button>
+              {/if}
+              {#if workflowLogCurrentSource}
+                <div class="ops-note">
+                  {workflowLogCurrentSource.description || 'Подключенный источник использует системный run log и связанные шаги, очередь и агрегаты.'}
+                </div>
+                <div class="system-source-list">
+                  {#if workflowLogCurrentSource.primary}
+                    <div class="system-source-row">
+                      <span>{workflowLogCurrentSource.primary.label}</span>
+                      <code>{workflowLogCurrentSource.primary.qname}</code>
+                    </div>
+                  {/if}
+                  {#each workflowLogCurrentSource.details || [] as detail (detail.key)}
+                    <div class="system-source-row">
+                      <span>{detail.label}</span>
+                      <code>{detail.qname}</code>
+                    </div>
                   {/each}
                 </div>
-                {@const selectedRuntimeStep = runtimeInspectorSelectedStep()}
-                {#if selectedRuntimeStep}
-                  {@const selectedRuntimeSteps = runtimeInspectorSteps()}
-                  {@const selectedRuntimeIndex = selectedRuntimeSteps.findIndex((step) => Math.max(0, Number(step?.step_order || 0)) === Math.max(0, Number(selectedRuntimeStep?.step_order || 0)))}
-                  {@const previousRuntimeStep = selectedRuntimeIndex > 0 ? selectedRuntimeSteps[selectedRuntimeIndex - 1] : null}
-                  {@const currentInputRows = runtimeRowsFromValue(selectedRuntimeStep.input_json)}
-                  {@const currentInputColumns = runtimeColumnsFromRows(currentInputRows)}
-                  {@const currentOutputRows = runtimeRowsFromValue(selectedRuntimeStep.output_json)}
-                  {@const currentOutputColumns = runtimeColumnsFromRows(currentOutputRows)}
-                  <div class="runtime-step-card">
-                    <div class="parser-shell-summary">
-                      <span class="chip-chip readonly-chip">Шаг {selectedRuntimeStep.step_order}</span>
-                      <span class="chip-chip readonly-chip">{selectedRuntimeStep.node_name || selectedRuntimeStep.node_id}</span>
-                      <span class="chip-chip readonly-chip">Тип: {selectedRuntimeStep.node_type || '-'}</span>
-                      <span class="chip-chip readonly-chip">Статус: {selectedRuntimeStep.status || '-'}</span>
-                    </div>
-                    <div class="preview-meta">
-                      <span>Canonical input rows: {runtimeRowCountFromValue(selectedRuntimeStep.input_json)}</span>
-                      <span>Canonical output rows: {runtimeRowCountFromValue(selectedRuntimeStep.output_json)}</span>
-                      <span>Request/debug: {selectedRuntimeStep.request_payload !== undefined ? 'есть' : 'нет'}</span>
-                      <span>Response/debug: {selectedRuntimeStep.response_payload !== undefined ? 'есть' : 'нет'}</span>
-                    </div>
-                    {#if previousRuntimeStep}
-                      <div class="inline-hint">
-                        Handoff от предыдущей ноды `{previousRuntimeStep.node_name || previousRuntimeStep.node_id}` к текущей:
-                        {runtimeValuesSemanticallyMatch(previousRuntimeStep.output_json, selectedRuntimeStep.input_json)
-                          ? ' canonical output и canonical input совпадают по сохранённому значению.'
-                          : ' вход и выход различаются, смотри canonical JSON ниже.'}
+              {:else if workflowLogEnabled}
+                <div class="ops-error">Выбери совместимый системный источник журнала выполнения.</div>
+              {:else}
+                <div class="ops-note">Журнал выполнения не подключен к настройкам этого рабочего стола.</div>
+              {/if}
+              {#if !workflowLogCompatibleSources.length}
+                <div class="ops-error">Нет доступных системных источников workflow log. Проверь server runtime и bootstrap workflow automation.</div>
+              {/if}
+              {#if workflowLogSourceError}
+                <div class="ops-error">{workflowLogSourceError}</div>
+              {/if}
+            </div>
+          </details>
+          <details class="ops-card ops-card-details" bind:open={runsJobsDetailsOpen}>
+            <summary>Запуски и очередь</summary>
+            <div class="ops-card-body">
+              <div class="ops-columns">
+                <div>
+                  <div class="ops-subhead">Запуски ({processRuns.length})</div>
+                  {#if processRuns.length}
+                    {#each processRuns.slice(0, 8) as run (run.run_uid)}
+                      <div class="compact-row">
+                        <span>{run.status}</span>
+                        <span>{run.start_node_id}</span>
+                        <code>{run.run_uid}</code>
                       </div>
-                    {/if}
-                    {#if settingsNode && String(settingsNode.id || '').trim() === String(selectedRuntimeStep.node_id || '').trim()}
-                      <div class="inline-hint">Этот runtime step соответствует ноде, которая сейчас открыта в редакторе.</div>
-                    {/if}
-                    <div class="runtime-io-grid">
-                      <details class="runtime-io-card" open>
-                        <summary>Canonical input</summary>
-                        {#if currentInputColumns.length}
-                          <div class="preview-columns">
-                            {#each currentInputColumns as column}
-                              <span>{column}</span>
-                            {/each}
-                          </div>
-                        {/if}
-                        {#if currentInputRows.length}
-                          <div class="preview-table-wrap compact-preview-wrap">
-                            <table class="preview-table">
-                              <thead>
-                                <tr>
-                                  {#each currentInputColumns as column}
-                                    <th>{column}</th>
-                                  {/each}
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {#each currentInputRows.slice(0, 5) as row}
+                    {/each}
+                  {:else}
+                    <div class="empty">Нет запусков</div>
+                  {/if}
+                </div>
+                <div>
+                  <div class="ops-subhead">Задания очереди ({workflowJobs.length})</div>
+                  {#if workflowJobs.length}
+                    {#each workflowJobs.slice(0, 8) as job (`${job.job_id}`)}
+                      <div class="compact-row">
+                        <span>{job.status}</span>
+                        <span>{job.job_type}</span>
+                        <span>#{job.job_id}</span>
+                      </div>
+                    {/each}
+                  {:else}
+                    <div class="empty">Нет jobs</div>
+                  {/if}
+                </div>
+              </div>
+            </div>
+          </details>
+          <details class="ops-card ops-card-details" bind:open={runtimeInspectorDetailsOpen}>
+            <summary>Runtime inspector</summary>
+            <div class="ops-card-body">
+              <div class="ops-note">
+                Read-only просмотр server runtime truth. Здесь отдельно показаны canonical input/output шага и transport/debug payload, без подмены desk descriptor или preview.
+              </div>
+              {#if processRuns.length}
+                <label class="sec-label runtime-run-picker">
+                  <span>Run</span>
+                  <select
+                    value={runtimeInspectorRunUid}
+                    on:change={(e) => loadRuntimeInspectorRun(selectValue(e), { focusNodeId: settingsNode?.id || '' })}
+                    disabled={runtimeInspectorLoading}
+                  >
+                    {#each processRuns.slice(0, 30) as run (run.run_uid)}
+                      <option value={run.run_uid}>
+                        {run.start_node_id} · {run.status} · {run.started_at || run.run_uid}
+                      </option>
+                    {/each}
+                  </select>
+                </label>
+                {#if runtimeInspectorLoading}
+                  <div class="empty">Загрузка runtime run...</div>
+                {:else if runtimeInspectorError}
+                  <div class="ops-error">{runtimeInspectorError}</div>
+                {:else if runtimeInspectorRunDetail}
+                  <div class="preview-meta">
+                    <span>Run UID: {runtimeInspectorRunDetail.run?.run_uid || '-'}</span>
+                    <span>Статус: {runtimeInspectorRunDetail.run?.status || '-'}</span>
+                    <span>Старт: {runtimeInspectorRunDetail.run?.started_at || '-'}</span>
+                    <span>Шагов: {runtimeInspectorSteps().length}</span>
+                  </div>
+                  <div class="runtime-step-strip">
+                    {#each runtimeInspectorSteps() as step}
+                      <button
+                        type="button"
+                        class="mini runtime-step-pill"
+                        class:active={Math.max(0, Number(step?.step_order || 0)) === Math.max(0, Number(runtimeInspectorSelectedStepOrder || 0))}
+                        on:click={() => (runtimeInspectorSelectedStepOrder = Math.max(0, Number(step?.step_order || 0)))}
+                      >
+                        {step.step_order}. {step.node_name || step.node_id} · {step.status}
+                      </button>
+                    {/each}
+                  </div>
+                  {@const selectedRuntimeStep = runtimeInspectorSelectedStep()}
+                  {#if selectedRuntimeStep}
+                    {@const selectedRuntimeSteps = runtimeInspectorSteps()}
+                    {@const selectedRuntimeIndex = selectedRuntimeSteps.findIndex((step) => Math.max(0, Number(step?.step_order || 0)) === Math.max(0, Number(selectedRuntimeStep?.step_order || 0)))}
+                    {@const previousRuntimeStep = selectedRuntimeIndex > 0 ? selectedRuntimeSteps[selectedRuntimeIndex - 1] : null}
+                    {@const currentInputRows = runtimeRowsFromValue(selectedRuntimeStep.input_json)}
+                    {@const currentInputColumns = runtimeColumnsFromRows(currentInputRows)}
+                    {@const currentOutputRows = runtimeRowsFromValue(selectedRuntimeStep.output_json)}
+                    {@const currentOutputColumns = runtimeColumnsFromRows(currentOutputRows)}
+                    <div class="runtime-step-card">
+                      <div class="parser-shell-summary">
+                        <span class="chip-chip readonly-chip">Шаг {selectedRuntimeStep.step_order}</span>
+                        <span class="chip-chip readonly-chip">{selectedRuntimeStep.node_name || selectedRuntimeStep.node_id}</span>
+                        <span class="chip-chip readonly-chip">Тип: {selectedRuntimeStep.node_type || '-'}</span>
+                        <span class="chip-chip readonly-chip">Статус: {selectedRuntimeStep.status || '-'}</span>
+                      </div>
+                      <div class="preview-meta">
+                        <span>Canonical input rows: {runtimeRowCountFromValue(selectedRuntimeStep.input_json)}</span>
+                        <span>Canonical output rows: {runtimeRowCountFromValue(selectedRuntimeStep.output_json)}</span>
+                        <span>Request/debug: {selectedRuntimeStep.request_payload !== undefined ? 'есть' : 'нет'}</span>
+                        <span>Response/debug: {selectedRuntimeStep.response_payload !== undefined ? 'есть' : 'нет'}</span>
+                      </div>
+                      {#if previousRuntimeStep}
+                        <div class="inline-hint">
+                          Handoff от предыдущей ноды `{previousRuntimeStep.node_name || previousRuntimeStep.node_id}` к текущей:
+                          {runtimeValuesSemanticallyMatch(previousRuntimeStep.output_json, selectedRuntimeStep.input_json)
+                            ? ' canonical output и canonical input совпадают по сохранённому значению.'
+                            : ' вход и выход различаются, смотри canonical JSON ниже.'}
+                        </div>
+                      {/if}
+                      {#if settingsNode && String(settingsNode.id || '').trim() === String(selectedRuntimeStep.node_id || '').trim()}
+                        <div class="inline-hint">Этот runtime step соответствует ноде, которая сейчас открыта в редакторе.</div>
+                      {/if}
+                      <div class="runtime-io-grid">
+                        <details class="runtime-io-card" open>
+                          <summary>Canonical input</summary>
+                          {#if currentInputColumns.length}
+                            <div class="preview-columns">
+                              {#each currentInputColumns as column}
+                                <span>{column}</span>
+                              {/each}
+                            </div>
+                          {/if}
+                          {#if currentInputRows.length}
+                            <div class="preview-table-wrap compact-preview-wrap">
+                              <table class="preview-table">
+                                <thead>
                                   <tr>
                                     {#each currentInputColumns as column}
-                                      <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
+                                      <th>{column}</th>
                                     {/each}
                                   </tr>
-                                {/each}
-                              </tbody>
-                            </table>
-                          </div>
-                        {/if}
-                        <pre>{runtimeJsonText(selectedRuntimeStep.input_json, '{}')}</pre>
-                      </details>
-                      <details class="runtime-io-card" open>
-                        <summary>Canonical output</summary>
-                        {#if currentOutputColumns.length}
-                          <div class="preview-columns">
-                            {#each currentOutputColumns as column}
-                              <span>{column}</span>
-                            {/each}
-                          </div>
-                        {/if}
-                        {#if currentOutputRows.length}
-                          <div class="preview-table-wrap compact-preview-wrap">
-                            <table class="preview-table">
-                              <thead>
-                                <tr>
-                                  {#each currentOutputColumns as column}
-                                    <th>{column}</th>
+                                </thead>
+                                <tbody>
+                                  {#each currentInputRows.slice(0, 5) as row}
+                                    <tr>
+                                      {#each currentInputColumns as column}
+                                        <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
+                                      {/each}
+                                    </tr>
                                   {/each}
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {#each currentOutputRows.slice(0, 5) as row}
+                                </tbody>
+                              </table>
+                            </div>
+                          {/if}
+                          <pre>{runtimeJsonText(selectedRuntimeStep.input_json, '{}')}</pre>
+                        </details>
+                        <details class="runtime-io-card" open>
+                          <summary>Canonical output</summary>
+                          {#if currentOutputColumns.length}
+                            <div class="preview-columns">
+                              {#each currentOutputColumns as column}
+                                <span>{column}</span>
+                              {/each}
+                            </div>
+                          {/if}
+                          {#if currentOutputRows.length}
+                            <div class="preview-table-wrap compact-preview-wrap">
+                              <table class="preview-table">
+                                <thead>
                                   <tr>
                                     {#each currentOutputColumns as column}
-                                      <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
+                                      <th>{column}</th>
                                     {/each}
                                   </tr>
-                                {/each}
-                              </tbody>
-                            </table>
-                          </div>
-                        {/if}
-                        <pre>{runtimeJsonText(selectedRuntimeStep.output_json, '{}')}</pre>
-                      </details>
-                      <details class="runtime-io-card">
-                        <summary>Request / debug</summary>
-                        <pre>{runtimeJsonText(selectedRuntimeStep.request_payload, '{}')}</pre>
-                      </details>
-                      <details class="runtime-io-card">
-                        <summary>Response / debug</summary>
-                        <pre>{runtimeJsonText(selectedRuntimeStep.response_payload, '{}')}</pre>
-                      </details>
+                                </thead>
+                                <tbody>
+                                  {#each currentOutputRows.slice(0, 5) as row}
+                                    <tr>
+                                      {#each currentOutputColumns as column}
+                                        <td>{typeof row?.[column] === 'object' ? JSON.stringify(row?.[column]) : String(row?.[column] ?? '')}</td>
+                                      {/each}
+                                    </tr>
+                                  {/each}
+                                </tbody>
+                              </table>
+                            </div>
+                          {/if}
+                          <pre>{runtimeJsonText(selectedRuntimeStep.output_json, '{}')}</pre>
+                        </details>
+                        <details class="runtime-io-card">
+                          <summary>Request / debug</summary>
+                          <pre>{runtimeJsonText(selectedRuntimeStep.request_payload, '{}')}</pre>
+                        </details>
+                        <details class="runtime-io-card">
+                          <summary>Response / debug</summary>
+                          <pre>{runtimeJsonText(selectedRuntimeStep.response_payload, '{}')}</pre>
+                        </details>
+                      </div>
                     </div>
-                  </div>
+                  {/if}
+                {:else}
+                  <div class="empty">Выбери запуск, чтобы увидеть сохранённый server runtime path.</div>
                 {/if}
               {:else}
-                <div class="empty">Выбери запуск, чтобы увидеть сохранённый server runtime path.</div>
+                <div class="empty">Серверных запусков пока нет. Сначала опубликуй и запусти процесс.</div>
               {/if}
-            {:else}
-              <div class="empty">Серверных запусков пока нет. Сначала опубликуй и запусти процесс.</div>
-            {/if}
-          </div>
+            </div>
+          </details>
         </div>
       </div>
     </aside>
@@ -6436,6 +6663,7 @@
           {@const rt = nodeRuntime[node.id]}
           {@const exec = nodeExecutions[node.id]}
           {@const apiNode = isApiNode(node) || isApiToolNode(node)}
+          {@const processIndicator = processIndicatorForNode(node)}
           <div
             class="node {node.type} {selectedNodeId === node.id ? 'selected' : ''}"
             class:node-api={apiNode}
@@ -6480,6 +6708,11 @@
                 ? 'API-нода'
                 : toolLabelByType(toolCfg(node).toolType)}
             </div>
+            {#if processIndicator}
+              <div class={`node-process-indicator tone-${processIndicator.tone}`} title={processIndicator.hint}>
+                {processIndicator.label}
+              </div>
+            {/if}
             {#if chainRunActive && chainCurrentNodeId === node.id}
               <div class="runtime running">Выполняется...</div>
             {/if}
@@ -7293,6 +7526,16 @@
     border-color: #bfdbfe;
     background: #eff6ff;
   }
+  .desk-run-state-queued {
+    color: #7c3aed;
+    border-color: #ddd6fe;
+    background: #f5f3ff;
+  }
+  .desk-run-state-success {
+    color: #166534;
+    border-color: #bbf7d0;
+    background: #f0fdf4;
+  }
   .desk-actions {
     display: grid;
     grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr) auto auto auto auto minmax(170px, 1fr);
@@ -7386,6 +7629,218 @@
     margin: 0;
     font-size: 13px;
     color: #0f172a;
+  }
+  .ops-card-details {
+    min-height: 0;
+  }
+  .ops-card-details summary {
+    cursor: pointer;
+    list-style: none;
+    font-size: 13px;
+    font-weight: 700;
+    color: #0f172a;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .ops-card-details summary::-webkit-details-marker {
+    display: none;
+  }
+  .ops-card-details summary::after {
+    content: '▾';
+    color: #64748b;
+    font-size: 12px;
+    transform: rotate(-90deg);
+    transition: transform 0.18s ease;
+  }
+  .ops-card-details[open] summary::after {
+    transform: rotate(0deg);
+  }
+  .ops-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 6px;
+  }
+  .process-status-board {
+    gap: 10px;
+  }
+  .process-board-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .process-board-chips {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+  .desk-status-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    border: 1px solid #dbe4f0;
+    background: #fff;
+    font-size: 11px;
+    line-height: 1.2;
+    color: #334155;
+    white-space: nowrap;
+  }
+  .desk-status-chip.ok {
+    border-color: #bbf7d0;
+    background: #f0fdf4;
+    color: #166534;
+  }
+  .desk-status-chip.warn {
+    border-color: #fde68a;
+    background: #fffbeb;
+    color: #92400e;
+  }
+  .desk-status-chip-active,
+  .process-state-pill.tone-running {
+    border-color: #bfdbfe;
+    background: #eff6ff;
+    color: #1d4ed8;
+  }
+  .desk-status-chip-blocked,
+  .process-state-pill.tone-failed,
+  .process-state-pill.tone-attention {
+    border-color: #fecaca;
+    background: #fef2f2;
+    color: #b91c1c;
+  }
+  .desk-status-chip-manual,
+  .process-state-pill.tone-pending {
+    border-color: #fde68a;
+    background: #fffbeb;
+    color: #92400e;
+  }
+  .desk-status-chip-queued,
+  .process-state-pill.tone-queued {
+    border-color: #ddd6fe;
+    background: #f5f3ff;
+    color: #7c3aed;
+  }
+  .desk-status-chip-success,
+  .process-state-pill.tone-success {
+    border-color: #bbf7d0;
+    background: #f0fdf4;
+    color: #166534;
+  }
+  .desk-status-chip-idle,
+  .desk-status-chip-draft,
+  .process-state-pill.tone-disabled,
+  .process-state-pill.tone-draft,
+  .process-state-pill.tone-neutral {
+    border-color: #dbe4f0;
+    background: #fff;
+    color: #475569;
+  }
+  .process-status-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .process-status-card {
+    border: 1px solid #dbe4f0;
+    border-radius: 12px;
+    background: #fff;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .process-status-card.tone-running {
+    border-color: #bfdbfe;
+    box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.12);
+  }
+  .process-status-card.tone-failed,
+  .process-status-card.tone-attention {
+    border-color: #fecaca;
+  }
+  .process-status-card.tone-success {
+    border-color: #bbf7d0;
+  }
+  .process-status-card-head {
+    display: flex;
+    gap: 10px;
+    justify-content: space-between;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .process-status-main {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    flex: 1;
+  }
+  .process-status-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    font-size: 11px;
+    color: #475569;
+  }
+  .process-status-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .process-status-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+  .process-state-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    border: 1px solid #dbe4f0;
+    font-size: 11px;
+    line-height: 1.2;
+    font-weight: 700;
+  }
+  .process-status-message {
+    font-size: 12px;
+    color: #334155;
+    line-height: 1.45;
+  }
+  .process-status-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .process-status-kv {
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background: #f8fafc;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+  .process-status-kv span {
+    font-size: 11px;
+    color: #64748b;
+  }
+  .process-status-kv strong {
+    font-size: 12px;
+    color: #0f172a;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .ops-note {
     font-size: 11px;
@@ -7602,6 +8057,52 @@
   .node.data { background: #f8fafc; }
   .node.selected { border-color: #2563eb; }
   .node-head { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+  .node-process-indicator {
+    margin-top: 6px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: 1px solid #dbe4f0;
+    background: #fff;
+    font-size: 10px;
+    line-height: 1.2;
+    font-weight: 700;
+    color: #475569;
+    max-width: 100%;
+  }
+  .node-process-indicator.tone-running {
+    border-color: #bfdbfe;
+    background: #eff6ff;
+    color: #1d4ed8;
+  }
+  .node-process-indicator.tone-queued {
+    border-color: #ddd6fe;
+    background: #f5f3ff;
+    color: #7c3aed;
+  }
+  .node-process-indicator.tone-success {
+    border-color: #bbf7d0;
+    background: #f0fdf4;
+    color: #166534;
+  }
+  .node-process-indicator.tone-failed {
+    border-color: #fecaca;
+    background: #fef2f2;
+    color: #b91c1c;
+  }
+  .node-process-indicator.tone-pending {
+    border-color: #fde68a;
+    background: #fffbeb;
+    color: #92400e;
+  }
+  .node-process-indicator.tone-disabled,
+  .node-process-indicator.tone-draft {
+    border-color: #dbe4f0;
+    background: #f8fafc;
+    color: #475569;
+  }
   .node-title {
     display: block;
     flex: 1;
@@ -7922,6 +8423,9 @@
     .ops-grid:not(.ops-grid-side) {
       grid-template-columns: 1fr;
     }
+    .process-status-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
   }
   @media (max-width: 1100px) {
     .workspace {
@@ -7938,6 +8442,17 @@
       grid-template-columns: 1fr;
     }
     .runtime-io-grid {
+      grid-template-columns: 1fr;
+    }
+    .process-board-head,
+    .process-status-card-head {
+      flex-direction: column;
+    }
+    .process-board-chips,
+    .process-status-actions {
+      justify-content: flex-start;
+    }
+    .process-status-grid {
       grid-template-columns: 1fr;
     }
   }
