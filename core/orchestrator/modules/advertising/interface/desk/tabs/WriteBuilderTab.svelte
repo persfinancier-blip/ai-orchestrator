@@ -205,13 +205,13 @@
   }
 
   function columnsFromRows(rows = [], fallback = []) {
-    const explicit = uniqueStrings(fallback);
-    if (explicit.length) return explicit;
-    return uniqueStrings(
+    const detected = uniqueStrings(
       (Array.isArray(rows) ? rows : []).flatMap((row) =>
         row && typeof row === 'object' && !Array.isArray(row) ? Object.keys(row) : []
       )
     );
+    if (detected.length) return detected;
+    return uniqueStrings(fallback);
   }
 
   function fieldDisplayName(field) {

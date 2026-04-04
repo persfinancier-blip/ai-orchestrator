@@ -3118,6 +3118,7 @@
     const fieldMappings = tryList(settings.fieldMappingsJson || settings.fieldMappings || settings.field_mappings);
     const targetColumns = uniqueDescriptorFields(
       fieldMappings
+        .filter((item: any) => String(item?.targetField || item?.target_field || '').trim())
         .map((item: any, index: number) =>
           normalizeDescriptorField(
             {
