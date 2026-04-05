@@ -531,13 +531,13 @@
 <section class="panel">
   <div class="panel-head">
     <div>
-      <h2>����������� Gold-������</h2>
-      <p class="sub">��������� builder ������ ������: ��������� ���������, ������� � ���������� ������, �������, ������, materialization, refresh � quality.</p>
+      <h2>Конструктор Gold-витрин</h2>
+      <p class="sub">Отдельный builder витрин: источники процессов, внешние и справочные данные, расчёты, модели, materialization, refresh и quality.</p>
     </div>
     <div class="toolbar">
-      <button on:click={startNewDefinition}>����� �������</button>
-      <button on:click={loadCatalog} disabled={busy}>�������� ���������</button>
-      <button on:click={() => loadDefinitions(selectedId)} disabled={busy || loadingDefinitions}>�������� ������</button>
+      <button on:click={startNewDefinition}>Новая витрина</button>
+      <button on:click={loadCatalog} disabled={busy}>Обновить источники</button>
+      <button on:click={() => loadDefinitions(selectedId)} disabled={busy || loadingDefinitions}>Обновить список</button>
     </div>
   </div>
 
@@ -547,14 +547,14 @@
   <div class="layout">
     <aside class="sidebar">
       <div class="section-head">
-        <h3>�������</h3>
+        <h3>Витрины</h3>
         <span class="badge">{definitions.length}</span>
       </div>
       <div class="definition-list">
         {#if loadingDefinitions}
-          <div class="hint">�������� ������...</div>
+          <div class="hint">Загружаем список...</div>
         {:else if definitions.length === 0}
-          <div class="hint">���� ��� ������. ������ ������ Gold definition.</div>
+          <div class="hint">Пока нет витрин. Создай первую Gold definition.</div>
         {:else}
           {#each definitions as item}
             <button class="definition-item" class:active={Number(item.id) === Number(selectedId)} on:click={() => loadDefinitionDetail(Number(item.id))}>
@@ -564,8 +564,8 @@
               </div>
               <div class="item-code">{item.code}</div>
               <div class="item-meta">
-                <span>{item.published ? `v${item.active_version || 0}` : '��������'}</span>
-                {#if item.has_draft_changes}<span>���� ���������������� ���������</span>{/if}
+                <span>{item.published ? `v${item.active_version || 0}` : 'черновик'}</span>
+                {#if item.has_draft_changes}<span>есть неопубликованные изменения</span>{/if}
                 {#if item.latest_refresh?.started_at}<span>refresh: {formatTs(item.latest_refresh.started_at)}</span>{/if}
               </div>
             </button>
@@ -577,36 +577,36 @@
     <div class="editor">
       <section class="card">
         <div class="section-head">
-          <h3>���������� �������</h3>
+          <h3>Метаданные витрины</h3>
           <div class="inline-actions">
-            <button class="primary" on:click={saveDraft} disabled={busy || !canWrite()}>��������� ��������</button>
-            <button on:click={validateDraft} disabled={busy || !canWrite()}>���������</button>
-            <button on:click={publishDraft} disabled={busy || !canWrite()}>������������</button>
-            <button on:click={refreshGold} disabled={busy || !canWrite()}>�������� �������</button>
+            <button class="primary" on:click={saveDraft} disabled={busy || !canWrite()}>Сохранить черновик</button>
+            <button on:click={validateDraft} disabled={busy || !canWrite()}>Проверить</button>
+            <button on:click={publishDraft} disabled={busy || !canWrite()}>Опубликовать</button>
+            <button on:click={refreshGold} disabled={busy || !canWrite()}>Обновить витрину</button>
           </div>
         </div>
         <div class="grid cols-3">
           <label>
-            ���
+            Код
             <div class="inline-field">
               <input bind:value={definition.metadata.code} placeholder="gold_revenue_daily" />
-              <button type="button" on:click={updateMetadataCodeFromName}>�������������</button>
+              <button type="button" on:click={updateMetadataCodeFromName}>Сгенерировать</button>
             </div>
           </label>
           <label>
-            ��������
-            <input bind:value={definition.metadata.name} placeholder="������� ������� �������" />
+            Название
+            <input bind:value={definition.metadata.name} placeholder="Золотая витрина выручки" />
           </label>
           <label>
-            ��������
+            Владелец
             <input bind:value={definition.metadata.owner} placeholder="analytics_team" />
           </label>
           <label class="span-3">
-            ��������
-            <textarea bind:value={definition.metadata.description} rows="2" placeholder="��� ������� ������� � ��� ���� �����"></textarea>
+            Описание
+            <textarea bind:value={definition.metadata.description} rows="2" placeholder="Для чего нужна витрина и какие решения на неё опираются"></textarea>
           </label>
           <label class="span-3">
-            ����
+            Теги
             <input value={definition.metadata.tags.join(', ')} on:input={updateTags} placeholder="revenue, gold, dashboard" />
           </label>
         </div>
@@ -614,97 +614,97 @@
 
       <section class="card">
         <div class="section-head">
-          <h3>���������</h3>
-          <span class="hint">Published process outputs, named external sources � �����������.</span>
+          <h3>Источники</h3>
+          <span class="hint">Published process outputs, именованные external sources и справочники.</span>
         </div>
         <div class="source-layout">
           <div class="catalog-column">
             <div class="catalog-block">
-              <h4>��������� �� ���������</h4>
+              <h4>Источники из процессов</h4>
               {#if asArray(sourceCatalog.process_sources).length === 0}
-                <div class="hint">Published process outputs ���� �� �������.</div>
+                <div class="hint">Published process outputs пока не найдены.</div>
               {:else}
                 {#each sourceCatalog.process_sources as source}
                   <div class="catalog-item">
                     <div class="catalog-title">{source.source_name}</div>
-                    <div class="catalog-meta">{source.process_code} � {source.schema_name}.{source.table_name}</div>
-                    <div class="catalog-meta">��������: v{source.contract_version || 0} � �����: {asArray(source.fields).length}</div>
-                    <button on:click={() => addSourceFromCatalog(source)}>��������</button>
+                    <div class="catalog-meta">{source.process_code} · {source.schema_name}.{source.table_name}</div>
+                    <div class="catalog-meta">Контракт: v{source.contract_version || 0} · Полей: {asArray(source.fields).length}</div>
+                    <button on:click={() => addSourceFromCatalog(source)}>Добавить</button>
                   </div>
                 {/each}
               {/if}
             </div>
 
             <div class="catalog-block">
-              <h4>������� ������ � �����������</h4>
+              <h4>Внешние данные и справочники</h4>
               {#each [...asArray(sourceCatalog.external_sources), ...asArray(sourceCatalog.reference_sources)] as source}
                 <div class="catalog-item">
                   <div class="catalog-title">{source.source_name}</div>
-                  <div class="catalog-meta">{source.source_kind} � {source.schema_name}.{source.table_name}</div>
-                  <div class="catalog-meta">����: {asArray(source.fields).length}</div>
+                  <div class="catalog-meta">{source.source_kind} · {source.schema_name}.{source.table_name}</div>
+                  <div class="catalog-meta">Полей: {asArray(source.fields).length}</div>
                   <div class="inline-actions">
-                    <button on:click={() => addSourceFromCatalog(source)}>��������</button>
-                    <button class="ghost" on:click={() => deleteRegistrySource(source.source_key)}>�������</button>
+                    <button on:click={() => addSourceFromCatalog(source)}>Добавить</button>
+                    <button class="ghost" on:click={() => deleteRegistrySource(source.source_key)}>Удалить</button>
                   </div>
                 </div>
               {/each}
               {#if asArray(sourceCatalog.external_sources).length + asArray(sourceCatalog.reference_sources).length === 0}
-                <div class="hint">������ named sources ���� ����.</div>
+                <div class="hint">Пока named sources ещё нет.</div>
               {/if}
             </div>
 
             <div class="catalog-block">
-              <h4>������ ������� ����������</h4>
+              <h4>Реестр именованных источников</h4>
               <div class="grid cols-2">
                 <label>
-                  ���
+                  Тип
                   <select bind:value={registryDraft.source_kind}>
-                    <option value="external">������� ��������</option>
-                    <option value="reference">����������</option>
+                    <option value="external">Внешний источник</option>
+                    <option value="reference">Справочник</option>
                   </select>
                 </label>
                 <label>
-                  ����
+                  Ключ
                   <input bind:value={registryDraft.source_key} placeholder="crm_clients_v1" />
                 </label>
                 <label class="span-2">
-                  ��������
-                  <input bind:value={registryDraft.source_name} placeholder="CRM �������" />
+                  Название
+                  <input bind:value={registryDraft.source_name} placeholder="CRM клиенты" />
                 </label>
                 <label>
-                  �����
+                  Схема
                   <input bind:value={registryDraft.schema_name} placeholder="gold_ref" />
                 </label>
                 <label>
-                  �������
+                  Таблица
                   <input bind:value={registryDraft.table_name} placeholder="crm_clients" />
                 </label>
                 <label>
-                  ��������, �����
+                  Freshness, минут
                   <input bind:value={registryDraft.expected_freshness_minutes} type="number" min="0" />
                 </label>
                 <label class="span-2">
-                  ��������
-                  <input bind:value={registryDraft.description} placeholder="���������� �������� � ���������" />
+                  Описание
+                  <input bind:value={registryDraft.description} placeholder="Справочник клиентов и сегментов" />
                 </label>
               </div>
-              <button on:click={saveRegistrySource} disabled={busy || !canWrite()}>��������� �������� � ������</button>
+              <button on:click={saveRegistrySource} disabled={busy || !canWrite()}>Сохранить источник в реестр</button>
             </div>
           </div>
 
           <div class="selected-sources">
-            <h4>��������� ���������</h4>
+            <h4>Выбранные источники</h4>
             {#if definition.sources.length === 0}
-              <div class="hint">������ ���� �� ���� ��������, ����� �������� contract preview � �������.</div>
+              <div class="hint">Добавь хотя бы один источник, чтобы получить contract preview и витрину.</div>
             {/if}
             {#each definition.sources as source}
               <div class="selected-source">
                 <div class="section-head compact">
                   <div>
                     <div class="catalog-title">{source.source_name || source.source_key}</div>
-                    <div class="catalog-meta">{source.source_kind} � {source.schema_name}.{source.table_name}</div>
+                    <div class="catalog-meta">{source.source_kind} · {source.schema_name}.{source.table_name}</div>
                   </div>
-                  <button class="ghost" on:click={() => removeSource(source.source_key)}>������</button>
+                  <button class="ghost" on:click={() => removeSource(source.source_key)}>Убрать</button>
                 </div>
                 <div class="chip-wrap">
                   {#each fieldsForSource(source.source_key) as field}
@@ -721,31 +721,31 @@
 
       <section class="card">
         <div class="section-head">
-          <h3>������� �������</h3>
+          <h3>Правила расчёта</h3>
           <div class="inline-actions">
-            <button on:click={addDerivedField}>�������� ����������� ����</button>
-            <button on:click={addFilter}>�������� ������</button>
-            <button on:click={addGrouping}>�������� �����������</button>
-            <button on:click={addAggregation}>�������� �������</button>
+            <button on:click={addDerivedField}>Добавить вычисляемое поле</button>
+            <button on:click={addFilter}>Добавить фильтр</button>
+            <button on:click={addGrouping}>Добавить группировку</button>
+            <button on:click={addAggregation}>Добавить метрику</button>
           </div>
         </div>
 
         <div class="subsection">
           <h4>Derived fields</h4>
-          {#if definition.transformations.derived_fields.length === 0}<div class="hint">���� ��� ����������� �����.</div>{/if}
+          {#if definition.transformations.derived_fields.length === 0}<div class="hint">Пока нет вычисляемых полей.</div>{/if}
           {#each definition.transformations.derived_fields as field, index}
             <div class="row-grid derived">
               <input bind:value={field.field_name} placeholder="gross_profit" />
               <input bind:value={field.field_type} placeholder="numeric" />
               <input bind:value={field.formula} placeholder="Number(row.revenue || 0) - Number(row.cost || 0)" />
-              <button class="ghost" on:click={() => removeItem('transformations.derived_fields', index)}>�������</button>
+              <button class="ghost" on:click={() => removeItem('transformations.derived_fields', index)}>Удалить</button>
             </div>
           {/each}
         </div>
 
         <div class="subsection">
-          <h4>�������</h4>
-          {#if definition.transformations.filters.length === 0}<div class="hint">���� ��� ��������.</div>{/if}
+          <h4>Фильтры</h4>
+          {#if definition.transformations.filters.length === 0}<div class="hint">Пока нет фильтров.</div>{/if}
           {#each definition.transformations.filters as filter, index}
             <div class="row-grid filter">
               <input bind:value={filter.field_name} placeholder="state" />
@@ -755,19 +755,19 @@
                 {/each}
               </select>
               <input bind:value={filter.value} placeholder="active" />
-              <input bind:value={filter.formula} placeholder="��� ������� ��� �������� �������" />
-              <button class="ghost" on:click={() => removeItem('transformations.filters', index)}>�������</button>
+              <input bind:value={filter.formula} placeholder="или формула для сложного правила" />
+              <button class="ghost" on:click={() => removeItem('transformations.filters', index)}>Удалить</button>
             </div>
           {/each}
         </div>
 
         <div class="subsection">
-          <h4>����������� � ��������</h4>
+          <h4>Группировки и агрегаты</h4>
           {#each definition.transformations.groupings as field, index}
             <div class="row-grid grouping">
               <input bind:value={field.field_name} placeholder="campaign_id" />
               <input bind:value={field.alias} placeholder="campaign_id" />
-              <button class="ghost" on:click={() => removeItem('transformations.groupings', index)}>������� �����������</button>
+              <button class="ghost" on:click={() => removeItem('transformations.groupings', index)}>Удалить группировку</button>
             </div>
           {/each}
           {#each definition.transformations.aggregations as metric, index}
@@ -780,7 +780,7 @@
                 {/each}
               </select>
               <input bind:value={metric.field_type} placeholder="numeric" />
-              <button class="ghost" on:click={() => removeItem('transformations.aggregations', index)}>������� �������</button>
+              <button class="ghost" on:click={() => removeItem('transformations.aggregations', index)}>Удалить метрику</button>
             </div>
           {/each}
         </div>
@@ -788,7 +788,7 @@
 
       <section class="card">
         <div class="section-head">
-          <h3>�������������� ���������� � inference</h3>
+          <h3>Математическое обогащение и inference</h3>
           <div class="inline-actions">
             <button on:click={() => addModelBlock('mathematical_blocks')}>Math block</button>
             <button on:click={() => addModelBlock('forecasting_blocks')}>Forecast block</button>
@@ -796,31 +796,31 @@
           </div>
         </div>
         {#each [
-          ['mathematical_blocks', '�������������� �����'],
-          ['forecasting_blocks', '���������������'],
+          ['mathematical_blocks', 'Математические блоки'],
+          ['forecasting_blocks', 'Прогнозирование'],
           ['inference_blocks', 'Inference']
         ] as [sectionKey, title]}
           <div class="subsection">
             <h4>{title}</h4>
-            {#if definition.model_enrichment[sectionKey].length === 0}<div class="hint">���� ��� ������.</div>{/if}
+            {#if definition.model_enrichment[sectionKey].length === 0}<div class="hint">Пока нет блоков.</div>{/if}
             {#each definition.model_enrichment[sectionKey] as block, index}
               <div class="model-block">
                 <div class="row-grid model-top">
-                  <input bind:value={block.block_name} placeholder="�������� �����" />
+                  <input bind:value={block.block_name} placeholder="Название блока" />
                   <input bind:value={block.model_key} placeholder="model_key" />
                   <input bind:value={block.model_version} placeholder="v1" />
                   <input value={asArray(block.required_input_features).join(', ')} on:input={(event) => updateBlockRequiredFeatures(sectionKey, index, event)} placeholder="required features через запятую" />
-                  <button class="ghost" on:click={() => mutateDefinition((draft) => draft.model_enrichment[sectionKey].splice(index, 1))}>�������</button>
+                  <button class="ghost" on:click={() => mutateDefinition((draft) => draft.model_enrichment[sectionKey].splice(index, 1))}>Удалить</button>
                 </div>
                 {#each block.output_fields as outputField, outputIndex}
                   <div class="row-grid model-output">
                     <input bind:value={outputField.field_name} placeholder="score" />
                     <input bind:value={outputField.field_type} placeholder="numeric" />
                     <input bind:value={outputField.formula} placeholder="Number(row.revenue || 0) / Number(row.clicks || 1)" />
-                    <button class="ghost" on:click={() => mutateDefinition((draft) => draft.model_enrichment[sectionKey][index].output_fields.splice(outputIndex, 1))}>������� �����</button>
+                    <button class="ghost" on:click={() => mutateDefinition((draft) => draft.model_enrichment[sectionKey][index].output_fields.splice(outputIndex, 1))}>Удалить выход</button>
                   </div>
                 {/each}
-                <button on:click={() => mutateDefinition((draft) => draft.model_enrichment[sectionKey][index].output_fields.push({ field_name: `output_${draft.model_enrichment[sectionKey][index].output_fields.length + 1}`, field_type: 'numeric', formula: '', description: '' }))}>�������� ����� ������</button>
+                <button on:click={() => mutateDefinition((draft) => draft.model_enrichment[sectionKey][index].output_fields.push({ field_name: `output_${draft.model_enrichment[sectionKey][index].output_fields.length + 1}`, field_type: 'numeric', formula: '', description: '' }))}>Добавить выход модели</button>
               </div>
             {/each}
           </div>
@@ -829,7 +829,7 @@
 
       <section class="card">
         <div class="section-head">
-          <h3>Materialization, refresh � quality</h3>
+          <h3>Materialization, refresh и quality</h3>
         </div>
         <div class="grid cols-3">
           <label>
@@ -841,11 +841,11 @@
             </select>
           </label>
           <label>
-            ����� ����������
+            Схема результата
             <input bind:value={definition.materialization.target_schema} placeholder="gold_showcase" />
           </label>
           <label>
-            ��� ����������
+            Имя результата
             <input bind:value={definition.materialization.target_name} placeholder="gold_revenue_daily" />
           </label>
           <label>
@@ -870,7 +870,7 @@
             <input bind:value={definition.refresh_policy.schedule_value} placeholder="15m / 0 * * * *" />
           </label>
           <label>
-            Freshness, �����
+            Freshness, минут
             <input bind:value={definition.quality.freshness_expectation_minutes} type="number" min="0" />
           </label>
           <label>
@@ -897,9 +897,9 @@
       <section class="card">
         <div class="section-head">
           <h3>Downstream consumers</h3>
-          <button on:click={addConsumer}>�������� consumer</button>
+          <button on:click={addConsumer}>Добавить consumer</button>
         </div>
-        {#if definition.consumers.length === 0}<div class="hint">���� ��� dashboards / reports / action rules.</div>{/if}
+        {#if definition.consumers.length === 0}<div class="hint">Пока нет dashboards / reports / action rules.</div>{/if}
         {#each definition.consumers as consumer, index}
           <div class="row-grid consumer">
             <select bind:value={consumer.consumer_kind}>
@@ -910,25 +910,25 @@
               <option value="action_api">action_api</option>
             </select>
             <input bind:value={consumer.consumer_key} placeholder="dashboard:revenue_main" />
-            <input bind:value={consumer.name} placeholder="������� �������" />
-            <button class="ghost" on:click={() => mutateDefinition((draft) => draft.consumers.splice(index, 1))}>�������</button>
+            <input bind:value={consumer.name} placeholder="Дашборд выручки" />
+            <button class="ghost" on:click={() => mutateDefinition((draft) => draft.consumers.splice(index, 1))}>Удалить</button>
           </div>
         {/each}
       </section>
 
       <section class="card">
         <div class="section-head">
-          <h3>������, lineage � impact</h3>
+          <h3>Статус, lineage и impact</h3>
         </div>
         <div class="status-grid">
           <div class="status-card">
-            <div class="status-title">������� ���������</div>
+            <div class="status-title">Текущее состояние</div>
             <div class={`status-pill status-${health?.status?.machine_status || selectedDefinitionSummary()?.status || 'draft'}`}>{machineStatusLabel(health?.status?.machine_status || selectedDefinitionSummary()?.status || 'draft')}</div>
             <div class="meta-list">
-              <div>Published: {selectedDefinitionSummary()?.published ? `��, v${selectedDefinitionSummary()?.active_version || 0}` : '���'}</div>
-              <div>Draft changes: {selectedDefinitionSummary()?.has_draft_changes ? '����' : '���'}</div>
-              <div>��������� refresh: {formatTs(latestRefresh?.finished_at || latestRefresh?.started_at || '')}</div>
-              <div>�������� ������: {activeDefinition ? `v${selectedDefinitionSummary()?.active_version || 0}` : '���'}</div>
+              <div>Published: {selectedDefinitionSummary()?.published ? `да, v${selectedDefinitionSummary()?.active_version || 0}` : 'нет'}</div>
+              <div>Draft changes: {selectedDefinitionSummary()?.has_draft_changes ? 'есть' : 'нет'}</div>
+              <div>Последний refresh: {formatTs(latestRefresh?.finished_at || latestRefresh?.started_at || '')}</div>
+              <div>Активная версия: {activeDefinition ? `v${selectedDefinitionSummary()?.active_version || 0}` : 'нет'}</div>
             </div>
           </div>
           <div class="status-card">
@@ -940,19 +940,19 @@
                 {/each}
               </ul>
             {:else}
-              <div class="hint">Lineage �������� ����� ������ ���������� � consumers.</div>
+              <div class="hint">Lineage появится после выбора источников и consumers.</div>
             {/if}
           </div>
           <div class="status-card">
             <div class="status-title">Impact</div>
             {#if impact}
               <ul class="flat-list">
-                <li>���������� ���������: {asArray(impact.affected_sources).length}</li>
-                <li>���������� ����: {asArray(impact.affected_output_fields).length}</li>
-                <li>���������� consumers: {asArray(impact.affected_consumers).length}</li>
+                <li>Затронутые источники: {asArray(impact.affected_sources).length}</li>
+                <li>Затронутые поля: {asArray(impact.affected_output_fields).length}</li>
+                <li>Затронутые consumers: {asArray(impact.affected_consumers).length}</li>
               </ul>
             {:else}
-              <div class="hint">Impact analysis ���������� ��� ���������� �������.</div>
+              <div class="hint">Impact analysis загрузится для сохранённой витрины.</div>
             {/if}
           </div>
         </div>
@@ -962,8 +962,8 @@
         <div class="section-head">
           <h3>Preview / sample</h3>
           <div class="inline-actions">
-            <button class="primary" on:click={previewDraft} disabled={busy || !canWrite()}>������� preview</button>
-            <button on:click={refreshGold} disabled={busy || !canWrite()}>���������������</button>
+            <button class="primary" on:click={previewDraft} disabled={busy || !canWrite()}>Собрать preview</button>
+            <button on:click={refreshGold} disabled={busy || !canWrite()}>Материализовать</button>
           </div>
         </div>
         {#if preview}
@@ -984,23 +984,23 @@
               </table>
             </div>
           {:else if previewColumns().length}
-            <div class="hint">Preview ���������, �� ����� ���. ���� ����� shape ����������.</div>
+            <div class="hint">Preview отработал, но строк нет. Ниже виден shape результата.</div>
             <div class="chip-wrap">{#each previewColumns() as column}<span class="chip static">{column}</span>{/each}</div>
           {:else}
-            <div class="hint">Preview ���� �� ����������� �� shape, �� ������.</div>
+            <div class="hint">Preview пока не сформировал ни shape, ни строки.</div>
           {/if}
           {#if asArray(preview?.dataset?.sample_aggregates).length}
             <div class="subsection">
               <h4>Sample aggregates</h4>
               <ul class="flat-list">
                 {#each preview.dataset.sample_aggregates as aggregate}
-                  <li>{aggregate.field_name}: ����� {aggregate.sum}, �������� �������� {aggregate.non_null_count}</li>
+                  <li>{aggregate.field_name}: сумма {aggregate.sum}, непустых значений {aggregate.non_null_count}</li>
                 {/each}
               </ul>
             </div>
           {/if}
         {:else}
-          <div class="hint">������ preview, ����� ������� sample rows, �������� � contract preview.</div>
+          <div class="hint">Собери preview, чтобы увидеть sample rows, агрегаты и contract preview.</div>
         {/if}
       </section>
     </div>
