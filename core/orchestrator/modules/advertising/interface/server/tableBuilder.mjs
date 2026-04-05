@@ -1868,7 +1868,7 @@ function defaultContractName(schema, table) {
   return `${schema}.${table}`;
 }
 
-async function getTableColumnsSnapshot(client, schema, table) {
+export async function getTableColumnsSnapshot(client, schema, table) {
   const r = await client.query(
     `
     SELECT
@@ -1984,7 +1984,7 @@ async function createContractVersionWithQn(
   return version;
 }
 
-async function createContractVersionFromTable(client, schema, table, reason, by) {
+export async function createContractVersionFromTable(client, schema, table, reason, by) {
   const cols = await getTableColumnsSnapshot(client, schema, table);
   const description = await getTableDescription(client, schema, table);
   return createContractVersion(client, { schema, table, description, columns: cols, reason, by });

@@ -6315,7 +6315,7 @@ function buildOverridesMap(rows) {
   return map;
 }
 
-function discoverProcessesFromGraph({ deskId, deskVersionId, versionNo, graphJson, overrideRows }) {
+export function discoverProcessesFromGraph({ deskId, deskVersionId, versionNo, graphJson, overrideRows }) {
   const { nodes, edges } = parseGraph(graphJson);
   const overrides = buildOverridesMap(overrideRows);
   const starts = nodes.filter(

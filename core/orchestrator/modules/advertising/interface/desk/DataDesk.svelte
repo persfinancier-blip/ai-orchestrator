@@ -3,6 +3,7 @@
   import { onMount } from 'svelte';
 
   import CreateTableTab from './tabs/CreateTableTab.svelte';
+  import GoldBuilderTab from './tabs/GoldBuilderTab.svelte';
   import TablesAndDataTab from './tabs/TablesAndDataTab.svelte';
 
   export type Role = 'viewer' | 'operator' | 'data_admin';
@@ -12,7 +13,7 @@
 
   let role: Role = 'data_admin';
 
-  type Tab = 'constructor' | 'tables';
+  type Tab = 'constructor' | 'tables' | 'gold';
   let tab: Tab = 'constructor';
   let constructorRenderKey = 0;
 
@@ -134,6 +135,12 @@
 
   onMount(async () => {
     const params = hashQueryParams();
+    const pane = String(params.get('pane') || '').trim().toLowerCase();
+    if (pane === 'gold') {
+      tab = 'gold';
+    } else if (pane === 'tables') {
+      tab = 'tables';
+    }
     const apiStoreId = Number(params.get('api_store_id') || 0);
     if (Number.isFinite(apiStoreId) && apiStoreId > 0) {
       // legacy deep-link support: API editor moved to "Данные"
@@ -152,9 +159,9 @@
 <div class="page">
   <header class="top">
     <div>
-      <h1>Конструктор таблиц</h1>
+      <h1>Конструктор данных и витрин</h1>
       <p class="sub">
-        Создание и редактирование таблиц. Здесь настраиваются таблицы и преднастроенные шаблоны API.
+        Создание и редактирование таблиц, данных и Gold-витрин. Таблицы остаются отдельным builder-модулем, а витрины собираются как отдельные доменные сущности.
       </p>
     </div>
 
@@ -171,6 +178,7 @@
   <nav class="tabs">
     <button class:active={tab === 'constructor'} on:click={() => (tab = 'constructor')}>Создание</button>
     <button class:active={tab === 'tables'} on:click={() => (tab = 'tables')}>Таблицы и данные</button>
+    <button class:active={tab === 'gold'} on:click={() => (tab = 'gold')}>Gold витрины</button>
   </nav>
 
   {#if error}
@@ -203,6 +211,14 @@
       {apiJson}
       {refreshTables}
       {existingTables}
+    />
+  {:else if tab === 'gold'}
+    <GoldBuilderTab
+      apiBase={API_BASE}
+      {role}
+      {loading}
+      {headers}
+      {apiJson}
     />
   {/if}
 </div>

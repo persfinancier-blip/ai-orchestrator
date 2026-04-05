@@ -1,0 +1,433 @@
+import vm from 'node:vm';
+
+import { discoverProcessesFromGraph } from './workflowAutomation.mjs';
+import {
+  analyzeGoldImpact,
+  buildGoldDependencyGraph,
+  checkSourceCompatibility,
+  collectGoldOutputFields,
+  normalizeGoldDefinition,
+  resolveConsumerDependencies,
+  resolveExternalSourceFreshness,
+  resolveGoldStatus,
+  validateGoldDefinition
+} from '../shared/goldDefinitionCore.mjs';
+
+function asText(value) {
+  return String(value || '').trim();
+}
+
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function asObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function buildTableKey(schema, table) {
+  return `${asText(schema).toLowerCase()}.${asText(table).toLowerCase()}`;
+}
+
+function parseJsonSafe(value, fallback) {
+  if (value && typeof value === 'object') return value;
+  const raw = asText(value);
+  if (!raw) return fallback;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function parseColumns(value) {
+  return asArray(parseJsonSafe(value, [])).map((item) => ({
+    name: asText(item?.field_name || item?.name),
+    type: asText(item?.field_type || item?.type || 'text') || 'text',
+    description: asText(item?.description)
+  })).filter((item) => item.name);
+}
+
+function normalizeTemplateRow(row = {}) {
+  return {
+    template_name: asText(row.template_name),
+    schema_name: asText(row.schema_name),
+    table_name: asText(row.table_name),
+    data_level: asText(row.data_level || 'bronze') || 'bronze',
+    template_kind: asText(row.template_kind || 'data') || 'data',
+    table_class: asText(row.table_class || 'custom') || 'custom'
+  };
+}
+
+function parseContractRow(row = {}) {
+  return {
+    schema_name: asText(row.schema_name),
+    table_name: asText(row.table_name),
+    contract_name: asText(row.contract_name),
+    version: Math.max(0, Number(row.version || 0)),
+    columns: parseColumns(row.columns)
+  };
+}
+
+function buildContractsMap(contractRows = []) {
+  const map = new Map();
+  asArray(contractRows).forEach((row) => {
+    const parsed = parseContractRow(row);
+    if (!parsed.schema_name || !parsed.table_name) return;
+    map.set(buildTableKey(parsed.schema_name, parsed.table_name), parsed);
+  });
+  return map;
+}
+
+function buildTemplatesMap(templateRows = []) {
+  const map = new Map();
+  asArray(templateRows).forEach((row) => {
+    const parsed = normalizeTemplateRow(row);
+    if (!parsed.schema_name || !parsed.table_name) return;
+    map.set(buildTableKey(parsed.schema_name, parsed.table_name), parsed);
+  });
+  return map;
+}
+
+function writeNodeTargetsFromProcess(process) {
+  const nodes = asArray(process?.subgraph?.nodes);
+  return nodes
+    .filter((node) => node?.type === 'tool' && asText(node?.config?.toolType).toLowerCase() === 'db_write')
+    .map((node) => {
+      const settings = asObject(node?.config?.settings);
+      return {
+        node_id: asText(node?.id),
+        node_name: asText(node?.config?.name || node?.id || 'Write'),
+        schema_name: asText(settings.targetSchema || settings.target_schema),
+        table_name: asText(settings.targetTable || settings.target_table)
+      };
+    })
+    .filter((item) => item.schema_name && item.table_name);
+}
+
+export function buildProcessGoldSources({ publishedDesks = [], contractRows = [], templateRows = [] } = {}) {
+  const contracts = buildContractsMap(contractRows);
+  const templates = buildTemplatesMap(templateRows);
+  const out = [];
+  const seen = new Set();
+
+  asArray(publishedDesks).forEach((desk) => {
+    const graphJson = parseJsonSafe(desk?.graph_json, {});
+    const processes = discoverProcessesFromGraph({
+      deskId: Number(desk?.desk_id || 0),
+      deskVersionId: Number(desk?.desk_version_id || 0),
+      versionNo: Number(desk?.version_no || 0),
+      graphJson,
+      overrideRows: []
+    });
+    processes.forEach((process) => {
+      writeNodeTargetsFromProcess(process).forEach((target) => {
+        const tableKey = buildTableKey(target.schema_name, target.table_name);
+        const template = templates.get(tableKey);
+        if (template && template.template_kind !== 'data') return;
+        const contract = contracts.get(tableKey);
+        const sourceKey = `process:${Number(desk?.desk_id || 0)}:${asText(process.start_node_id)}:${target.schema_name}.${target.table_name}`;
+        if (seen.has(sourceKey)) return;
+        seen.add(sourceKey);
+        out.push({
+          source_key: sourceKey,
+          source_kind: 'process',
+          source_name: `${asText(process.name || process.process_code || 'Процесс')} → ${target.schema_name}.${target.table_name}`,
+          process_code: asText(process.process_code),
+          desk_id: Number(desk?.desk_id || 0),
+          desk_name: asText(desk?.desk_name),
+          start_node_id: asText(process.start_node_id),
+          schema_name: target.schema_name,
+          table_name: target.table_name,
+          data_level: asText(template?.data_level || 'silver') || 'silver',
+          table_class: asText(template?.table_class || 'custom'),
+          contract_name: asText(contract?.contract_name),
+          contract_version: Number(contract?.version || 0),
+          fields: asArray(contract?.columns)
+        });
+      });
+    });
+  });
+
+  return out;
+}
+
+export function buildNamedSourceCatalog({ registryRows = [], contractRows = [] } = {}) {
+  const contracts = buildContractsMap(contractRows);
+  return asArray(registryRows)
+    .filter((row) => row?.is_active !== false)
+    .map((row) => {
+      const schema_name = asText(row.schema_name);
+      const table_name = asText(row.table_name);
+      const contract = contracts.get(buildTableKey(schema_name, table_name));
+      return {
+        source_key: asText(row.source_key),
+        source_kind: asText(row.source_kind || 'external') || 'external',
+        source_name: asText(row.source_name || row.source_key),
+        description: asText(row.description),
+        schema_name,
+        table_name,
+        contract_name: asText(contract?.contract_name),
+        contract_version: Number(contract?.version || row.contract_version || 0),
+        freshness_expectation_minutes: Math.max(0, Number(row.expected_freshness_minutes || 0)),
+        required_fields: asArray(parseJsonSafe(row.required_fields, [])).map((item) => asText(item)).filter(Boolean),
+        optional_fields: asArray(parseJsonSafe(row.optional_fields, [])).map((item) => asText(item)).filter(Boolean),
+        fields: asArray(contract?.columns)
+      };
+    })
+    .filter((item) => item.source_key);
+}
+
+function sourceFieldValue(sources, sourceKey, fieldName) {
+  return asObject(sources?.[sourceKey])?.[fieldName];
+}
+
+function safeFormula(formula, ctx) {
+  const code = asText(formula);
+  if (!code) return null;
+  if (/[;`\\]/.test(code)) {
+    throw new Error('gold_formula_unsafe_chars');
+  }
+  const sandbox = {
+    row: ctx.row,
+    sources: ctx.sources,
+    Math,
+    Number,
+    String,
+    Boolean,
+    Date,
+    coalesce: (...values) => values.find((value) => value !== null && value !== undefined && value !== '') ?? null,
+    round: (value, precision = 0) => {
+      const num = Number(value || 0);
+      const factor = 10 ** Math.max(0, Number(precision || 0));
+      return Math.round(num * factor) / factor;
+    },
+    source: (sourceKey, fieldName) => sourceFieldValue(ctx.sources, asText(sourceKey), asText(fieldName))
+  };
+  return vm.runInNewContext(code, sandbox, { timeout: 50 });
+}
+
+function compareValue(actual, operator, expected) {
+  if (operator === 'eq') return actual === expected;
+  if (operator === 'ne') return actual !== expected;
+  if (operator === 'gt') return Number(actual) > Number(expected);
+  if (operator === 'gte') return Number(actual) >= Number(expected);
+  if (operator === 'lt') return Number(actual) < Number(expected);
+  if (operator === 'lte') return Number(actual) <= Number(expected);
+  if (operator === 'contains') return asText(actual).toLowerCase().includes(asText(expected).toLowerCase());
+  if (operator === 'not_contains') return !asText(actual).toLowerCase().includes(asText(expected).toLowerCase());
+  if (operator === 'is_empty') return actual === null || actual === undefined || actual === '';
+  if (operator === 'not_empty') return !(actual === null || actual === undefined || actual === '');
+  if (operator === 'in') return asArray(expected).map((item) => asText(item)).includes(asText(actual));
+  return true;
+}
+
+function buildInitialContexts(definition, sourceRowsByKey) {
+  const primary = definition.sources[0];
+  if (!primary) return [];
+  const rows = asArray(sourceRowsByKey?.[primary.source_key]);
+  return rows.map((row) => ({
+    __sources: {
+      [primary.source_key]: row
+    }
+  }));
+}
+
+function applyJoins(contexts, definition, sourceRowsByKey) {
+  let current = contexts;
+  definition.transformations.joins.forEach((join) => {
+    if (!join.left_source_key || !join.right_source_key || !join.left_field || !join.right_field) return;
+    const rightRows = asArray(sourceRowsByKey?.[join.right_source_key]);
+    const next = [];
+    current.forEach((ctx) => {
+      const leftRow = asObject(ctx.__sources?.[join.left_source_key]);
+      const leftValue = leftRow?.[join.left_field];
+      const matches = rightRows.filter((row) => row?.[join.right_field] === leftValue);
+      if (matches.length) {
+        matches.forEach((match) => {
+          next.push({
+            __sources: {
+              ...ctx.__sources,
+              [join.right_source_key]: match
+            }
+          });
+        });
+      } else if (join.join_type === 'left' || join.join_type === 'full') {
+        next.push({
+          __sources: {
+            ...ctx.__sources,
+            [join.right_source_key]: null
+          }
+        });
+      }
+    });
+    current = next;
+  });
+  return current;
+}
+
+function flattenContext(definition, ctx) {
+  const row = {};
+  definition.sources.forEach((source) => {
+    const sourceRow = asObject(ctx.__sources?.[source.source_key]);
+    source.selected_fields.forEach((field) => {
+      const key = field.alias || field.field_name;
+      row[key] = sourceRow?.[field.field_name] ?? null;
+    });
+  });
+  return row;
+}
+
+function applyFilters(rows, definition, contexts) {
+  return rows.filter((row, index) => {
+    return definition.transformations.filters.every((filter) => {
+      if (filter.formula) {
+        return Boolean(safeFormula(filter.formula, { row, sources: contexts[index]?.__sources || {} }));
+      }
+      return compareValue(row?.[filter.field_name], filter.operator, filter.value);
+    });
+  });
+}
+
+function applyDerivedFields(rows, definition, contexts) {
+  return rows.map((row, index) => {
+    const next = { ...row };
+    definition.transformations.derived_fields.forEach((field) => {
+      next[field.field_name] = field.formula
+        ? safeFormula(field.formula, { row: next, sources: contexts[index]?.__sources || {} })
+        : null;
+    });
+    ['mathematical_blocks', 'forecasting_blocks', 'inference_blocks'].forEach((section) => {
+      definition.model_enrichment[section].forEach((block) => {
+        block.output_fields.forEach((field) => {
+          next[field.field_name] = field.formula
+            ? safeFormula(field.formula, { row: next, sources: contexts[index]?.__sources || {} })
+            : null;
+        });
+      });
+    });
+    return next;
+  });
+}
+
+function aggregateRows(rows, definition) {
+  const groups = [...definition.transformations.groupings, ...definition.transformations.dimensions];
+  const metrics = [...definition.transformations.aggregations, ...definition.transformations.metrics];
+  if (!groups.length && !metrics.length) return rows;
+  const grouped = new Map();
+  rows.forEach((row) => {
+    const keyValues = groups.map((group) => row?.[group.field_name]);
+    const groupKey = JSON.stringify(keyValues);
+    if (!grouped.has(groupKey)) grouped.set(groupKey, []);
+    grouped.get(groupKey).push(row);
+  });
+  const result = [];
+  grouped.forEach((bucket, groupKey) => {
+    const groupValues = JSON.parse(groupKey);
+    const next = {};
+    groups.forEach((group, index) => {
+      next[group.alias || group.field_name] = groupValues[index];
+    });
+    metrics.forEach((metric) => {
+      const values = metric.field_name ? bucket.map((row) => row?.[metric.field_name]).filter((value) => value !== null && value !== undefined && value !== '') : [];
+      if (metric.aggregator === 'count') next[metric.alias] = bucket.length;
+      else if (metric.aggregator === 'count_distinct') next[metric.alias] = new Set(values.map((value) => JSON.stringify(value))).size;
+      else if (metric.aggregator === 'avg') next[metric.alias] = values.length ? values.reduce((sum, value) => sum + Number(value || 0), 0) / values.length : 0;
+      else if (metric.aggregator === 'min') next[metric.alias] = values.length ? values.reduce((min, value) => (Number(value) < Number(min) ? value : min), values[0]) : null;
+      else if (metric.aggregator === 'max') next[metric.alias] = values.length ? values.reduce((max, value) => (Number(value) > Number(max) ? value : max), values[0]) : null;
+      else next[metric.alias] = values.reduce((sum, value) => sum + Number(value || 0), 0);
+    });
+    result.push(next);
+  });
+  return result;
+}
+
+function inferColumns(rows, fallbackOutputFields) {
+  if (rows.length) {
+    return [...new Set(rows.flatMap((row) => Object.keys(asObject(row))))];
+  }
+  return asArray(fallbackOutputFields).map((field) => asText(field.name)).filter(Boolean);
+}
+
+function sampleAggregates(rows, outputFields) {
+  const numericFields = asArray(outputFields).filter((field) => ['int', 'bigint', 'numeric'].includes(asText(field.type)));
+  return numericFields.map((field) => ({
+    field_name: field.name,
+    sum: rows.reduce((sum, row) => sum + Number(row?.[field.name] || 0), 0),
+    non_null_count: rows.filter((row) => row?.[field.name] !== null && row?.[field.name] !== undefined && row?.[field.name] !== '').length
+  }));
+}
+
+export function buildGoldDataset(definition, { sourceRowsByKey = {} } = {}) {
+  const normalized = normalizeGoldDefinition(definition);
+  const warnings = [];
+  let contexts = buildInitialContexts(normalized, sourceRowsByKey);
+  contexts = applyJoins(contexts, normalized, sourceRowsByKey);
+  let rows = contexts.map((ctx) => flattenContext(normalized, ctx));
+  rows = applyFilters(rows, normalized, contexts);
+  rows = applyDerivedFields(rows, normalized, contexts);
+  rows = aggregateRows(rows, normalized);
+  const outputFields = collectGoldOutputFields(normalized);
+  if (normalized.sources.length > 1 && !normalized.transformations.joins.length) {
+    warnings.push({ code: 'unjoined_sources_ignored', message: 'Дополнительные источники не участвуют в preview без join-правил.' });
+  }
+  return {
+    rows,
+    columns: inferColumns(rows, outputFields),
+    output_fields: outputFields,
+    sample_aggregates: sampleAggregates(rows, outputFields),
+    warnings
+  };
+}
+
+export function buildGoldPreviewModel(
+  definition,
+  {
+    sourceCatalogByKey = {},
+    sourceRowsByKey = {},
+    externalSourceStatesByKey = {},
+    lastRefresh = null,
+    publishedDefinition = null,
+    nowMs = Date.now()
+  } = {}
+) {
+  const normalized = normalizeGoldDefinition(definition);
+  const validation = validateGoldDefinition(normalized);
+  const compatibility = checkSourceCompatibility(normalized, { sourceCatalogByKey });
+  const freshness = resolveExternalSourceFreshness(normalized, { externalSourceStatesByKey, nowMs });
+  const dataset = buildGoldDataset(normalized, { sourceRowsByKey });
+  const status = resolveGoldStatus({
+    definition: normalized,
+    publishedDefinition,
+    lastRefresh,
+    compatibility,
+    sourceFreshness: freshness
+  });
+
+  const quality_warnings = [];
+  if (!dataset.rows.length) {
+    quality_warnings.push({ code: 'preview_empty', message: 'Preview не вернул строк.' });
+  }
+  normalized.quality.required_output_fields.forEach((fieldName) => {
+    if (!dataset.columns.includes(fieldName)) {
+      quality_warnings.push({
+        code: 'required_output_field_missing',
+        message: `В preview нет обязательного поля ${fieldName}.`
+      });
+    }
+  });
+
+  return {
+    definition: normalized,
+    validation,
+    compatibility,
+    freshness,
+    status,
+    dataset,
+    lineage: buildGoldDependencyGraph(normalized),
+    impact: analyzeGoldImpact(normalized, { changedSources: [] }),
+    consumers: resolveConsumerDependencies(normalized),
+    quality_warnings
+  };
+}
