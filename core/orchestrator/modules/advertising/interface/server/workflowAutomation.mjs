@@ -2423,7 +2423,7 @@ async function writeChunkLog(client, config, payload = {}) {
         error_text
       )
     VALUES
-      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16::timestamptz, $17::timestamptz, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22)
+      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16::timestamptz, $17::timestamptz, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, $23::jsonb, $24)
     `,
     [
       Math.trunc(Number(payload?.job_id || 0)),
@@ -2446,6 +2446,8 @@ async function writeChunkLog(client, config, payload = {}) {
       Math.max(0, Math.trunc(Number(payload?.duration_ms || 0))),
       stableJsonString(payload?.input_json === undefined ? {} : payload.input_json),
       stableJsonString(payload?.output_json === undefined ? {} : payload.output_json),
+      stableJsonString(payload?.request_payload === undefined ? {} : payload.request_payload),
+      stableJsonString(payload?.response_payload === undefined ? {} : payload.response_payload),
       stableJsonString(payload?.metrics_json === undefined ? {} : payload.metrics_json),
       String(payload?.error_text || '').trim()
     ]
@@ -9144,6 +9146,7 @@ export const workflowAutomationTestkit = {
   executeTableNode,
   executeDbWriteNode,
   _testEnsureWorkflowAutomationTables: ensureWorkflowAutomationTables,
+  _testWriteChunkLog: writeChunkLog,
   _testReserveRunSlotForProcess: reserveRunSlotForProcess,
   _testReleaseRunSlotForProcess: releaseRunSlotForProcess,
   _testClearActiveRunSlots() {

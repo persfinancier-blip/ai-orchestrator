@@ -30,6 +30,7 @@ const {
   executeTableNode,
   executeDbWriteNode,
   _testEnsureWorkflowAutomationTables,
+  _testWriteChunkLog,
   _testReserveRunSlotForProcess,
   _testReleaseRunSlotForProcess,
   _testClearActiveRunSlots
@@ -897,4 +898,47 @@ test('schema migration: workflow chunk logs store adds request and response payl
   assert.ok(chunkAlter, 'expected ALTER TABLE for workflow_chunk_logs_store to backfill payload columns');
   assert.match(chunkAlter, /ADD COLUMN IF NOT EXISTS request_payload jsonb NOT NULL DEFAULT '\{\}'::jsonb/i);
   assert.match(chunkAlter, /ADD COLUMN IF NOT EXISTS response_payload jsonb NOT NULL DEFAULT '\{\}'::jsonb/i);
+});
+
+test('chunk log write: insert keeps request/response payload expressions aligned with target columns', async () => {
+  const calls = [];
+  const fakeClient = {
+    async query(sql, params = []) {
+      calls.push({
+        sql: String(sql || '').replace(/\s+/g, ' ').trim(),
+        params: Array.isArray(params) ? [...params] : []
+      });
+      return { rows: [] };
+    }
+  };
+  await _testWriteChunkLog(
+    fakeClient,
+    {
+      workflow_runs_schema: 'ao_system',
+      workflow_chunk_logs_table: 'workflow_chunk_logs_store'
+    },
+    {
+      job_id: 11,
+      run_uid: 'wf_run_test',
+      tenant_id: 'tenant_a',
+      desk_id: 24,
+      desk_version_id: 16,
+      start_node_id: 'start_1',
+      process_code: 'desk_24_start',
+      provider_code: 'demo_provider',
+      endpoint_code: 'demo_endpoint',
+      chunk_key: 'chunk_1',
+      chunk_no: 1,
+      request_payload: { method: 'GET' },
+      response_payload: { rows: 2 },
+      metrics_json: { ok: 2 }
+    }
+  );
+  const insert = calls.find((call) => call.sql.includes('INSERT INTO "ao_system"."workflow_chunk_logs_store"'));
+  assert.ok(insert, 'expected insert into workflow_chunk_logs_store');
+  assert.match(insert.sql, /\$21::jsonb, \$22::jsonb, \$23::jsonb, \$24\)/);
+  assert.equal(insert.params.length, 24);
+  assert.deepEqual(JSON.parse(insert.params[20]), { method: 'GET' });
+  assert.deepEqual(JSON.parse(insert.params[21]), { rows: 2 });
+  assert.deepEqual(JSON.parse(insert.params[22]), { ok: 2 });
 });
