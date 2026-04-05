@@ -268,6 +268,36 @@ function valueWithTypePolicy(leftValue, rightValue, typePolicy) {
   return [leftValue, rightValue];
 }
 
+function normalizeJoinValue(value, typePolicy) {
+  if (typePolicy === 'cast') return value == null ? null : String(value);
+  if (typePolicy === 'normalize_text') return asText(value).toLowerCase();
+  return value ?? null;
+}
+
+function canUseIndexedJoin(relation) {
+  const joinKeys = asArray(relation?.join_keys);
+  if (!joinKeys.length) return false;
+  return joinKeys.every((key) => !asText(key?.operator) || asText(key?.operator).toLowerCase() === 'eq');
+}
+
+function joinSignature(row, joinKeys, fieldKey, typePolicy) {
+  return JSON.stringify(
+    asArray(joinKeys).map((key) => normalizeJoinValue(asObject(row)?.[key?.[fieldKey]], typePolicy))
+  );
+}
+
+function buildRightLookup(rows, relation) {
+  if (!canUseIndexedJoin(relation)) return null;
+  const map = new Map();
+  rows.forEach((row) => {
+    const signature = joinSignature(row, relation.join_keys, 'right_field', relation.type_policy);
+    const bucket = map.get(signature);
+    if (bucket) bucket.push(row);
+    else map.set(signature, [row]);
+  });
+  return map;
+}
+
 function joinMatches(leftRow, rightRow, joinKeys, typePolicy) {
   return asArray(joinKeys).every((key) => {
     const [leftValue, rightValue] = valueWithTypePolicy(leftRow?.[key.left_field], rightRow?.[key.right_field], typePolicy);
@@ -331,6 +361,7 @@ function applyRelations(contexts, definition, sourceRowsByKey) {
       return;
     }
     const rightRows = sourceRows(sourceRowsByKey, relation.right_source_key);
+    const rightLookup = buildRightLookup(rightRows, relation);
     if (relation.relation_type === 'append' || relation.relation_type === 'union') {
       const appended = rightRows.map((row) => ({
         __sources: { [relation.right_source_key]: row },
@@ -355,7 +386,9 @@ function applyRelations(contexts, definition, sourceRowsByKey) {
     let warningCount = 0;
     current.forEach((ctx) => {
       const leftRow = asObject(ctx.__sources?.[relation.left_source_key]);
-      const matches = rightRows.filter((row) => joinMatches(leftRow, row, relation.join_keys, relation.type_policy));
+      const matches = rightLookup
+        ? asArray(rightLookup.get(joinSignature(leftRow, relation.join_keys, 'left_field', relation.type_policy)))
+        : rightRows.filter((row) => joinMatches(leftRow, row, relation.join_keys, relation.type_policy));
       if (matches.length) {
         matchedRows += matches.length;
         const allowManyMatches = relationAllowsManyMatches(relation);
