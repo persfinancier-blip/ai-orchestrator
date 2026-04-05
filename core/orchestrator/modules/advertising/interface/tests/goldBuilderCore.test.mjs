@@ -272,3 +272,78 @@ test('gold builder core: explicit relation model explains left join assembly', (
   assert.equal(preview.dataset.assembly.relations[0].relation_type, 'left_join');
   assert.deepEqual(preview.dataset.assembly.relations[0].join_keys, ['offer_id = offer_id', 'marketplace = marketplace']);
 });
+
+test('gold builder core: N:1 relation keeps one row per left record even when right side has duplicates', () => {
+  const definition = {
+    metadata: { code: 'gold_cardinality', name: 'Cardinality desk' },
+    marts: [
+      {
+        id: 'mart_main',
+        code: 'mart_main',
+        name: 'Main mart',
+        scenarios: [
+          {
+            id: 'scenario_main',
+            name: 'Main scenario',
+            sources: [
+              {
+                source_key: 'process:fact',
+                source_kind: 'process',
+                source_role: 'primary',
+                selected_fields: [
+                  { field_name: 'id', field_type: 'text' },
+                  { field_name: 'title', field_type: 'text' }
+                ]
+              },
+              {
+                source_key: 'external:lookup',
+                source_kind: 'external',
+                source_role: 'lookup',
+                selected_fields: [
+                  { field_name: 'id', alias: 'lookup_id', field_type: 'text' },
+                  { field_name: 'title', alias: 'lookup_title', field_type: 'text' }
+                ]
+              }
+            ],
+            relations: [
+              {
+                relation_key: 'rel_lookup',
+                relation_name: 'Lookup relation',
+                relation_type: 'left_join',
+                left_source_key: 'process:fact',
+                right_source_key: 'external:lookup',
+                join_keys: [{ left_field: 'id', right_field: 'id' }],
+                cardinality: 'N:1',
+                mismatch_policy: 'keep_primary',
+                conflict_policy: 'rename_with_alias',
+                type_policy: 'strict'
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    active_mart_id: 'mart_main',
+    active_scenario_id: 'scenario_main'
+  };
+
+  const preview = buildGoldPreviewModel(definition, {
+    sourceCatalogByKey: {
+      'process:fact': { source_key: 'process:fact', source_name: 'Fact', fields: [{ name: 'id' }, { name: 'title' }] },
+      'external:lookup': { source_key: 'external:lookup', source_name: 'Lookup', fields: [{ name: 'id' }, { name: 'title' }] }
+    },
+    sourceRowsByKey: {
+      'process:fact': [{ id: '1', title: 'left-title' }],
+      'external:lookup': [
+        { id: '1', title: 'right-title-1' },
+        { id: '1', title: 'right-title-2' }
+      ]
+    }
+  });
+
+  assert.equal(preview.dataset.rows.length, 1);
+  assert.equal(preview.dataset.rows[0].lookup_title, 'right-title-1');
+  assert.equal(preview.dataset.assembly.relations[0].matched_rows, 2);
+  assert.equal(preview.dataset.assembly.relations[0].after_count, 1);
+  assert.equal(preview.dataset.warnings.some((item) => item.code === 'relation_cardinality_warning'), true);
+});

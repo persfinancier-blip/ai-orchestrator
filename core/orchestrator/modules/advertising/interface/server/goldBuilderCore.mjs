@@ -254,6 +254,14 @@ function relationTypeLabel(type) {
   return 'lookup enrich';
 }
 
+function relationAllowsManyMatches(relation) {
+  const cardinality = asText(relation?.cardinality);
+  const relationType = asText(relation?.relation_type).toLowerCase();
+  if (relationType === 'lookup_enrich') return false;
+  if (cardinality === '1:N' || cardinality === 'N:N') return true;
+  return false;
+}
+
 function valueWithTypePolicy(leftValue, rightValue, typePolicy) {
   if (typePolicy === 'cast') return [leftValue == null ? null : String(leftValue), rightValue == null ? null : String(rightValue)];
   if (typePolicy === 'normalize_text') return [asText(leftValue).toLowerCase(), asText(rightValue).toLowerCase()];
@@ -350,8 +358,10 @@ function applyRelations(contexts, definition, sourceRowsByKey) {
       const matches = rightRows.filter((row) => joinMatches(leftRow, row, relation.join_keys, relation.type_policy));
       if (matches.length) {
         matchedRows += matches.length;
-        if ((relation.cardinality === '1:1' || relation.cardinality === 'N:1') && matches.length > 1) warningCount += 1;
-        matches.forEach((match) => {
+        const allowManyMatches = relationAllowsManyMatches(relation);
+        if (!allowManyMatches && matches.length > 1) warningCount += 1;
+        const rowsToAttach = allowManyMatches ? matches : [matches[0]];
+        rowsToAttach.forEach((match) => {
           next.push({
             __sources: {
               ...ctx.__sources,
@@ -392,6 +402,12 @@ function applyRelations(contexts, definition, sourceRowsByKey) {
       conflict_policy: relation.conflict_policy,
       type_policy: relation.type_policy
     });
+    if (warningCount > 0) {
+      assembly.warnings.push({
+        code: 'relation_cardinality_warning',
+        message: `Связь ${relation.relation_name} нашла множественные совпадения при кардинальности ${relation.cardinality}.`
+      });
+    }
     if (droppedRows > 0) {
       assembly.warnings.push({
         code: 'rows_dropped_on_relation',
