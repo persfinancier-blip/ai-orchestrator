@@ -189,3 +189,86 @@ test('gold builder core: preview model aggregates metrics and keeps status data'
   assert.equal(preview.status.health_code, 'healthy');
   assert.equal(preview.quality_warnings.length, 0);
 });
+
+test('gold builder core: explicit relation model explains left join assembly', () => {
+  const definition = {
+    metadata: { code: 'gold_joined', name: 'Joined desk' },
+    marts: [
+      {
+        id: 'mart_main',
+        code: 'mart_main',
+        name: 'Main mart',
+        scenarios: [
+          {
+            id: 'scenario_main',
+            name: 'Main scenario',
+            sources: [
+              {
+                source_key: 'process:fact',
+                source_kind: 'process',
+                source_role: 'primary',
+                selected_fields: [
+                  { field_name: 'offer_id', field_type: 'text' },
+                  { field_name: 'marketplace', field_type: 'text' },
+                  { field_name: 'spend', field_type: 'numeric' }
+                ]
+              },
+              {
+                source_key: 'reference:costs',
+                source_kind: 'reference',
+                source_role: 'lookup',
+                selected_fields: [
+                  { field_name: 'offer_id', alias: 'cost_offer_id', field_type: 'text' },
+                  { field_name: 'marketplace', alias: 'cost_marketplace', field_type: 'text' },
+                  { field_name: 'cost', alias: 'product_cost', field_type: 'numeric' }
+                ]
+              }
+            ],
+            relations: [
+              {
+                relation_key: 'rel_costs',
+                relation_name: 'Стоимость товара',
+                relation_type: 'left_join',
+                left_source_key: 'process:fact',
+                right_source_key: 'reference:costs',
+                join_keys: [
+                  { left_field: 'offer_id', right_field: 'offer_id' },
+                  { left_field: 'marketplace', right_field: 'marketplace' }
+                ],
+                cardinality: 'N:1',
+                mismatch_policy: 'keep_primary',
+                conflict_policy: 'rename_with_prefix',
+                type_policy: 'strict'
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    active_mart_id: 'mart_main',
+    active_scenario_id: 'scenario_main'
+  };
+
+  const preview = buildGoldPreviewModel(definition, {
+    sourceCatalogByKey: {
+      'process:fact': { source_key: 'process:fact', source_name: 'Fact', fields: [{ name: 'offer_id' }, { name: 'marketplace' }, { name: 'spend' }] },
+      'reference:costs': { source_key: 'reference:costs', source_name: 'Costs', fields: [{ name: 'offer_id' }, { name: 'marketplace' }, { name: 'cost' }] }
+    },
+    sourceRowsByKey: {
+      'process:fact': [
+        { offer_id: 'sku-1', marketplace: 'wb', spend: 10 },
+        { offer_id: 'sku-2', marketplace: 'wb', spend: 20 }
+      ],
+      'reference:costs': [{ offer_id: 'sku-1', marketplace: 'wb', cost: 4 }]
+    }
+  });
+
+  assert.equal(preview.dataset.rows.length, 2);
+  assert.equal(preview.dataset.rows[0].product_cost, 4);
+  assert.equal(preview.dataset.rows[1].product_cost, null);
+  assert.equal(preview.dataset.assembly.primary_source_key, 'process:fact');
+  assert.equal(preview.dataset.assembly.row_count_before_merge, 2);
+  assert.equal(preview.dataset.assembly.row_count_after_merge, 2);
+  assert.equal(preview.dataset.assembly.relations[0].relation_type, 'left_join');
+  assert.deepEqual(preview.dataset.assembly.relations[0].join_keys, ['offer_id = offer_id', 'marketplace = marketplace']);
+});

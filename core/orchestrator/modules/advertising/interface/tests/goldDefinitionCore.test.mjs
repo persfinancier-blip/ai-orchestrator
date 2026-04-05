@@ -2,16 +2,28 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  addMartToGoldDefinition,
+  addScenarioToMart,
   analyzeGoldImpact,
   buildGoldDependencyGraph,
   checkSourceCompatibility,
   collectGoldOutputFields,
+  copyMartInGoldDefinition,
+  copyScenarioInMart,
+  createEmptyGoldDefinition,
+  getActiveDataMart,
+  getActiveScenario,
+  markActiveScenarioPreviewStale,
   normalizeGoldDefinition,
   planGoldMaterialization,
   planGoldRefresh,
+  removeMartFromGoldDefinition,
+  removeScenarioFromMart,
   resolveConsumerDependencies,
   resolveExternalSourceFreshness,
   resolveGoldStatus,
+  setActiveDataMart,
+  setActiveScenario,
   validateGoldDefinition,
   validateModelBindings
 } from '../shared/goldDefinitionCore.mjs';
@@ -20,7 +32,7 @@ function sourceCatalogEntry(overrides = {}) {
   return {
     source_key: 'process:24:start_1:silver_adv.wb_ads_daily',
     source_kind: 'process',
-    source_name: 'Реклама WB daily',
+    source_name: 'WB daily',
     process_code: 'wb_sync',
     desk_id: 24,
     start_node_id: 'start_1',
@@ -37,49 +49,99 @@ function sourceCatalogEntry(overrides = {}) {
   };
 }
 
-test('gold core: normalize definition fills defaults and output fields', () => {
+test('gold core: empty definition now starts with desk, mart and scenario', () => {
+  const definition = createEmptyGoldDefinition({ metadata: { code: 'roi_daily', name: 'ROI daily desk' } });
+
+  assert.equal(definition.metadata.code, 'roi_daily');
+  assert.equal(definition.marts.length, 1);
+  assert.equal(definition.active_mart_id, definition.marts[0].id);
+  assert.equal(definition.marts[0].scenarios.length, 1);
+  assert.equal(definition.active_scenario_id, definition.marts[0].scenarios[0].id);
+});
+
+test('gold core: active mart and scenario selection works inside desk', () => {
+  let definition = createEmptyGoldDefinition({ metadata: { code: 'roi_daily', name: 'ROI daily desk' } });
+  definition = addMartToGoldDefinition(definition, { id: 'mart_regions', code: 'mart_regions', name: 'По регионам' });
+  definition = addScenarioToMart(definition, 'mart_regions', { id: 'scenario_weekly', name: 'Weekly' });
+  definition = setActiveDataMart(definition, 'mart_1');
+  definition = setActiveScenario(definition, 'mart_1', 'scenario_1');
+
+  assert.equal(getActiveDataMart(definition).id, 'mart_1');
+  assert.equal(getActiveScenario(definition).id, 'scenario_1');
+
+  definition = setActiveDataMart(definition, 'mart_regions');
+  definition = setActiveScenario(definition, 'mart_regions', 'scenario_weekly');
+  assert.equal(getActiveDataMart(definition).id, 'mart_regions');
+  assert.equal(getActiveScenario(definition).id, 'scenario_weekly');
+});
+
+test('gold core: mart and scenario copy/remove keep state consistent', () => {
+  let definition = createEmptyGoldDefinition({ metadata: { code: 'roi_daily', name: 'ROI daily desk' } });
+  definition = copyMartInGoldDefinition(definition, 'mart_1');
+  assert.equal(definition.marts.length, 2);
+  definition = removeMartFromGoldDefinition(definition, 'mart_1');
+  assert.equal(definition.marts.length, 1);
+
+  definition = copyScenarioInMart(definition, definition.active_mart_id, definition.active_scenario_id);
+  assert.equal(getActiveDataMart(definition).scenarios.length, 2);
+  definition = removeScenarioFromMart(definition, definition.active_mart_id, getActiveDataMart(definition).scenarios[0].id);
+  assert.equal(getActiveDataMart(definition).scenarios.length, 1);
+});
+
+test('gold core: relation change marks preview stale', () => {
+  const definition = markActiveScenarioPreviewStale(
+    normalizeGoldDefinition({
+      metadata: { code: 'roi_daily', name: 'ROI daily desk' },
+      marts: [
+        {
+          id: 'mart_1',
+          code: 'mart_1',
+          name: 'Main mart',
+          scenarios: [{ id: 'scenario_1', name: 'Main', preview_state: { status: 'ready' } }]
+        }
+      ],
+      active_mart_id: 'mart_1',
+      active_scenario_id: 'scenario_1'
+    }),
+    'relation_changed'
+  );
+
+  assert.equal(getActiveScenario(definition).preview_state.status, 'stale');
+  assert.equal(getActiveScenario(definition).preview_state.stale_reason, 'relation_changed');
+});
+
+test('gold core: validation flags missing fields, relation issues and unsupported configuration', () => {
   const definition = normalizeGoldDefinition({
-    code: 'roi_daily',
-    name: 'ROI daily',
-    sources: [
+    metadata: { code: '', name: '' },
+    marts: [
       {
-        source_key: 'process:24:start_1:silver_adv.wb_ads_daily',
-        source_kind: 'process',
-        selected_fields: [
-          { field_name: 'event_date' },
-          { field_name: 'spend', alias: 'fact_spend', field_type: 'numeric' }
+        id: 'mart_1',
+        code: 'mart_1',
+        name: 'Main mart',
+        scenarios: [
+          {
+            id: 'scenario_1',
+            name: 'Main',
+            sources: [
+              { source_key: 'a', source_kind: 'process', source_role: 'primary', selected_fields: [] },
+              { source_key: 'b', source_kind: 'process', source_role: 'lookup', selected_fields: [] }
+            ],
+            relations: [{ relation_key: 'r1', relation_type: 'left_join', left_source_key: 'a', right_source_key: 'missing', join_keys: [] }],
+            materialization: { mode: 'snapshot_table', target_schema: '', target_name: '' },
+            refresh_policy: { mode: 'interval', schedule_value: '' }
+          }
         ]
       }
     ],
-    transformations: {
-      derived_fields: [{ field_name: 'roas_bucket', formula: "row.fact_spend > 1000 ? 'high' : 'mid'" }]
-    }
-  });
-
-  assert.equal(definition.metadata.code, 'roi_daily');
-  assert.equal(definition.materialization.mode, 'snapshot_table');
-  assert.equal(definition.refresh_policy.mode, 'manual');
-  assert.equal(definition.sources[0].freshness_expectation_minutes, 0);
-  assert.deepEqual(
-    collectGoldOutputFields(definition).map((item) => item.name),
-    ['event_date', 'fact_spend', 'roas_bucket']
-  );
-});
-
-test('gold core: validation flags missing fields and unsupported configuration', () => {
-  const definition = normalizeGoldDefinition({
-    code: '',
-    name: '',
-    sources: [],
-    materialization: { mode: 'snapshot_table', target_schema: '', target_name: '' },
-    refresh_policy: { mode: 'interval', schedule_value: '' }
+    active_mart_id: 'mart_1',
+    active_scenario_id: 'scenario_1'
   });
   const validation = validateGoldDefinition(definition);
 
   assert.equal(validation.ok, false);
-  assert.equal(validation.errors.some((item) => item.code === 'metadata_code_required'), true);
-  assert.equal(validation.errors.some((item) => item.code === 'sources_required'), true);
-  assert.equal(validation.errors.some((item) => item.code === 'materialization_target_required'), true);
+  assert.equal(definition.metadata.name.length > 0, true);
+  assert.equal(validation.errors.some((item) => item.code === 'relation_right_source_missing'), true);
+  assert.equal(validation.errors.some((item) => item.code === 'relation_join_keys_required'), true);
   assert.equal(validation.errors.some((item) => item.code === 'refresh_schedule_required'), true);
 });
 
@@ -113,13 +175,7 @@ test('gold core: model binding validation rejects missing input features and dup
   const definition = normalizeGoldDefinition({
     code: 'roi_daily',
     name: 'ROI daily',
-    sources: [
-      {
-        source_key: 'process:24:start_1:silver_adv.wb_ads_daily',
-        source_kind: 'process',
-        selected_fields: [{ field_name: 'event_date' }, { field_name: 'spend' }]
-      }
-    ],
+    sources: [{ source_key: 'process:24:start_1:silver_adv.wb_ads_daily', source_kind: 'process', selected_fields: [{ field_name: 'event_date' }, { field_name: 'spend' }] }],
     model_enrichment: {
       inference_blocks: [
         {
@@ -134,42 +190,42 @@ test('gold core: model binding validation rejects missing input features and dup
   });
 
   const result = validateModelBindings(definition);
-
   assert.equal(result.ok, false);
   assert.equal(result.errors.some((item) => item.code === 'model_missing_input_feature'), true);
   assert.equal(result.errors.some((item) => item.code === 'model_duplicate_output_field'), true);
 });
 
-test('gold core: dependency graph and consumers are normalized', () => {
+test('gold core: dependency graph and consumers are normalized for desk, mart and scenario', () => {
   const definition = normalizeGoldDefinition({
-    code: 'roi_daily',
-    name: 'ROI daily',
-    sources: [
+    metadata: { code: 'roi_daily', name: 'ROI daily desk' },
+    marts: [
       {
-        source_key: 'process:24:start_1:silver_adv.wb_ads_daily',
-        source_kind: 'process',
-        source_name: 'WB daily',
-        selected_fields: [{ field_name: 'event_date' }]
+        id: 'mart_roi',
+        code: 'mart_roi',
+        name: 'ROI daily',
+        scenarios: [
+          {
+            id: 'scenario_main',
+            name: 'Основной',
+            sources: [{ source_key: 'process:24:start_1:silver_adv.wb_ads_daily', source_kind: 'process', source_name: 'WB daily', selected_fields: [{ field_name: 'event_date' }] }],
+            consumers: [
+              { consumer_key: 'dashboard:roi_main', consumer_kind: 'dashboard', name: 'ROI dashboard' },
+              { consumer_key: 'action:rebid', consumer_kind: 'action_rule', name: 'Rebid action' }
+            ]
+          }
+        ]
       }
     ],
-    consumers: [
-      { consumer_key: 'dashboard:roi_main', consumer_kind: 'dashboard', name: 'ROI dashboard' },
-      { consumer_key: 'action:rebid', consumer_kind: 'action_rule', name: 'Rebid action' }
-    ]
+    active_mart_id: 'mart_roi',
+    active_scenario_id: 'scenario_main'
   });
 
   const graph = buildGoldDependencyGraph(definition);
   const consumers = resolveConsumerDependencies(definition);
 
-  assert.equal(graph.nodes.some((node) => node.node_type === 'gold_definition' && node.key === 'gold:roi_daily'), true);
-  assert.equal(
-    graph.edges.some((edge) => edge.from === 'process:24:start_1:silver_adv.wb_ads_daily' && edge.to === 'gold:roi_daily'),
-    true
-  );
-  assert.equal(
-    graph.edges.some((edge) => edge.from === 'gold:roi_daily' && edge.to === 'dashboard:roi_main'),
-    true
-  );
+  assert.equal(graph.nodes.some((node) => node.node_type === 'gold_desk' && node.key === 'gold_desk:roi_daily'), true);
+  assert.equal(graph.edges.some((edge) => edge.from === 'process:24:start_1:silver_adv.wb_ads_daily' && edge.to === 'gold_scenario:scenario_main'), true);
+  assert.equal(graph.edges.some((edge) => edge.from === 'gold_scenario:scenario_main' && edge.to === 'dashboard:roi_main'), true);
   assert.equal(consumers.counts.dashboard, 1);
   assert.equal(consumers.counts.action_rule, 1);
 });
@@ -190,17 +246,13 @@ test('gold core: impact analysis reports incompatible sources and affected consu
   });
 
   const impact = analyzeGoldImpact(definition, {
-    changedSources: [
-      {
-        source_key: 'process:24:start_1:silver_adv.wb_ads_daily',
-        removed_fields: ['spend']
-      }
-    ]
+    changedSources: [{ source_key: 'process:24:start_1:silver_adv.wb_ads_daily', removed_fields: ['spend'] }]
   });
 
   assert.equal(impact.has_impact, true);
   assert.equal(impact.affected_sources[0].severity, 'high');
   assert.equal(impact.affected_consumers[0].consumer_key, 'dashboard:roi_main');
+  assert.equal(impact.affected_output_fields.includes('event_date'), true);
 });
 
 test('gold core: refresh planner resolves interval and dependency triggers', () => {
@@ -231,20 +283,33 @@ test('gold core: refresh planner resolves interval and dependency triggers', () 
   assert.equal(dependencyPlan.reason_code, 'dependency_changed');
 });
 
-test('gold core: materialization planner keeps mode-specific target metadata', () => {
+test('gold core: materialization planner keeps selected scenario target metadata', () => {
   const definition = normalizeGoldDefinition({
     code: 'roi_daily',
     name: 'ROI daily',
-    sources: [{ source_key: 'process:24:start_1:silver_adv.wb_ads_daily', source_kind: 'process' }],
-    materialization: {
-      mode: 'materialized_view',
-      target_schema: 'gold_adv',
-      target_name: 'roi_daily_mv',
-      table_class: 'gold_showcase'
-    }
+    marts: [
+      {
+        id: 'mart_main',
+        code: 'mart_main',
+        name: 'Main',
+        scenarios: [
+          {
+            id: 'scenario_mv',
+            name: 'MV',
+            materialization: {
+              mode: 'materialized_view',
+              target_schema: 'gold_adv',
+              target_name: 'roi_daily_mv',
+              table_class: 'gold_showcase'
+            }
+          }
+        ]
+      }
+    ],
+    active_mart_id: 'mart_main',
+    active_scenario_id: 'scenario_mv'
   });
   const plan = planGoldMaterialization(definition);
-
   assert.equal(plan.mode, 'materialized_view');
   assert.equal(plan.target.schema_name, 'gold_adv');
   assert.equal(plan.target.name, 'roi_daily_mv');
@@ -256,21 +321,11 @@ test('gold core: external freshness and status resolve to stale/incompatible cor
     name: 'ROI daily',
     published: true,
     version: 3,
-    sources: [
-      {
-        source_key: 'external:pricing_feed',
-        source_kind: 'external',
-        source_name: 'Pricing feed',
-        freshness_expectation_minutes: 30
-      }
-    ]
+    sources: [{ source_key: 'external:pricing_feed', source_kind: 'external', source_name: 'Pricing feed', freshness_expectation_minutes: 30 }]
   });
   const freshness = resolveExternalSourceFreshness(definition, {
     externalSourceStatesByKey: {
-      'external:pricing_feed': {
-        last_seen_at: '2026-04-05T09:00:00.000Z',
-        schema_version: 'v2'
-      }
+      'external:pricing_feed': { last_seen_at: '2026-04-05T09:00:00.000Z', schema_version: 'v2' }
     },
     nowMs: Date.parse('2026-04-05T10:00:00.000Z')
   });

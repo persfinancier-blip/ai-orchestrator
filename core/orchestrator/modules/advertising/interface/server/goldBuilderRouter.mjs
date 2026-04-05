@@ -339,6 +339,8 @@ async function ensureGoldContracts(client, config) {
 
 function parseDefinitionRow(row = {}) {
   const definition = normalizeGoldDefinition(parseJsonSafe(row.definition_json, {}));
+  const activeMart = definition.active_mart;
+  const activeScenario = definition.active_scenario;
   definition.metadata.id = String(Number(row.id || 0) || '');
   definition.metadata.code = asText(row.gold_code || definition.metadata.code);
   definition.metadata.name = asText(row.gold_name || definition.metadata.name);
@@ -358,6 +360,13 @@ function parseDefinitionRow(row = {}) {
     status: definition.metadata.status,
     updated_at: asText(row.updated_at),
     updated_by: asText(row.updated_by),
+    group_name: asText(definition.metadata.group_name),
+    mart_count: asArray(definition.marts).length,
+    scenario_count: asArray(activeMart?.scenarios).length,
+    active_mart_id: asText(activeMart?.id),
+    active_mart_name: asText(activeMart?.name),
+    active_scenario_id: asText(activeScenario?.id),
+    active_scenario_name: asText(activeScenario?.name),
     definition
   };
 }
@@ -687,31 +696,33 @@ function selectedFieldsFromCatalog(catalog = {}) {
 
 function hydrateDefinitionSources(definition, sourceCatalogByKey = {}) {
   const normalized = normalizeGoldDefinition(definition);
-  return normalizeGoldDefinition({
-    ...normalized,
-    sources: normalized.sources.map((source) => {
-      const catalog = asObject(sourceCatalogByKey?.[source.source_key]);
-      return {
-        ...catalog,
-        ...source,
-        source_kind: asText(source.source_kind || catalog.source_kind || 'process'),
-        source_name: asText(source.source_name || catalog.source_name || source.source_key),
-        process_code: asText(source.process_code || catalog.process_code),
-        desk_id: Number(source.desk_id || catalog.desk_id || 0),
-        start_node_id: asText(source.start_node_id || catalog.start_node_id),
-        schema_name: asText(source.schema_name || catalog.schema_name),
-        table_name: asText(source.table_name || catalog.table_name),
-        contract_version: Number(source.contract_version || catalog.contract_version || 0),
-        required_fields: asArray(source.required_fields).length ? source.required_fields : asArray(catalog.required_fields),
-        optional_fields: asArray(source.optional_fields).length ? source.optional_fields : asArray(catalog.optional_fields),
-        freshness_expectation_minutes:
-          Number(source.freshness_expectation_minutes || 0) > 0
-            ? Number(source.freshness_expectation_minutes || 0)
-            : Number(catalog.freshness_expectation_minutes || 0),
-        selected_fields: asArray(source.selected_fields).length ? source.selected_fields : selectedFieldsFromCatalog(catalog)
-      };
-    })
+  const next = typeof structuredClone === 'function' ? structuredClone(normalized) : JSON.parse(JSON.stringify(normalized));
+  const mart = next.marts.find((item) => item.id === next.active_mart_id) || next.marts[0];
+  const scenario = mart?.scenarios?.find((item) => item.id === mart.active_scenario_id) || mart?.scenarios?.[0];
+  if (!scenario) return normalizeGoldDefinition(next);
+  scenario.sources = normalized.sources.map((source) => {
+    const catalog = asObject(sourceCatalogByKey?.[source.source_key]);
+    return {
+      ...catalog,
+      ...source,
+      source_kind: asText(source.source_kind || catalog.source_kind || 'process'),
+      source_name: asText(source.source_name || catalog.source_name || source.source_key),
+      process_code: asText(source.process_code || catalog.process_code),
+      desk_id: Number(source.desk_id || catalog.desk_id || 0),
+      start_node_id: asText(source.start_node_id || catalog.start_node_id),
+      schema_name: asText(source.schema_name || catalog.schema_name),
+      table_name: asText(source.table_name || catalog.table_name),
+      contract_version: Number(source.contract_version || catalog.contract_version || 0),
+      required_fields: asArray(source.required_fields).length ? source.required_fields : asArray(catalog.required_fields),
+      optional_fields: asArray(source.optional_fields).length ? source.optional_fields : asArray(catalog.optional_fields),
+      freshness_expectation_minutes:
+        Number(source.freshness_expectation_minutes || 0) > 0
+          ? Number(source.freshness_expectation_minutes || 0)
+          : Number(catalog.freshness_expectation_minutes || 0),
+      selected_fields: asArray(source.selected_fields).length ? source.selected_fields : selectedFieldsFromCatalog(catalog)
+    };
   });
+  return normalizeGoldDefinition(next);
 }
 
 function buildExternalSourceStates(registryRows = []) {
@@ -1232,11 +1243,13 @@ goldBuilderRouter.post('/gold-definitions/:id/preview', requireDataAdmin, async 
     const definition = hydrateDefinitionSources(req.body?.definition || current.definition, catalog.source_map);
     const limit = Math.max(1, Math.min(MAX_PREVIEW_ROWS, Math.trunc(Number(req.body?.limit || MAX_PREVIEW_ROWS))));
     const sourceRowsByKey = await loadSourceRowsForDefinition(client, definition, limit);
+    const previewUid = `gold_preview_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
     const previewModel = buildGoldPreviewModel(definition, {
       sourceCatalogByKey: catalog.source_map,
       sourceRowsByKey,
       externalSourceStatesByKey: buildExternalSourceStates(registryRows),
-      lastRefresh: latestRefreshMap.get(current.id) || null
+      lastRefresh: latestRefreshMap.get(current.id) || null,
+      previewUid
     });
     return res.json({ ok: true, preview: previewModel });
   } catch (e) {
@@ -1267,7 +1280,8 @@ goldBuilderRouter.post('/gold-definitions/:id/refresh', requireDataAdmin, async 
     const previewModel = buildGoldPreviewModel(definition, {
       sourceCatalogByKey: catalog.source_map,
       sourceRowsByKey,
-      externalSourceStatesByKey: buildExternalSourceStates(registryRows)
+      externalSourceStatesByKey: buildExternalSourceStates(registryRows),
+      previewUid: run_uid
     });
     if (!previewModel.validation.ok) {
       throw new Error(`gold_definition_invalid:${previewModel.validation.errors[0]?.code || 'validation_failed'}`);
@@ -1304,7 +1318,7 @@ goldBuilderRouter.post('/gold-definitions/:id/refresh', requireDataAdmin, async 
         ao_updated_at = now()
       WHERE id = $1
       `,
-      [definitionId, asText(previewModel.status.machine_status || 'healthy'), asText(req.header('X-AO-USER') || 'ui'), run_uid]
+      [definitionId, asText(previewModel.status.health_code || 'healthy'), asText(req.header('X-AO-USER') || 'ui'), run_uid]
     );
     await client.query('COMMIT');
     return res.json({ ok: true, refresh_run: refreshRow, materialization: materialized, preview: previewModel });

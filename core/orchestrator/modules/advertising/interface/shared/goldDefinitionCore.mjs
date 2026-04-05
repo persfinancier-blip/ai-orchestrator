@@ -1,10 +1,16 @@
 const SOURCE_KINDS = new Set(['process', 'external', 'reference']);
+const SOURCE_ROLES = new Set(['primary', 'lookup', 'reference', 'fact', 'append']);
+const RELATION_TYPES = new Set(['left_join', 'inner_join', 'full_join', 'right_join', 'union', 'append', 'lookup_enrich']);
+const CARDINALITIES = new Set(['1:1', '1:N', 'N:1', 'N:N']);
+const MISMATCH_POLICIES = new Set(['keep_primary', 'drop_row', 'null', 'warning', 'error']);
+const CONFLICT_POLICIES = new Set(['keep_left', 'keep_right', 'rename_with_prefix', 'rename_with_alias', 'explicit']);
+const TYPE_POLICIES = new Set(['strict', 'cast', 'normalize_text']);
 const MATERIALIZATION_MODES = new Set(['live_view', 'materialized_view', 'snapshot_table']);
 const REFRESH_MODES = new Set(['manual', 'interval', 'cron', 'dependency']);
 const GOLD_MACHINE_STATUSES = ['draft', 'published', 'healthy', 'stale', 'incompatible', 'partial', 'broken', 'disabled'];
 
 function asText(value) {
-  return String(value || '').trim();
+  return String(value ?? '').trim();
 }
 
 function asArray(value) {
@@ -15,24 +21,36 @@ function asObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value ?? null));
+}
+
 function uniqueStrings(values = []) {
   return [...new Set(asArray(values).map((item) => asText(item)).filter(Boolean))];
 }
 
+function slugify(value, fallback = '') {
+  const raw = asText(value || fallback)
+    .replace(/\s+/g, '_')
+    .replace(/[^0-9a-zA-Z_а-яА-ЯёЁ]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return raw || asText(fallback);
+}
+
 function normalizeFieldName(value, fallback = '') {
-  const raw = asText(value || fallback);
-  return raw.replace(/\s+/g, '_');
+  return slugify(value, fallback);
 }
 
 function normalizeFieldType(value) {
   const raw = asText(value).toLowerCase();
   if (raw === 'int' || raw === 'integer') return 'int';
   if (raw === 'bigint') return 'bigint';
-  if (raw === 'numeric' || raw === 'decimal') return 'numeric';
+  if (raw === 'numeric' || raw === 'decimal' || raw === 'number') return 'numeric';
   if (raw === 'boolean' || raw === 'bool') return 'boolean';
   if (raw === 'date') return 'date';
-  if (raw === 'timestamptz' || raw === 'timestamp with time zone') return 'timestamptz';
-  if (raw === 'jsonb' || raw === 'json') return 'jsonb';
+  if (raw === 'timestamp' || raw === 'timestamp with time zone' || raw === 'timestamptz') return 'timestamptz';
+  if (raw === 'json' || raw === 'jsonb') return 'jsonb';
   if (raw === 'uuid') return 'uuid';
   return raw || 'text';
 }
@@ -63,10 +81,17 @@ function ensureSection(value, defaults = {}) {
   return { ...defaults, ...asObject(value) };
 }
 
+function inferSourceRole(rawRole, index) {
+  const role = asText(rawRole).toLowerCase();
+  if (SOURCE_ROLES.has(role)) return role;
+  return index === 0 ? 'primary' : 'lookup';
+}
+
 function normalizeSelectedField(raw = {}) {
+  const fieldName = normalizeFieldName(raw.field_name || raw.name, raw.field_name || raw.name);
   return {
-    field_name: normalizeFieldName(raw.field_name || raw.name),
-    alias: normalizeFieldName(raw.alias || raw.output_name || raw.field_name || raw.name),
+    field_name: fieldName,
+    alias: normalizeFieldName(raw.alias || raw.output_name || fieldName, fieldName),
     field_type: normalizeFieldType(raw.field_type || raw.type || 'text'),
     required: Boolean(raw.required),
     description: asText(raw.description),
@@ -74,12 +99,21 @@ function normalizeSelectedField(raw = {}) {
   };
 }
 
+function normalizeJoinKey(raw = {}, index = 0) {
+  return {
+    key_id: asText(raw.key_id || raw.id || `key_${index + 1}`),
+    left_field: normalizeFieldName(raw.left_field || raw.source_a_field || raw.field_a),
+    right_field: normalizeFieldName(raw.right_field || raw.source_b_field || raw.field_b),
+    operator: asText(raw.operator || 'eq').toLowerCase() || 'eq'
+  };
+}
+
 function normalizeSource(raw = {}, index = 0) {
   const source_kind = SOURCE_KINDS.has(asText(raw.source_kind).toLowerCase()) ? asText(raw.source_kind).toLowerCase() : 'process';
-  const selectedFields = asArray(raw.selected_fields).map(normalizeSelectedField).filter((item) => item.field_name);
   return {
     source_key: asText(raw.source_key || raw.id || `${source_kind}_${index + 1}`),
     source_kind,
+    source_role: inferSourceRole(raw.source_role || raw.role, index),
     source_name: asText(raw.source_name || raw.name || `Источник ${index + 1}`),
     process_code: asText(raw.process_code),
     desk_id: Math.max(0, Number(raw.desk_id || 0)),
@@ -89,29 +123,40 @@ function normalizeSource(raw = {}, index = 0) {
     contract_version: Math.max(0, Number(raw.contract_version || 0)),
     required_fields: uniqueStrings(raw.required_fields),
     optional_fields: uniqueStrings(raw.optional_fields),
-    selected_fields: selectedFields,
+    selected_fields: asArray(raw.selected_fields).map(normalizeSelectedField).filter((item) => item.field_name),
     freshness_expectation_minutes: Math.max(0, Number(raw.freshness_expectation_minutes || 0)),
     output_aliases: { ...asObject(raw.output_aliases) }
   };
 }
 
-function normalizeDerivedField(raw = {}, index = 0) {
+function normalizeRelation(raw = {}, index = 0) {
+  const joinType = asText(raw.join_type).toLowerCase();
+  const rawType = asText(raw.relation_type || raw.type).toLowerCase();
+  let relationType = rawType;
+  if (!RELATION_TYPES.has(relationType)) {
+    if (joinType === 'left') relationType = 'left_join';
+    else if (joinType === 'inner') relationType = 'inner_join';
+    else if (joinType === 'full') relationType = 'full_join';
+    else relationType = index === 0 ? 'left_join' : 'lookup_enrich';
+  }
+  const join_keys = asArray(raw.join_keys).map(normalizeJoinKey).filter((item) => item.left_field && item.right_field);
+  if (!join_keys.length && (asText(raw.left_field) || asText(raw.right_field))) {
+    const single = normalizeJoinKey(raw, 0);
+    if (single.left_field && single.right_field) join_keys.push(single);
+  }
   return {
-    field_name: normalizeFieldName(raw.field_name || raw.name || `derived_${index + 1}`),
-    field_type: normalizeFieldType(raw.field_type || raw.type || 'text'),
-    formula: asText(raw.formula),
-    description: asText(raw.description)
-  };
-}
-
-function normalizeJoin(raw = {}, index = 0) {
-  return {
-    join_key: asText(raw.join_key || raw.id || `join_${index + 1}`),
+    relation_key: asText(raw.relation_key || raw.join_key || raw.id || `relation_${index + 1}`),
+    relation_name: asText(raw.relation_name || raw.name || `Связь ${index + 1}`),
+    relation_type: relationType,
     left_source_key: asText(raw.left_source_key),
     right_source_key: asText(raw.right_source_key),
-    left_field: normalizeFieldName(raw.left_field),
-    right_field: normalizeFieldName(raw.right_field),
-    join_type: ['left', 'inner', 'full'].includes(asText(raw.join_type).toLowerCase()) ? asText(raw.join_type).toLowerCase() : 'left'
+    join_keys,
+    cardinality: CARDINALITIES.has(asText(raw.cardinality)) ? asText(raw.cardinality) : 'N:1',
+    mismatch_policy: MISMATCH_POLICIES.has(asText(raw.mismatch_policy)) ? asText(raw.mismatch_policy) : 'keep_primary',
+    conflict_policy: CONFLICT_POLICIES.has(asText(raw.conflict_policy)) ? asText(raw.conflict_policy) : 'keep_left',
+    type_policy: TYPE_POLICIES.has(asText(raw.type_policy)) ? asText(raw.type_policy) : 'strict',
+    rename_prefix: normalizeFieldName(raw.rename_prefix || raw.right_prefix),
+    alias_map: { ...asObject(raw.alias_map) }
   };
 }
 
@@ -122,6 +167,15 @@ function normalizeFilter(raw = {}, index = 0) {
     operator: asText(raw.operator || 'eq').toLowerCase() || 'eq',
     value: raw.value,
     formula: asText(raw.formula)
+  };
+}
+
+function normalizeDerivedField(raw = {}, index = 0) {
+  return {
+    field_name: normalizeFieldName(raw.field_name || raw.name || `derived_${index + 1}`),
+    field_type: normalizeFieldType(raw.field_type || raw.type || 'text'),
+    formula: asText(raw.formula),
+    description: asText(raw.description)
   };
 }
 
@@ -145,21 +199,22 @@ function normalizeAggregation(raw = {}, index = 0) {
 }
 
 function normalizeModelBlock(raw = {}, index = 0) {
-  const outputs = asArray(raw.output_fields).map((item, itemIndex) => ({
-    field_name: normalizeFieldName(item.field_name || item.name || `model_output_${itemIndex + 1}`),
-    field_type: normalizeFieldType(item.field_type || item.type || 'numeric'),
-    formula: asText(item.formula),
-    description: asText(item.description)
-  }));
   return {
     block_key: asText(raw.block_key || raw.id || `model_${index + 1}`),
     block_name: asText(raw.block_name || raw.name || `Модель ${index + 1}`),
     model_key: asText(raw.model_key || raw.block_key || raw.id),
     model_version: asText(raw.model_version || raw.version || 'draft'),
+    retraining_policy: asText(raw.retraining_policy),
+    block_type: asText(raw.block_type || 'custom').toLowerCase() || 'custom',
     required_input_features: uniqueStrings(raw.required_input_features),
-    output_fields: outputs,
-    retraining_policy: asText(raw.retraining_policy || ''),
-    block_type: asText(raw.block_type || 'custom').toLowerCase() || 'custom'
+    output_fields: asArray(raw.output_fields)
+      .map((item, itemIndex) => ({
+        field_name: normalizeFieldName(item.field_name || item.name || `model_output_${itemIndex + 1}`),
+        field_type: normalizeFieldType(item.field_type || item.type || 'numeric'),
+        formula: asText(item.formula),
+        description: asText(item.description)
+      }))
+      .filter((item) => item.field_name)
   };
 }
 
@@ -172,183 +227,501 @@ function normalizeConsumer(raw = {}, index = 0) {
   };
 }
 
-export function normalizeGoldDefinition(raw = {}) {
-  const metadata = ensureSection(raw.metadata, raw);
-  const transformations = ensureSection(raw.transformations);
-  const model_enrichment = ensureSection(raw.model_enrichment);
-  const materialization = ensureSection(raw.materialization);
-  const refresh_policy = ensureSection(raw.refresh_policy);
-  const quality = ensureSection(raw.quality);
+function normalizeSourceContract(raw = {}) {
+  return {
+    source_key: asText(raw.source_key),
+    source_table: asObject(raw.source_table),
+    source_contract_version: Math.max(0, Number(raw.source_contract_version || 0)),
+    required_fields: uniqueStrings(raw.required_fields),
+    optional_fields: uniqueStrings(raw.optional_fields),
+    freshness_expectation_minutes: Math.max(0, Number(raw.freshness_expectation_minutes || 0))
+  };
+}
 
+function normalizePreviewState(raw = {}) {
+  const obj = asObject(raw);
+  return {
+    status: asText(obj.status || 'idle') || 'idle',
+    preview_uid: asText(obj.preview_uid),
+    updated_at: asText(obj.updated_at),
+    signature: asText(obj.signature),
+    stale_reason: asText(obj.stale_reason)
+  };
+}
+
+function normalizePublishState(raw = {}) {
+  const obj = asObject(raw);
+  return {
+    status: asText(obj.status || 'draft') || 'draft',
+    published_version: Math.max(0, Number(obj.published_version || 0)),
+    published_at: asText(obj.published_at),
+    published_by: asText(obj.published_by)
+  };
+}
+
+function normalizeMaterialization(raw = {}, fallbackCode = '') {
+  return {
+    mode: MATERIALIZATION_MODES.has(asText(raw.mode).toLowerCase()) ? asText(raw.mode).toLowerCase() : 'snapshot_table',
+    target_schema: asText(raw.target_schema || 'gold_showcase'),
+    target_name: normalizeFieldName(raw.target_name || fallbackCode, fallbackCode),
+    table_class: asText(raw.table_class || 'gold_showcase'),
+    data_level: asText(raw.data_level || 'gold')
+  };
+}
+
+function normalizeRefreshPolicy(raw = {}) {
+  return {
+    mode: REFRESH_MODES.has(asText(raw.mode).toLowerCase()) ? asText(raw.mode).toLowerCase() : 'manual',
+    schedule_value: asText(raw.schedule_value),
+    timezone: asText(raw.timezone || 'UTC'),
+    dependency_sources: uniqueStrings(raw.dependency_sources)
+  };
+}
+
+function normalizeQuality(raw = {}) {
+  return {
+    required_output_fields: uniqueStrings(raw.required_output_fields || raw.required_fields),
+    freshness_expectation_minutes: Math.max(0, Number(raw.freshness_expectation_minutes || 0)),
+    completeness_threshold_pct: Math.max(0, Math.min(100, Number(raw.completeness_threshold_pct || 0)))
+  };
+}
+
+function createBaseScenario(overrides = {}, index = 0, mart = {}) {
+  const martCode = normalizeFieldName(mart.code || mart.name || 'mart');
+  const name = asText(overrides.name || `Сценарий ${index + 1}`);
+  const id = asText(overrides.id || `scenario_${index + 1}`);
+  return {
+    id,
+    name,
+    description: asText(overrides.description),
+    enabled: overrides.enabled !== false,
+    scenario_type: asText(overrides.scenario_type || 'default') || 'default',
+    preview_state: normalizePreviewState(overrides.preview_state),
+    publish_state: normalizePublishState(overrides.publish_state),
+    sources: asArray(overrides.sources).map(normalizeSource),
+    source_contracts: asArray(overrides.source_contracts).map(normalizeSourceContract),
+    relations: asArray(overrides.relations).map(normalizeRelation),
+    transformations: {
+      joins: asArray(overrides?.transformations?.joins).map(normalizeRelation),
+      filters: asArray(overrides?.transformations?.filters).map(normalizeFilter),
+      derived_fields: asArray(overrides?.transformations?.derived_fields).map(normalizeDerivedField),
+      metrics: asArray(overrides?.transformations?.metrics).map(normalizeAggregation),
+      dimensions: asArray(overrides?.transformations?.dimensions).map(normalizeGrouping),
+      windows: asArray(overrides?.transformations?.windows).map((item) => ({ ...asObject(item) })),
+      groupings: asArray(overrides?.transformations?.groupings).map(normalizeGrouping),
+      aggregations: asArray(overrides?.transformations?.aggregations).map(normalizeAggregation)
+    },
+    model_enrichment: {
+      mathematical_blocks: asArray(overrides?.model_enrichment?.mathematical_blocks || overrides?.model_enrichment?.math_blocks).map(normalizeModelBlock),
+      forecasting_blocks: asArray(overrides?.model_enrichment?.forecasting_blocks || overrides?.model_enrichment?.forecast_blocks).map(normalizeModelBlock),
+      inference_blocks: asArray(overrides?.model_enrichment?.inference_blocks).map(normalizeModelBlock)
+    },
+    materialization: normalizeMaterialization(overrides.materialization, `${martCode}_${slugify(name, `scenario_${index + 1}`)}`),
+    refresh_policy: normalizeRefreshPolicy(overrides.refresh_policy),
+    quality: normalizeQuality(overrides.quality),
+    consumers: asArray(overrides.consumers).map(normalizeConsumer)
+  };
+}
+
+function createBaseMart(overrides = {}, index = 0) {
+  const name = asText(overrides.name || `Витрина ${index + 1}`);
+  const code = normalizeFieldName(overrides.code || name || `mart_${index + 1}`, `mart_${index + 1}`);
+  const martId = asText(overrides.id || code || `mart_${index + 1}`);
+  const scenariosInput = asArray(overrides.scenarios);
+  const scenarios = scenariosInput.length
+    ? scenariosInput.map((item, scenarioIndex) => createBaseScenario(item, scenarioIndex, { code, name }))
+    : [createBaseScenario({}, 0, { code, name })];
+  const activeScenarioId = asText(overrides.active_scenario_id || scenarios[0]?.id || 'scenario_1');
+  return {
+    id: martId,
+    code,
+    name,
+    description: asText(overrides.description),
+    group_name: asText(overrides.group_name),
+    status: asText(overrides.status || 'draft') || 'draft',
+    active_version: Math.max(1, Number(overrides.active_version || 1)),
+    materialization_mode: asText(overrides.materialization_mode || scenarios[0]?.materialization?.mode || 'snapshot_table'),
+    scenarios,
+    active_scenario_id: scenarios.some((item) => item.id === activeScenarioId) ? activeScenarioId : scenarios[0].id
+  };
+}
+
+function legacyToDesk(raw = {}) {
+  const metadata = ensureSection(raw.metadata, raw);
+  const martName = asText(raw.mart_name || metadata.name || 'Витрина');
+  const martCode = normalizeFieldName(raw.mart_code || metadata.code || martName || 'mart_1', 'mart_1');
+  const scenarioName = asText(raw.scenario_name || 'Основной');
+  const scenario = createBaseScenario(
+    {
+      id: asText(raw.active_scenario_id || 'scenario_main'),
+      name: scenarioName,
+      description: asText(raw.scenario_description),
+      enabled: raw.enabled !== false,
+      scenario_type: asText(raw.scenario_type || 'default'),
+      preview_state: raw.preview_state,
+      publish_state: raw.publish_state,
+      sources: raw.sources,
+      source_contracts: raw.source_contracts,
+      relations: raw.relations,
+      transformations: raw.transformations,
+      model_enrichment: raw.model_enrichment,
+      materialization: raw.materialization,
+      refresh_policy: raw.refresh_policy,
+      quality: raw.quality,
+      consumers: raw.consumers
+    },
+    0,
+    { code: martCode, name: martName }
+  );
+  const mart = createBaseMart(
+    {
+      id: asText(raw.active_mart_id || 'mart_main'),
+      code: martCode,
+      name: martName,
+      description: asText(raw.mart_description || metadata.description),
+      group_name: asText(raw.group_name || metadata.group_name),
+      status: asText(raw.mart_status || metadata.status || 'draft'),
+      active_version: Math.max(1, Number(metadata.version || raw.version || 1)),
+      scenarios: [scenario],
+      active_scenario_id: scenario.id,
+      materialization_mode: scenario.materialization.mode
+    },
+    0
+  );
   return {
     metadata: {
       id: asText(metadata.id),
-      code: normalizeFieldName(metadata.code || raw.code),
-      name: asText(metadata.name || raw.name),
+      code: normalizeFieldName(metadata.code || raw.code, metadata.code || raw.code),
+      name: asText(metadata.name || raw.name || 'Рабочий стол витрин'),
       description: asText(metadata.description || raw.description),
+      group_name: asText(metadata.group_name || raw.group_name),
       owner: asText(metadata.owner || raw.owner),
       tags: uniqueStrings(metadata.tags || raw.tags),
-      status: asText(metadata.status || raw.status || 'draft'),
+      status: asText(metadata.status || raw.status || 'draft') || 'draft',
       version: Math.max(1, Number(metadata.version || raw.version || 1)),
       published: Boolean(metadata.published ?? raw.published)
     },
-    sources: asArray(raw.sources).map(normalizeSource),
-    source_contracts: asArray(raw.source_contracts).map((item) => ({
-      source_key: asText(item.source_key),
-      source_table: asObject(item.source_table),
-      source_contract_version: Math.max(0, Number(item.source_contract_version || 0)),
-      required_fields: uniqueStrings(item.required_fields),
-      optional_fields: uniqueStrings(item.optional_fields),
-      freshness_expectation_minutes: Math.max(0, Number(item.freshness_expectation_minutes || 0))
-    })),
-    transformations: {
-      joins: asArray(transformations.joins).map(normalizeJoin),
-      filters: asArray(transformations.filters).map(normalizeFilter),
-      derived_fields: asArray(transformations.derived_fields).map(normalizeDerivedField),
-      metrics: asArray(transformations.metrics).map(normalizeAggregation),
-      dimensions: asArray(transformations.dimensions).map(normalizeGrouping),
-      windows: asArray(transformations.windows).map((item) => ({ ...asObject(item) })),
-      groupings: asArray(transformations.groupings).map(normalizeGrouping),
-      aggregations: asArray(transformations.aggregations).map(normalizeAggregation)
-    },
-    model_enrichment: {
-      mathematical_blocks: asArray(model_enrichment.mathematical_blocks || model_enrichment.math_blocks).map(normalizeModelBlock),
-      forecasting_blocks: asArray(model_enrichment.forecasting_blocks || model_enrichment.forecast_blocks).map(normalizeModelBlock),
-      inference_blocks: asArray(model_enrichment.inference_blocks).map(normalizeModelBlock)
-    },
-    materialization: {
-      mode: MATERIALIZATION_MODES.has(asText(materialization.mode).toLowerCase())
-        ? asText(materialization.mode).toLowerCase()
-        : 'snapshot_table',
-      target_schema: asText(materialization.target_schema || 'gold_showcase'),
-      target_name: normalizeFieldName(materialization.target_name || metadata.code || raw.code),
-      table_class: asText(materialization.table_class || 'gold_showcase'),
-      data_level: asText(materialization.data_level || 'gold')
-    },
-    refresh_policy: {
-      mode: REFRESH_MODES.has(asText(refresh_policy.mode).toLowerCase()) ? asText(refresh_policy.mode).toLowerCase() : 'manual',
-      schedule_value: asText(refresh_policy.schedule_value),
-      timezone: asText(refresh_policy.timezone || 'UTC'),
-      dependency_sources: uniqueStrings(refresh_policy.dependency_sources)
-    },
-    quality: {
-      required_output_fields: uniqueStrings(quality.required_output_fields || quality.required_fields),
-      freshness_expectation_minutes: Math.max(0, Number(quality.freshness_expectation_minutes || 0)),
-      completeness_threshold_pct: Math.max(0, Math.min(100, Number(quality.completeness_threshold_pct || 0)))
-    },
-    consumers: asArray(raw.consumers).map(normalizeConsumer)
+    marts: [mart],
+    active_mart_id: mart.id,
+    active_scenario_id: mart.active_scenario_id
   };
+}
+
+export function createDataMartScenario(overrides = {}, index = 0, mart = {}) {
+  return createBaseScenario(overrides, index, mart);
+}
+
+export function createDataMart(overrides = {}, index = 0) {
+  return createBaseMart(overrides, index);
+}
+
+export function createEmptyGoldDefinition(overrides = {}) {
+  const metadata = ensureSection(overrides.metadata, overrides);
+  const name = asText(metadata.name || 'Рабочий стол витрин');
+  const code = normalizeFieldName(metadata.code || name || `gold_${Date.now()}`, `gold_${Date.now()}`);
+  const mart = createBaseMart(
+    {
+      id: 'mart_1',
+      code: 'mart_1',
+      name: 'Витрина 1',
+      description: '',
+      group_name: asText(metadata.group_name),
+      scenarios: [
+        createBaseScenario(
+          {
+            id: 'scenario_1',
+            name: 'Основной',
+            description: '',
+            enabled: true
+          },
+          0,
+          { code: 'mart_1', name: 'Витрина 1' }
+        )
+      ],
+      active_scenario_id: 'scenario_1'
+    },
+    0
+  );
+  return normalizeGoldDefinition({
+    metadata: {
+      id: asText(metadata.id),
+      code,
+      name,
+      description: asText(metadata.description),
+      group_name: asText(metadata.group_name),
+      owner: asText(metadata.owner),
+      tags: uniqueStrings(metadata.tags),
+      status: asText(metadata.status || 'draft') || 'draft',
+      version: Math.max(1, Number(metadata.version || 1)),
+      published: Boolean(metadata.published)
+    },
+    marts: [mart],
+    active_mart_id: mart.id,
+    active_scenario_id: mart.active_scenario_id
+  });
+}
+
+export function getActiveDataMart(definition) {
+  const normalized = normalizeGoldDefinition(definition);
+  return normalized.marts.find((item) => item.id === normalized.active_mart_id) || normalized.marts[0] || null;
+}
+
+export function getScenarioById(definition, martId, scenarioId) {
+  const normalized = normalizeGoldDefinition(definition);
+  const mart = normalized.marts.find((item) => item.id === martId);
+  if (!mart) return null;
+  return mart.scenarios.find((item) => item.id === scenarioId) || null;
+}
+
+export function getActiveScenario(definition) {
+  const normalized = normalizeGoldDefinition(definition);
+  const mart = getActiveDataMart(normalized);
+  if (!mart) return null;
+  return mart.scenarios.find((item) => item.id === mart.active_scenario_id) || mart.scenarios[0] || null;
+}
+
+export function setActiveDataMart(definition, martId) {
+  const normalized = normalizeGoldDefinition(definition);
+  const next = cloneJson(normalized);
+  const mart = next.marts.find((item) => item.id === martId) || next.marts[0];
+  next.active_mart_id = mart?.id || '';
+  next.active_scenario_id = mart?.active_scenario_id || mart?.scenarios?.[0]?.id || '';
+  return normalizeGoldDefinition(next);
+}
+
+export function setActiveScenario(definition, martId, scenarioId) {
+  const normalized = normalizeGoldDefinition(definition);
+  const next = cloneJson(normalized);
+  const mart = next.marts.find((item) => item.id === martId) || next.marts[0];
+  if (!mart) return normalizeGoldDefinition(next);
+  const scenario = mart.scenarios.find((item) => item.id === scenarioId) || mart.scenarios[0];
+  mart.active_scenario_id = scenario?.id || mart.active_scenario_id;
+  next.active_mart_id = mart.id;
+  next.active_scenario_id = mart.active_scenario_id;
+  return normalizeGoldDefinition(next);
+}
+
+export function addMartToGoldDefinition(definition, overrides = {}) {
+  const normalized = normalizeGoldDefinition(definition);
+  const next = cloneJson(normalized);
+  const mart = createDataMart(overrides, next.marts.length);
+  next.marts.push(mart);
+  next.active_mart_id = mart.id;
+  next.active_scenario_id = mart.active_scenario_id;
+  return normalizeGoldDefinition(next);
+}
+
+export function copyMartInGoldDefinition(definition, martId) {
+  const normalized = normalizeGoldDefinition(definition);
+  const next = cloneJson(normalized);
+  const source = next.marts.find((item) => item.id === martId);
+  if (!source) return normalizeGoldDefinition(next);
+  const copyIndex = next.marts.length;
+  const copy = createDataMart({
+    ...source,
+    id: `${source.id}_copy_${copyIndex + 1}`,
+    code: `${normalizeFieldName(source.code, source.id)}_copy_${copyIndex + 1}`,
+    name: `${source.name} копия`,
+    scenarios: source.scenarios.map((scenario, scenarioIndex) => ({
+      ...scenario,
+      id: `${scenario.id}_copy_${copyIndex + 1}_${scenarioIndex + 1}`,
+      preview_state: { status: 'stale', stale_reason: 'copied' },
+      publish_state: { status: 'draft' }
+    }))
+  });
+  next.marts.push(copy);
+  next.active_mart_id = copy.id;
+  next.active_scenario_id = copy.active_scenario_id;
+  return normalizeGoldDefinition(next);
+}
+
+export function removeMartFromGoldDefinition(definition, martId) {
+  const normalized = normalizeGoldDefinition(definition);
+  const next = cloneJson(normalized);
+  if (next.marts.length <= 1) return normalizeGoldDefinition(next);
+  next.marts = next.marts.filter((item) => item.id !== martId);
+  const activeMart = next.marts.find((item) => item.id === next.active_mart_id) || next.marts[0];
+  next.active_mart_id = activeMart?.id || '';
+  next.active_scenario_id = activeMart?.active_scenario_id || activeMart?.scenarios?.[0]?.id || '';
+  return normalizeGoldDefinition(next);
+}
+
+export function addScenarioToMart(definition, martId, overrides = {}) {
+  const normalized = normalizeGoldDefinition(definition);
+  const next = cloneJson(normalized);
+  const mart = next.marts.find((item) => item.id === martId);
+  if (!mart) return normalizeGoldDefinition(next);
+  const scenario = createDataMartScenario(overrides, mart.scenarios.length, mart);
+  mart.scenarios.push(scenario);
+  mart.active_scenario_id = scenario.id;
+  next.active_mart_id = mart.id;
+  next.active_scenario_id = scenario.id;
+  return normalizeGoldDefinition(next);
+}
+
+export function copyScenarioInMart(definition, martId, scenarioId) {
+  const normalized = normalizeGoldDefinition(definition);
+  const next = cloneJson(normalized);
+  const mart = next.marts.find((item) => item.id === martId);
+  if (!mart) return normalizeGoldDefinition(next);
+  const source = mart.scenarios.find((item) => item.id === scenarioId);
+  if (!source) return normalizeGoldDefinition(next);
+  const copy = createDataMartScenario(
+    {
+      ...source,
+      id: `${source.id}_copy_${mart.scenarios.length + 1}`,
+      name: `${source.name} копия`,
+      preview_state: { status: 'stale', stale_reason: 'copied' },
+      publish_state: { status: 'draft' }
+    },
+    mart.scenarios.length,
+    mart
+  );
+  mart.scenarios.push(copy);
+  mart.active_scenario_id = copy.id;
+  next.active_mart_id = mart.id;
+  next.active_scenario_id = copy.id;
+  return normalizeGoldDefinition(next);
+}
+
+export function removeScenarioFromMart(definition, martId, scenarioId) {
+  const normalized = normalizeGoldDefinition(definition);
+  const next = cloneJson(normalized);
+  const mart = next.marts.find((item) => item.id === martId);
+  if (!mart || mart.scenarios.length <= 1) return normalizeGoldDefinition(next);
+  mart.scenarios = mart.scenarios.filter((item) => item.id !== scenarioId);
+  const activeScenario = mart.scenarios.find((item) => item.id === mart.active_scenario_id) || mart.scenarios[0];
+  mart.active_scenario_id = activeScenario?.id || '';
+  next.active_mart_id = mart.id;
+  next.active_scenario_id = mart.active_scenario_id;
+  return normalizeGoldDefinition(next);
+}
+
+export function markActiveScenarioPreviewStale(definition, staleReason = 'definition_changed') {
+  const normalized = normalizeGoldDefinition(definition);
+  const next = cloneJson(normalized);
+  const mart = next.marts.find((item) => item.id === next.active_mart_id);
+  const scenario = mart?.scenarios?.find((item) => item.id === next.active_scenario_id);
+  if (scenario) {
+    scenario.preview_state = {
+      ...scenario.preview_state,
+      status: 'stale',
+      stale_reason: asText(staleReason)
+    };
+  }
+  return normalizeGoldDefinition(next);
+}
+
+export function normalizeGoldDefinition(raw = {}) {
+  const looksLikeDesk =
+    Array.isArray(raw?.marts) ||
+    Boolean(raw?.active_mart_id) ||
+    Boolean(raw?.metadata?.group_name) ||
+    Boolean(raw?.active_scenario_id);
+  const base = looksLikeDesk ? raw : legacyToDesk(raw);
+  const metadata = ensureSection(base.metadata, base);
+  const martsInput = asArray(base.marts);
+  const marts = martsInput.length ? martsInput.map((item, index) => createBaseMart(item, index)) : [createBaseMart({}, 0)];
+  const activeMart = marts.find((item) => item.id === asText(base.active_mart_id)) || marts[0];
+  const activeScenario = activeMart.scenarios.find((item) => item.id === asText(base.active_scenario_id || activeMart.active_scenario_id)) || activeMart.scenarios[0];
+
+  const normalized = {
+    metadata: {
+      id: asText(metadata.id),
+      code: normalizeFieldName(metadata.code || raw.code, metadata.code || raw.code),
+      name: asText(metadata.name || raw.name || 'Рабочий стол витрин'),
+      description: asText(metadata.description || raw.description),
+      group_name: asText(metadata.group_name || raw.group_name),
+      owner: asText(metadata.owner || raw.owner),
+      tags: uniqueStrings(metadata.tags || raw.tags),
+      status: asText(metadata.status || raw.status || 'draft') || 'draft',
+      version: Math.max(1, Number(metadata.version || raw.version || 1)),
+      published: Boolean(metadata.published ?? raw.published)
+    },
+    marts,
+    active_mart_id: activeMart.id,
+    active_scenario_id: activeScenario.id,
+    active_mart: activeMart,
+    active_scenario: activeScenario,
+    sources: activeScenario.sources,
+    source_contracts: activeScenario.source_contracts,
+    relations: activeScenario.relations.length ? activeScenario.relations : activeScenario.transformations.joins,
+    transformations: activeScenario.transformations,
+    model_enrichment: activeScenario.model_enrichment,
+    materialization: activeScenario.materialization,
+    refresh_policy: activeScenario.refresh_policy,
+    quality: activeScenario.quality,
+    consumers: activeScenario.consumers
+  };
+
+  if (!normalized.metadata.code) {
+    normalized.metadata.code = normalizeFieldName(normalized.metadata.name, `gold_${Date.now()}`);
+  }
+  return normalized;
+}
+
+function fieldsForScenario(definition) {
+  const normalized = normalizeGoldDefinition(definition);
+  return normalized.active_scenario || getActiveScenario(normalized);
+}
+
+function pushUniqueField(output, seen, name, type = 'text', description = '') {
+  const key = normalizeFieldName(name);
+  if (!key || seen.has(key)) return;
+  seen.add(key);
+  output.push({ name: key, type: normalizeFieldType(type), description: asText(description) });
 }
 
 export function collectGoldOutputFields(definition) {
   const normalized = normalizeGoldDefinition(definition);
+  const scenario = fieldsForScenario(normalized);
   const output = [];
   const seen = new Set();
-  const pushField = (name, type = 'text', description = '') => {
-    const key = normalizeFieldName(name);
-    if (!key || seen.has(key)) return;
-    seen.add(key);
-    output.push({ name: key, type: normalizeFieldType(type), description: asText(description) });
-  };
-
-  normalized.sources.forEach((source) => {
-    source.selected_fields.forEach((field) => pushField(field.alias || field.field_name, field.field_type, field.description));
+  asArray(scenario?.sources).forEach((source) => {
+    source.selected_fields.forEach((field) => pushUniqueField(output, seen, field.alias || field.field_name, field.field_type, field.description));
   });
-  normalized.transformations.derived_fields.forEach((field) => pushField(field.field_name, field.field_type, field.description));
-  normalized.transformations.groupings.forEach((field) => pushField(field.alias || field.field_name, 'text'));
-  normalized.transformations.aggregations.forEach((field) => pushField(field.alias, field.field_type, field.description));
-  normalized.transformations.metrics.forEach((field) => pushField(field.alias, field.field_type, field.description));
+  asArray(scenario?.transformations?.derived_fields).forEach((field) =>
+    pushUniqueField(output, seen, field.field_name, field.field_type, field.description)
+  );
+  [...asArray(scenario?.transformations?.groupings), ...asArray(scenario?.transformations?.dimensions)].forEach((field) =>
+    pushUniqueField(output, seen, field.alias || field.field_name, 'text')
+  );
+  [...asArray(scenario?.transformations?.aggregations), ...asArray(scenario?.transformations?.metrics)].forEach((field) =>
+    pushUniqueField(output, seen, field.alias, field.field_type, field.description)
+  );
   ['mathematical_blocks', 'forecasting_blocks', 'inference_blocks'].forEach((section) => {
-    normalized.model_enrichment[section].forEach((block) => {
-      block.output_fields.forEach((field) => pushField(field.field_name, field.field_type, field.description));
+    asArray(scenario?.model_enrichment?.[section]).forEach((block) => {
+      block.output_fields.forEach((field) => pushUniqueField(output, seen, field.field_name, field.field_type, field.description));
     });
   });
   return output;
 }
 
-export function validateGoldDefinition(definition) {
-  const normalized = normalizeGoldDefinition(definition);
-  const errors = [];
-  const warnings = [];
-  const pushError = (code, message, context = {}) => errors.push({ code, message, context });
-  const pushWarning = (code, message, context = {}) => warnings.push({ code, message, context });
-
-  if (!normalized.metadata.code) pushError('metadata_code_required', 'У витрины должен быть код.');
-  if (!normalized.metadata.name) pushError('metadata_name_required', 'У витрины должно быть название.');
-  if (!normalized.sources.length) pushError('sources_required', 'Нужно указать хотя бы один источник.');
-
-  normalized.sources.forEach((source, index) => {
-    if (!source.source_key) pushError('source_key_required', 'Источник должен иметь source_key.', { index });
-    if (!SOURCE_KINDS.has(source.source_kind)) pushError('source_kind_invalid', 'У источника недопустимый тип.', { index });
-    if (!source.selected_fields.length) pushWarning('source_selected_fields_empty', 'Источник не публикует поля в витрину.', { index });
-  });
-
-  const outputFields = collectGoldOutputFields(normalized);
-  if (!outputFields.length) pushError('output_fields_required', 'Нужно определить хотя бы одно выходное поле витрины.');
-
-  if (normalized.materialization.mode === 'snapshot_table') {
-    if (!normalized.materialization.target_schema || !normalized.materialization.target_name) {
-      pushError('materialization_target_required', 'Для snapshot table нужно указать схему и имя объекта.');
-    }
-  }
-
-  if (normalized.refresh_policy.mode === 'interval' && !parseScheduleToMs(normalized.refresh_policy.schedule_value)) {
-    pushError('refresh_schedule_required', 'Для interval refresh нужно указать интервал вида 15m / 1h / 1d.');
-  }
-  if (normalized.refresh_policy.mode === 'cron' && !normalized.refresh_policy.schedule_value) {
-    pushError('refresh_schedule_required', 'Для cron refresh нужно указать cron-выражение.');
-  }
-  if (normalized.refresh_policy.mode === 'dependency' && !normalized.refresh_policy.dependency_sources.length) {
-    pushError('refresh_dependency_required', 'Для dependency refresh нужно выбрать зависимые источники.');
-  }
-
-  const modelBinding = validateModelBindings(normalized);
-  errors.push(...modelBinding.errors);
-  warnings.push(...modelBinding.warnings);
-
-  return { ok: errors.length === 0, errors, warnings, output_fields: outputFields };
-}
-
-export function checkSourceCompatibility(definition, { sourceCatalogByKey = {} } = {}) {
-  const normalized = normalizeGoldDefinition(definition);
-  const sources = normalized.sources.map((source) => {
-    const catalog = asObject(sourceCatalogByKey?.[source.source_key]);
-    const contractFields = uniqueStrings(asArray(catalog.fields).map((field) => asText(field?.name || field?.field_name)));
-    const missingRequired = source.required_fields.filter((field) => !contractFields.includes(field));
-    const missingSelected = source.selected_fields
-      .map((field) => field.field_name)
-      .filter((field) => field && !contractFields.includes(field));
-    return {
-      source_key: source.source_key,
-      source_name: source.source_name || asText(catalog.source_name),
-      compatible: !missingRequired.length && !missingSelected.length && Boolean(contractFields.length),
-      missing_required_fields: missingRequired,
-      missing_selected_fields: missingSelected,
-      available_fields: contractFields
-    };
-  });
-  return { ok: sources.every((item) => item.compatible), sources };
-}
-
 export function validateModelBindings(definition) {
   const normalized = normalizeGoldDefinition(definition);
+  const scenario = fieldsForScenario(normalized);
   const errors = [];
   const warnings = [];
   const availableFields = new Set(
     collectGoldOutputFields({
       ...normalized,
+      active_scenario: {
+        ...scenario,
+        model_enrichment: { mathematical_blocks: [], forecasting_blocks: [], inference_blocks: [] }
+      },
       model_enrichment: { mathematical_blocks: [], forecasting_blocks: [], inference_blocks: [] }
     }).map((field) => field.name)
   );
 
   const allBlocks = [
-    ...normalized.model_enrichment.mathematical_blocks,
-    ...normalized.model_enrichment.forecasting_blocks,
-    ...normalized.model_enrichment.inference_blocks
+    ...asArray(scenario?.model_enrichment?.mathematical_blocks),
+    ...asArray(scenario?.model_enrichment?.forecasting_blocks),
+    ...asArray(scenario?.model_enrichment?.inference_blocks)
   ];
   allBlocks.forEach((block) => {
     block.required_input_features.forEach((feature) => {
-      if (!availableFields.has(normalizeFieldName(feature))) {
+      const key = normalizeFieldName(feature);
+      if (!availableFields.has(key)) {
         errors.push({
           code: 'model_missing_input_feature',
           message: `Модель ${block.block_name} требует вход ${feature}, которого нет в витрине.`,
@@ -379,44 +752,164 @@ export function validateModelBindings(definition) {
   return { ok: errors.length === 0, errors, warnings };
 }
 
+function validateRelations(scenario, errors, warnings) {
+  const sourceKeys = new Set(asArray(scenario?.sources).map((item) => item.source_key));
+  const relations = asArray(scenario?.relations?.length ? scenario.relations : scenario?.transformations?.joins);
+  if (asArray(scenario?.sources).length > 1 && !relations.length) {
+    warnings.push({
+      code: 'relations_missing',
+      message: 'Для нескольких источников не задана явная модель объединения.'
+    });
+  }
+  relations.forEach((relation) => {
+    if (!sourceKeys.has(relation.left_source_key)) {
+      errors.push({
+        code: 'relation_left_source_missing',
+        message: `Связь ${relation.relation_name} ссылается на несуществующий левый источник.`,
+        context: { relation_key: relation.relation_key }
+      });
+    }
+    if (!sourceKeys.has(relation.right_source_key)) {
+      errors.push({
+        code: 'relation_right_source_missing',
+        message: `Связь ${relation.relation_name} ссылается на несуществующий правый источник.`,
+        context: { relation_key: relation.relation_key }
+      });
+    }
+    if ((relation.relation_type.endsWith('_join') || relation.relation_type === 'lookup_enrich') && !relation.join_keys.length) {
+      errors.push({
+        code: 'relation_join_keys_required',
+        message: `Для связи ${relation.relation_name} нужно указать ключи объединения.`,
+        context: { relation_key: relation.relation_key }
+      });
+    }
+  });
+}
+
+export function validateGoldDefinition(definition) {
+  const normalized = normalizeGoldDefinition(definition);
+  const scenario = fieldsForScenario(normalized);
+  const errors = [];
+  const warnings = [];
+  const pushError = (code, message, context = {}) => errors.push({ code, message, context });
+  const pushWarning = (code, message, context = {}) => warnings.push({ code, message, context });
+
+  if (!normalized.metadata.code) pushError('metadata_code_required', 'У рабочего стола витрин должен быть код.');
+  if (!normalized.metadata.name) pushError('metadata_name_required', 'У рабочего стола витрин должно быть название.');
+  if (!normalized.marts.length) pushError('marts_required', 'Нужна хотя бы одна витрина.');
+  if (!scenario) pushError('scenario_required', 'Нужен активный сценарий витрины.');
+  if (scenario && !scenario.enabled) pushWarning('scenario_disabled', 'Активный сценарий выключен.');
+  if (scenario && !scenario.sources.length) pushError('sources_required', 'Нужно указать хотя бы один источник.');
+
+  asArray(scenario?.sources).forEach((source, index) => {
+    if (!source.source_key) pushError('source_key_required', 'Источник должен иметь source_key.', { index });
+    if (!SOURCE_KINDS.has(source.source_kind)) pushError('source_kind_invalid', 'У источника недопустимый тип.', { index });
+    if (!source.selected_fields.length) pushWarning('source_selected_fields_empty', 'Источник не публикует поля в витрину.', { index });
+  });
+
+  const primaryCount = asArray(scenario?.sources).filter((item) => item.source_role === 'primary' || item.source_role === 'fact').length;
+  if (scenario?.sources?.length && primaryCount === 0) {
+    pushWarning('primary_source_missing', 'Не выбран primary/fact источник. Будет использован первый источник.');
+  }
+  if (primaryCount > 1) {
+    pushError('primary_source_ambiguous', 'В сценарии не может быть больше одного primary/fact источника.');
+  }
+
+  validateRelations(scenario, errors, warnings);
+
+  const outputFields = collectGoldOutputFields(normalized);
+  if (!outputFields.length) pushError('output_fields_required', 'Нужно определить хотя бы одно выходное поле витрины.');
+
+  if (scenario?.materialization?.mode === 'snapshot_table') {
+    if (!scenario.materialization.target_schema || !scenario.materialization.target_name) {
+      pushError('materialization_target_required', 'Для snapshot table нужно указать схему и имя объекта.');
+    }
+  }
+
+  if (scenario?.refresh_policy?.mode === 'interval' && !parseScheduleToMs(scenario.refresh_policy.schedule_value)) {
+    pushError('refresh_schedule_required', 'Для interval refresh нужно указать интервал вида 15m / 1h / 1d.');
+  }
+  if (scenario?.refresh_policy?.mode === 'cron' && !scenario.refresh_policy.schedule_value) {
+    pushError('refresh_schedule_required', 'Для cron refresh нужно указать cron-выражение.');
+  }
+  if (scenario?.refresh_policy?.mode === 'dependency' && !scenario.refresh_policy.dependency_sources.length) {
+    pushError('refresh_dependency_required', 'Для dependency refresh нужно выбрать зависимые источники.');
+  }
+
+  const modelBinding = validateModelBindings(normalized);
+  errors.push(...modelBinding.errors);
+  warnings.push(...modelBinding.warnings);
+
+  return { ok: errors.length === 0, errors, warnings, output_fields: outputFields };
+}
+
+export function checkSourceCompatibility(definition, { sourceCatalogByKey = {} } = {}) {
+  const normalized = normalizeGoldDefinition(definition);
+  const scenario = fieldsForScenario(normalized);
+  const sources = asArray(scenario?.sources).map((source) => {
+    const catalog = asObject(sourceCatalogByKey?.[source.source_key]);
+    const contractFields = uniqueStrings(asArray(catalog.fields).map((field) => asText(field?.name || field?.field_name)));
+    const missingRequired = source.required_fields.filter((field) => !contractFields.includes(field));
+    const missingSelected = source.selected_fields
+      .map((field) => field.field_name)
+      .filter((field) => field && !contractFields.includes(field));
+    return {
+      source_key: source.source_key,
+      source_name: source.source_name || asText(catalog.source_name),
+      source_role: source.source_role,
+      compatible: !missingRequired.length && !missingSelected.length && Boolean(contractFields.length),
+      missing_required_fields: missingRequired,
+      missing_selected_fields: missingSelected,
+      available_fields: contractFields
+    };
+  });
+  return { ok: sources.every((item) => item.compatible), sources };
+}
+
 export function buildGoldDependencyGraph(definition) {
   const normalized = normalizeGoldDefinition(definition);
-  const goldKey = `gold:${normalized.metadata.code || normalized.metadata.id || 'draft'}`;
+  const mart = getActiveDataMart(normalized);
+  const scenario = fieldsForScenario(normalized);
+  const deskKey = `gold_desk:${normalized.metadata.code || normalized.metadata.id || 'draft'}`;
+  const martKey = `gold_mart:${mart?.code || mart?.id || 'mart'}`;
+  const scenarioKey = `gold_scenario:${scenario?.id || 'scenario'}`;
   const nodes = [
-    {
-      key: goldKey,
-      node_type: 'gold_definition',
-      label: normalized.metadata.name || normalized.metadata.code || 'Gold'
-    }
+    { key: deskKey, node_type: 'gold_desk', label: normalized.metadata.name || normalized.metadata.code || 'Gold desk' },
+    { key: martKey, node_type: 'gold_mart', label: mart?.name || mart?.code || 'Mart' },
+    { key: scenarioKey, node_type: 'gold_scenario', label: scenario?.name || scenario?.id || 'Scenario' }
   ];
-  const edges = [];
+  const edges = [
+    { from: deskKey, to: martKey, edge_type: 'contains' },
+    { from: martKey, to: scenarioKey, edge_type: 'activates' }
+  ];
 
-  normalized.sources.forEach((source) => {
+  asArray(scenario?.sources).forEach((source) => {
     nodes.push({
       key: source.source_key,
       node_type: `${source.source_kind}_source`,
       label: source.source_name || source.source_key
     });
-    edges.push({ from: source.source_key, to: goldKey, edge_type: 'feeds' });
+    edges.push({ from: source.source_key, to: scenarioKey, edge_type: 'feeds' });
   });
 
-  normalized.consumers.forEach((consumer) => {
+  asArray(scenario?.consumers).forEach((consumer) => {
     nodes.push({
       key: consumer.consumer_key,
       node_type: `${consumer.consumer_kind}_consumer`,
       label: consumer.name || consumer.consumer_key
     });
-    edges.push({ from: goldKey, to: consumer.consumer_key, edge_type: 'consumed_by' });
+    edges.push({ from: scenarioKey, to: consumer.consumer_key, edge_type: 'consumed_by' });
   });
 
-  return { gold_key: goldKey, nodes, edges };
+  return { gold_key: deskKey, desk_key: deskKey, mart_key: martKey, scenario_key: scenarioKey, nodes, edges };
 }
 
 export function analyzeGoldImpact(definition, { changedSources = [] } = {}) {
   const normalized = normalizeGoldDefinition(definition);
+  const scenario = fieldsForScenario(normalized);
   const bySource = new Map(asArray(changedSources).map((item) => [asText(item?.source_key), asObject(item)]));
   const affected_sources = [];
-  normalized.sources.forEach((source) => {
+  asArray(scenario?.sources).forEach((source) => {
     const change = bySource.get(source.source_key);
     if (!change) return;
     const removed = uniqueStrings(change.removed_fields);
@@ -430,23 +923,26 @@ export function analyzeGoldImpact(definition, { changedSources = [] } = {}) {
       removed_selected_fields: selectedBroken
     });
   });
-  const affected_consumers = affected_sources.length ? normalized.consumers.map((consumer) => ({ ...consumer })) : [];
+  const affected_output_fields = affected_sources.length ? collectGoldOutputFields(normalized).map((field) => field.name) : [];
+  const affected_consumers = affected_sources.length ? asArray(scenario?.consumers).map((consumer) => ({ ...consumer })) : [];
   return {
     has_impact: affected_sources.length > 0,
     affected_sources,
+    affected_output_fields,
     affected_consumers
   };
 }
 
 export function planGoldRefresh(definition, { nowMs = Date.now(), lastRefreshAt = '', dependencyEvents = [] } = {}) {
   const normalized = normalizeGoldDefinition(definition);
-  const mode = normalized.refresh_policy.mode;
+  const scenario = fieldsForScenario(normalized);
+  const mode = asText(scenario?.refresh_policy?.mode || 'manual');
   const lastTs = toTs(lastRefreshAt);
   if (mode === 'manual') {
     return { mode, needs_refresh: false, reason_code: 'manual_only', next_due_at: '' };
   }
   if (mode === 'interval') {
-    const everyMs = parseScheduleToMs(normalized.refresh_policy.schedule_value);
+    const everyMs = parseScheduleToMs(scenario.refresh_policy.schedule_value);
     if (!everyMs) return { mode, needs_refresh: false, reason_code: 'interval_invalid', next_due_at: '' };
     const dueTs = lastTs > 0 ? lastTs + everyMs : nowMs;
     return {
@@ -459,7 +955,7 @@ export function planGoldRefresh(definition, { nowMs = Date.now(), lastRefreshAt 
   if (mode === 'dependency') {
     const changed = asArray(dependencyEvents).find((event) => {
       const sourceKey = asText(event?.source_key);
-      return normalized.refresh_policy.dependency_sources.includes(sourceKey) && toTs(event?.changed_at) > lastTs;
+      return asArray(scenario?.refresh_policy?.dependency_sources).includes(sourceKey) && toTs(event?.changed_at) > lastTs;
     });
     return {
       mode,
@@ -471,20 +967,21 @@ export function planGoldRefresh(definition, { nowMs = Date.now(), lastRefreshAt 
   return {
     mode,
     needs_refresh: false,
-    reason_code: normalized.refresh_policy.schedule_value ? 'cron_waiting' : 'cron_not_evaluated',
+    reason_code: scenario?.refresh_policy?.schedule_value ? 'cron_waiting' : 'cron_not_evaluated',
     next_due_at: ''
   };
 }
 
 export function planGoldMaterialization(definition) {
   const normalized = normalizeGoldDefinition(definition);
+  const scenario = fieldsForScenario(normalized);
   return {
-    mode: normalized.materialization.mode,
+    mode: scenario?.materialization?.mode || 'snapshot_table',
     target: {
-      schema_name: normalized.materialization.target_schema,
-      name: normalized.materialization.target_name,
-      table_class: normalized.materialization.table_class,
-      data_level: normalized.materialization.data_level
+      schema_name: scenario?.materialization?.target_schema || '',
+      name: scenario?.materialization?.target_name || '',
+      table_class: scenario?.materialization?.table_class || '',
+      data_level: scenario?.materialization?.data_level || ''
     },
     output_fields: collectGoldOutputFields(normalized)
   };
@@ -492,7 +989,8 @@ export function planGoldMaterialization(definition) {
 
 export function resolveExternalSourceFreshness(definition, { externalSourceStatesByKey = {}, nowMs = Date.now() } = {}) {
   const normalized = normalizeGoldDefinition(definition);
-  const sources = normalized.sources
+  const scenario = fieldsForScenario(normalized);
+  const sources = asArray(scenario?.sources)
     .filter((source) => source.source_kind === 'external' || source.source_kind === 'reference')
     .map((source) => {
       const state = asObject(externalSourceStatesByKey?.[source.source_key]);
@@ -521,11 +1019,12 @@ export function resolveExternalSourceFreshness(definition, { externalSourceState
 
 export function resolveConsumerDependencies(definition) {
   const normalized = normalizeGoldDefinition(definition);
+  const scenario = fieldsForScenario(normalized);
   const counts = {};
-  normalized.consumers.forEach((consumer) => {
+  asArray(scenario?.consumers).forEach((consumer) => {
     counts[consumer.consumer_kind] = (counts[consumer.consumer_kind] || 0) + 1;
   });
-  return { consumers: normalized.consumers, counts };
+  return { consumers: asArray(scenario?.consumers), counts };
 }
 
 export function resolveGoldStatus({

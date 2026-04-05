@@ -6,6 +6,8 @@ import {
   buildGoldDependencyGraph,
   checkSourceCompatibility,
   collectGoldOutputFields,
+  getActiveDataMart,
+  getActiveScenario,
   normalizeGoldDefinition,
   resolveConsumerDependencies,
   resolveExternalSourceFreshness,
@@ -133,7 +135,7 @@ export function buildProcessGoldSources({ publishedDesks = [], contractRows = []
         out.push({
           source_key: sourceKey,
           source_kind: 'process',
-          source_name: `${asText(process.name || process.process_code || 'Процесс')} → ${target.schema_name}.${target.table_name}`,
+          source_name: `${asText(process.name || process.process_code || 'Процесс')} -> ${target.schema_name}.${target.table_name}`,
           process_code: asText(process.process_code),
           desk_id: Number(desk?.desk_id || 0),
           desk_name: asText(desk?.desk_name),
@@ -186,9 +188,7 @@ function sourceFieldValue(sources, sourceKey, fieldName) {
 function safeFormula(formula, ctx) {
   const code = asText(formula);
   if (!code) return null;
-  if (/[;`\\]/.test(code)) {
-    throw new Error('gold_formula_unsafe_chars');
-  }
+  if (/[;`\\]/.test(code)) throw new Error('gold_formula_unsafe_chars');
   const sandbox = {
     row: ctx.row,
     sources: ctx.sources,
@@ -223,57 +223,203 @@ function compareValue(actual, operator, expected) {
   return true;
 }
 
+function sourceRows(sourceRowsByKey, sourceKey) {
+  return asArray(sourceRowsByKey?.[sourceKey]);
+}
+
+function primarySource(definition) {
+  const normalized = normalizeGoldDefinition(definition);
+  const scenario = getActiveScenario(normalized);
+  const sources = asArray(scenario?.sources);
+  return sources.find((item) => item.source_role === 'primary' || item.source_role === 'fact') || sources[0] || null;
+}
+
 function buildInitialContexts(definition, sourceRowsByKey) {
-  const primary = definition.sources[0];
+  const primary = primarySource(definition);
   if (!primary) return [];
-  const rows = asArray(sourceRowsByKey?.[primary.source_key]);
-  return rows.map((row) => ({
-    __sources: {
-      [primary.source_key]: row
-    }
+  return sourceRows(sourceRowsByKey, primary.source_key).map((row) => ({
+    __sources: { [primary.source_key]: row },
+    __warnings: []
   }));
 }
 
-function applyJoins(contexts, definition, sourceRowsByKey) {
+function relationTypeLabel(type) {
+  const key = asText(type).toLowerCase();
+  if (key === 'left_join') return 'left join';
+  if (key === 'inner_join') return 'inner join';
+  if (key === 'full_join') return 'full join';
+  if (key === 'right_join') return 'right join';
+  if (key === 'union') return 'union';
+  if (key === 'append') return 'append';
+  return 'lookup enrich';
+}
+
+function valueWithTypePolicy(leftValue, rightValue, typePolicy) {
+  if (typePolicy === 'cast') return [leftValue == null ? null : String(leftValue), rightValue == null ? null : String(rightValue)];
+  if (typePolicy === 'normalize_text') return [asText(leftValue).toLowerCase(), asText(rightValue).toLowerCase()];
+  return [leftValue, rightValue];
+}
+
+function joinMatches(leftRow, rightRow, joinKeys, typePolicy) {
+  return asArray(joinKeys).every((key) => {
+    const [leftValue, rightValue] = valueWithTypePolicy(leftRow?.[key.left_field], rightRow?.[key.right_field], typePolicy);
+    return leftValue === rightValue;
+  });
+}
+
+function relationForSource(scenario, sourceKey) {
+  return asArray(scenario?.relations).find((item) => item.right_source_key === sourceKey || item.left_source_key === sourceKey) || null;
+}
+
+function resolveConflictKey(row, source, field, relation) {
+  const baseKey = asText(field.alias || field.field_name);
+  if (!baseKey) return '';
+  if (!(baseKey in row)) return baseKey;
+  const policy = asText(relation?.conflict_policy || 'keep_left');
+  if (policy === 'keep_left') return '';
+  if (policy === 'keep_right') return baseKey;
+  if (policy === 'rename_with_alias' && asText(field.alias) && asText(field.alias) !== asText(field.field_name)) return asText(field.alias);
+  const prefix = asText(relation?.rename_prefix || source?.source_role || source?.source_key).replace(/[^0-9a-zA-Z_а-яА-ЯёЁ]+/g, '_');
+  return `${prefix}_${baseKey}`;
+}
+
+function applyRelations(contexts, definition, sourceRowsByKey) {
+  const normalized = normalizeGoldDefinition(definition);
+  const mart = getActiveDataMart(normalized);
+  const scenario = getActiveScenario(normalized);
+  const sources = asArray(scenario?.sources);
+  const relations = asArray(scenario?.relations?.length ? scenario.relations : scenario?.transformations?.joins);
+  const assembly = {
+    desk_name: normalized.metadata.name,
+    desk_code: normalized.metadata.code,
+    mart_name: mart?.name || '',
+    mart_code: mart?.code || '',
+    scenario_name: scenario?.name || '',
+    scenario_id: scenario?.id || '',
+    primary_source_key: primarySource(normalized)?.source_key || '',
+    row_count_before_merge: contexts.length,
+    row_count_after_merge: contexts.length,
+    sources: sources.map((source) => ({
+      source_key: source.source_key,
+      source_name: source.source_name,
+      source_role: source.source_role,
+      row_count: sourceRows(sourceRowsByKey, source.source_key).length
+    })),
+    relations: [],
+    warnings: []
+  };
   let current = contexts;
-  definition.transformations.joins.forEach((join) => {
-    if (!join.left_source_key || !join.right_source_key || !join.left_field || !join.right_field) return;
-    const rightRows = asArray(sourceRowsByKey?.[join.right_source_key]);
+  relations.forEach((relation) => {
+    const beforeCount = current.length;
+    if (!relation.left_source_key || !relation.right_source_key) {
+      assembly.relations.push({
+        relation_key: relation.relation_key,
+        relation_name: relation.relation_name,
+        relation_type: relation.relation_type,
+        before_count: beforeCount,
+        after_count: beforeCount,
+        skipped: true
+      });
+      return;
+    }
+    const rightRows = sourceRows(sourceRowsByKey, relation.right_source_key);
+    if (relation.relation_type === 'append' || relation.relation_type === 'union') {
+      const appended = rightRows.map((row) => ({
+        __sources: { [relation.right_source_key]: row },
+        __warnings: []
+      }));
+      current = [...current, ...appended];
+      assembly.relations.push({
+        relation_key: relation.relation_key,
+        relation_name: relation.relation_name,
+        relation_type: relation.relation_type,
+        relation_type_label: relationTypeLabel(relation.relation_type),
+        before_count: beforeCount,
+        after_count: current.length,
+        join_keys: []
+      });
+      return;
+    }
+
     const next = [];
+    let matchedRows = 0;
+    let droppedRows = 0;
+    let warningCount = 0;
     current.forEach((ctx) => {
-      const leftRow = asObject(ctx.__sources?.[join.left_source_key]);
-      const leftValue = leftRow?.[join.left_field];
-      const matches = rightRows.filter((row) => row?.[join.right_field] === leftValue);
+      const leftRow = asObject(ctx.__sources?.[relation.left_source_key]);
+      const matches = rightRows.filter((row) => joinMatches(leftRow, row, relation.join_keys, relation.type_policy));
       if (matches.length) {
+        matchedRows += matches.length;
+        if ((relation.cardinality === '1:1' || relation.cardinality === 'N:1') && matches.length > 1) warningCount += 1;
         matches.forEach((match) => {
           next.push({
             __sources: {
               ...ctx.__sources,
-              [join.right_source_key]: match
-            }
+              [relation.right_source_key]: match
+            },
+            __warnings: asArray(ctx.__warnings)
           });
         });
-      } else if (join.join_type === 'left' || join.join_type === 'full') {
-        next.push({
-          __sources: {
-            ...ctx.__sources,
-            [join.right_source_key]: null
-          }
-        });
+        return;
       }
+      if (relation.mismatch_policy === 'drop_row' || relation.relation_type === 'inner_join') {
+        droppedRows += 1;
+        return;
+      }
+      if (relation.mismatch_policy === 'warning' || relation.mismatch_policy === 'error') warningCount += 1;
+      next.push({
+        __sources: {
+          ...ctx.__sources,
+          [relation.right_source_key]: null
+        },
+        __warnings: [...asArray(ctx.__warnings), `mismatch:${relation.relation_key}`]
+      });
     });
     current = next;
+    assembly.relations.push({
+      relation_key: relation.relation_key,
+      relation_name: relation.relation_name,
+      relation_type: relation.relation_type,
+      relation_type_label: relationTypeLabel(relation.relation_type),
+      before_count: beforeCount,
+      after_count: current.length,
+      matched_rows: matchedRows,
+      dropped_rows: droppedRows,
+      warnings_count: warningCount,
+      join_keys: asArray(relation.join_keys).map((item) => `${item.left_field} = ${item.right_field}`),
+      cardinality: relation.cardinality,
+      mismatch_policy: relation.mismatch_policy,
+      conflict_policy: relation.conflict_policy,
+      type_policy: relation.type_policy
+    });
+    if (droppedRows > 0) {
+      assembly.warnings.push({
+        code: 'rows_dropped_on_relation',
+        message: `Связь ${relation.relation_name} отбросила ${droppedRows} строк.`
+      });
+    }
   });
-  return current;
+  assembly.row_count_after_merge = current.length;
+  if (sources.length > 1 && !relations.length) {
+    assembly.warnings.push({
+      code: 'relations_missing',
+      message: 'Дополнительные источники не участвуют в сборке без явных relations.'
+    });
+  }
+  return { contexts: current, assembly };
 }
 
 function flattenContext(definition, ctx) {
+  const normalized = normalizeGoldDefinition(definition);
+  const scenario = getActiveScenario(normalized);
   const row = {};
-  definition.sources.forEach((source) => {
+  asArray(scenario?.sources).forEach((source) => {
     const sourceRow = asObject(ctx.__sources?.[source.source_key]);
+    const relation = relationForSource(scenario, source.source_key);
     source.selected_fields.forEach((field) => {
-      const key = field.alias || field.field_name;
-      row[key] = sourceRow?.[field.field_name] ?? null;
+      const targetKey = resolveConflictKey(row, source, field, relation);
+      if (!targetKey) return;
+      row[targetKey] = sourceRow?.[field.field_name] ?? null;
     });
   });
   return row;
@@ -281,7 +427,7 @@ function flattenContext(definition, ctx) {
 
 function applyFilters(rows, definition, contexts) {
   return rows.filter((row, index) => {
-    return definition.transformations.filters.every((filter) => {
+    return asArray(definition.transformations?.filters).every((filter) => {
       if (filter.formula) {
         return Boolean(safeFormula(filter.formula, { row, sources: contexts[index]?.__sources || {} }));
       }
@@ -293,13 +439,13 @@ function applyFilters(rows, definition, contexts) {
 function applyDerivedFields(rows, definition, contexts) {
   return rows.map((row, index) => {
     const next = { ...row };
-    definition.transformations.derived_fields.forEach((field) => {
+    asArray(definition.transformations?.derived_fields).forEach((field) => {
       next[field.field_name] = field.formula
         ? safeFormula(field.formula, { row: next, sources: contexts[index]?.__sources || {} })
         : null;
     });
     ['mathematical_blocks', 'forecasting_blocks', 'inference_blocks'].forEach((section) => {
-      definition.model_enrichment[section].forEach((block) => {
+      asArray(definition.model_enrichment?.[section]).forEach((block) => {
         block.output_fields.forEach((field) => {
           next[field.field_name] = field.formula
             ? safeFormula(field.formula, { row: next, sources: contexts[index]?.__sources || {} })
@@ -312,8 +458,8 @@ function applyDerivedFields(rows, definition, contexts) {
 }
 
 function aggregateRows(rows, definition) {
-  const groups = [...definition.transformations.groupings, ...definition.transformations.dimensions];
-  const metrics = [...definition.transformations.aggregations, ...definition.transformations.metrics];
+  const groups = [...asArray(definition.transformations?.groupings), ...asArray(definition.transformations?.dimensions)];
+  const metrics = [...asArray(definition.transformations?.aggregations), ...asArray(definition.transformations?.metrics)];
   if (!groups.length && !metrics.length) return rows;
   const grouped = new Map();
   rows.forEach((row) => {
@@ -344,9 +490,7 @@ function aggregateRows(rows, definition) {
 }
 
 function inferColumns(rows, fallbackOutputFields) {
-  if (rows.length) {
-    return [...new Set(rows.flatMap((row) => Object.keys(asObject(row))))];
-  }
+  if (rows.length) return [...new Set(rows.flatMap((row) => Object.keys(asObject(row))))];
   return asArray(fallbackOutputFields).map((field) => asText(field.name)).filter(Boolean);
 }
 
@@ -361,23 +505,21 @@ function sampleAggregates(rows, outputFields) {
 
 export function buildGoldDataset(definition, { sourceRowsByKey = {} } = {}) {
   const normalized = normalizeGoldDefinition(definition);
-  const warnings = [];
   let contexts = buildInitialContexts(normalized, sourceRowsByKey);
-  contexts = applyJoins(contexts, normalized, sourceRowsByKey);
+  const relationResult = applyRelations(contexts, normalized, sourceRowsByKey);
+  contexts = relationResult.contexts;
   let rows = contexts.map((ctx) => flattenContext(normalized, ctx));
   rows = applyFilters(rows, normalized, contexts);
   rows = applyDerivedFields(rows, normalized, contexts);
   rows = aggregateRows(rows, normalized);
   const outputFields = collectGoldOutputFields(normalized);
-  if (normalized.sources.length > 1 && !normalized.transformations.joins.length) {
-    warnings.push({ code: 'unjoined_sources_ignored', message: 'Дополнительные источники не участвуют в preview без join-правил.' });
-  }
   return {
     rows,
     columns: inferColumns(rows, outputFields),
     output_fields: outputFields,
     sample_aggregates: sampleAggregates(rows, outputFields),
-    warnings
+    warnings: asArray(relationResult.assembly?.warnings),
+    assembly: relationResult.assembly
   };
 }
 
@@ -389,7 +531,8 @@ export function buildGoldPreviewModel(
     externalSourceStatesByKey = {},
     lastRefresh = null,
     publishedDefinition = null,
-    nowMs = Date.now()
+    nowMs = Date.now(),
+    previewUid = `gold_preview_${Date.now()}`
   } = {}
 ) {
   const normalized = normalizeGoldDefinition(definition);
@@ -425,6 +568,7 @@ export function buildGoldPreviewModel(
     freshness,
     status,
     dataset,
+    preview_uid: previewUid,
     lineage: buildGoldDependencyGraph(normalized),
     impact: analyzeGoldImpact(normalized, { changedSources: [] }),
     consumers: resolveConsumerDependencies(normalized),
