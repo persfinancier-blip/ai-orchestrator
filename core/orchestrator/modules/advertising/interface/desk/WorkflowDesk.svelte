@@ -3,10 +3,14 @@
   import WorkflowCanvas from './components/WorkflowCanvas.svelte';
   import ApiBuilderTab from './tabs/ApiBuilderTab.svelte';
   import ClientsModuleTab from './tabs/ClientsModuleTab.svelte';
-  import ParserBuilderTab from './tabs/ParserBuilderTab.svelte';
+  import {
+    resolveWorkflowDeskPane,
+    sanitizeWorkflowDeskParams,
+    shouldRefreshWorkflowDeskTables
+  } from './data/workflowDeskPaneState.js';
 
   type ExistingTable = { schema_name: string; table_name: string };
-  type Pane = 'workspace' | 'api' | 'parser' | 'clients';
+  type Pane = 'workspace' | 'api' | 'clients';
 
   const API_BASE = '/ai-orchestrator/api';
   const API_ROLE = 'data_admin';
@@ -21,8 +25,6 @@
   let initialApiStoreId: number | null = null;
   let apiBuilderRenderKey = 0;
   let clientsRenderKey = 0;
-  let parserBuilderRenderKey = 0;
-  let standaloneParserSettings: Record<string, any> = {};
 
   function parseHashState() {
     const raw = String(window.location.hash || '').replace(/^#/, '');
@@ -111,11 +113,6 @@
       params.delete('api_store_id');
       params.delete('from_node');
       handoffInfo = '';
-    } else if (next === 'parser') {
-      params.set('pane', 'parser');
-      params.delete('api_store_id');
-      params.delete('from_node');
-      handoffInfo = '';
     } else if (next === 'clients') {
       params.set('pane', 'clients');
       params.delete('api_store_id');
@@ -133,7 +130,7 @@
       return;
     }
     pane = next;
-    if (pane === 'api' || pane === 'parser') void refreshBuilderTables();
+    if (shouldRefreshWorkflowDeskTables(pane)) void refreshBuilderTables();
   }
 
   function applyHashState() {
@@ -143,14 +140,9 @@
     const apiStoreIdRaw = Number(params.get('api_store_id') || 0);
     const apiStoreId = Number.isFinite(apiStoreIdRaw) && apiStoreIdRaw > 0 ? Math.trunc(apiStoreIdRaw) : null;
     const fromNode = String(params.get('from_node') || '').trim();
+    const normalized = sanitizeWorkflowDeskParams({ route, paneParam, params });
 
-    const nextPane: Pane = fromLegacyWorkflowRoute || paneParam === 'api' || apiStoreId !== null
-      ? 'api'
-      : paneParam === 'parser'
-      ? 'parser'
-      : paneParam === 'clients'
-      ? 'clients'
-      : 'workspace';
+    const nextPane = resolveWorkflowDeskPane({ route, paneParam, apiStoreId }) as Pane;
 
     pane = nextPane;
 
@@ -165,22 +157,16 @@
         : `Открыт из workflow-узла API. Шаблон ID: ${apiStoreId}`
       : '';
 
-    if (nextPane === 'api' || nextPane === 'parser' || nextPane === 'clients') {
+    if (shouldRefreshWorkflowDeskTables(nextPane)) {
       void refreshBuilderTables();
     }
 
-    if (fromLegacyWorkflowRoute) {
-      const nextParams = new URLSearchParams(params);
-      nextParams.set('pane', 'api');
-      const target = buildHash('desk/data', nextParams);
+    if (fromLegacyWorkflowRoute || normalized.changed) {
+      const target = buildHash(normalized.route, normalized.params);
       if (window.location.hash !== target) {
         window.location.hash = target;
       }
     }
-  }
-
-  function onParserConfigChange(event: CustomEvent<{ settings: Record<string, any> }>) {
-    standaloneParserSettings = { ...(event.detail?.settings || {}) };
   }
 
   const onHashChange = () => applyHashState();
@@ -199,14 +185,13 @@
   <header class="top">
     <div>
       <h1>Рабочий стол данных</h1>
-      <p class="sub">Управление процессами, API-шаблонами и шаблонами парсинга в едином рабочем пространстве.</p>
+      <p class="sub">Управление процессами, API-шаблонами и клиентскими настройками в едином рабочем пространстве.</p>
     </div>
   </header>
 
   <nav class="tabs">
     <button class:active={pane === 'workspace'} on:click={() => setPane('workspace')}>Рабочий стол</button>
     <button class:active={pane === 'api'} on:click={() => setPane('api')}>Запросы</button>
-    <button class:active={pane === 'parser'} on:click={() => setPane('parser')}>Работа с данными</button>
     <button class:active={pane === 'clients'} on:click={() => setPane('clients')}>Клиенты</button>
   </nav>
 
@@ -235,18 +220,6 @@
           {existingTables}
           refreshTables={refreshBuilderTables}
           {initialApiStoreId}
-        />
-      {/key}
-    {:else if pane === 'parser'}
-      {#key parserBuilderRenderKey}
-        <ParserBuilderTab
-          apiBase={API_BASE}
-          {apiJson}
-          {headers}
-          {existingTables}
-          initialSettings={standaloneParserSettings}
-          embeddedMode={true}
-          on:configChange={onParserConfigChange}
         />
       {/key}
     {:else if pane === 'clients'}
