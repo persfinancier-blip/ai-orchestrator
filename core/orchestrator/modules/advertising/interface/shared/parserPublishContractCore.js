@@ -64,6 +64,14 @@ export function parserPublishLeaf(path) {
     .slice(-1)[0] || normalized;
 }
 
+function normalizeParserPublishDefaultToken(value) {
+  return trim(value)
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[\s\-./]+/g, '_')
+    .replace(/__+/g, '_')
+    .toLowerCase();
+}
+
 export function parserPublishDefaultName(fieldOrPath) {
   if (fieldOrPath && typeof fieldOrPath === 'object') {
     return (
@@ -73,7 +81,7 @@ export function parserPublishDefaultName(fieldOrPath) {
       'field'
     );
   }
-  return parserPublishLeaf(fieldOrPath) || 'field';
+  return normalizeParserPublishDefaultToken(parserPublishLeaf(fieldOrPath)) || 'field';
 }
 
 export function parserPublishRelativePath(path, workingSetPath = '') {

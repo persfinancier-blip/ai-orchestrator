@@ -144,3 +144,33 @@ test('parser publish runtime entries: keep output aliases and add read candidate
   assert.deepEqual(buildParserPublishReadCandidates('items.meta.id', 'items.meta'), ['items.meta.id', 'id']);
   assert.deepEqual(buildParserPublishReadCandidates('list.advObjectType', 'list'), ['list.advObjectType', 'advObjectType', 'adv_object_type']);
 });
+
+test('parser publish runtime entries: default publish aliases normalize camelCase leafs to canonical snake_case', () => {
+  const entries = buildParserPublishRuntimeEntries({
+    settings: {
+      selectFields: 'list.advObjectType, list.fromDate, list.PaymentType'
+    },
+    workingSetPath: 'list'
+  });
+
+  assert.deepEqual(
+    entries.map((entry) => ({ sourcePath: entry.sourcePath, outputName: entry.outputName, readCandidates: entry.readCandidates })),
+    [
+      {
+        sourcePath: 'list.advObjectType',
+        outputName: 'adv_object_type',
+        readCandidates: ['list.advObjectType', 'advObjectType', 'adv_object_type']
+      },
+      {
+        sourcePath: 'list.fromDate',
+        outputName: 'from_date',
+        readCandidates: ['list.fromDate', 'fromDate', 'from_date']
+      },
+      {
+        sourcePath: 'list.PaymentType',
+        outputName: 'payment_type',
+        readCandidates: ['list.PaymentType', 'PaymentType', 'payment_type']
+      }
+    ]
+  );
+});

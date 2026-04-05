@@ -145,6 +145,27 @@ test('parser runtime: reads upstream published alias keys when source path leaf 
   assert.deepEqual(result.rows, [{ adv_object_type: 'SKU', from_date: '2026-03-25' }]);
 });
 
+test('parser runtime: default publish output stays canonical snake_case even without explicit rename map', async () => {
+  const result = await executeParserRows(
+    { query: async () => ({ rows: [] }) },
+    {
+      sourceMode: 'input',
+      sourceFormat: 'json',
+      recordPath: 'list',
+      selectFields: 'list.advObjectType, list.fromDate, list.PaymentType',
+      previewLimit: '20'
+    },
+    {
+      inputValue: {
+        list: [{ advObjectType: 'SKU', fromDate: '2026-03-25', PaymentType: 'CPC' }]
+      }
+    }
+  );
+
+  assert.deepEqual(result.rows, [{ adv_object_type: 'SKU', from_date: '2026-03-25', payment_type: 'CPC' }]);
+  assert.deepEqual(result.columns, ['adv_object_type', 'from_date', 'payment_type']);
+});
+
 test('parser runtime: CSV input supports batch cursor without loading fake chunks in UI', async () => {
   const csv = 'id,name\n1,a\n2,b\n3,c\n4,d\n';
   const settings = {
