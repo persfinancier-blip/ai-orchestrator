@@ -14,7 +14,15 @@ function createWriteClient({ existingIds = new Set(), columns = ['id', 'title', 
       if (text.includes('information_schema.tables')) return { rows: [{ '?column?': 1 }], rowCount: 1 };
       if (text.includes('information_schema.columns')) {
         return {
-          rows: columns.map((name) => ({ column_name: name, data_type: name === 'id' ? 'integer' : 'text' })),
+          rows: columns.map((column) => {
+            if (typeof column === 'string') {
+              return { column_name: column, data_type: column === 'id' ? 'integer' : 'text' };
+            }
+            return {
+              column_name: column?.name || '',
+              data_type: column?.type || 'text'
+            };
+          }),
           rowCount: columns.length
         };
       }
@@ -156,4 +164,76 @@ test('write runtime: upsert splits inserted and updated rows by existing key mat
   assert.equal(result.stats.inserted, 1);
   assert.equal(result.stats.updated, 1);
   assert.deepEqual(result.meta.key_fields, ['id']);
+});
+
+test('write runtime: preview normalizes empty strings to null for temporal target columns', async () => {
+  const client = createWriteClient({
+    columns: [
+      { name: 'id', type: 'integer' },
+      { name: 'event_date', type: 'date' },
+      { name: 'to_date', type: 'date' },
+      { name: 'title', type: 'text' }
+    ]
+  });
+  const preview = await previewWriteConfig(
+    client,
+    {
+      sourceMode: 'node',
+      targetSchema: 'ao_data',
+      targetTable: 'silver_products',
+      writeMode: 'insert',
+      fieldMappingsJson: JSON.stringify([
+        { sourceField: 'id', targetField: 'id' },
+        { sourceField: 'from_date', targetField: 'event_date' },
+        { sourceField: 'to_date', targetField: 'to_date' },
+        { sourceField: 'title', targetField: 'title' }
+      ])
+    },
+    {
+      inputValue: {
+        contract_version: 'node_io_v1',
+        rows: [{ id: 1, from_date: '2026-04-03', to_date: '', title: 'A' }]
+      }
+    }
+  );
+
+  assert.equal(preview.result_sample_rows[0].event_date, '2026-04-03');
+  assert.equal(preview.result_sample_rows[0].to_date, null);
+});
+
+test('write runtime: execute normalizes empty strings to null for temporal target columns before insert', async () => {
+  const client = createWriteClient({
+    columns: [
+      { name: 'id', type: 'integer' },
+      { name: 'event_date', type: 'date' },
+      { name: 'to_date', type: 'date' },
+      { name: 'title', type: 'text' }
+    ]
+  });
+  const result = await executeWriteConfig(
+    client,
+    {
+      sourceMode: 'node',
+      targetSchema: 'ao_data',
+      targetTable: 'silver_products',
+      writeMode: 'insert',
+      fieldMappingsJson: JSON.stringify([
+        { sourceField: 'id', targetField: 'id' },
+        { sourceField: 'from_date', targetField: 'event_date' },
+        { sourceField: 'to_date', targetField: 'to_date' },
+        { sourceField: 'title', targetField: 'title' }
+      ])
+    },
+    {
+      inputValue: {
+        contract_version: 'node_io_v1',
+        rows: [{ id: 1, from_date: '2026-04-03', to_date: '', title: 'A' }]
+      }
+    }
+  );
+
+  const insertCall = client.calls.find((item) => item.sql.startsWith('INSERT INTO "ao_data"."silver_products"'));
+  assert.ok(insertCall);
+  assert.deepEqual(insertCall.params, [1, '2026-04-03', null, 'A']);
+  assert.equal(result.rows[0].to_date, null);
 });

@@ -242,6 +242,26 @@ export async function tableColumnsDetailed(client, schema, table) {
     .filter((row) => row.name);
 }
 
+function buildTargetColumnTypeMap(targetColumns = []) {
+  return new Map(
+    (Array.isArray(targetColumns) ? targetColumns : [])
+      .map((column) => [String(column?.name || '').trim(), String(column?.type || '').trim().toLowerCase()])
+      .filter(([name]) => Boolean(name))
+  );
+}
+
+function isTemporalColumnType(type) {
+  const normalized = String(type || '').trim().toLowerCase();
+  return normalized.includes('date') || normalized.includes('time');
+}
+
+function normalizeWriteValueForColumn(value, columnName, columnTypes) {
+  if (value === undefined || value === null) return null;
+  const type = String(columnTypes?.get(String(columnName || '').trim()) || '').trim().toLowerCase();
+  if (typeof value === 'string' && value.trim() === '' && isTemporalColumnType(type)) return null;
+  return value;
+}
+
 async function readTableRows(client, schema, table, limit) {
   if (!isIdent(schema) || !isIdent(table)) return [];
   const qn = qname(schema, table);
@@ -401,8 +421,16 @@ export async function previewWriteConfig(client, rawSettings, options = {}) {
   const sourceRows = source.rows;
   const sourceColumns = columnsFromRows(sourceRows);
   const targetColumns = cfg.targetSchema && cfg.targetTable ? await tableColumnsDetailed(client, cfg.targetSchema, cfg.targetTable) : [];
+  const targetColumnTypes = buildTargetColumnTypeMap(targetColumns);
   const mapping = resolveWriteMappings(sourceColumns, targetColumns, cfg.fieldMappings);
-  const mappedRows = sourceRows.map((row) => applyMappingsToRow(row, mapping.rows, cfg.unmappedMode).row);
+  const mappedRows = sourceRows.map((row) => {
+    const mapped = applyMappingsToRow(row, mapping.rows, cfg.unmappedMode).row;
+    const normalized = {};
+    for (const [column, value] of Object.entries(mapped)) {
+      normalized[column] = normalizeWriteValueForColumn(value, column, targetColumnTypes);
+    }
+    return normalized;
+  });
   const keys = cfg.keyFields.filter((field) => targetColumns.some((column) => column.name === field));
   const rowsWithKeys = rowsWithCompleteKeys(mappedRows, keys);
   const matchStats = cfg.targetSchema && cfg.targetTable ? await countExistingMatches(client, cfg.targetSchema, cfg.targetTable, rowsWithKeys.slice(0, cfg.previewLimit), keys) : { matched: 0 };
@@ -467,11 +495,16 @@ export async function executeWriteConfig(client, rawSettings, options = {}) {
     };
   }
   const targetColumns = await tableColumnsDetailed(client, cfg.targetSchema, cfg.targetTable);
+  const targetColumnTypes = buildTargetColumnTypeMap(targetColumns);
   const hasPayloadJson = targetColumns.some((column) => column.name === 'payload_json');
   const mapping = resolveWriteMappings(columnsFromRows(sourceRows), targetColumns, cfg.fieldMappings);
   const readyRows = [];
   for (const sourceRow of sourceRows) {
-    const mapped = applyMappingsToRow(sourceRow, mapping.rows, cfg.unmappedMode).row;
+    const rawMapped = applyMappingsToRow(sourceRow, mapping.rows, cfg.unmappedMode).row;
+    const mapped = {};
+    for (const [column, value] of Object.entries(rawMapped)) {
+      mapped[column] = normalizeWriteValueForColumn(value, column, targetColumnTypes);
+    }
     if (Object.keys(mapped).length) readyRows.push(mapped);
     else if (hasPayloadJson) readyRows.push({ payload_json: sourceRow });
   }
