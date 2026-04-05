@@ -29,6 +29,7 @@ const {
   executeTableParserNode,
   executeTableNode,
   executeDbWriteNode,
+  _testEnsureWorkflowAutomationTables,
   _testReserveRunSlotForProcess,
   _testReleaseRunSlotForProcess,
   _testClearActiveRunSlots
@@ -854,4 +855,46 @@ test('aggregation consistency: manual trigger and scheduler trigger produce iden
   assert.equal(manualSummary.progress_percent, schedulerSummary.progress_percent);
   assert.equal(manualSummary.total_jobs, schedulerSummary.total_jobs);
   assert.equal(manualSummary.completed_jobs, schedulerSummary.completed_jobs);
+});
+
+test('schema migration: workflow chunk logs store adds request and response payload columns for older installs', async () => {
+  const statements = [];
+  const fakeClient = {
+    async query(sql) {
+      statements.push(String(sql || '').replace(/\s+/g, ' ').trim());
+      return { rows: [] };
+    }
+  };
+  const config = {
+    workflow_runs_schema: 'ao_system',
+    workflow_desks_schema: 'ao_system',
+    workflow_desks_table: 'workflow_desks_store',
+    workflow_desk_versions_table: 'workflow_desk_versions_store',
+    workflow_runs_table: 'workflow_runs_store',
+    workflow_run_steps_table: 'workflow_run_steps_store',
+    workflow_process_overrides_table: 'workflow_process_overrides_store',
+    workflow_process_locks_table: 'workflow_process_locks_store',
+    workflow_process_bus_table: 'workflow_process_bus_store',
+    workflow_job_queue_table: 'workflow_job_queue_store',
+    workflow_incremental_state_table: 'workflow_incremental_state_store',
+    workflow_dependencies_table: 'workflow_process_dependencies_store',
+    workflow_rate_limit_policies_table: 'workflow_rate_limit_policies_store',
+    workflow_tenant_policies_table: 'workflow_tenant_policies_store',
+    workflow_run_aggregation_table: 'workflow_run_aggregation_store',
+    workflow_dead_jobs_table: 'workflow_dead_jobs_store',
+    workflow_scheduler_leases_table: 'workflow_scheduler_leases_store',
+    workflow_worker_leases_table: 'workflow_worker_leases_store',
+    workflow_provider_registry_table: 'workflow_provider_registry_store',
+    workflow_chunk_logs_table: 'workflow_chunk_logs_store'
+  };
+  await _testEnsureWorkflowAutomationTables(fakeClient, config);
+  const chunkAlter = statements.find(
+    (sql) =>
+      sql.includes('ALTER TABLE "ao_system"."workflow_chunk_logs_store"') &&
+      sql.includes('request_payload') &&
+      sql.includes('response_payload')
+  );
+  assert.ok(chunkAlter, 'expected ALTER TABLE for workflow_chunk_logs_store to backfill payload columns');
+  assert.match(chunkAlter, /ADD COLUMN IF NOT EXISTS request_payload jsonb NOT NULL DEFAULT '\{\}'::jsonb/i);
+  assert.match(chunkAlter, /ADD COLUMN IF NOT EXISTS response_payload jsonb NOT NULL DEFAULT '\{\}'::jsonb/i);
 });

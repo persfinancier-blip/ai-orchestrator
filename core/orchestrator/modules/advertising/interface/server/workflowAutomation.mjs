@@ -1291,7 +1291,9 @@ async function ensureWorkflowAutomationTables(client, config) {
     ALTER TABLE ${workflowChunkLogsQname(config)}
       ADD COLUMN IF NOT EXISTS scope_type text NOT NULL DEFAULT 'global',
       ADD COLUMN IF NOT EXISTS scope_ref text NOT NULL DEFAULT 'global',
-      ADD COLUMN IF NOT EXISTS context_json jsonb NOT NULL DEFAULT '{}'::jsonb
+      ADD COLUMN IF NOT EXISTS context_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      ADD COLUMN IF NOT EXISTS request_payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+      ADD COLUMN IF NOT EXISTS response_payload jsonb NOT NULL DEFAULT '{}'::jsonb
   `);
   await client.query(`
     ALTER TABLE ${workflowChunkLogsQname(config)}
@@ -9141,6 +9143,7 @@ export const workflowAutomationTestkit = {
   executeTableParserNode,
   executeTableNode,
   executeDbWriteNode,
+  _testEnsureWorkflowAutomationTables: ensureWorkflowAutomationTables,
   _testReserveRunSlotForProcess: reserveRunSlotForProcess,
   _testReleaseRunSlotForProcess: releaseRunSlotForProcess,
   _testClearActiveRunSlots() {
