@@ -4,6 +4,8 @@ import vm from 'node:vm';
 import { pool } from './db.mjs';
 import { executeParserRows, parserRuntimeTestkit } from './parserRuntime.mjs';
 import { executeTableNodeConfig } from './tableNodeRuntime.mjs';
+import { executeActionPrepConfig, previewActionPrepConfig } from './actionPrepRuntime.mjs';
+import { executeApiMutationConfig, previewApiMutationConfig } from './apiMutationRuntime.mjs';
 import { executeWriteConfig, previewWriteConfig } from './writeRuntime.mjs';
 import {
   shouldRetryStatus,
@@ -4275,6 +4277,16 @@ function isParserToolNode(node) {
   return Boolean(node && node.type === 'tool' && toolType === 'table_parser');
 }
 
+function isActionPrepToolNode(node) {
+  const toolType = String(node?.config?.toolType || '').trim().toLowerCase();
+  return Boolean(node && node.type === 'tool' && toolType === 'action_prep');
+}
+
+function isApiMutationToolNode(node) {
+  const toolType = String(node?.config?.toolType || '').trim().toLowerCase();
+  return Boolean(node && node.type === 'tool' && toolType === 'api_mutation');
+}
+
 function applyToolSettingsOverrideToGraph(graphJson, targetNodeId, settingsOverride = null, expectedToolType = '') {
   const graph = graphJson && typeof graphJson === 'object' ? deepClone(graphJson) : {};
   const override =
@@ -7198,6 +7210,91 @@ async function executeTableNode(client, _config, processCtx, node, inputValue, e
   };
 }
 
+async function executeActionPrepNode(client, _config, processCtx, node, inputValue, extra = {}) {
+  const settings = node?.config?.settings && typeof node.config.settings === 'object' ? node.config.settings : {};
+  const inputEnvelope = normalizeNodeIoEnvelope(inputValue, processCtx);
+  const exec = await executeActionPrepConfig(client, settings, {
+    inputValue,
+    inputEnvelope,
+    preview: Boolean(extra?.preview)
+  });
+  const outputEnvelope = composeNodeOutputEnvelope(
+    processCtx,
+    node,
+    Array.isArray(exec?.rows) ? exec.rows : [],
+    {
+      source_type: 'action_prep',
+      source_ref: String(exec?.meta?.source_ref || '').trim()
+    },
+    {
+      input_rows: inputEnvelope.row_count,
+      result_rows: Array.isArray(exec?.rows) ? exec.rows.length : 0
+    }
+  );
+  return {
+    output: outputEnvelope,
+    metrics: {
+      rows: Array.isArray(exec?.rows) ? exec.rows.length : 0,
+      ...(exec?.stats && typeof exec.stats === 'object' ? exec.stats : {})
+    }
+  };
+}
+
+async function executeApiMutationNode(client, _config, processCtx, node, inputValue, extra = {}) {
+  const settings = node?.config?.settings && typeof node.config.settings === 'object' ? node.config.settings : {};
+  const inputEnvelope = normalizeNodeIoEnvelope(inputValue, processCtx);
+  const isPreview = Boolean(extra?.preview);
+  const effectiveDryRun = extra?.dry_run_override === undefined ? isPreview : Boolean(extra.dry_run_override);
+  const exec = isPreview
+    ? await previewApiMutationConfig(client, settings, {
+        inputValue,
+        inputEnvelope,
+        dryRunOverride: true
+      })
+    : await executeApiMutationConfig(client, settings, {
+        inputValue,
+        inputEnvelope,
+        dryRunOverride: effectiveDryRun
+      });
+  const outputRows = Array.isArray(exec?.rows)
+    ? exec.rows
+    : Array.isArray(exec?.sample_rows)
+    ? exec.sample_rows
+    : [];
+
+  const outputEnvelope = composeNodeOutputEnvelope(
+    processCtx,
+    node,
+    outputRows,
+    {
+      source_type: 'api_mutation',
+      request_mode: String(exec?.meta?.request_mode || exec?.stats?.request_mode || '').trim() || undefined,
+      dry_run: Boolean(exec?.meta?.dry_run ?? exec?.stats?.dry_run ?? false)
+    },
+    {
+      input_rows: inputEnvelope.row_count,
+      request_preview: exec?.request_preview || []
+    }
+  );
+  return {
+    output: outputEnvelope,
+    metrics: {
+      rows: outputRows.length,
+      ...(exec?.stats && typeof exec.stats === 'object' ? exec.stats : {})
+    },
+    request_payload: {
+      mode: 'api_mutation',
+      request_preview: exec?.request_preview || [],
+      input_contract: inputEnvelope
+    },
+    response_payload: {
+      rows: outputRows,
+      stats: exec?.stats || {},
+      warnings: Array.isArray(exec?.warnings) ? exec.warnings : []
+    }
+  };
+}
+
 async function executeProcessNode(client, config, processCtx, node, templates, inputValue, execOptions = {}) {
   const toolType = String(node?.config?.toolType || '').trim().toLowerCase();
   if (toolType === 'http_request') {
@@ -7282,6 +7379,18 @@ async function executeProcessNode(client, config, processCtx, node, templates, i
       response_payload: tableNode.output
     };
   }
+  if (toolType === 'action_prep') {
+    const actionPrep = await executeActionPrepNode(client, config, processCtx, node, inputValue, execOptions);
+    return {
+      output: actionPrep.output,
+      metrics: actionPrep.metrics,
+      request_payload: {
+        mode: 'action_prep',
+        input_contract: normalizeNodeIoEnvelope(inputValue, processCtx)
+      },
+      response_payload: actionPrep.output
+    };
+  }
   if (toolType === 'db_write') {
     const write = await executeDbWriteNode(client, config, processCtx, node, inputValue, execOptions);
     return {
@@ -7289,6 +7398,15 @@ async function executeProcessNode(client, config, processCtx, node, templates, i
       metrics: write.metrics,
       request_payload: { mode: 'db_write' },
       response_payload: write.output
+    };
+  }
+  if (toolType === 'api_mutation') {
+    const mutation = await executeApiMutationNode(client, config, processCtx, node, inputValue, execOptions);
+    return {
+      output: mutation.output,
+      metrics: mutation.metrics,
+      request_payload: mutation.request_payload || {},
+      response_payload: mutation.response_payload || mutation.output
     };
   }
   if (toolType === 'end_process') {
@@ -8526,6 +8644,284 @@ async function previewWriteNodeProcessHandler(req, res) {
   }
 }
 
+async function previewActionPrepNodeProcessHandler(req, res) {
+  const deskId = Math.trunc(Number(req.body?.desk_id || 0));
+  const targetNodeId = String(req.body?.target_node_id || '').trim();
+  const graphJson = req.body?.graph_json && typeof req.body.graph_json === 'object' ? req.body.graph_json : null;
+  const settingsOverride =
+    req.body?.action_prep_settings_override && typeof req.body.action_prep_settings_override === 'object'
+      ? req.body.action_prep_settings_override
+      : null;
+  if (!targetNodeId) return res.status(400).json({ error: 'bad_request', details: 'target_node_id is required' });
+  if (!graphJson && deskId <= 0) return res.status(400).json({ error: 'bad_request', details: 'desk_id or graph_json is required' });
+
+  let client = null;
+  let runUid = buildRunUid('wf_preview');
+  let config = { ...DEFAULT_CONFIG };
+  try {
+    client = await pool.connect();
+    config = await loadRuntimeStorageConfig(client);
+    await ensureWorkflowAutomationTables(client, config);
+
+    const publishedDesk = deskId > 0 ? await loadPublishedDeskById(client, config, deskId) : null;
+    const effectiveGraph = applyToolSettingsOverrideToGraph(
+      graphJson || publishedDesk?.graph_json || {},
+      targetNodeId,
+      settingsOverride,
+      'action_prep'
+    );
+    const deskRow = {
+      desk_id: deskId > 0 ? deskId : Math.trunc(Number(publishedDesk?.desk_id || 0)),
+      desk_name: String(req.body?.desk_name || publishedDesk?.desk_name || '').trim(),
+      desk_version_id: Math.trunc(Number(publishedDesk?.desk_version_id || 0)),
+      version_no: Math.trunc(Number(publishedDesk?.version_no || 0)),
+      graph_json: effectiveGraph
+    };
+    const overrideRows = deskRow.desk_id > 0 ? await loadProcessOverrides(client, config, deskRow.desk_id) : [];
+    const processes = discoverProcessesFromGraph({
+      deskId: deskRow.desk_id,
+      deskVersionId: deskRow.desk_version_id,
+      versionNo: deskRow.version_no,
+      graphJson: deskRow.graph_json,
+      overrideRows
+    });
+    const process = findProcessContainingNode(processes, targetNodeId);
+    if (!process) return res.status(404).json({ error: 'not_found', details: 'process for target node not found' });
+    const targetNode =
+      Array.isArray(process?.subgraph?.order)
+        ? process.subgraph.order.find((node) => String(node?.id || '').trim() === targetNodeId)
+        : null;
+    if (!targetNode || !(targetNode?.type === 'tool' && String(targetNode?.config?.toolType || '').trim().toLowerCase() === 'action_prep')) {
+      return res.status(400).json({ error: 'bad_request', details: 'target node is not an action preparation node' });
+    }
+
+    const scopes = await resolveExecutionScopesForProcess(client, config, deskRow, process);
+    const previewScope = Array.isArray(scopes) && scopes.length ? scopes[0] : buildDefaultExecutionScopeForProcess(process);
+    const previewProcess = {
+      ...process,
+      subgraph: buildUpstreamSubgraphToTarget(process?.subgraph || {}, targetNodeId)
+    };
+
+    await insertProcessRunRow(client, config, {
+      run_uid: runUid,
+      desk_id: deskRow.desk_id,
+      desk_name: deskRow.desk_name || `desk_${deskRow.desk_id || 0}`,
+      desk_version_id: deskRow.desk_version_id,
+      start_node_id: String(previewProcess?.start_node_id || '').trim(),
+      process_code: String(previewProcess?.process_code || '').trim(),
+      scope_type: previewScope.scope_type,
+      scope_ref: previewScope.scope_ref,
+      tenant_id: previewScope.tenant_id,
+      context_json: previewScope.context_json || {},
+      run_policy: String(previewProcess?.run_policy || 'single_instance').trim(),
+      orchestration_mode: 'preview',
+      trigger_source: 'preview',
+      trigger_type: 'preview',
+      trigger_key: targetNodeId,
+      trigger_meta: {
+        preview_target_node_id: targetNodeId,
+        graph_source: graphJson ? 'editor_snapshot' : 'published_desk',
+        preview_scope: previewScope,
+        action_prep_settings_override: Boolean(settingsOverride)
+      },
+      status: 'running',
+      created_by: String(req.body?.created_by || 'action_prep_preview').trim() || 'action_prep_preview'
+    });
+
+    const result = await executeProcessPreviewUntilNode(
+      client,
+      config,
+      deskRow,
+      previewProcess,
+      {
+        run_uid: runUid,
+        scope_type: previewScope.scope_type,
+        scope_ref: previewScope.scope_ref,
+        tenant_id: previewScope.tenant_id,
+        context_json: previewScope.context_json || {}
+      },
+      targetNodeId,
+      { preview: true }
+    );
+
+    await updateRunRow(client, config, runUid, {
+      status: result.status,
+      finished_at: new Date().toISOString(),
+      duration_ms: Number(result.duration_ms || 0),
+      summary_json: result.summary_json || {},
+      error_text: result.error_text || ''
+    });
+
+    return res.json({
+      run_uid: runUid,
+      process: {
+        start_node_id: String(previewProcess?.start_node_id || '').trim(),
+        process_code: String(previewProcess?.process_code || '').trim()
+      },
+      scope: previewScope,
+      target_step: result.target_step || null,
+      steps: Array.isArray(result.steps) ? result.steps : []
+    });
+  } catch (e) {
+    const errorText = String(e?.message || e || 'preview_action_prep_node_failed');
+    if (client) {
+      try {
+        await updateRunRow(client, config, runUid, {
+          status: 'failed',
+          finished_at: new Date().toISOString(),
+          duration_ms: 0,
+          summary_json: {},
+          error_text: errorText
+        });
+      } catch {
+        // ignore
+      }
+    }
+    return res.status(500).json({ error: 'preview_action_prep_node_failed', details: errorText });
+  } finally {
+    if (client) client.release();
+  }
+}
+
+async function previewApiMutationNodeProcessHandler(req, res) {
+  const deskId = Math.trunc(Number(req.body?.desk_id || 0));
+  const targetNodeId = String(req.body?.target_node_id || '').trim();
+  const graphJson = req.body?.graph_json && typeof req.body.graph_json === 'object' ? req.body.graph_json : null;
+  const settingsOverride =
+    req.body?.api_mutation_settings_override && typeof req.body.api_mutation_settings_override === 'object'
+      ? req.body.api_mutation_settings_override
+      : null;
+  if (!targetNodeId) return res.status(400).json({ error: 'bad_request', details: 'target_node_id is required' });
+  if (!graphJson && deskId <= 0) return res.status(400).json({ error: 'bad_request', details: 'desk_id or graph_json is required' });
+
+  let client = null;
+  let runUid = buildRunUid('wf_preview');
+  let config = { ...DEFAULT_CONFIG };
+  try {
+    client = await pool.connect();
+    config = await loadRuntimeStorageConfig(client);
+    await ensureWorkflowAutomationTables(client, config);
+
+    const publishedDesk = deskId > 0 ? await loadPublishedDeskById(client, config, deskId) : null;
+    const effectiveGraph = applyToolSettingsOverrideToGraph(
+      graphJson || publishedDesk?.graph_json || {},
+      targetNodeId,
+      settingsOverride,
+      'api_mutation'
+    );
+    const deskRow = {
+      desk_id: deskId > 0 ? deskId : Math.trunc(Number(publishedDesk?.desk_id || 0)),
+      desk_name: String(req.body?.desk_name || publishedDesk?.desk_name || '').trim(),
+      desk_version_id: Math.trunc(Number(publishedDesk?.desk_version_id || 0)),
+      version_no: Math.trunc(Number(publishedDesk?.version_no || 0)),
+      graph_json: effectiveGraph
+    };
+    const overrideRows = deskRow.desk_id > 0 ? await loadProcessOverrides(client, config, deskRow.desk_id) : [];
+    const processes = discoverProcessesFromGraph({
+      deskId: deskRow.desk_id,
+      deskVersionId: deskRow.desk_version_id,
+      versionNo: deskRow.version_no,
+      graphJson: deskRow.graph_json,
+      overrideRows
+    });
+    const process = findProcessContainingNode(processes, targetNodeId);
+    if (!process) return res.status(404).json({ error: 'not_found', details: 'process for target node not found' });
+    const targetNode =
+      Array.isArray(process?.subgraph?.order)
+        ? process.subgraph.order.find((node) => String(node?.id || '').trim() === targetNodeId)
+        : null;
+    if (!targetNode || !(targetNode?.type === 'tool' && String(targetNode?.config?.toolType || '').trim().toLowerCase() === 'api_mutation')) {
+      return res.status(400).json({ error: 'bad_request', details: 'target node is not an API mutation node' });
+    }
+
+    const scopes = await resolveExecutionScopesForProcess(client, config, deskRow, process);
+    const previewScope = Array.isArray(scopes) && scopes.length ? scopes[0] : buildDefaultExecutionScopeForProcess(process);
+    const previewProcess = {
+      ...process,
+      subgraph: buildUpstreamSubgraphToTarget(process?.subgraph || {}, targetNodeId)
+    };
+
+    await insertProcessRunRow(client, config, {
+      run_uid: runUid,
+      desk_id: deskRow.desk_id,
+      desk_name: deskRow.desk_name || `desk_${deskRow.desk_id || 0}`,
+      desk_version_id: deskRow.desk_version_id,
+      start_node_id: String(previewProcess?.start_node_id || '').trim(),
+      process_code: String(previewProcess?.process_code || '').trim(),
+      scope_type: previewScope.scope_type,
+      scope_ref: previewScope.scope_ref,
+      tenant_id: previewScope.tenant_id,
+      context_json: previewScope.context_json || {},
+      run_policy: String(previewProcess?.run_policy || 'single_instance').trim(),
+      orchestration_mode: 'preview',
+      trigger_source: 'preview',
+      trigger_type: 'preview',
+      trigger_key: targetNodeId,
+      trigger_meta: {
+        preview_target_node_id: targetNodeId,
+        graph_source: graphJson ? 'editor_snapshot' : 'published_desk',
+        preview_scope: previewScope,
+        api_mutation_settings_override: Boolean(settingsOverride)
+      },
+      status: 'running',
+      created_by: String(req.body?.created_by || 'api_mutation_preview').trim() || 'api_mutation_preview'
+    });
+
+    const result = await executeProcessPreviewUntilNode(
+      client,
+      config,
+      deskRow,
+      previewProcess,
+      {
+        run_uid: runUid,
+        scope_type: previewScope.scope_type,
+        scope_ref: previewScope.scope_ref,
+        tenant_id: previewScope.tenant_id,
+        context_json: previewScope.context_json || {}
+      },
+      targetNodeId,
+      { preview: true, dry_run_override: true }
+    );
+
+    await updateRunRow(client, config, runUid, {
+      status: result.status,
+      finished_at: new Date().toISOString(),
+      duration_ms: Number(result.duration_ms || 0),
+      summary_json: result.summary_json || {},
+      error_text: result.error_text || ''
+    });
+
+    return res.json({
+      run_uid: runUid,
+      process: {
+        start_node_id: String(previewProcess?.start_node_id || '').trim(),
+        process_code: String(previewProcess?.process_code || '').trim()
+      },
+      scope: previewScope,
+      target_step: result.target_step || null,
+      steps: Array.isArray(result.steps) ? result.steps : []
+    });
+  } catch (e) {
+    const errorText = String(e?.message || e || 'preview_api_mutation_node_failed');
+    if (client) {
+      try {
+        await updateRunRow(client, config, runUid, {
+          status: 'failed',
+          finished_at: new Date().toISOString(),
+          duration_ms: 0,
+          summary_json: {},
+          error_text: errorText
+        });
+      } catch {
+        // ignore
+      }
+    }
+    return res.status(500).json({ error: 'preview_api_mutation_node_failed', details: errorText });
+  } finally {
+    if (client) client.release();
+  }
+}
+
 async function triggerProcessRunsHandler(req, res) {
   const deskId = Number(req.body?.desk_id || 0);
   const startNodeId = String(req.body?.start_node_id || '').trim();
@@ -9095,7 +9491,9 @@ workflowAutomationRouter.get('/process-runs/aggregation', requireDataAdmin, list
 workflowAutomationRouter.get('/process-runs/:run_uid', requireDataAdmin, getProcessRunHandler);
 workflowAutomationRouter.post('/process-runs/preview-api-node', requireDataAdmin, previewApiNodeProcessHandler);
 workflowAutomationRouter.post('/process-runs/preview-parser-node', requireDataAdmin, previewParserNodeProcessHandler);
+workflowAutomationRouter.post('/process-runs/preview-action-prep-node', requireDataAdmin, previewActionPrepNodeProcessHandler);
 workflowAutomationRouter.post('/process-runs/preview-write-node', requireDataAdmin, previewWriteNodeProcessHandler);
+workflowAutomationRouter.post('/process-runs/preview-api-mutation-node', requireDataAdmin, previewApiMutationNodeProcessHandler);
 workflowAutomationRouter.post('/process-runs/trigger', requireDataAdmin, triggerProcessRunsHandler);
 workflowAutomationRouter.post('/desks/:desk_id/publish', requireDataAdmin, publishDeskHandler);
 workflowAutomationRouter.get('/desks/:desk_id/processes', requireDataAdmin, listDeskProcessesHandler);
@@ -9144,7 +9542,9 @@ export const workflowAutomationTestkit = {
   parseCsvList,
   executeTableParserNode,
   executeTableNode,
+  executeActionPrepNode,
   executeDbWriteNode,
+  executeApiMutationNode,
   _testEnsureWorkflowAutomationTables: ensureWorkflowAutomationTables,
   _testWriteChunkLog: writeChunkLog,
   _testReserveRunSlotForProcess: reserveRunSlotForProcess,

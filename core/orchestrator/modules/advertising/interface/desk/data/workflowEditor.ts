@@ -3,9 +3,11 @@ export type ToolType =
   | 'start_process'
   | 'schedule_process'
   | 'api_request'
+  | 'api_mutation'
   | 'http_request'
   | 'table_node'
   | 'table_parser'
+  | 'action_prep'
   | 'db_write'
   | 'split_data'
   | 'merge_data'
@@ -181,6 +183,12 @@ export const tools: ToolItem[] = [
     description: 'Выполняет прямой HTTP-запрос по произвольному адресу'
   },
   {
+    id: 'tool_api_mutation',
+    name: 'API-изменение',
+    toolType: 'api_mutation',
+    description: 'Готовит mutation payload и выполняет API-изменения по входному потоку строк'
+  },
+  {
     id: 'tool_table_node',
     name: 'Табличный набор',
     toolType: 'table_node',
@@ -224,6 +232,12 @@ export const tools: ToolItem[] = [
     description: 'Парсинг, нормализация и подготовка строк для следующей ноды'
   },
   {
+    id: 'tool_action_prep',
+    name: 'Подготовка действий',
+    toolType: 'action_prep',
+    description: 'Отбирает строки, добавляет action-колонки и готовит поток для API-изменений'
+  },
+  {
     id: 'tool_db_write',
     name: 'Запись в БД',
     toolType: 'db_write',
@@ -241,9 +255,11 @@ export const toolPorts: Record<ToolType, { inputs: string[]; outputs: string[] }
   start_process: { inputs: ['in'], outputs: ['out'] },
   schedule_process: { inputs: ['in'], outputs: ['out'] },
   api_request: { inputs: ['in'], outputs: ['out'] },
+  api_mutation: { inputs: ['in'], outputs: ['out'] },
   http_request: { inputs: ['in'], outputs: ['out'] },
   table_node: { inputs: ['in'], outputs: ['out'] },
   table_parser: { inputs: ['in'], outputs: ['out'] },
+  action_prep: { inputs: ['in'], outputs: ['out'] },
   db_write: { inputs: ['in'], outputs: ['out'] },
   split_data: { inputs: ['in'], outputs: ['out'] },
   merge_data: { inputs: ['in'], outputs: ['out'] },

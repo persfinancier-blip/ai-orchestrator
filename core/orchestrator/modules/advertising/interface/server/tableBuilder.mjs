@@ -276,6 +276,23 @@ export const DEFAULT_NODE_REGISTRY_ROWS = Object.freeze([
     runtime_handler_code: 'http_request'
   },
   {
+    node_type_code: 'api_mutation',
+    node_name_ru: 'API-изменение',
+    description_ru: 'Принимает входные строки, собирает mutation payload и выполняет API-изменения с dry-run и батчами.',
+    section_code: 'requests',
+    section_name_ru: 'Запросы',
+    section_order: 20,
+    node_order: 30,
+    is_enabled: true,
+    is_system: true,
+    hidden_in_palette: false,
+    node_label_ru: 'Мутация',
+    icon_key: 'api_mutation',
+    visual_preset_key: 'request',
+    editor_type_code: 'api_mutation_builder',
+    runtime_handler_code: 'api_mutation'
+  },
+  {
     node_type_code: 'condition_if',
     node_name_ru: 'Если',
     description_ru: 'Проверяет условие и направляет поток данных в одну из двух веток.',
@@ -376,6 +393,23 @@ export const DEFAULT_NODE_REGISTRY_ROWS = Object.freeze([
     visual_preset_key: 'data',
     editor_type_code: 'table_node',
     runtime_handler_code: 'table_node'
+  },
+  {
+    node_type_code: 'action_prep',
+    node_name_ru: 'Подготовка действий',
+    description_ru: 'Отбирает строки, добавляет action-колонки и формирует поток для массовых API-изменений.',
+    section_code: 'data_processing',
+    section_name_ru: 'Работа с данными',
+    section_order: 30,
+    node_order: 50,
+    is_enabled: true,
+    is_system: true,
+    hidden_in_palette: false,
+    node_label_ru: 'Действия',
+    icon_key: 'action_prep',
+    visual_preset_key: 'data',
+    editor_type_code: 'action_prep_builder',
+    runtime_handler_code: 'action_prep'
   },
   {
     node_type_code: 'code_node',

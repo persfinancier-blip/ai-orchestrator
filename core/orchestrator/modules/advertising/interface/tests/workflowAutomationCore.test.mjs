@@ -27,7 +27,9 @@ const {
   executeProcessPreviewUntilNode,
   applyToolSettingsOverrideToGraph,
   executeTableParserNode,
+  executeActionPrepNode,
   executeTableNode,
+  executeApiMutationNode,
   executeDbWriteNode,
   _testEnsureWorkflowAutomationTables,
   _testWriteChunkLog,
@@ -739,6 +741,82 @@ test('first nodes runtime contract: table_node output params propagate to downst
   assert.equal(secondOut.output.contract_version, 'node_io_v1');
   assert.equal(secondOut.output.rows[0].picked_sku, 'wb-1');
   assert.equal(secondOut.output.trace.input_rows, 2);
+});
+
+test('action prep handoff: canonical output feeds api mutation dry-run preview', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url: String(url || ''), init });
+    throw new Error('dry_run_should_not_call_network');
+  };
+  try {
+    const client = {
+      query: async () => ({
+        rows: [
+          { campaign_id: 'cmp_1', current_bid: 100, roas: 0.8 },
+          { campaign_id: 'cmp_2', current_bid: 120, roas: 1.4 }
+        ]
+      })
+    };
+    const processCtx = { desk_id: 91, run_uid: 'run_actions', process_code: 'proc_actions' };
+    const prepNode = {
+      id: 'action_prep_1',
+      type: 'tool',
+      config: {
+        name: 'Подготовка действий',
+        toolType: 'action_prep',
+        settings: {
+          sourceMode: 'table',
+          sourceSchema: 'ao_data',
+          sourceTable: 'campaigns',
+          filterRulesJson: JSON.stringify([{ field: 'roas', operator: '<', value: 1 }]),
+          actionColumnsJson: JSON.stringify([
+            { name: 'action_type', mode: 'constant', constantValue: 'update_bid' },
+            { name: 'new_bid', mode: 'percent_change', baseField: 'current_bid', percentValue: 5 },
+            { name: 'reason', mode: 'string_template', template: 'rebalance_{campaign_id}' }
+          ])
+        }
+      }
+    };
+    const prepResult = await executeActionPrepNode(client, {}, processCtx, prepNode, null, {});
+    assert.equal(prepResult.output.contract_version, 'node_io_v1');
+    assert.equal(prepResult.output.row_count, 1);
+    assert.equal(prepResult.output.rows[0].action_type, 'update_bid');
+    assert.equal(prepResult.output.rows[0].new_bid, 105);
+
+    const mutationNode = {
+      id: 'api_mutation_1',
+      type: 'tool',
+      config: {
+        name: 'API-изменение',
+        toolType: 'api_mutation',
+        settings: {
+          endpointUrl: 'https://mutation.example.test/bids',
+          httpMethod: 'POST',
+          headersJson: '{"Content-Type":"application/json"}',
+          bodyJson: '{}',
+          bindingRulesJson: JSON.stringify([
+            { sourceField: 'campaign_id', target: 'body', path: 'campaign_id' },
+            { sourceField: 'new_bid', target: 'body', path: 'bid' },
+            { sourceField: 'reason', target: 'body', path: 'reason' }
+          ]),
+          responseMappingsJson: JSON.stringify([{ responsePath: 'dry_run', alias: 'mutation_preview_dry_run' }]),
+          requestMode: 'row_per_request',
+          dryRun: 'true'
+        }
+      }
+    };
+    const mutationResult = await executeApiMutationNode(client, {}, processCtx, mutationNode, prepResult.output, { preview: true, dry_run_override: true });
+    assert.equal(mutationResult.output.contract_version, 'node_io_v1');
+    assert.equal(mutationResult.output.row_count, 1);
+    assert.equal(mutationResult.output.rows[0].campaign_id, 'cmp_1');
+    assert.equal(mutationResult.output.rows[0].mutation_dry_run, true);
+    assert.equal(mutationResult.request_payload.request_preview[0].body.bid, 105);
+    assert.equal(requests.length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('start settings sync contract: execution scope mode values stay from UI options', () => {

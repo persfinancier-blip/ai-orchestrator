@@ -2,6 +2,8 @@
   import { onDestroy, onMount, tick } from 'svelte';
   import ApiBuilderTab from '../tabs/ApiBuilderTab.svelte';
   import ParserBuilderTab from '../tabs/ParserBuilderTab.svelte';
+  import ActionPrepBuilderTab from '../tabs/ActionPrepBuilderTab.svelte';
+  import ApiMutationBuilderTab from '../tabs/ApiMutationBuilderTab.svelte';
   import TableNodeBuilderTab from '../tabs/TableNodeBuilderTab.svelte';
   import WriteBuilderTab from '../tabs/WriteBuilderTab.svelte';
   import { buildAliasFromPath, normalizeTemplatePath } from '../tabs/outputContractCore.js';
@@ -641,9 +643,11 @@
   const supportedToolTypeSet = new Set<ToolType>([
     'start_process',
     'api_request',
+    'api_mutation',
     'http_request',
     'table_parser',
     'table_node',
+    'action_prep',
     'db_write',
     'split_data',
     'merge_data',
@@ -706,6 +710,24 @@
       visual_preset_key: 'request',
       editor_type_code: 'http_request',
       runtime_handler_code: 'http_request'
+    },
+    {
+      id: 13,
+      node_type_code: 'api_mutation',
+      node_name_ru: 'API-изменение',
+      description_ru: 'Принимает входные строки, собирает mutation payload и выполняет API-изменения с dry-run и батчами.',
+      section_code: 'requests',
+      section_name_ru: 'Запросы',
+      section_order: 20,
+      node_order: 30,
+      is_enabled: true,
+      is_system: true,
+      hidden_in_palette: false,
+      node_label_ru: 'Мутация',
+      icon_key: 'api_mutation',
+      visual_preset_key: 'request',
+      editor_type_code: 'api_mutation_builder',
+      runtime_handler_code: 'api_mutation'
     },
     {
       id: 4,
@@ -796,6 +818,24 @@
       visual_preset_key: 'data',
       editor_type_code: 'table_node',
       runtime_handler_code: 'table_node'
+    },
+    {
+      id: 14,
+      node_type_code: 'action_prep',
+      node_name_ru: 'Подготовка действий',
+      description_ru: 'Отбирает строки, добавляет action-колонки и формирует поток для массовых API-изменений.',
+      section_code: 'data_processing',
+      section_name_ru: 'Работа с данными',
+      section_order: 30,
+      node_order: 50,
+      is_enabled: true,
+      is_system: true,
+      hidden_in_palette: false,
+      node_label_ru: 'Действия',
+      icon_key: 'action_prep',
+      visual_preset_key: 'data',
+      editor_type_code: 'action_prep_builder',
+      runtime_handler_code: 'action_prep'
     },
     {
       id: 9,
@@ -1056,7 +1096,7 @@
         throw new Error(String(payload?.details || payload?.error || `HTTP ${raw.status}`));
       }
       const rows = Array.isArray(payload?.node_registry) ? payload.node_registry : [];
-      nodeRegistryEntries = rows
+      const loadedRows = rows
         .map((row: any) => ({
           id: Number(row?.id || 0) || 0,
           node_type_code: String(row?.node_type_code || '').trim(),
@@ -1078,9 +1118,10 @@
           updated_by: String(row?.updated_by || '').trim()
         }))
         .filter((entry: NodeRegistryEntry) => Boolean(entry.node_type_code && entry.node_name_ru));
-      if (!nodeRegistryEntries.length) {
-        nodeRegistryEntries = [...fallbackNodeRegistryEntries];
-      }
+      const mergedRows = new Map<string, NodeRegistryEntry>();
+      for (const entry of fallbackNodeRegistryEntries) mergedRows.set(String(entry.node_type_code || '').trim(), entry);
+      for (const entry of loadedRows) mergedRows.set(String(entry.node_type_code || '').trim(), entry);
+      nodeRegistryEntries = [...mergedRows.values()];
     } catch (e: any) {
       nodeRegistryEntries = [...fallbackNodeRegistryEntries];
       nodeRegistryError = String(e?.message || e || 'Не удалось загрузить реестр нод');
@@ -3110,6 +3151,14 @@
     return Boolean(n && n.type === 'tool' && toolCfg(n).toolType === 'table_parser');
   }
 
+  function isActionPrepToolNode(n: WorkflowNode | null | undefined) {
+    return Boolean(n && n.type === 'tool' && toolCfg(n).toolType === 'action_prep');
+  }
+
+  function isApiMutationToolNode(n: WorkflowNode | null | undefined) {
+    return Boolean(n && n.type === 'tool' && toolCfg(n).toolType === 'api_mutation');
+  }
+
   function tryList(value: any): any[] {
     if (Array.isArray(value)) return value;
     if (typeof value !== 'string') return [];
@@ -3222,6 +3271,45 @@
     );
   }
 
+  function descriptorFieldsFromActionPrepNode(node: WorkflowNode, upstreamDescriptors: NodeDescriptor[] = []): NodeDescriptorField[] {
+    const settings = toolCfg(node).settings || {};
+    const actionColumns = tryList(settings.actionColumnsJson || settings.actionColumns || settings.action_columns);
+    const passthroughFields =
+      String(settings.sourceMode || settings.source_mode || 'node').trim().toLowerCase() === 'node'
+        ? upstreamDescriptors
+            .flatMap((descriptor) => descriptorFields(descriptor))
+            .map((field, index) =>
+              normalizeDescriptorField(
+                {
+                  name: String(field?.alias || field?.name || field?.path || '').trim(),
+                  alias: String(field?.alias || field?.name || field?.path || '').trim(),
+                  path: String(field?.path || field?.alias || field?.name || '').trim(),
+                  type: String(field?.type || '').trim(),
+                  origin: 'action_prep_input'
+                },
+                index
+              )
+            )
+            .filter((item: NodeDescriptorField | null): item is NodeDescriptorField => Boolean(item))
+        : [];
+    const actionFields = actionColumns
+      .filter((item: any) => String(item?.name || item?.outputName || item?.output_name || '').trim())
+      .map((item: any, index: number) =>
+        normalizeDescriptorField(
+          {
+            name: String(item?.name || item?.outputName || item?.output_name || '').trim(),
+            alias: String(item?.name || item?.outputName || item?.output_name || '').trim(),
+            path: String(item?.name || item?.outputName || item?.output_name || '').trim(),
+            type: String(item?.type || '').trim(),
+            origin: 'action_prep_column'
+          },
+          passthroughFields.length + index
+        )
+      )
+      .filter((item: NodeDescriptorField | null): item is NodeDescriptorField => Boolean(item));
+    return uniqueDescriptorFields([...passthroughFields, ...actionFields]);
+  }
+
   function descriptorFieldsFromTableNode(node: WorkflowNode): NodeDescriptorField[] {
     const settings = toolCfg(node).settings || {};
     const selectedFields = tryList(settings.selectedFieldsJson || settings.selectedFields || settings.selected_fields);
@@ -3304,11 +3392,61 @@
     return targetColumns;
   }
 
+  function descriptorFieldsFromApiMutationNode(node: WorkflowNode, upstreamDescriptors: NodeDescriptor[] = []): NodeDescriptorField[] {
+    const settings = toolCfg(node).settings || {};
+    const passthroughFields = upstreamDescriptors
+      .flatMap((descriptor) => descriptorFields(descriptor))
+      .map((field, index) =>
+        normalizeDescriptorField(
+          {
+            name: String(field?.alias || field?.name || field?.path || '').trim(),
+            alias: String(field?.alias || field?.name || field?.path || '').trim(),
+            path: String(field?.path || field?.alias || field?.name || '').trim(),
+            type: String(field?.type || '').trim(),
+            origin: 'api_mutation_input'
+          },
+          index
+        )
+      )
+      .filter((item: NodeDescriptorField | null): item is NodeDescriptorField => Boolean(item));
+    const responseMappings = tryList(settings.responseMappingsJson || settings.responseMappings || settings.response_mappings);
+    const mutationSummaryFields = ['mutation_request_index', 'mutation_batch_index', 'mutation_source_rows', 'mutation_dry_run', 'mutation_executed', 'mutation_ok', 'mutation_status', 'mutation_error']
+      .map((name, index) =>
+        normalizeDescriptorField(
+          {
+            name,
+            alias: name,
+            path: name,
+            origin: 'api_mutation_summary'
+          },
+          passthroughFields.length + index
+        )
+      )
+      .filter((item: NodeDescriptorField | null): item is NodeDescriptorField => Boolean(item));
+    const mappedResponseFields = responseMappings
+      .filter((item: any) => String(item?.alias || item?.outputName || item?.output_name || '').trim())
+      .map((item: any, index: number) =>
+        normalizeDescriptorField(
+          {
+            name: String(item?.alias || item?.outputName || item?.output_name || '').trim(),
+            alias: String(item?.alias || item?.outputName || item?.output_name || '').trim(),
+            path: String(item?.alias || item?.outputName || item?.output_name || '').trim(),
+            origin: 'api_mutation_response'
+          },
+          passthroughFields.length + mutationSummaryFields.length + index
+        )
+      )
+      .filter((item: NodeDescriptorField | null): item is NodeDescriptorField => Boolean(item));
+    return uniqueDescriptorFields([...passthroughFields, ...mutationSummaryFields, ...mappedResponseFields]);
+  }
+
   function nodeDescriptorFieldsForNode(node: WorkflowNode, upstreamDescriptors: NodeDescriptor[] = []): NodeDescriptorField[] {
     if (isApiNode(node) || isApiToolNode(node)) return descriptorFieldsFromApiNode(node);
     if (isParserToolNode(node)) return descriptorFieldsFromParserNode(node, upstreamDescriptors);
+    if (isActionPrepToolNode(node)) return descriptorFieldsFromActionPrepNode(node, upstreamDescriptors);
     if (isTableNodeTool(node)) return descriptorFieldsFromTableNode(node);
     if (isWriteToolNode(node)) return descriptorFieldsFromWriteNode(node, upstreamDescriptors);
+    if (isApiMutationToolNode(node)) return descriptorFieldsFromApiMutationNode(node, upstreamDescriptors);
     return [];
   }
 
@@ -3405,22 +3543,46 @@
     };
   }
 
+  function descriptorDetectionFromActionPrepNode(node: WorkflowNode) {
+    const settings = toolCfg(node).settings || {};
+    return {
+      readMode: 'action_prep',
+      parseMode: String(settings.sourceMode || settings.source_mode || 'node').trim().toLowerCase() === 'table' ? 'table_source' : 'upstream_rows',
+      warnings: [],
+      appliedSteps: ['filters', 'action_columns']
+    };
+  }
+
+  function descriptorDetectionFromApiMutationNode(node: WorkflowNode) {
+    const settings = toolCfg(node).settings || {};
+    return {
+      readMode: 'api_mutation',
+      parseMode: String(settings.requestMode || settings.request_mode || 'row_per_request').trim().toLowerCase() || 'row_per_request',
+      warnings: [],
+      appliedSteps: ['payload_mapping', 'mutation_execution']
+    };
+  }
+
   function nodeDescriptorDetectionForNode(node: WorkflowNode) {
     if (isApiNode(node) || isApiToolNode(node)) return descriptorDetectionFromApiNode(node);
     if (isParserToolNode(node)) return descriptorDetectionFromParserNode(node);
+    if (isActionPrepToolNode(node)) return descriptorDetectionFromActionPrepNode(node);
     if (isTableNodeTool(node)) return descriptorDetectionFromTableNode(node);
     if (isWriteToolNode(node)) return descriptorDetectionFromWriteNode(node);
+    if (isApiMutationToolNode(node)) return descriptorDetectionFromApiMutationNode(node);
     return undefined;
   }
 
   function nodeDescriptorOutputKindForNode(node: WorkflowNode, fields: NodeDescriptorField[], sample: any, upstreamDescriptors: NodeDescriptor[]): NodeDescriptorOutputKind {
     if (isParserToolNode(node)) return 'row set';
+    if (isActionPrepToolNode(node)) return 'row set';
     if (isTableNodeTool(node)) {
       const mode = String(toolCfg(node).settings?.outputMode || toolCfg(node).settings?.output_mode || 'rows').trim().toLowerCase();
       if (mode === 'named_output_params' || mode === 'aggregated_values') return 'structured object';
       return 'row set';
     }
     if (isWriteToolNode(node)) return fields.length ? 'row set' : 'unknown';
+    if (isApiMutationToolNode(node)) return 'row set';
     if (isApiNode(node) || isApiToolNode(node)) {
       if (Array.isArray(sample?.sampleRows) && sample.sampleRows.length) return 'row set';
       return descriptorOutputKindFromFields(fields, 'structured object');
@@ -3437,7 +3599,7 @@
     const fields = nodeDescriptorFieldsForNode(node, upstreamDescriptors);
     const sample = nodeDescriptorSampleForApiNode(node);
     const registry = descriptorRegistryForNode(node);
-    if (!fields.length && upstreamDescriptors.length === 1 && !(isApiNode(node) || isApiToolNode(node) || isParserToolNode(node) || isTableNodeTool(node) || isWriteToolNode(node))) {
+    if (!fields.length && upstreamDescriptors.length === 1 && !(isApiNode(node) || isApiToolNode(node) || isParserToolNode(node) || isActionPrepToolNode(node) || isTableNodeTool(node) || isWriteToolNode(node) || isApiMutationToolNode(node))) {
       const inherited = upstreamDescriptors[0] || emptyNodeDescriptor(String(node.id || '').trim(), sourcePort);
       return {
         ...inherited,
@@ -3507,8 +3669,10 @@
           n &&
         (isApiNode(n) ||
           (n.type === 'tool' && toolCfg(n).toolType === 'api_request') ||
+          isApiMutationToolNode(n) ||
           isTableNodeTool(n) ||
           isParserToolNode(n) ||
+          isActionPrepToolNode(n) ||
           isWriteToolNode(n) ||
           toolCfg(n).toolType === 'condition_switch' ||
           toolCfg(n).toolType === 'code_node')
@@ -4438,6 +4602,28 @@
         apiBody: '{}'
       };
     }
+    if (toolType === 'api_mutation')
+      return {
+        endpointUrl: '',
+        httpMethod: 'POST',
+        authMode: 'manual',
+        authJson: '{}',
+        headersJson: '{"Content-Type":"application/json"}',
+        queryJson: '{}',
+        bodyJson: '{}',
+        bodyItemsPath: 'items',
+        bindingRulesJson: '[]',
+        responseMappingsJson: '[]',
+        requestMode: 'row_per_request',
+        batchSize: '50',
+        dryRun: 'true',
+        maxRowsPerRun: '500',
+        retryCount: '1',
+        timeoutMs: '15000',
+        stopPolicy: 'stop_on_error',
+        previewLimit: '20',
+        channel: ''
+      };
     if (toolType === 'table_node')
       return {
         baseSchema: '',
@@ -4543,6 +4729,18 @@
         channel: '',
         limit: '1000',
         parserMultiplier: '1'
+      };
+    if (toolType === 'action_prep')
+      return {
+        sourceMode: 'node',
+        sourceSchema: '',
+        sourceTable: '',
+        filterRulesJson: '[]',
+        filterLogic: 'and',
+        actionColumnsJson: '[]',
+        batchSize: '500',
+        previewLimit: '20',
+        channel: ''
       };
     if (toolType === 'db_write')
       return {
@@ -5177,7 +5375,13 @@
         }
       }
     if (cfg.toolType === 'table_parser') outRows = Math.max(0, Math.round(inRows * Math.max(0.1, Number(cfg.settings.parserMultiplier || 1))));
+    if (cfg.toolType === 'action_prep') outRows = inRows;
     if (cfg.toolType === 'table_node') outRows = inRows;
+    if (cfg.toolType === 'api_mutation') {
+      const requestMode = String(cfg.settings.requestMode || cfg.settings.request_mode || 'row_per_request').trim().toLowerCase();
+      const batchSize = Math.max(1, Number(cfg.settings.batchSize || cfg.settings.batch_size || 50));
+      outRows = requestMode === 'batch_request' ? Math.ceil(inRows / batchSize) : inRows;
+    }
     if (cfg.toolType === 'db_write') outRows = Math.max(0, Math.round(inRows * Math.max(0, Math.min(100, Number(cfg.settings.writeSuccessRate || 98))) / 100));
     if (cfg.toolType === 'end_process') outRows = 0;
     if (cfg.toolType === 'split_data') {
@@ -5353,7 +5557,13 @@
     if (cfg.toolType === 'schedule_process') outRows = inRows;
     if (cfg.toolType === 'api_request') outRows = inRows > 0 ? inRows : 1;
     if (cfg.toolType === 'table_parser') outRows = Math.max(0, Math.round(inRows * Math.max(0.1, Number(cfg.settings.parserMultiplier || 1))));
+    if (cfg.toolType === 'action_prep') outRows = inRows;
     if (cfg.toolType === 'table_node') outRows = inRows;
+    if (cfg.toolType === 'api_mutation') {
+      const requestMode = String(cfg.settings.requestMode || cfg.settings.request_mode || 'row_per_request').trim().toLowerCase();
+      const batchSize = Math.max(1, Number(cfg.settings.batchSize || cfg.settings.batch_size || 50));
+      outRows = requestMode === 'batch_request' ? Math.ceil(inRows / batchSize) : inRows;
+    }
     if (cfg.toolType === 'db_write') outRows = Math.max(0, Math.round(inRows * Math.max(0, Math.min(100, Number(cfg.settings.writeSuccessRate || 98))) / 100));
     if (cfg.toolType === 'end_process') outRows = 0;
     if (cfg.toolType === 'split_data') {
@@ -6786,6 +6996,11 @@
               Полная настройка parser-ноды открывается по двойному клику по карточке или через модалку настройки узла.
             </div>
           {/if}
+          {#if toolCfg(selectedNode).toolType === 'action_prep'}
+            <div class="empty">
+              Полная настройка подготовки действий открывается по двойному клику по карточке или через модалку настройки узла.
+            </div>
+          {/if}
           {#if toolCfg(selectedNode).toolType === 'table_node'}
             <div class="empty">
               Полная настройка табличного набора открывается по двойному клику по карточке или через модалку настройки узла.
@@ -6794,6 +7009,11 @@
           {#if toolCfg(selectedNode).toolType === 'db_write'}
             <div class="empty">
               Полная настройка ноды записи данных открывается по двойному клику по карточке или через модалку настройки узла.
+            </div>
+          {/if}
+          {#if toolCfg(selectedNode).toolType === 'api_mutation'}
+            <div class="empty">
+              Полная настройка API-изменения открывается по двойному клику по карточке или через модалку настройки узла.
             </div>
           {/if}
           {#if toolCfg(selectedNode).toolType === 'http_request'}
@@ -7279,6 +7499,30 @@
           {/key}
         </div>
       {/if}
+      {#if isActionPrepToolNode(settingsNode)}
+        <div class="node-modal-body node-modal-body-api">
+          {#key `${settingsNode.id}:${toolCfg(settingsNode).settings.sourceMode || 'node'}:${toolCfg(settingsNode).settings.sourceSchema || ''}:${toolCfg(settingsNode).settings.sourceTable || ''}`}
+            <ActionPrepBuilderTab
+              apiBase={API_BASE}
+              apiJson={workflowApiJson}
+              headers={workflowApiHeaders}
+              existingTables={apiBuilderExistingTables}
+              workflowDeskId={deskId}
+              workflowNodeId={settingsNode.id}
+              workflowGraph={captureDeskState()}
+              initialSettings={toolCfg(settingsNode).settings || {}}
+              incomingDescriptor={incomingDescriptorForNode(settingsNode)}
+              outputDescriptor={buildNodeOutputDescriptor(settingsNode, {
+                sourcePort: 'out',
+                upstreamDescriptors: incomingDescriptorForNode(settingsNode)?.upstreamDescriptors || []
+              })}
+              lastRuntimeStep={runtimeSnapshotForNode(settingsNode)}
+              embeddedMode={false}
+              on:configChange={(event) => replaceToolSettings(settingsNode.id, event.detail?.settings || {})}
+            />
+          {/key}
+        </div>
+      {/if}
       {#if isTableNodeTool(settingsNode)}
         <div class="node-modal-body node-modal-body-api">
           {#key `${settingsNode.id}:${toolCfg(settingsNode).settings.baseSchema || ''}:${toolCfg(settingsNode).settings.baseTable || ''}`}
@@ -7293,6 +7537,29 @@
                 sourcePort: 'out',
                 upstreamDescriptors: incomingDescriptorForNode(settingsNode)?.upstreamDescriptors || []
               })}
+              embeddedMode={false}
+              on:configChange={(event) => replaceToolSettings(settingsNode.id, event.detail?.settings || {})}
+            />
+          {/key}
+        </div>
+      {/if}
+      {#if isApiMutationToolNode(settingsNode)}
+        <div class="node-modal-body node-modal-body-api">
+          {#key `${settingsNode.id}:${toolCfg(settingsNode).settings.endpointUrl || ''}:${toolCfg(settingsNode).settings.requestMode || 'row_per_request'}`}
+            <ApiMutationBuilderTab
+              apiBase={API_BASE}
+              apiJson={workflowApiJson}
+              headers={workflowApiHeaders}
+              workflowDeskId={deskId}
+              workflowNodeId={settingsNode.id}
+              workflowGraph={captureDeskState()}
+              initialSettings={toolCfg(settingsNode).settings || {}}
+              incomingDescriptor={incomingDescriptorForNode(settingsNode)}
+              outputDescriptor={buildNodeOutputDescriptor(settingsNode, {
+                sourcePort: 'out',
+                upstreamDescriptors: incomingDescriptorForNode(settingsNode)?.upstreamDescriptors || []
+              })}
+              lastRuntimeStep={runtimeSnapshotForNode(settingsNode)}
               embeddedMode={false}
               on:configChange={(event) => replaceToolSettings(settingsNode.id, event.detail?.settings || {})}
             />

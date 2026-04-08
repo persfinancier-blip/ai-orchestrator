@@ -28,19 +28,21 @@ test('table builder: new practical field types map to safe SQL types', () => {
 
 test('table builder: node registry seed rows keep canonical order and russian labels', () => {
   const rows = DEFAULT_NODE_REGISTRY_ROWS;
-  assert.equal(rows.length >= 11, true);
+  assert.equal(rows.length >= 13, true);
   assert.deepEqual(
     rows.filter((row) => !row.hidden_in_palette).map((row) => row.node_type_code),
     [
       'start_process',
       'api_request',
       'http_request',
+      'api_mutation',
       'condition_if',
       'condition_switch',
       'table_parser',
       'split_data',
       'merge_data',
       'table_node',
+      'action_prep',
       'code_node',
       'db_write',
       'end_process'
@@ -48,16 +50,18 @@ test('table builder: node registry seed rows keep canonical order and russian la
   );
   assert.deepEqual(
     rows.filter((row) => !row.hidden_in_palette).map((row) => row.section_name_ru),
-    ['Старт', 'Запросы', 'Запросы', 'Логика', 'Логика', 'Работа с данными', 'Работа с данными', 'Работа с данными', 'Работа с данными', 'Инструменты', 'Запись', 'Завершение']
+    ['Старт', 'Запросы', 'Запросы', 'Запросы', 'Логика', 'Логика', 'Работа с данными', 'Работа с данными', 'Работа с данными', 'Работа с данными', 'Работа с данными', 'Инструменты', 'Запись', 'Завершение']
   );
   assert.equal(rows.find((row) => row.node_type_code === 'table_node')?.node_name_ru, 'Табличный набор');
   assert.equal(rows.find((row) => row.node_type_code === 'table_parser')?.node_name_ru, 'Парсер данных');
   assert.equal(rows.find((row) => row.node_type_code === 'api_request')?.node_label_ru, 'API');
+  assert.equal(rows.find((row) => row.node_type_code === 'api_mutation')?.node_name_ru, 'API-изменение');
   assert.equal(rows.find((row) => row.node_type_code === 'http_request')?.node_name_ru, 'HTTP-запрос');
   assert.equal(rows.find((row) => row.node_type_code === 'condition_if')?.node_name_ru, 'Если');
   assert.equal(rows.find((row) => row.node_type_code === 'condition_switch')?.node_name_ru, 'Переключатель');
   assert.equal(rows.find((row) => row.node_type_code === 'split_data')?.node_name_ru, 'Разделить данные');
   assert.equal(rows.find((row) => row.node_type_code === 'merge_data')?.node_name_ru, 'Объединить данные');
+  assert.equal(rows.find((row) => row.node_type_code === 'action_prep')?.node_name_ru, 'Подготовка действий');
   assert.equal(rows.find((row) => row.node_type_code === 'code_node')?.node_name_ru, 'Код');
 });
 
