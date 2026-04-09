@@ -36,6 +36,12 @@
     type NodeDescriptorOutputKind
   } from '../data/nodeDescriptorFlow';
   import { canOpenWorkflowNodeSettings } from '../data/workflowNodeSettingsAccess.js';
+  import {
+    actionPrepEditorMountKey,
+    apiMutationEditorMountKey,
+    mergeWorkflowToolSettings,
+    safeWorkflowToolSettings
+  } from '../data/workflowNodeEditorState.js';
 
   type WorkflowNode = {
     id: string;
@@ -5102,6 +5108,27 @@
       banner = 'Для этого узла пока нет отдельной настройки по двойному клику';
       return;
     }
+    if (node.type === 'tool') {
+      const current = safeWorkflowToolSettings(node);
+      const merged = mergeWorkflowToolSettings(defaultSettings(toolCfg(node).toolType), node);
+      const currentKeys = Object.keys(current);
+      const mergedKeys = Object.keys(merged);
+      const shouldNormalize =
+        currentKeys.length !== mergedKeys.length || mergedKeys.some((key) => String(current[key] ?? '') !== String(merged[key] ?? ''));
+      if (shouldNormalize) {
+        nodes = nodes.map((candidate) =>
+          candidate.id === nodeId && candidate.type === 'tool'
+            ? {
+                ...candidate,
+                config: {
+                  ...toolCfg(candidate),
+                  settings: merged
+                }
+              }
+            : candidate
+        );
+      }
+    }
     selectedNodeId = nodeId;
     settingsNodeId = nodeId;
     settingsModalOpen = true;
@@ -7470,7 +7497,7 @@
       {/if}
       {#if isParserToolNode(settingsNode)}
         <div class="node-modal-body node-modal-body-api">
-          {#key `${settingsNode.id}:${toolCfg(settingsNode).settings.templateStoreId || 0}:${toolCfg(settingsNode).settings.templateId || ''}`}
+          {#key `${settingsNode.id}:${safeWorkflowToolSettings(settingsNode).templateStoreId || 0}:${safeWorkflowToolSettings(settingsNode).templateId || ''}`}
             <ParserBuilderTab
               apiBase={API_BASE}
               apiJson={workflowApiJson}
@@ -7479,7 +7506,7 @@
               workflowDeskId={deskId}
               workflowNodeId={settingsNode.id}
               workflowGraph={captureDeskState()}
-              initialSettings={toolCfg(settingsNode).settings || {}}
+              initialSettings={safeWorkflowToolSettings(settingsNode)}
               incomingDescriptor={incomingDescriptorForNode(settingsNode)}
               outputDescriptor={buildNodeOutputDescriptor(settingsNode, {
                 sourcePort: 'out',
@@ -7494,7 +7521,7 @@
       {/if}
       {#if isActionPrepToolNode(settingsNode)}
         <div class="node-modal-body node-modal-body-api">
-          {#key `${settingsNode.id}:${toolCfg(settingsNode).settings.sourceMode || 'node'}:${toolCfg(settingsNode).settings.sourceSchema || ''}:${toolCfg(settingsNode).settings.sourceTable || ''}`}
+          {#key actionPrepEditorMountKey(settingsNode)}
             <ActionPrepBuilderTab
               apiBase={API_BASE}
               apiJson={workflowApiJson}
@@ -7503,7 +7530,7 @@
               workflowDeskId={deskId}
               workflowNodeId={settingsNode.id}
               workflowGraph={captureDeskState()}
-              initialSettings={toolCfg(settingsNode).settings || {}}
+              initialSettings={safeWorkflowToolSettings(settingsNode)}
               incomingDescriptor={incomingDescriptorForNode(settingsNode)}
               outputDescriptor={buildNodeOutputDescriptor(settingsNode, {
                 sourcePort: 'out',
@@ -7518,13 +7545,13 @@
       {/if}
       {#if isTableNodeTool(settingsNode)}
         <div class="node-modal-body node-modal-body-api">
-          {#key `${settingsNode.id}:${toolCfg(settingsNode).settings.baseSchema || ''}:${toolCfg(settingsNode).settings.baseTable || ''}`}
+          {#key `${settingsNode.id}:${safeWorkflowToolSettings(settingsNode).baseSchema || ''}:${safeWorkflowToolSettings(settingsNode).baseTable || ''}`}
             <TableNodeBuilderTab
               apiBase={API_BASE}
               apiJson={workflowApiJson}
               headers={workflowApiHeaders}
               existingTables={apiBuilderExistingTables}
-              initialSettings={toolCfg(settingsNode).settings || {}}
+              initialSettings={safeWorkflowToolSettings(settingsNode)}
               incomingDescriptor={incomingDescriptorForNode(settingsNode)}
               outputDescriptor={buildNodeOutputDescriptor(settingsNode, {
                 sourcePort: 'out',
@@ -7538,7 +7565,7 @@
       {/if}
       {#if isApiMutationToolNode(settingsNode)}
         <div class="node-modal-body node-modal-body-api">
-          {#key `${settingsNode.id}:${toolCfg(settingsNode).settings.endpointUrl || ''}:${toolCfg(settingsNode).settings.requestMode || 'row_per_request'}`}
+          {#key apiMutationEditorMountKey(settingsNode)}
             <ApiMutationBuilderTab
               apiBase={API_BASE}
               apiJson={workflowApiJson}
@@ -7546,7 +7573,7 @@
               workflowDeskId={deskId}
               workflowNodeId={settingsNode.id}
               workflowGraph={captureDeskState()}
-              initialSettings={toolCfg(settingsNode).settings || {}}
+              initialSettings={safeWorkflowToolSettings(settingsNode)}
               incomingDescriptor={incomingDescriptorForNode(settingsNode)}
               outputDescriptor={buildNodeOutputDescriptor(settingsNode, {
                 sourcePort: 'out',
@@ -7561,7 +7588,7 @@
       {/if}
       {#if isWriteToolNode(settingsNode)}
         <div class="node-modal-body node-modal-body-api">
-          {#key `${settingsNode.id}:${toolCfg(settingsNode).settings.templateStoreId || 0}:${toolCfg(settingsNode).settings.templateId || ''}`}
+          {#key `${settingsNode.id}:${safeWorkflowToolSettings(settingsNode).templateStoreId || 0}:${safeWorkflowToolSettings(settingsNode).templateId || ''}`}
             <WriteBuilderTab
               apiBase={API_BASE}
               apiJson={workflowApiJson}
@@ -7570,7 +7597,7 @@
               workflowDeskId={deskId}
               workflowNodeId={settingsNode.id}
               workflowGraph={captureDeskState()}
-              initialSettings={toolCfg(settingsNode).settings || {}}
+              initialSettings={safeWorkflowToolSettings(settingsNode)}
               incomingDescriptor={incomingDescriptorForNode(settingsNode)}
               outputDescriptor={buildNodeOutputDescriptor(settingsNode, {
                 sourcePort: 'out',
