@@ -31,7 +31,6 @@ jobs:
           npm ci
           npm run build
 
-      # UI dist
       - name: Rsync UI dist to server
         uses: burnett01/rsync-deployments@6.0.0
         with:
@@ -43,7 +42,6 @@ jobs:
           remote_port: ${{ secrets.DEPLOY_PORT }}
           remote_key: ${{ secrets.DEPLOY_SSH_KEY }}
 
-      # API runtime (без git на сервере)
       - name: Rsync API runtime to server
         uses: burnett01/rsync-deployments@6.0.0
         with:
@@ -70,7 +68,6 @@ jobs:
 
             npm ci
 
-            # Порт фиксируем (как в Apache ProxyPass)
             sudo /usr/local/bin/pm2 delete ai-orchestrator-adv-api || true
 
             sudo /usr/bin/env \
@@ -84,18 +81,30 @@ jobs:
 
             sudo /usr/local/bin/pm2 save --force
 
-            # Даем серверу 2 секунды подняться
-            sleep 2
+            APP_PORT="${{ secrets.AIR_PORT }}"
+            HEALTH_URL="http://127.0.0.1:${APP_PORT}/ai-orchestrator/api/health"
 
-            # Диагностика: слушаем ли порт
-            sudo /usr/bin/ss -lntp | grep 8787 || true
+            # API начинает слушать порт только после bootstrap-ов.
+            # Ждём с retry вместо одного раннего curl, иначе deploy валится на ложном старте.
+            for attempt in $(seq 1 30); do
+              if curl -fsS "$HEALTH_URL" >/dev/null; then
+                echo "OK: /api/health (attempt $attempt)"
+                break
+              fi
+              echo "Waiting for API health... attempt $attempt/30"
+              sleep 2
+            done
 
-            # Проверка API напрямую (liveness)
-            curl -fsS "http://127.0.0.1:8787/ai-orchestrator/api/health" >/dev/null
-            echo "OK: /api/health"
+            if ! curl -fsS "$HEALTH_URL" >/dev/null; then
+              echo "API did not become healthy in time"
+              sudo /usr/local/bin/pm2 describe ai-orchestrator-adv-api || true
+              sudo /usr/local/bin/pm2 logs ai-orchestrator-adv-api --lines 120 --nostream || true
+              sudo /usr/bin/ss -lntp | grep ":${APP_PORT}" || true
+              exit 1
+            fi
 
-            # Диагностика данных витрины (не валит деплой)
-            curl -fsS "http://127.0.0.1:8787/ai-orchestrator/api/space" >/dev/null || true
+            # Диагностика данных витрины не валит деплой
+            curl -fsS "http://127.0.0.1:${APP_PORT}/ai-orchestrator/api/space" >/dev/null || true
 
       - name: Reload Apache
         uses: appleboy/ssh-action@v1.2.0
