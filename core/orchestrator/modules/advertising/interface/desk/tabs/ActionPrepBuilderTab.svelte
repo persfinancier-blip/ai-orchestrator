@@ -1,6 +1,7 @@
 <script>
   import { createEventDispatcher } from 'svelte';
   import { descriptorFields, descriptorOutputKindLabel, descriptorSampleColumns, descriptorSampleRows } from '../data/nodeDescriptorFlow';
+  import { normalizeJsonTextSetting, safeJsonArray } from '../data/workflowBuilderJsonState.js';
 
   export let apiBase = '';
   export let apiJson;
@@ -33,7 +34,7 @@
   const kindRu = (kind) => ({ 'row set': 'Набор строк', 'tabular contract': 'Табличный контракт', 'structured object': 'Структурированный объект', unknown: 'Не определён' }[str(kind).toLowerCase()] || kind || 'Не определён');
   const normalizeFilter = (item={}, index=0) => ({ id: str(item.id || `filter_${index + 1}`), field: str(item.field), operator: str(item.operator || '=') || '=', value: String(item.value ?? ''), secondValue: String(item.secondValue ?? item.second_value ?? ''), caseSensitive: Boolean(item.caseSensitive ?? item.case_sensitive) });
   const normalizeAction = (item={}, index=0) => ({ id: str(item.id || `action_${index + 1}`), name: str(item.name || item.outputName || item.output_name || `action_${index + 1}`), mode: str(item.mode || item.sourceMode || item.actionType || 'source_field').toLowerCase() || 'source_field', sourceField: str(item.sourceField || item.source_field), baseField: str(item.baseField || item.base_field), constantValue: item.constantValue ?? item.constant_value ?? '', expression: str(item.expression), template: String(item.template ?? ''), conditionExpression: str(item.conditionExpression || item.condition_expression), trueValue: item.trueValue ?? item.true_value ?? '', falseValue: item.falseValue ?? item.false_value ?? '', percentValue: item.percentValue ?? item.percent_value ?? '', deltaValue: item.deltaValue ?? item.delta_value ?? '', replaceFrom: String(item.replaceFrom ?? item.replace_from ?? ''), replaceTo: String(item.replaceTo ?? item.replace_to ?? ''), overrideValue: item.overrideValue ?? item.override_value ?? '', type: str(item.type) });
-  function normalizeSettings(raw) { const src = raw && typeof raw === 'object' ? raw : {}; return { sourceMode: str(src.sourceMode || src.source_mode || 'node').toLowerCase() === 'table' ? 'table' : 'node', sourceSchema: str(src.sourceSchema || src.source_schema), sourceTable: str(src.sourceTable || src.source_table), filterRulesJson: pretty(src.filterRules ?? src.filterRulesJson ?? src.filter_rules ?? [], '[]'), filterLogic: str(src.filterLogic || src.filter_logic || 'and').toLowerCase() === 'or' ? 'or' : 'and', actionColumnsJson: pretty(src.actionColumns ?? src.actionColumnsJson ?? src.action_columns ?? [], '[]'), batchSize: str(src.batchSize || src.batch_size || '500') || '500', previewLimit: str(src.previewLimit || src.preview_limit || '20') || '20', channel: str(src.channel || '') }; }
+  function normalizeSettings(raw) { const src = raw && typeof raw === 'object' ? raw : {}; return { sourceMode: str(src.sourceMode || src.source_mode || 'node').toLowerCase() === 'table' ? 'table' : 'node', sourceSchema: str(src.sourceSchema || src.source_schema), sourceTable: str(src.sourceTable || src.source_table), filterRulesJson: normalizeJsonTextSetting(src.filterRules ?? src.filterRulesJson ?? src.filter_rules, '[]'), filterLogic: str(src.filterLogic || src.filter_logic || 'and').toLowerCase() === 'or' ? 'or' : 'and', actionColumnsJson: normalizeJsonTextSetting(src.actionColumns ?? src.actionColumnsJson ?? src.action_columns, '[]'), batchSize: str(src.batchSize || src.batch_size || '500') || '500', previewLimit: str(src.previewLimit || src.preview_limit || '20') || '20', channel: str(src.channel || '') }; }
   let settings = normalizeSettings(initialSettings);
   let initialSignature = JSON.stringify(settings);
   let previewLoading = false;
@@ -64,8 +65,8 @@
   $: incomingRows = descriptorSampleRows(primaryIncomingDescriptor);
   $: incomingCols = descriptorSampleColumns(primaryIncomingDescriptor);
   $: outputFields = descriptorFields(outputDescriptor);
-  $: filterRules = parseJson(settings.filterRulesJson, []).map((item, index) => normalizeFilter(item, index));
-  $: actionColumns = parseJson(settings.actionColumnsJson, []).map((item, index) => normalizeAction(item, index));
+  $: filterRules = safeJsonArray(parseJson(settings.filterRulesJson, [])).map((item, index) => normalizeFilter(item, index));
+  $: actionColumns = safeJsonArray(parseJson(settings.actionColumnsJson, [])).map((item, index) => normalizeAction(item, index));
   $: tableCols = columnsCache[`${settings.sourceSchema}.${settings.sourceTable}`] || [];
   $: sourceFields = settings.sourceMode === 'table' ? tableCols.map((item) => ({ name: item.name, alias: item.name, path: item.name, type: item.type || '' })) : incomingFields;
   $: sourceCols = settings.sourceMode === 'table' ? tableCols.map((item) => item.name) : uniq([...incomingFields.map((field) => fieldName(field)), ...incomingCols]);
