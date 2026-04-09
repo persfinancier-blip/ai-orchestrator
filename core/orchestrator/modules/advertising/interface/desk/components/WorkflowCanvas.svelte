@@ -35,6 +35,7 @@
     type NodeDescriptorFlow,
     type NodeDescriptorOutputKind
   } from '../data/nodeDescriptorFlow';
+  import { canOpenWorkflowNodeSettings } from '../data/workflowNodeSettingsAccess.js';
 
   type WorkflowNode = {
     id: string;
@@ -5096,15 +5097,7 @@
   function openNodeSettings(nodeId: string) {
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return;
-    const isStartTool = node.type === 'tool' && toolCfg(node).toolType === 'start_process';
-    const canOpenSettings =
-      isStartTool ||
-      isApiNode(node) ||
-      isApiToolNode(node) ||
-      isTableNodeTool(node) ||
-      isParserToolNode(node) ||
-      isWriteToolNode(node) ||
-      ['table_node', 'split_data', 'merge_data', 'condition_if', 'condition_switch', 'code_node'].includes(toolCfg(node).toolType || '');
+    const canOpenSettings = canOpenWorkflowNodeSettings(node);
     if (!canOpenSettings) {
       banner = 'Для этого узла пока нет отдельной настройки по двойному клику';
       return;
