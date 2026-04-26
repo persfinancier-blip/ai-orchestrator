@@ -206,6 +206,156 @@ const SYSTEM_CONTRACT_COLUMNS = [
   { name: 'ao_contract_name', type: 'text' },
   { name: 'ao_contract_version', type: 'integer' }
 ];
+function defaultPaginationConfig(dataPath = '') {
+  return {
+    enabled: false,
+    strategy: 'none',
+    target: 'body',
+    data_path: dataPath,
+    page_param: 'page',
+    start_page: 1,
+    limit_param: 'limit',
+    limit_value: 100,
+    cursor_req_path_1: '',
+    cursor_req_path_2: '',
+    cursor_res_path_1: '',
+    cursor_res_path_2: '',
+    next_url_path: 'next',
+    use_max_pages: true,
+    max_pages: 3,
+    use_delay: false,
+    delay_ms: 0,
+    stop_conditions: {
+      on_missing_pagination_value: true,
+      on_same_response: true,
+      same_response_limit: 5,
+      on_http_error: true,
+      response_rules: []
+    },
+    custom_strategy: '',
+    parameters: []
+  };
+}
+function defaultExecutionConfig() {
+  return {
+    dispatch_mode: 'single',
+    execution_mode: 'sync',
+    sync_planner: 'entity_to_stop',
+    async_concurrency: 3,
+    execution_delay_ms: 0,
+    response_log: { enabled: false, schema: '', table: '' },
+    group_by_aliases: [],
+    body_items_path: 'items',
+    preview_request_limit: 5,
+    data_model: {
+      tables: [],
+      joins: [],
+      fields: [],
+      filters: [],
+      date_parameters: [],
+      api_parameters: []
+    },
+    binding_rules: []
+  };
+}
+function ozonCampaignConfig({ name, method, path, query = {}, body = {}, description, dataPath = '' }) {
+  const sourceUrl = 'https://docs.ozon.ru/api/performance/#tag/Campaign';
+  const config = {
+    api_name: name,
+    method,
+    base_url: 'https://api-performance.ozon.ru',
+    path,
+    headers_json: {
+      Authorization: 'Bearer {{ozon_performance_token}}',
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    },
+    query_json: query,
+    body_json: body,
+    pagination_json: defaultPaginationConfig(dataPath),
+    execution_json: defaultExecutionConfig(),
+    mapping_json: {
+      source: {
+        provider: 'ozon',
+        catalog: 'performance',
+        section: 'campaign',
+        source_url: sourceUrl,
+        source_slug: 'ozon_performance_campaign'
+      },
+      tag: 'Campaign',
+      auth: { required: true, schemes: ['BearerToken'] },
+      parameters: {
+        path: [],
+        query: Object.keys(query).map((key) => ({
+          name: key,
+          required: false,
+          schema_type: 'string'
+        }))
+      },
+      request_body_media_type: method === 'GET' ? '' : 'application/json',
+      response_example_status: '200',
+      response_example_media_type: 'application/json'
+    },
+    auth_mode: 'manual',
+    auth_json: {},
+    parameter_definitions: [],
+    response_targets: [],
+    picked_paths: [],
+    description,
+    is_active: true
+  };
+  return {
+    api_name: name,
+    description,
+    config_json: config
+  };
+}
+export const DEFAULT_API_CONFIG_ROWS = Object.freeze([
+  ozonCampaignConfig({
+    name: 'Ozon Performance Campaign :: Список кампаний',
+    method: 'GET',
+    path: '/api/client/campaign',
+    query: {
+      campaignIds: '{{campaignIds}}',
+      advObjectType: '{{advObjectType}}',
+      state: '{{state}}'
+    },
+    description: 'Ozon Performance Campaign. Получить список кампаний. Источник: https://docs.ozon.ru/api/performance/#tag/Campaign',
+    dataPath: 'list'
+  }),
+  ozonCampaignConfig({
+    name: 'Ozon Performance Campaign :: Доступные режимы кампаний',
+    method: 'GET',
+    path: '/campaign/available',
+    description: 'Ozon Performance Campaign. Получить доступные режимы создания рекламных кампаний. Источник: https://docs.ozon.ru/api/performance/#tag/Campaign'
+  }),
+  ozonCampaignConfig({
+    name: 'Ozon Performance Campaign :: Активировать оплату за заказ',
+    method: 'GET',
+    path: '/api/client/campaign/all_sku_promo/activate',
+    description: 'Ozon Performance Campaign. Активировать продвижение с оплатой за заказ для всех товаров. Источник: https://docs.ozon.ru/api/performance/#tag/Campaign'
+  }),
+  ozonCampaignConfig({
+    name: 'Ozon Performance Campaign :: Товары в оплате за заказ',
+    method: 'POST',
+    path: '/api/client/campaign/search_promo/products',
+    body: {
+      page: '{{page}}',
+      pageSize: '{{pageSize}}'
+    },
+    description: 'Ozon Performance Campaign. Получить товары, участвующие в продвижении с оплатой за заказ. Источник: https://docs.ozon.ru/api/performance/#tag/Campaign',
+    dataPath: 'products'
+  }),
+  ozonCampaignConfig({
+    name: 'Ozon Performance Campaign :: Включить продвижение товаров',
+    method: 'POST',
+    path: '/api/client/search_promo/product/enable',
+    body: {
+      skus: ['{{sku}}']
+    },
+    description: 'Ozon Performance Campaign. Включить поисковое продвижение для списка SKU. Источник: https://docs.ozon.ru/api/performance/#tag/Campaign'
+  })
+]);
 export const DEFAULT_NODE_REGISTRY_ROWS = Object.freeze([
   {
     node_type_code: 'start_process',
@@ -1259,7 +1409,45 @@ async function ensureApiConfigsTable(client, config) {
     END $$;
   `);
   await ensureSystemContractColumns(client, qn);
+  await ensureDefaultApiConfigRows(client, qn);
   return qn;
+}
+
+async function ensureDefaultApiConfigRows(client, apiConfigsQn) {
+  for (const row of DEFAULT_API_CONFIG_ROWS) {
+    const cfg = row.config_json || {};
+    await client.query(
+      `
+      INSERT INTO ${apiConfigsQn}
+        (api_name, config_json, schema_version, revision, description, is_active, updated_at, updated_by)
+      SELECT
+        $1,
+        $2::jsonb,
+        1,
+        1,
+        $3,
+        true,
+        now(),
+        'ozon_seed_performance_campaign'
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM ${apiConfigsQn}
+        WHERE UPPER(COALESCE(config_json->>'method', '')) = UPPER($4)
+          AND COALESCE(config_json->>'base_url', '') = $5
+          AND COALESCE(config_json->>'path', '') = $6
+          AND COALESCE(config_json->'mapping_json'->'source'->>'source_slug', '') = 'ozon_performance_campaign'
+      )
+      `,
+      [
+        row.api_name,
+        JSON.stringify(cfg),
+        row.description,
+        String(cfg.method || ''),
+        String(cfg.base_url || ''),
+        String(cfg.path || '')
+      ]
+    );
+  }
 }
 
 async function ensureParserConfigsTable(client, config) {

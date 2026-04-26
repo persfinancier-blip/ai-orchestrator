@@ -6,6 +6,7 @@ process.env.PGPASSWORD = process.env.PGPASSWORD || 'test';
 process.env.PGDATABASE = process.env.PGDATABASE || 'test';
 
 const {
+  DEFAULT_API_CONFIG_ROWS,
   DEFAULT_NODE_REGISTRY_ROWS,
   fieldTypeToSql,
   materializeNodeRegistryRow
@@ -109,3 +110,30 @@ test('table builder: node registry materializer normalizes row payload', () => {
   });
 });
 
+test('table builder: built-in Ozon Performance Campaign API templates are executable request configs', () => {
+  const rows = DEFAULT_API_CONFIG_ROWS.filter(
+    (row) => row.config_json?.mapping_json?.source?.source_slug === 'ozon_performance_campaign'
+  );
+  assert.equal(rows.length, 5);
+  assert.deepEqual(
+    rows.map((row) => `${row.config_json.method} ${row.config_json.path}`),
+    [
+      'GET /api/client/campaign',
+      'GET /campaign/available',
+      'GET /api/client/campaign/all_sku_promo/activate',
+      'POST /api/client/campaign/search_promo/products',
+      'POST /api/client/search_promo/product/enable'
+    ]
+  );
+  for (const row of rows) {
+    const cfg = row.config_json;
+    assert.equal(cfg.base_url, 'https://api-performance.ozon.ru');
+    assert.equal(cfg.auth_mode, 'manual');
+    assert.equal(cfg.headers_json.Authorization, 'Bearer {{ozon_performance_token}}');
+    assert.equal(cfg.pagination_json.enabled, false);
+    assert.equal(cfg.execution_json.dispatch_mode, 'single');
+    assert.equal(cfg.execution_json.execution_mode, 'sync');
+    assert.equal(cfg.mapping_json.tag, 'Campaign');
+    assert.equal(cfg.is_active, true);
+  }
+});
