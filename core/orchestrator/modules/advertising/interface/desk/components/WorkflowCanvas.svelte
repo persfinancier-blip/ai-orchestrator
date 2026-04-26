@@ -17,6 +17,7 @@
     pickProcessFocusRun
   } from '../data/workflowProcessStatusCore.js';
   import {
+    ozonCampaignApiSources,
     tools,
     toolPorts,
     type ApiRequestTemplate,
@@ -4854,7 +4855,7 @@
       else workflowDeskStorageRef = 'ao_system.workflow_desks_store';
 
       const apiRows = Array.isArray(apiJson?.api_configs) ? apiJson.api_configs : [];
-      dynamicApiSources = apiRows.map((row: any, idx: number) => {
+      const loadedApiSources = apiRows.map((row: any, idx: number) => {
         const storeId = Number(String(row?.id ?? '').trim());
         const name = String(row?.api_name || row?.name || '').trim() || `API template ${idx + 1}`;
         const method = String(row?.method || 'GET').trim().toUpperCase();
@@ -4887,6 +4888,32 @@
           dataModel: normalizeTemplateDataModel(row)
         };
       });
+      const loadedApiSignatures = new Set(
+        loadedApiSources.map((source) => {
+          const tpl = normalizeApiRequest(source.requestTemplate);
+          return `${tpl.method} ${tpl.url}`;
+        })
+      );
+      const fallbackOzonSources = ozonCampaignApiSources
+        .filter((source) => {
+          const tpl = normalizeApiRequest(source.requestTemplate);
+          return !loadedApiSignatures.has(`${tpl.method} ${tpl.url}`);
+        })
+        .map((source) => ({
+          ...source,
+          storeId: undefined,
+          rawRow: {
+            api_name: source.name,
+            method: source.requestTemplate?.method || 'GET',
+            base_url: 'https://api-performance.ozon.ru',
+            path: String(source.requestTemplate?.url || '').replace('https://api-performance.ozon.ru', ''),
+            auth_mode: source.requestTemplate?.authMode || 'manual',
+            headers_json: source.requestTemplate?.headers || {},
+            query_json: source.requestTemplate?.query || {},
+            body_json: source.requestTemplate?.body ?? {}
+          }
+        }));
+      dynamicApiSources = [...loadedApiSources, ...fallbackOzonSources];
 
       const existingTables = Array.isArray(tableJson?.existing_tables) ? tableJson.existing_tables : [];
       apiBuilderExistingTables = [...existingTables];

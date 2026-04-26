@@ -58,6 +58,125 @@ export const sourceGroups: Array<{ key: SourceGroup; label: string }> = [
   { key: 'math_calculations', label: 'Математические расчеты' }
 ];
 
+export const ozonCampaignApiSources: SourceItem[] = [
+  {
+    id: 'ozon_campaign_list',
+    name: 'Ozon Performance: список кампаний',
+    group: 'api_requests',
+    datasetId: 'api:ozon.performance.campaign.list',
+    schema: ['id', 'title', 'state', 'advObjectType', 'fromDate', 'toDate'],
+    size: 100,
+    preview: mkPreview('ozon_campaign'),
+    description: 'GET /api/client/campaign из Ozon Performance Campaign',
+    requestTemplate: {
+      method: 'GET',
+      url: 'https://api-performance.ozon.ru/api/client/campaign',
+      authMode: 'manual',
+      headers: {
+        Authorization: 'Bearer {{ozon_performance_token}}',
+        Accept: 'application/json'
+      },
+      query: {
+        campaignIds: '{{campaignIds}}',
+        advObjectType: '{{advObjectType}}',
+        state: '{{state}}'
+      },
+      body: {}
+    }
+  },
+  {
+    id: 'ozon_campaign_available',
+    name: 'Ozon Performance: доступные режимы кампаний',
+    group: 'api_requests',
+    datasetId: 'api:ozon.performance.campaign.available',
+    schema: ['available', 'type', 'name'],
+    size: 10,
+    preview: mkPreview('ozon_available'),
+    description: 'GET /campaign/available из Ozon Performance Campaign',
+    requestTemplate: {
+      method: 'GET',
+      url: 'https://api-performance.ozon.ru/campaign/available',
+      authMode: 'manual',
+      headers: {
+        Authorization: 'Bearer {{ozon_performance_token}}',
+        Accept: 'application/json'
+      },
+      query: {},
+      body: {}
+    }
+  },
+  {
+    id: 'ozon_campaign_all_sku_promo_activate',
+    name: 'Ozon Performance: активировать оплату за заказ',
+    group: 'api_requests',
+    datasetId: 'api:ozon.performance.campaign.all_sku_promo.activate',
+    schema: ['result', 'status'],
+    size: 1,
+    preview: mkPreview('ozon_activate'),
+    description: 'GET /api/client/campaign/all_sku_promo/activate из Ozon Performance Campaign',
+    requestTemplate: {
+      method: 'GET',
+      url: 'https://api-performance.ozon.ru/api/client/campaign/all_sku_promo/activate',
+      authMode: 'manual',
+      headers: {
+        Authorization: 'Bearer {{ozon_performance_token}}',
+        Accept: 'application/json'
+      },
+      query: {},
+      body: {}
+    }
+  },
+  {
+    id: 'ozon_campaign_search_promo_products',
+    name: 'Ozon Performance: товары в оплате за заказ',
+    group: 'api_requests',
+    datasetId: 'api:ozon.performance.campaign.search_promo.products',
+    schema: ['sku', 'name', 'price', 'status'],
+    size: 100,
+    preview: mkPreview('ozon_products'),
+    description: 'POST /api/client/campaign/search_promo/products из Ozon Performance Campaign',
+    requestTemplate: {
+      method: 'POST',
+      url: 'https://api-performance.ozon.ru/api/client/campaign/search_promo/products',
+      authMode: 'manual',
+      headers: {
+        Authorization: 'Bearer {{ozon_performance_token}}',
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+      },
+      query: {},
+      body: {
+        page: '{{page}}',
+        pageSize: '{{pageSize}}'
+      }
+    }
+  },
+  {
+    id: 'ozon_search_promo_product_enable',
+    name: 'Ozon Performance: включить продвижение товаров',
+    group: 'api_requests',
+    datasetId: 'api:ozon.performance.search_promo.product.enable',
+    schema: ['sku', 'enabled', 'status'],
+    size: 100,
+    preview: mkPreview('ozon_enable'),
+    description: 'POST /api/client/search_promo/product/enable из Ozon Performance Campaign',
+    requestTemplate: {
+      method: 'POST',
+      url: 'https://api-performance.ozon.ru/api/client/search_promo/product/enable',
+      authMode: 'manual',
+      headers: {
+        Authorization: 'Bearer {{ozon_performance_token}}',
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+      },
+      query: {},
+      body: {
+        skus: ['{{sku}}']
+      }
+    }
+  }
+];
+
 export const sourceItemsByGroup: Record<SourceGroup, SourceItem[]> = {
   api_requests: [
     {
@@ -80,6 +199,7 @@ export const sourceItemsByGroup: Record<SourceGroup, SourceItem[]> = {
       preview: mkPreview('ozon_adv'),
       description: 'Ответ API по рекламным кампаниям'
     },
+    ...ozonCampaignApiSources,
     {
       id: 'api_3',
       name: 'Внешний справочник',
