@@ -4257,6 +4257,168 @@
   async function onApiBuilderTemplateSaved(event: CustomEvent<{ ref: string; storeId: number; templateId: string }>) {
     onApiBuilderTemplateSelectionChange(event as unknown as CustomEvent<ApiTemplateSelectionChangePayload>);
     await loadDynamicSourceCatalog();
+    const node = settingsNode;
+    if (!node || (!isApiNode(node) && !isApiToolNode(node))) return;
+    const detail = event?.detail || {};
+    const savedBinding = {
+      storeId: parseTemplateStoreId(detail.storeId),
+      templateId: normalizeTemplateId(detail.templateId || '')
+    };
+    const currentBinding = currentSettingsTemplateBinding();
+    if (!templateBindingsMatch(currentBinding, savedBinding)) return;
+    const source =
+      dynamicApiSources.find((src) => savedBinding.storeId > 0 && Number(src?.storeId || 0) === savedBinding.storeId) ||
+      dynamicApiSources.find((src) => Boolean(savedBinding.templateId) && normalizeTemplateId(src?.id || '') === savedBinding.templateId) ||
+      null;
+    if (!source) return;
+    applyTemplateToNode(node.id, source.id);
+    await tick();
+    const saved = await saveDesk(true);
+    banner = saved
+      ? 'Сохраненный API-шаблон синхронизирован с нодой.'
+      : 'API-шаблон сохранен, но рабочий стол с обновленной нодой сохранить не удалось.';
+  }
+
+  function safeJsonObjectText(raw: any) {
+    const text = String(raw || '').trim();
+    if (!text) return {};
+    try {
+      const parsed = JSON.parse(text);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function safeJsonAnyText(raw: any) {
+    const text = String(raw || '').trim();
+    if (!text) return {};
+    try {
+      return JSON.parse(text);
+    } catch {
+      return {};
+    }
+  }
+
+  function requestTemplateFromNodeParseDetail(request: any): ApiRequestTemplate {
+    return {
+      method: String(request?.method || 'GET').trim().toUpperCase() || 'GET',
+      url: String(request?.url || '').trim(),
+      authMode: String(request?.authMode || 'manual').trim() || 'manual',
+      headers: safeJsonObjectText(request?.headersText),
+      query: safeJsonObjectText(request?.queryText),
+      body: safeJsonAnyText(request?.bodyText)
+    };
+  }
+
+  function applyApiBuilderRequestPatchToNode(nodeId: string, detail: any) {
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node || (!isApiNode(node) && !isApiToolNode(node))) return false;
+    const request = detail?.request || {};
+    const template = requestTemplateFromNodeParseDetail(request);
+    const apiRequest = normalizeApiRequest(template);
+    const templateId = nodeTemplateId(node) || String(detail?.templateId || '').trim();
+    const templateStoreId = nodeTemplateStoreId(node) || String(detail?.storeId || '').trim();
+    if (isApiNode(node)) {
+      updateDataNodeConfig(nodeId, {
+        requestTemplate: template,
+        apiRequest,
+        templateId,
+        templateStoreId
+      });
+      return true;
+    }
+    const settingsPatch: Record<string, any> = {
+      templateId,
+      templateStoreId,
+      apiMethod: apiRequest.method,
+      apiUrl: apiRequest.url,
+      apiAuthMode: apiRequest.authMode,
+      apiHeaders: apiRequest.headersText,
+      apiQuery: apiRequest.queryText,
+      apiBody: apiRequest.bodyText
+    };
+    replaceToolSettings(nodeId, settingsPatch);
+    return true;
+  }
+
+  function applyApiBuilderPaginationPatchToNode(nodeId: string, rawPagination: any) {
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node || (!isApiNode(node) && !isApiToolNode(node))) return;
+    const current = getPaginationForNode(node);
+    const source = rawPagination && typeof rawPagination === 'object' ? rawPagination : {};
+    const next: ApiNodePagination = {
+      ...current,
+      enabled: Boolean(source.enabled),
+      mode: (String(source.mode || current.mode || 'none') as ApiPaginationMode) || 'none',
+      target: (String(source.target || current.target || 'query') as ApiPaginationTarget) || 'query',
+      useMaxPages: source.useMaxPages === undefined ? current.useMaxPages : Boolean(source.useMaxPages),
+      maxPages: Math.max(1, Number(source.maxPages || current.maxPages || 1)),
+      useDelay: source.useDelay === undefined ? current.useDelay : Boolean(source.useDelay),
+      pauseMs: Math.max(0, Number(source.pauseMs || current.pauseMs || 0)),
+      dataPath: String(source.dataPath ?? current.dataPath ?? '').trim(),
+      stopOnMissingValue: source.stopOnMissingValue === undefined ? current.stopOnMissingValue : Boolean(source.stopOnMissingValue),
+      stopOnHttpError: source.stopOnHttpError === undefined ? current.stopOnHttpError : Boolean(source.stopOnHttpError),
+      stopOnSameResponse: source.stopOnSameResponse === undefined ? current.stopOnSameResponse : Boolean(source.stopOnSameResponse),
+      sameResponseLimit: Math.max(2, Math.min(50, Number(source.sameResponseLimit || current.sameResponseLimit || 5))),
+      stopRules: Array.isArray(source.stopRules) ? source.stopRules : current.stopRules,
+      pageParam: String(source.pageParam || current.pageParam || 'page').trim() || 'page',
+      startPage: Math.max(1, Number(source.startPage || current.startPage || 1)),
+      limitParam: String(source.limitParam || current.limitParam || 'limit').trim() || 'limit',
+      limitValue: Math.max(1, Number(source.limitValue || current.limitValue || 1)),
+      offsetParam: String(source.offsetParam || current.offsetParam || 'offset').trim() || 'offset',
+      startOffset: Math.max(0, Number(source.startOffset || current.startOffset || 0)),
+      cursorReqPath: String(source.cursorReqPath || current.cursorReqPath || 'cursor').trim() || 'cursor',
+      cursorResPath: String(source.cursorResPath || current.cursorResPath || 'response.cursor').trim() || 'response.cursor'
+    };
+    if (isApiNode(node)) {
+      updateDataNodeConfig(nodeId, { apiPagination: next });
+      return;
+    }
+    replaceToolSettings(nodeId, {
+      paginationEnabled: next.enabled ? 'true' : 'false',
+      paginationMode: next.mode,
+      paginationTarget: next.target,
+      paginationUseMaxPages: next.useMaxPages ? 'true' : 'false',
+      paginationMaxPages: String(next.maxPages),
+      paginationUseDelay: next.useDelay ? 'true' : 'false',
+      paginationPauseMs: String(next.pauseMs),
+      paginationDataPath: next.dataPath,
+      paginationStopOnMissingValue: next.stopOnMissingValue ? 'true' : 'false',
+      paginationStopOnHttpError: next.stopOnHttpError ? 'true' : 'false',
+      paginationStopOnSameResponse: next.stopOnSameResponse ? 'true' : 'false',
+      paginationSameResponseLimit: String(next.sameResponseLimit),
+      paginationStopRules: JSON.stringify(next.stopRules || []),
+      paginationPageParam: next.pageParam,
+      paginationStartPage: String(next.startPage),
+      paginationLimitParam: next.limitParam,
+      paginationLimitValue: String(next.limitValue),
+      paginationOffsetParam: next.offsetParam,
+      paginationStartOffset: String(next.startOffset),
+      paginationCursorReqPath: next.cursorReqPath,
+      paginationCursorResPath: next.cursorResPath
+    });
+  }
+
+  async function onApiBuilderTemplatePatchApplied(event: CustomEvent<any>) {
+    const nodeId = String(settingsNode?.id || '').trim();
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node || (!isApiNode(node) && !isApiToolNode(node))) return;
+    const detail = event?.detail || {};
+    const applied = applyApiBuilderRequestPatchToNode(nodeId, detail);
+    if (!applied) return;
+    applyApiBuilderPaginationPatchToNode(nodeId, detail?.pagination || {});
+    await tick();
+    const saved = await saveDesk(true);
+    apiTemplateUsageRefreshTick += 1;
+    const changeCount = Array.isArray(detail?.appliedChanges) ? detail.appliedChanges.length : 0;
+    if (saved) {
+      banner = changeCount
+        ? `Рекомендации применены к API-ноде и сохранены в рабочем столе: ${changeCount}`
+        : 'API-нода сохранена в рабочем столе без новых изменений.';
+    } else {
+      banner = 'Рекомендации применены к API-ноде, но сохранить рабочий стол на сервер не удалось.';
+    }
   }
 
   function parseTemplateStoreId(value: any) {
@@ -7485,6 +7647,7 @@
                 embeddedMode={false}
                 on:templateSelectionChange={onApiBuilderTemplateSelectionChange}
                 on:templateSaved={onApiBuilderTemplateSaved}
+                on:templatePatchApplied={onApiBuilderTemplatePatchApplied}
                 on:executionPreviewChange={onApiBuilderExecutionPreviewChange}
               />
             {/key}
