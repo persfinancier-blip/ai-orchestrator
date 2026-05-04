@@ -4273,10 +4273,7 @@
     if (!source) return;
     applyTemplateToNode(node.id, source.id);
     await tick();
-    const saved = await saveDesk(true);
-    banner = saved
-      ? 'Сохраненный API-шаблон синхронизирован с нодой.'
-      : 'API-шаблон сохранен, но рабочий стол с обновленной нодой сохранить не удалось.';
+    banner = 'API-шаблон сохранен. Нода обновлена только в текущем рабочем столе; нажми «Сохранить», чтобы сохранить Desk.';
   }
 
   function safeJsonObjectText(raw: any) {
@@ -4409,16 +4406,11 @@
     if (!applied) return;
     applyApiBuilderPaginationPatchToNode(nodeId, detail?.pagination || {});
     await tick();
-    const saved = await saveDesk(true);
     apiTemplateUsageRefreshTick += 1;
     const changeCount = Array.isArray(detail?.appliedChanges) ? detail.appliedChanges.length : 0;
-    if (saved) {
-      banner = changeCount
-        ? `Рекомендации применены к API-ноде и сохранены в рабочем столе: ${changeCount}`
-        : 'API-нода сохранена в рабочем столе без новых изменений.';
-    } else {
-      banner = 'Рекомендации применены к API-ноде, но сохранить рабочий стол на сервер не удалось.';
-    }
+    banner = changeCount
+      ? `Рекомендации подставлены в API-ноду: ${changeCount}. Desk не сохранен; нажми «Сохранить» после проверки.`
+      : 'API-нода не получила новых значений. Desk не сохранен.';
   }
 
   function parseTemplateStoreId(value: any) {

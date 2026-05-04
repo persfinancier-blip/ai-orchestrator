@@ -46,7 +46,10 @@
     {#if hasResult}
       <div class="api-example-section">
         <div class="api-example-title">Инструкция по настройке</div>
-        <p>{result.summary || 'Проверь распознанные поля и примени рекомендации, если они подходят.'}</p>
+        <p>{result.summary || 'Проверь распознанные поля. Применение только подставит значения в текущую форму без сохранения.'}</p>
+        <div class="api-example-draft-note">
+          Рекомендации не сохраняют API template и Desk автоматически. После подстановки нажмите «Проверить», затем сохраните шаблон или Desk вручную.
+        </div>
       </div>
 
       {#if detected.length}
@@ -66,13 +69,13 @@
 
       {#if changes.length}
         <div class="api-example-section">
-          <div class="api-example-title">Что будет изменено</div>
+          <div class="api-example-title">Что будет подставлено в форму</div>
           <div class="api-example-list">
             {#each changes as item, idx (`${item?.field || 'change'}:${idx}`)}
               <div class="api-example-row">
                 <span>{item?.label || item?.field || 'Поле'}</span>
                 <code>{formatValue(item?.value)}</code>
-                <small>{item?.action === 'merge' ? 'merge' : 'safe overwrite'}</small>
+                <small>{item?.action === 'merge' ? 'merge' : 'draft overwrite'}</small>
               </div>
             {/each}
           </div>
@@ -103,7 +106,7 @@
 
       <div class="api-example-actions">
         <button type="button" class="view-toggle template-action-btn view-toggle-primary" on:click={() => dispatch('apply')} disabled={!canApply}>
-          Применить рекомендованные настройки
+          Применить рекомендованные настройки в форму
         </button>
       </div>
     {/if}
@@ -157,6 +160,16 @@
     margin: 0;
     font-size: 12px;
     line-height: 1.45;
+  }
+
+  .api-example-draft-note {
+    font-size: 12px;
+    line-height: 1.45;
+    color: #475569;
+    background: #eef6ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 8px;
+    padding: 7px 8px;
   }
 
   .api-example-section ul {

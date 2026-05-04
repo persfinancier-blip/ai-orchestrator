@@ -4295,9 +4295,12 @@ function formatBytes(bytes: number) {
       Object.assign(d, nextDraft);
     });
     requestInput = draftUrl(nextDraft);
+    const nextStepHint = workflowNodeId
+      ? 'Нажми «Проверить», затем вручную сохрани шаблон или Desk.'
+      : 'Нажми «Проверить», затем вручную сохрани шаблон.';
     templateParseApplyMessage = applyResult.applied_changes.length
-      ? `Применено: ${applyResult.applied_changes.join(', ')}.`
-      : 'Новые настройки не применялись: рекомендации совпадают с текущей формой или требуют ручной проверки.';
+      ? `Подставлено в текущую форму: ${applyResult.applied_changes.join(', ')}. ${nextStepHint}`
+      : `Новые поля не подставлялись: рекомендации совпадают с текущей формой или требуют ручной проверки. ${nextStepHint}`;
     if (applyResult.warnings.length) {
       templateParseApplyMessage = `${templateParseApplyMessage} Требуют проверки: ${applyResult.warnings.length}.`;
     }
@@ -4314,7 +4317,7 @@ function formatBytes(bytes: number) {
       Object.assign(d, clearApiExampleInputDraft(d));
     });
     templateParseError = '';
-    templateParseApplyMessage = 'Поле примера очищено. Примененные настройки формы не менялись.';
+    templateParseApplyMessage = 'Поле примера очищено. Подставленные настройки формы не откатывались.';
     templateParseMessage = templateParseApplyMessage;
     syncLeftTextareasHeight();
   }
