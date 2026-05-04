@@ -1,8 +1,10 @@
 ﻿<script lang="ts">
   import { createEventDispatcher, onDestroy, tick } from 'svelte';
   import JsonTreeView from '../components/JsonTreeView.svelte';
+  import ApiExampleParseResult from '../components/ApiExampleParseResult.svelte';
   import { shouldRetryStatus, retryDelayMs, groupRowsByAliases } from './apiBuilderRuntimeCore.js';
   import { buildApiResponsePreviewState, extractApiBusinessPayload } from './apiResponseTreeCore.js';
+  import { applyApiExamplePatchToDraft, clearApiExampleInputDraft } from '../../shared/apiExampleParserCore.mjs';
   import {
     buildAliasFromPath,
     buildOutputFieldsFromNode,
@@ -40,6 +42,22 @@
       ref: string;
       storeId: number;
       templateId: string;
+    };
+    templatePatchApplied: {
+      ref: string;
+      storeId: number;
+      templateId: string;
+      request: {
+        method: string;
+        url: string;
+        authMode: string;
+        headersText: string;
+        queryText: string;
+        bodyText: string;
+      };
+      pagination: Record<string, any>;
+      appliedChanges: string[];
+      warnings: string[];
     };
     executionPreviewChange: {
       execution: {
@@ -522,6 +540,10 @@
   let queryEl: HTMLTextAreaElement | null = null;
   let bodyEl: HTMLTextAreaElement | null = null;
   let templateParseMessage = '';
+  let templateParseBusy = false;
+  let templateParseError = '';
+  let templateParseResult: any = null;
+  let templateParseApplyMessage = '';
   let activeResponseFieldRef = '';
   type ColumnMeta = { name: string; type?: string };
   let columnsCache: Record<string, ColumnMeta[]> = {};
@@ -656,6 +678,18 @@
     try {
       const p = JSON.parse(v);
       return p && typeof p === 'object' ? p : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function tryAnyJson(v: any): any {
+    if (v && typeof v === 'object') return v;
+    if (typeof v !== 'string') return {};
+    const s = v.trim();
+    if (!s) return {};
+    try {
+      return JSON.parse(s);
     } catch {
       return {};
     }
@@ -4130,216 +4164,163 @@ function formatBytes(bytes: number) {
     return (m?.[1] || s).trim();
   }
 
-  function toObj(v: any): Record<string, any> {
-    return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+  function draftUrl(d: ApiDraft | null) {
+    if (!d) return '';
+    const base = String(d.baseUrl || '').trim().replace(/\/$/, '');
+    const path = String(d.path || '/').trim();
+    if (!base) return path || '/';
+    return `${base}${path.startsWith('/') ? path : `/${path}`}`;
   }
 
-  function fromHeaderLines(raw: string): Record<string, string> {
-    const out: Record<string, string> = {};
-    for (const line of String(raw || '').split('\n')) {
-      const s = line.trim();
-      if (!s || !s.includes(':')) continue;
-      const idx = s.indexOf(':');
-      const k = s.slice(0, idx).trim();
-      const v = s.slice(idx + 1).trim();
-      if (k) out[k] = v;
-    }
-    return out;
-  }
-
-  function splitAuthHeaders(headersObj: Record<string, any>) {
-    const auth: Record<string, string> = {};
-    const headersOut: Record<string, string> = {};
-    for (const [k, v] of Object.entries(headersObj || {})) {
-      const key = String(k || '').trim();
-      if (!key) continue;
-      const val = String(v ?? '');
-      const lk = key.toLowerCase();
-      const isAuth =
-        lk === 'authorization' ||
-        lk === 'x-api-key' ||
-        lk === 'api-key' ||
-        lk === 'apikey' ||
-        lk.includes('token');
-      if (isAuth) auth[key] = val;
-      else headersOut[key] = val;
-    }
-    return { auth, headersOut };
-  }
-
-  function parseCurlTemplate(raw: string) {
-    const src = String(raw || '');
-    if (!/\bcurl\b/i.test(src)) return null;
-
-    const methodMatch = src.match(/(?:^|\s)-X\s+(GET|POST|PUT|PATCH|DELETE)\b/i);
-    const method = methodMatch ? toHttpMethod(methodMatch[1].toUpperCase()) : undefined;
-
-    const urlQuoted = src.match(/curl(?:\s+-[A-Za-z]\s+\S+)*\s+['"]([^'"]+)['"]/i);
-    const urlBare = src.match(/(https?:\/\/[^\s"'\\]+)/i);
-    const url = (urlQuoted?.[1] || urlBare?.[1] || '').trim();
-
-    const headerRe = /(?:^|\s)-H\s+['"]([^'"]+)['"]/gi;
-    const headerLines: string[] = [];
-    let hm: RegExpExecArray | null;
-    while ((hm = headerRe.exec(src))) headerLines.push(hm[1]);
-
-    const dataMatch = src.match(/(?:^|\s)(?:--data-raw|--data|-d)\s+('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|[^\s]+)/i);
-    const bodyRaw = dataMatch ? String(dataMatch[1] || '').replace(/^['"]|['"]$/g, '') : '';
-
-    return { method, url, headerLines, bodyRaw };
-  }
-
-  function parseTemplateToPatch(raw: string) {
-    const text = unwrapCodeFence(raw);
-    if (!text) return { ok: false, message: '' as string, patch: null as any };
-
-    const curl = parseCurlTemplate(text);
-    if (curl?.url) {
-      const u = new URL(curl.url);
-      const query: Record<string, string> = {};
-      u.searchParams.forEach((v, k) => (query[k] = v));
-      const headersObj = fromHeaderLines(curl.headerLines.join('\n'));
-      const { auth, headersOut } = splitAuthHeaders(headersObj);
-      let bodyValue: any = {};
-      if (curl.bodyRaw) {
-        try {
-          bodyValue = JSON.parse(curl.bodyRaw);
-        } catch {
-          bodyValue = { raw: curl.bodyRaw };
-        }
-      }
-      return {
-        ok: true,
-        message: 'Шаблон разобран из curl',
-        patch: {
-          method: curl.method,
-          baseUrl: u.origin,
-          path: decodeUrlPathname(u.pathname),
-          queryJson: toPrettyJson(query),
-          headersJson: toPrettyJson(headersOut),
-          authJson: toPrettyJson(auth),
-          bodyJson: toPrettyJson(bodyValue)
-        }
-      };
-    }
-
-    try {
-      const parsed = JSON.parse(text);
-      const root = toObj(parsed?.request || parsed);
-      const method = root?.method ? toHttpMethod(String(root.method).toUpperCase()) : undefined;
-      const urlRaw = String(root?.url || root?.endpoint || '').trim();
-      const baseUrl = String(root?.baseUrl || root?.base_url || '').trim();
-      const path = String(root?.path || '').trim();
-      const headersSrc = toObj(root?.headers);
-      const authSrc = toObj(root?.auth || root?.authorization);
-      const querySrc = toObj(root?.query || root?.params);
-      const hasExplicitBody = root && (Object.prototype.hasOwnProperty.call(root, 'body') || Object.prototype.hasOwnProperty.call(root, 'data'));
-      const bodySrc = hasExplicitBody ? root?.body ?? root?.data ?? {} : parsed;
-
-      let finalBaseUrl = baseUrl;
-      let finalPath = path || '/';
-      let queryFromUrl: Record<string, string> = {};
-      if (urlRaw) {
-        const u = new URL(urlRaw);
-        finalBaseUrl = u.origin;
-        finalPath = decodeUrlPathname(u.pathname);
-        u.searchParams.forEach((v, k) => (queryFromUrl[k] = v));
-      }
-
-      const { auth, headersOut } = splitAuthHeaders(headersSrc);
-      const authFinal = Object.keys(authSrc).length ? authSrc : auth;
-      const queryFinal = Object.keys(querySrc).length ? querySrc : queryFromUrl;
-      const modeMessage = hasExplicitBody || urlRaw || method
-        ? 'Шаблон разобран из JSON'
-        : 'Шаблон разобран как Body JSON';
-      return {
-        ok: true,
-        message: modeMessage,
-        patch: {
-          method,
-          baseUrl: finalBaseUrl,
-          path: finalPath,
-          headersJson: toPrettyJson(headersOut),
-          authJson: toPrettyJson(authFinal),
-          queryJson: toPrettyJson(queryFinal),
-          bodyJson: toPrettyJson(bodySrc)
-        }
-      };
-    } catch {
-      // ignore and try URL fallback
-    }
-
-    const urlMatch = text.match(/https?:\/\/[^\s"'\\]+/i);
-    if (urlMatch?.[0]) {
-      const u = new URL(urlMatch[0]);
-      const query: Record<string, string> = {};
-      u.searchParams.forEach((v, k) => (query[k] = v));
-      return {
-        ok: true,
-        message: 'Шаблон разобран из URL',
-        patch: {
-          baseUrl: u.origin,
-          path: decodeUrlPathname(u.pathname),
-          queryJson: toPrettyJson(query)
-        }
-      };
-    }
-
+  function currentTemplateForParse(d: ApiDraft | null) {
+    if (!d) return {};
     return {
-      ok: false,
-      message: 'Не удалось распознать шаблон. Вставьте curl, URL или JSON.',
-      patch: null
+      method: d.method,
+      base_url: d.baseUrl,
+      path: d.path,
+      auth_mode: d.authMode,
+      headers_json: tryObj(d.headersJson),
+      query_json: tryObj(d.queryJson),
+      body_json: tryAnyJson(d.bodyJson),
+      pagination_json: {
+        enabled: d.paginationEnabled,
+        strategy: d.paginationStrategy,
+        target: d.paginationTarget,
+        data_path: d.paginationDataPath
+      },
+      execution_json: {
+        response_log: {
+          enabled: d.responseLogEnabled,
+          mode: d.responseLogMode
+        }
+      }
     };
   }
 
-  function applyTemplatePatch(patch: any) {
-    if (!patch) return;
-    mutateSelected((d) => {
-      if (patch.method) d.method = patch.method;
-      if (typeof patch.baseUrl === 'string') d.baseUrl = patch.baseUrl;
-      if (typeof patch.path === 'string') d.path = patch.path || '/';
-      if (typeof patch.authJson === 'string') d.authJson = patch.authJson;
-      if (typeof patch.headersJson === 'string') d.headersJson = patch.headersJson;
-      if (typeof patch.queryJson === 'string') d.queryJson = patch.queryJson;
-      if (typeof patch.bodyJson === 'string') d.bodyJson = patch.bodyJson;
-    });
-    const next = byRef(selectedRef);
-    if (next) {
-      requestInput = `${next.baseUrl.replace(/\/$/, '')}${next.path.startsWith('/') ? next.path : `/${next.path}`}`;
-    }
+  function draftPaginationForNodeSync(d: ApiDraft): Record<string, any> {
+    return {
+      enabled: Boolean(d.paginationEnabled),
+      mode: d.paginationStrategy === 'cursor_fields' ? 'cursor' : d.paginationStrategy || 'none',
+      target: d.paginationTarget || 'query',
+      useMaxPages: Boolean(d.paginationUseMaxPages),
+      maxPages: Math.max(1, Number(d.paginationMaxPages || 1)),
+      useDelay: Boolean(d.paginationUseDelay),
+      pauseMs: Math.max(0, Number(d.paginationDelayMs || 0)),
+      dataPath: String(d.paginationDataPath || '').trim(),
+      stopOnMissingValue: Boolean(d.paginationStopOnMissingValue),
+      stopOnHttpError: Boolean(d.paginationStopOnHttpError),
+      stopOnSameResponse: Boolean(d.paginationStopOnSameResponse),
+      sameResponseLimit: Math.max(2, Number(d.paginationSameResponseLimit || 5)),
+      stopRules: Array.isArray(d.paginationStopRules) ? d.paginationStopRules : [],
+      pageParam: String(d.paginationPageParam || 'page').trim() || 'page',
+      startPage: Math.max(1, Number(d.paginationStartPage || 1)),
+      limitParam: String(d.paginationLimitParam || 'limit').trim() || 'limit',
+      limitValue: Math.max(1, Number(d.paginationLimitValue || 1)),
+      offsetParam: String(d.paginationOffsetParam || 'offset').trim() || 'offset',
+      startOffset: Math.max(0, Number(d.paginationStartOffset || 0)),
+      cursorReqPath: String(d.paginationCursorReqPath1 || 'cursor').trim() || 'cursor',
+      cursorResPath: String(d.paginationCursorResPath1 || 'response.cursor').trim() || 'response.cursor'
+    };
   }
 
-  function parseTemplateNow(force = false) {
+  function dispatchTemplatePatchApplied(d: ApiDraft, appliedChanges: string[], warnings: string[]) {
+    dispatch('templatePatchApplied', {
+      ref: refOf(d),
+      storeId: Number(d.storeId || 0) || 0,
+      templateId: Number(d.storeId || 0) > 0 ? `api_tpl_${Number(d.storeId || 0)}` : '',
+      request: {
+        method: d.method,
+        url: draftUrl(d),
+        authMode: d.authMode,
+        headersText: d.headersJson || '{}',
+        queryText: d.queryJson || '{}',
+        bodyText: d.bodyJson || '{}'
+      },
+      pagination: draftPaginationForNodeSync(d),
+      appliedChanges,
+      warnings
+    });
+  }
+
+  async function parseTemplateNow() {
     if (!selected) {
-      templateParseMessage = 'Выбери API в правом блоке';
+      templateParseError = 'Выбери API в правом блоке.';
+      templateParseMessage = '';
       return;
     }
     const srcRaw = exampleApiEl ? String(exampleApiEl.value || '') : String(selected.exampleRequest || '');
     const src = srcRaw.trim();
     if (!src) {
+      templateParseError = 'Вставьте пример API перед разбором.';
       templateParseMessage = '';
       return;
     }
     mutateSelected((d) => (d.exampleRequest = srcRaw));
-    if (!force && src.length < 8) return;
-    const parsed = parseTemplateToPatch(src);
-    if (!parsed.ok) {
-      if (force) templateParseMessage = parsed.message;
-      return;
+    templateParseBusy = true;
+    templateParseError = '';
+    templateParseApplyMessage = '';
+    templateParseMessage = '';
+    try {
+      const response = await apiJson<{ parse_result: any }>(`${apiBase}/api-configs/parse-example`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({
+          example_text: srcRaw,
+          current_template: currentTemplateForParse(selected)
+        })
+      });
+      templateParseResult = response?.parse_result || null;
+      const changesCount = Array.isArray(templateParseResult?.recommended_changes)
+        ? templateParseResult.recommended_changes.length
+        : Object.keys(templateParseResult?.apply_patch || {}).length;
+      templateParseMessage = changesCount ? `Разбор готов: рекомендаций ${changesCount}` : 'Разбор готов, но применяемые поля не найдены.';
+    } catch {
+      templateParseError = 'Не удалось разобрать пример API. Проверьте текст и попробуйте ещё раз.';
+      templateParseMessage = '';
+    } finally {
+      templateParseBusy = false;
+      syncLeftTextareasHeight();
     }
-    applyTemplatePatch(parsed.patch);
-    templateParseMessage = parsed.message;
+  }
+
+  async function applyTemplateParseRecommendations() {
+    if (!selected || !templateParseResult) return;
+    const applyResult = applyApiExamplePatchToDraft(selected, templateParseResult) as {
+      draft: ApiDraft;
+      applied_changes: string[];
+      warnings: string[];
+    };
+    const nextDraft = applyResult.draft;
+    mutateSelected((d) => {
+      Object.assign(d, nextDraft);
+    });
+    requestInput = draftUrl(nextDraft);
+    templateParseApplyMessage = applyResult.applied_changes.length
+      ? `Применено: ${applyResult.applied_changes.join(', ')}.`
+      : 'Новые настройки не применялись: рекомендации совпадают с текущей формой или требуют ручной проверки.';
+    if (applyResult.warnings.length) {
+      templateParseApplyMessage = `${templateParseApplyMessage} Требуют проверки: ${applyResult.warnings.length}.`;
+    }
+    templateParseMessage = templateParseApplyMessage;
+    dispatchTemplatePatchApplied(nextDraft, applyResult.applied_changes, applyResult.warnings);
+    await tick();
+    syncMainTextareasHeight();
+    syncLeftTextareasHeight();
   }
 
   function clearTemplateField() {
     if (exampleApiEl) exampleApiEl.value = '';
-    mutateSelected((d) => (d.exampleRequest = ''));
-    templateParseMessage = '';
+    mutateSelected((d) => {
+      Object.assign(d, clearApiExampleInputDraft(d));
+    });
+    templateParseError = '';
+    templateParseApplyMessage = 'Поле примера очищено. Примененные настройки формы не менялись.';
+    templateParseMessage = templateParseApplyMessage;
     syncLeftTextareasHeight();
   }
 
   function onTemplateParseClick() {
-    parseTemplateNow(true);
+    void parseTemplateNow();
   }
 
   function onTemplateClearClick() {
@@ -10722,7 +10703,9 @@ function syncParameterEditorsHeight() {
         <div class="subttl template-head">
           <span>Шаблон API</span>
           <span class="inline-actions">
-            <button type="button" class="view-toggle template-action-btn view-toggle-primary" on:click={onTemplateParseClick}>Разобрать</button>
+            <button type="button" class="view-toggle template-action-btn view-toggle-primary" on:click={onTemplateParseClick} disabled={templateParseBusy}>
+              {templateParseBusy ? 'Разбор...' : 'Разобрать'}
+            </button>
             <button type="button" class="view-toggle template-action-btn view-toggle-primary" on:click={onTemplateClearClick}>Очистить</button>
             {#if exampleIsJson}
               <button type="button" class="view-toggle template-action-btn" on:click={() => (exampleViewMode = exampleViewMode === 'tree' ? 'raw' : 'tree')}>
@@ -10751,6 +10734,13 @@ function syncParameterEditorsHeight() {
             <span class="template-parse-note">{templateParseMessage}</span>
           {/if}
         </div>
+        <ApiExampleParseResult
+          result={templateParseResult}
+          loading={templateParseBusy}
+          error={templateParseError}
+          applyMessage={templateParseApplyMessage}
+          on:apply={applyTemplateParseRecommendations}
+        />
       </div>
     </aside>
   </div>
