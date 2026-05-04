@@ -3,7 +3,7 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 import path from 'path';
 
 export default defineConfig({
-  base: '/ai-orchestrator/',
+  base: '/',
   plugins: [svelte()],
   resolve: {
     alias: {
