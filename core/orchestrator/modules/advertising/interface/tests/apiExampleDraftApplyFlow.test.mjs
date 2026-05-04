@@ -39,6 +39,7 @@ test('api example apply in node modal hydrates draft without saving desk', () =>
 
   assert.match(body, /applyApiBuilderRequestPatchToNode/);
   assert.match(body, /applyApiBuilderPaginationPatchToNode/);
+  assert.match(body, /deskAutosavePausedForApiDraft\s*=\s*true/);
   assert.doesNotMatch(body, /saveDesk\s*\(/);
   assert.doesNotMatch(body, /workflow-desks\/upsert/);
   assert.match(body, /Desk не сохранен/);
@@ -49,9 +50,20 @@ test('api template save from node modal updates node draft without saving desk',
   const body = functionBody(source, 'onApiBuilderTemplateSaved');
 
   assert.match(body, /applyTemplateToNode/);
+  assert.match(body, /deskAutosavePausedForApiDraft\s*=\s*true/);
   assert.doesNotMatch(body, /saveDesk\s*\(/);
   assert.doesNotMatch(body, /workflow-desks\/upsert/);
-  assert.match(body, /нажми «Сохранить»/);
+  assert.match(body, /ручного «Сохранить»/);
+});
+
+test('desk autosave skips api recommendation draft until manual save', () => {
+  const source = readProjectFile('desk/components/WorkflowCanvas.svelte');
+  const autosaveBody = functionBody(source, 'restartDeskAutosaveTimer');
+  const saveBody = functionBody(source, 'saveDesk');
+
+  assert.match(autosaveBody, /deskAutosavePausedForApiDraft\)\s*return/);
+  assert.match(saveBody, /deskAutosavePausedForApiDraft\s*=\s*false/);
+  assert.match(source, /Автосохранение ждёт ручного сохранения/);
 });
 
 test('api constructor apply hydrates form draft without template upsert', () => {

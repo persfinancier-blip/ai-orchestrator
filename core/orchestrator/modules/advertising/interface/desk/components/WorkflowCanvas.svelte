@@ -462,6 +462,7 @@
   let deskSaveError = '';
   let deskAutosaveEnabled = true;
   let deskAutosaveSeconds = 10;
+  let deskAutosavePausedForApiDraft = false;
   let deskInitialized = false;
   let deskSignatureMute = false;
   let deskLastSavedSignature = '';
@@ -1920,6 +1921,7 @@
     deskDirty = false;
     deskLastSavedAt = safeIso(row?.updated_at);
     deskSaveError = '';
+    deskAutosavePausedForApiDraft = false;
   }
 
   function clearDeskAutosaveTimer() {
@@ -1976,6 +1978,7 @@
       deskLastSavedSignature = deskSignatureFromState(captureDeskState());
       deskDirty = false;
       deskLastSavedAt = new Date().toISOString();
+      deskAutosavePausedForApiDraft = false;
       workflowDeskOptions = [
         {
           id: deskId,
@@ -2484,6 +2487,7 @@
     deskAutosaveSeconds = sec;
     deskAutosaveTimer = setInterval(() => {
       if (!deskInitialized || !deskDirty || deskSaving || deskLoading) return;
+      if (deskAutosavePausedForApiDraft) return;
       void saveDesk(true);
     }, sec * 1000);
   }
@@ -4273,7 +4277,9 @@
     if (!source) return;
     applyTemplateToNode(node.id, source.id);
     await tick();
-    banner = 'API-шаблон сохранен. Нода обновлена только в текущем рабочем столе; нажми «Сохранить», чтобы сохранить Desk.';
+    deskAutosavePausedForApiDraft = true;
+    banner =
+      'API-шаблон сохранен. Нода обновлена только в текущем рабочем столе; автосохранение не сработает до ручного «Сохранить».';
   }
 
   function safeJsonObjectText(raw: any) {
@@ -4406,10 +4412,11 @@
     if (!applied) return;
     applyApiBuilderPaginationPatchToNode(nodeId, detail?.pagination || {});
     await tick();
+    deskAutosavePausedForApiDraft = true;
     apiTemplateUsageRefreshTick += 1;
     const changeCount = Array.isArray(detail?.appliedChanges) ? detail.appliedChanges.length : 0;
     banner = changeCount
-      ? `Рекомендации подставлены в API-ноду: ${changeCount}. Desk не сохранен; нажми «Сохранить» после проверки.`
+      ? `Рекомендации подставлены в API-ноду: ${changeCount}. Desk не сохранен; автосохранение пропущено до ручного «Сохранить».`
       : 'API-нода не получила новых значений. Desk не сохранен.';
   }
 
@@ -6586,6 +6593,9 @@
         Интервал (сек)
         <input type="number" min="3" value={String(deskAutosaveSeconds)} on:input={onDeskAutosaveSecondsInput} disabled={!deskAutosaveEnabled} />
       </label>
+      {#if deskAutosavePausedForApiDraft}
+        <span class="desk-autosave-paused">Автосохранение ждёт ручного сохранения</span>
+      {/if}
       <span class="saved-at">{deskLastSavedAt ? `Сохранено: ${deskLastSavedAt}` : 'Пока не сохранено'}</span>
     </div>
     {#if deskSaveError}
@@ -8039,6 +8049,15 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .desk-autosave-paused {
+    font-size: 11px;
+    color: #92400e;
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    border-radius: 999px;
+    padding: 4px 8px;
+    white-space: nowrap;
   }
   .desk-error {
     border: 1px solid #fecaca;
