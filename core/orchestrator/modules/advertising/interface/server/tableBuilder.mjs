@@ -3,6 +3,7 @@ import { pool } from './db.mjs';
 import { executeParserRows, parserPreviewSummary } from './parserRuntime.mjs';
 import { previewTableNodeConfig } from './tableNodeRuntime.mjs';
 import { previewWriteConfig } from './writeRuntime.mjs';
+import { parseApiExample } from '../shared/apiExampleParserCore.mjs';
 
 export const tableBuilderRouter = express.Router();
 tableBuilderRouter.use(express.json({ limit: '4mb' }));
@@ -3078,6 +3079,24 @@ tableBuilderRouter.get('/api-configs', requireDataAdmin, async (_req, res) => {
     return res.status(500).json({ error: 'api_configs_list_failed', details: String(e?.message || e) });
   } finally {
     client.release();
+  }
+});
+
+tableBuilderRouter.post('/api-configs/parse-example', requireDataAdmin, async (req, res) => {
+  try {
+    const exampleText = String(req.body?.example_text ?? req.body?.example ?? '').trim();
+    if (!exampleText) {
+      return res.status(400).json({ error: 'bad_request', details: 'example_text is required' });
+    }
+    if (exampleText.length > 200000) {
+      return res.status(413).json({ error: 'payload_too_large', details: 'example_text is too large' });
+    }
+    const result = parseApiExample(exampleText, {
+      current_template: req.body?.current_template && typeof req.body.current_template === 'object' ? req.body.current_template : {}
+    });
+    return res.json({ parse_result: result });
+  } catch (e) {
+    return res.status(500).json({ error: 'api_example_parse_failed', details: String(e?.message || e) });
   }
 });
 
