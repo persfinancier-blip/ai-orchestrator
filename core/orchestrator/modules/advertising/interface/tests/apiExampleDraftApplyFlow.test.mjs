@@ -61,8 +61,10 @@ test('desk autosave skips api recommendation draft until manual save', () => {
   const autosaveBody = functionBody(source, 'restartDeskAutosaveTimer');
   const saveBody = functionBody(source, 'saveDesk');
 
-  assert.match(autosaveBody, /deskAutosavePausedForApiDraft\)\s*return/);
+  assert.match(autosaveBody, /deskAutosaveAiDraftSignature/);
+  assert.match(autosaveBody, /deskCurrentSignature\s*===\s*deskAutosaveAiDraftSignature/);
   assert.match(saveBody, /deskAutosavePausedForApiDraft\s*=\s*false/);
+  assert.match(saveBody, /deskAutosaveAiDraftSignature\s*=\s*''/);
   assert.match(source, /Автосохранение ждёт ручного сохранения/);
 });
 
