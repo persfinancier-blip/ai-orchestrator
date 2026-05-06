@@ -4,6 +4,7 @@ import { executeParserRows, parserPreviewSummary } from './parserRuntime.mjs';
 import { previewTableNodeConfig } from './tableNodeRuntime.mjs';
 import { previewWriteConfig } from './writeRuntime.mjs';
 import { parseApiExample } from '../shared/apiExampleParserCore.mjs';
+import { DEFAULT_NODE_EDITOR_SCHEMAS, analyzeNodeAssistantSources, runNodeAssistantFlow } from '../shared/nodeAssistantCore.mjs';
 
 export const tableBuilderRouter = express.Router();
 tableBuilderRouter.use(express.json({ limit: '4mb' }));
@@ -357,7 +358,7 @@ export const DEFAULT_API_CONFIG_ROWS = Object.freeze([
     description: 'Ozon Performance Campaign. Включить поисковое продвижение для списка SKU. Источник: https://docs.ozon.ru/api/performance/#tag/Campaign'
   })
 ]);
-export const DEFAULT_NODE_REGISTRY_ROWS = Object.freeze([
+const DEFAULT_NODE_REGISTRY_BASE_ROWS = [
   {
     node_type_code: 'start_process',
     node_name_ru: 'Старт процесса',
@@ -613,7 +614,13 @@ export const DEFAULT_NODE_REGISTRY_ROWS = Object.freeze([
     editor_type_code: 'end_process',
     runtime_handler_code: 'end_process'
   }
-]);
+];
+export const DEFAULT_NODE_REGISTRY_ROWS = Object.freeze(
+  DEFAULT_NODE_REGISTRY_BASE_ROWS.map((row) => ({
+    ...row,
+    editor_schema_json: DEFAULT_NODE_EDITOR_SCHEMAS[row.node_type_code] || null
+  }))
+);
 const BUILTIN_NODE_REGISTRY_TEMPLATE = Object.freeze({
   template_name: 'Реестр системных нод',
   schema_name: DEFAULT_CONFIG.node_registry_schema,
@@ -644,6 +651,7 @@ const BUILTIN_NODE_REGISTRY_TEMPLATE = Object.freeze({
     { field_name: 'icon_key', field_type: 'text', description: 'Ключ иконки из безопасного набора интерфейса.' },
     { field_name: 'visual_preset_key', field_type: 'text', description: 'Ключ визуального пресета ноды.' },
     { field_name: 'editor_type_code', field_type: 'text', description: 'Код редактора или конструктора, который открывается для ноды.' },
+    { field_name: 'editor_schema_json', field_type: 'jsonb', description: 'Schema полей редактора ноды для AI-помощника и безопасного draft merge.' },
     { field_name: 'runtime_handler_code', field_type: 'text', description: 'Код обработчика выполнения на сервере.' },
     { field_name: 'updated_at', field_type: 'timestamptz', description: 'Когда запись в реестре обновили.' },
     { field_name: 'updated_by', field_type: 'text', description: 'Кто обновил запись.' }
@@ -1725,6 +1733,7 @@ async function ensureDefaultNodeRegistryRows(client, qn, config) {
           visual_preset_key,
           editor_type_code,
           runtime_handler_code,
+          editor_schema_json,
           updated_at,
           updated_by,
           ao_source,
@@ -1736,8 +1745,8 @@ async function ensureDefaultNodeRegistryRows(client, qn, config) {
           ao_contract_version
         )
       VALUES
-        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now(), 'system_bootstrap',
-         'system_bootstrap', $16, now(), now(), $17, $18, 1)
+        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, now(), 'system_bootstrap',
+         'system_bootstrap', $17, now(), now(), $18, $19, 1)
       ON CONFLICT (node_type_code)
       DO UPDATE SET
         node_name_ru = EXCLUDED.node_name_ru,
@@ -1754,6 +1763,7 @@ async function ensureDefaultNodeRegistryRows(client, qn, config) {
         visual_preset_key = EXCLUDED.visual_preset_key,
         editor_type_code = EXCLUDED.editor_type_code,
         runtime_handler_code = EXCLUDED.runtime_handler_code,
+        editor_schema_json = EXCLUDED.editor_schema_json,
         updated_at = now(),
         updated_by = 'system_bootstrap',
         ao_source = 'system_bootstrap',
@@ -1779,6 +1789,7 @@ async function ensureDefaultNodeRegistryRows(client, qn, config) {
         row.visual_preset_key,
         row.editor_type_code,
         row.runtime_handler_code,
+        JSON.stringify(row.editor_schema_json || null),
         runId,
         config.contracts_schema,
         contractName
@@ -1788,7 +1799,7 @@ async function ensureDefaultNodeRegistryRows(client, qn, config) {
 }
 
 export function materializeNodeRegistryRow(row) {
-  return {
+  const out = {
     id: Number(row?.id || 0) || 0,
     node_type_code: String(row?.node_type_code || '').trim(),
     node_name_ru: String(row?.node_name_ru || '').trim(),
@@ -1808,6 +1819,144 @@ export function materializeNodeRegistryRow(row) {
     updated_at: row?.updated_at || '',
     updated_by: String(row?.updated_by || '').trim()
   };
+  if (row?.editor_schema_json && typeof row.editor_schema_json === 'object' && !Array.isArray(row.editor_schema_json)) {
+    out.editor_schema_json = row.editor_schema_json;
+  }
+  return out;
+}
+
+function nodeAssistantTextFromHtml(raw) {
+  return String(raw || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&#39;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isBlockedNodeAssistantHost(hostname) {
+  const host = String(hostname || '').trim().toLowerCase();
+  if (!host) return true;
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
+  if (/^(127|10)\./.test(host)) return true;
+  if (/^192\.168\./.test(host)) return true;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(host)) return true;
+  if (host === '0.0.0.0' || host === '::1') return true;
+  return false;
+}
+
+function safeExternalNodeAssistantUrl(rawUrl) {
+  try {
+    const parsed = new URL(String(rawUrl || '').trim());
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
+    if (isBlockedNodeAssistantHost(parsed.hostname)) return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+async function fetchTextWithLimit(url, { timeoutMs = 8000, maxBytes = 700000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: {
+        Accept: 'text/html,application/json,text/plain;q=0.9,*/*;q=0.3',
+        'User-Agent': 'AI-Orchestrator-NodeAssistant/1.0'
+      }
+    });
+    const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (contentType && !/(text|html|json|xml|markdown|openapi|yaml|yml)/i.test(contentType)) {
+      throw new Error(`unsupported content-type ${contentType}`);
+    }
+    const reader = response.body?.getReader ? response.body.getReader() : null;
+    if (!reader) {
+      const text = await response.text();
+      return text.slice(0, maxBytes);
+    }
+    const chunks = [];
+    let total = 0;
+    while (total < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      chunks.push(value);
+    }
+    return new TextDecoder('utf-8').decode(Buffer.concat(chunks).subarray(0, maxBytes));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchNodeAssistantDocumentation(urls) {
+  const out = [];
+  for (const rawUrl of urls.slice(0, 3)) {
+    const url = safeExternalNodeAssistantUrl(rawUrl);
+    if (!url) {
+      out.push({ url: rawUrl, error: 'blocked_url' });
+      continue;
+    }
+    try {
+      const raw = await fetchTextWithLimit(url);
+      out.push({ url, text: nodeAssistantTextFromHtml(raw).slice(0, 120000) });
+    } catch (e) {
+      out.push({ url, error: String(e?.message || e) });
+    }
+  }
+  return out;
+}
+
+function buildNodeAssistantSearchQuery({ userText, intent, nodeTypeCode }) {
+  const parts = [];
+  if (intent?.source) parts.push(intent.source);
+  if (intent?.operation) parts.push(intent.operation);
+  if (intent?.action) parts.push(intent.action);
+  if (nodeTypeCode) parts.push(nodeTypeCode);
+  if (!parts.length) parts.push(String(userText || '').trim().slice(0, 80));
+  parts.push('api documentation endpoint');
+  return parts.filter(Boolean).join(' ');
+}
+
+async function searchNodeAssistantWeb(query) {
+  const safeQuery = String(query || '').trim();
+  if (!safeQuery) return [];
+  const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(safeQuery)}`;
+  try {
+    const html = await fetchTextWithLimit(url, { timeoutMs: 7000, maxBytes: 500000 });
+    const results = [];
+    const re = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]{0,1200}?<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
+    let match;
+    while ((match = re.exec(html)) && results.length < 5) {
+      const rawHref = String(match[1] || '').replace(/&amp;/g, '&');
+      let resultUrl = rawHref;
+      try {
+        const parsed = new URL(rawHref, 'https://duckduckgo.com');
+        const uddg = parsed.searchParams.get('uddg');
+        resultUrl = uddg || parsed.toString();
+      } catch {
+        resultUrl = rawHref;
+      }
+      results.push({
+        title: nodeAssistantTextFromHtml(match[2]),
+        url: resultUrl,
+        snippet: nodeAssistantTextFromHtml(match[3])
+      });
+    }
+    return results;
+  } catch {
+    return [];
+  }
 }
 
 async function ensureNodeRegistryTable(client, config) {
@@ -1834,6 +1983,7 @@ async function ensureNodeRegistryTable(client, config) {
       visual_preset_key text NOT NULL DEFAULT '',
       editor_type_code text NOT NULL DEFAULT '',
       runtime_handler_code text NOT NULL DEFAULT '',
+      editor_schema_json jsonb,
       updated_at timestamptz NOT NULL DEFAULT now(),
       updated_by text NOT NULL DEFAULT 'system'
     )
@@ -1853,6 +2003,7 @@ async function ensureNodeRegistryTable(client, config) {
       ADD COLUMN IF NOT EXISTS visual_preset_key text NOT NULL DEFAULT '',
       ADD COLUMN IF NOT EXISTS editor_type_code text NOT NULL DEFAULT '',
       ADD COLUMN IF NOT EXISTS runtime_handler_code text NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS editor_schema_json jsonb,
       ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now(),
       ADD COLUMN IF NOT EXISTS updated_by text NOT NULL DEFAULT 'system'
   `);
@@ -3933,6 +4084,108 @@ tableBuilderRouter.get('/node-registry', requireDataAdmin, async (_req, res) => 
     return res.json({ node_registry: (r.rows || []).map(materializeNodeRegistryRow) });
   } catch (e) {
     return res.status(500).json({ error: 'node_registry_list_failed', details: String(e?.message || e) });
+  } finally {
+    client.release();
+  }
+});
+
+tableBuilderRouter.post('/node-assistant/recommend', requireDataAdmin, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const userText = String(req.body?.user_text || req.body?.text || '').trim();
+    const nodeTypeCode = String(req.body?.node_type_code || '').trim();
+    const editorTypeCode = String(req.body?.editor_type_code || '').trim();
+    const nodeKind = String(req.body?.node_kind || '').trim();
+    const currentValues = req.body?.current_values && typeof req.body.current_values === 'object' ? req.body.current_values : {};
+    const clarificationAnswers =
+      req.body?.clarification_answers && typeof req.body.clarification_answers === 'object' ? req.body.clarification_answers : {};
+
+    if (!nodeTypeCode && !editorTypeCode) {
+      return res.status(400).json({ error: 'bad_request', details: 'node_type_code or editor_type_code is required' });
+    }
+    if (!userText && !Object.keys(clarificationAnswers).length) {
+      return res.status(400).json({ error: 'bad_request', details: 'user_text or clarification_answers is required' });
+    }
+
+    const config = await loadRuntimeConfig(client);
+    const qn = nodeRegistryQname(config);
+    await ensureNodeRegistryTable(client, config);
+    const params = [];
+    let whereSql = '';
+    if (nodeTypeCode) {
+      params.push(nodeTypeCode);
+      whereSql = `node_type_code = $${params.length}`;
+    }
+    if (editorTypeCode) {
+      params.push(editorTypeCode);
+      whereSql = whereSql ? `${whereSql} OR editor_type_code = $${params.length}` : `editor_type_code = $${params.length}`;
+    }
+    const registryResult = await client.query(
+      `
+      SELECT *
+      FROM ${qn}
+      WHERE is_enabled = true AND (${whereSql})
+      ORDER BY CASE WHEN node_type_code = $1 THEN 0 ELSE 1 END, id ASC
+      LIMIT 1
+      `,
+      params
+    );
+    const registryRow = registryResult.rows?.[0] ? materializeNodeRegistryRow(registryResult.rows[0]) : {};
+
+    const sourceAnalysis = analyzeNodeAssistantSources(userText);
+    const documentationFetches =
+      req.body?.fetch_documentation === false ? [] : await fetchNodeAssistantDocumentation(sourceAnalysis.documentation_urls || []);
+    const preflight = await runNodeAssistantFlow({
+      user_text: userText,
+      node_type_code: nodeTypeCode,
+      editor_type_code: editorTypeCode,
+      node_kind: nodeKind,
+      registry_row: registryRow,
+      current_values: currentValues,
+      clarification_answers: clarificationAnswers
+    });
+    const shouldSearchWeb =
+      req.body?.allow_web_search !== false &&
+      !sourceAnalysis.urls.length &&
+      preflight.status === 'clarification_required' &&
+      (preflight.intent?.source || preflight.intent?.operation || preflight.intent?.action);
+    const webSearchQuery = shouldSearchWeb
+      ? buildNodeAssistantSearchQuery({ userText, intent: preflight.intent, nodeTypeCode: nodeTypeCode || registryRow.node_type_code })
+      : '';
+    const webResults = shouldSearchWeb ? await searchNodeAssistantWeb(webSearchQuery) : [];
+    const result = await runNodeAssistantFlow({
+      user_text: userText,
+      node_type_code: nodeTypeCode,
+      editor_type_code: editorTypeCode,
+      node_kind: nodeKind,
+      registry_row: registryRow,
+      current_values: currentValues,
+      clarification_answers: clarificationAnswers,
+      documentation_texts: documentationFetches.filter((item) => item.text).map((item) => ({ url: item.url, text: item.text })),
+      web_results: webResults,
+      web_search_attempted: shouldSearchWeb
+    });
+    const fetchWarnings = documentationFetches
+      .filter((item) => item.error)
+      .map((item) => `Не удалось прочитать документацию ${item.url}: ${item.error}`);
+    if (fetchWarnings.length) result.warnings = [...new Set([...(result.warnings || []), ...fetchWarnings])];
+    result.source_analysis = {
+      ...(result.source_analysis || sourceAnalysis),
+      documentation_fetches: documentationFetches.map((item) => ({
+        url: item.url,
+        ok: Boolean(item.text),
+        chars: item.text ? item.text.length : 0,
+        error: item.error || ''
+      })),
+      web_search: {
+        attempted: Boolean(shouldSearchWeb),
+        query: webSearchQuery,
+        results: webResults.map((item) => ({ title: item.title, url: item.url, snippet: item.snippet }))
+      }
+    };
+    return res.json({ ok: true, node_assistant: result, recommendation: result });
+  } catch (e) {
+    return res.status(500).json({ error: 'node_assistant_recommend_failed', details: String(e?.message || e) });
   } finally {
     client.release();
   }
