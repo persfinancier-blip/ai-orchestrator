@@ -1,6 +1,7 @@
 ﻿<script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
   import ApiBuilderTab from '../tabs/ApiBuilderTab.svelte';
+  import NodeAssistantPanel from './NodeAssistantPanel.svelte';
   import ParserBuilderTab from '../tabs/ParserBuilderTab.svelte';
   import ActionPrepBuilderTab from '../tabs/ActionPrepBuilderTab.svelte';
   import ApiMutationBuilderTab from '../tabs/ApiMutationBuilderTab.svelte';
@@ -210,6 +211,7 @@
     visual_preset_key: string;
     editor_type_code: string;
     runtime_handler_code: string;
+    editor_schema_json?: any;
     updated_at?: string;
     updated_by?: string;
   };
@@ -463,6 +465,7 @@
   let deskAutosaveEnabled = true;
   let deskAutosaveSeconds = 10;
   let deskAutosavePausedForApiDraft = false;
+  let deskAutosaveAiDraftSignature = '';
   let deskInitialized = false;
   let deskSignatureMute = false;
   let deskLastSavedSignature = '';
@@ -644,6 +647,10 @@
   });
   $: if (deskInitialized && !deskSignatureMute) {
     deskDirty = deskCurrentSignature !== deskLastSavedSignature;
+  }
+  $: if (deskAutosaveAiDraftSignature && deskCurrentSignature && deskCurrentSignature !== deskAutosaveAiDraftSignature) {
+    deskAutosavePausedForApiDraft = false;
+    deskAutosaveAiDraftSignature = '';
   }
 
   const uid = (p: string) => `${p}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
@@ -1123,6 +1130,10 @@
           visual_preset_key: String(row?.visual_preset_key || '').trim(),
           editor_type_code: String(row?.editor_type_code || '').trim(),
           runtime_handler_code: String(row?.runtime_handler_code || '').trim(),
+          editor_schema_json:
+            row?.editor_schema_json && typeof row.editor_schema_json === 'object' && !Array.isArray(row.editor_schema_json)
+              ? row.editor_schema_json
+              : null,
           updated_at: String(row?.updated_at || '').trim(),
           updated_by: String(row?.updated_by || '').trim()
         }))
@@ -1922,6 +1933,7 @@
     deskLastSavedAt = safeIso(row?.updated_at);
     deskSaveError = '';
     deskAutosavePausedForApiDraft = false;
+    deskAutosaveAiDraftSignature = '';
   }
 
   function clearDeskAutosaveTimer() {
@@ -1979,6 +1991,7 @@
       deskDirty = false;
       deskLastSavedAt = new Date().toISOString();
       deskAutosavePausedForApiDraft = false;
+      deskAutosaveAiDraftSignature = '';
       workflowDeskOptions = [
         {
           id: deskId,
@@ -2487,7 +2500,7 @@
     deskAutosaveSeconds = sec;
     deskAutosaveTimer = setInterval(() => {
       if (!deskInitialized || !deskDirty || deskSaving || deskLoading) return;
-      if (deskAutosavePausedForApiDraft) return;
+      if (deskAutosaveAiDraftSignature && deskCurrentSignature === deskAutosaveAiDraftSignature) return;
       void saveDesk(true);
     }, sec * 1000);
   }
@@ -4278,6 +4291,7 @@
     applyTemplateToNode(node.id, source.id);
     await tick();
     deskAutosavePausedForApiDraft = true;
+    deskAutosaveAiDraftSignature = deskSignatureFromState(captureDeskState());
     banner =
       'API-шаблон сохранен. Нода обновлена только в текущем рабочем столе; автосохранение не сработает до ручного «Сохранить».';
   }
@@ -4413,6 +4427,7 @@
     applyApiBuilderPaginationPatchToNode(nodeId, detail?.pagination || {});
     await tick();
     deskAutosavePausedForApiDraft = true;
+    deskAutosaveAiDraftSignature = deskSignatureFromState(captureDeskState());
     apiTemplateUsageRefreshTick += 1;
     const changeCount = Array.isArray(detail?.appliedChanges) ? detail.appliedChanges.length : 0;
     banner = changeCount
@@ -4626,6 +4641,89 @@
       cur = cur[key as any];
     }
     cur[parts[parts.length - 1] as any] = value;
+  }
+
+  function nodeAssistantContextForNode(node: WorkflowNode | null | undefined) {
+    if (!node) return null;
+    const registry = node.type === 'tool' ? toolMetaByType(String(toolCfg(node).toolType || '').trim()) : toolMetaByType('api_request');
+    return {
+      ...(registry || {}),
+      node_type_code: node.type === 'tool' ? String(toolCfg(node).toolType || '').trim() : 'api_request',
+      editor_type_code: registry?.editor_type_code || (node.type === 'tool' ? String(toolCfg(node).toolType || '').trim() : 'api_builder'),
+      node_kind: node.type === 'data' ? 'data' : 'tool'
+    };
+  }
+
+  function nodeAssistantFieldPath(field: any, nodeKind: string) {
+    const byKind = field?.draft_path_by_node_kind && typeof field.draft_path_by_node_kind === 'object' ? field.draft_path_by_node_kind : {};
+    return String(byKind?.[nodeKind] || field?.draft_path || '').trim();
+  }
+
+  function nodeAssistantCurrentValues(node: WorkflowNode | null | undefined, context: any) {
+    if (!node || !context?.editor_schema_json?.fields) return {};
+    const nodeKind = String(context?.node_kind || '').trim();
+    const out: Record<string, any> = {};
+    for (const field of context.editor_schema_json.fields || []) {
+      const key = String(field?.field_key || '').trim();
+      if (!key) continue;
+      const path = nodeAssistantFieldPath(field, nodeKind);
+      if (!path) continue;
+      out[key] = getByPath(node.config || {}, path);
+    }
+    return out;
+  }
+
+  function nodeAssistantValueForDraft(field: any, path: string, value: any) {
+    const type = String(field?.type || '').trim();
+    const target = String(path || '').trim();
+    const shouldStringify =
+      target.startsWith('settings.') ||
+      target.endsWith('Text') ||
+      type === 'json' ||
+      type === 'json_object' ||
+      type === 'array';
+    if (!shouldStringify) return value;
+    if (value === undefined || value === null) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'boolean') return value ? 'true' : 'false';
+    if (typeof value === 'number') return String(value);
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  }
+
+  async function applyNodeAssistantRecommendations(event: CustomEvent<any>) {
+    const result = event?.detail || {};
+    const nodeId = String(settingsNode?.id || '').trim();
+    const context = settingsNode ? nodeAssistantContextForNode(settingsNode) : null;
+    const fields = Array.isArray(context?.editor_schema_json?.fields) ? context.editor_schema_json.fields : [];
+    const recommendations = Array.isArray(result?.recommendations) ? result.recommendations : [];
+    if (!nodeId || !fields.length || !recommendations.length) return;
+    const nodeKind = String(context?.node_kind || '').trim();
+    let appliedCount = 0;
+    nodes = nodes.map((node) => {
+      if (node.id !== nodeId) return node;
+      const config = JSON.parse(JSON.stringify(node.config || {}));
+      for (const rec of recommendations) {
+        if (!rec?.apply_allowed) continue;
+        const field = fields.find((item: any) => String(item?.field_key || '') === String(rec.field_key || ''));
+        if (!field) continue;
+        const path = String(rec.draft_path || nodeAssistantFieldPath(field, nodeKind) || '').trim();
+        if (!path) continue;
+        const nextValue = nodeAssistantValueForDraft(field, path, rec.suggested_value);
+        setByPath(config, path, nextValue);
+        appliedCount += 1;
+      }
+      return { ...node, config };
+    });
+    await tick();
+    deskAutosavePausedForApiDraft = true;
+    deskAutosaveAiDraftSignature = deskSignatureFromState(captureDeskState());
+    banner = appliedCount
+      ? `AI-рекомендации подставлены в ноду: ${appliedCount}. Desk не сохранен; проверьте ноду и сохраните вручную.`
+      : 'AI-помощник не нашел безопасных значений для подстановки.';
   }
 
   function getPaginationForNode(n: WorkflowNode | null | undefined): ApiNodePagination {
@@ -7361,6 +7459,18 @@
         </div>
       </div>
 
+      {#if nodeAssistantContextForNode(settingsNode)?.editor_schema_json?.supports_ai}
+        <NodeAssistantPanel
+          apiBase={API_BASE}
+          headers={workflowApiHeaders()}
+          nodeContext={nodeAssistantContextForNode(settingsNode)}
+          currentValues={nodeAssistantCurrentValues(settingsNode, nodeAssistantContextForNode(settingsNode))}
+          on:apply={applyNodeAssistantRecommendations}
+        />
+      {:else}
+        <div class="node-assistant-unsupported">AI не поддерживается для этой ноды: в schema реестра нет AI-полей.</div>
+      {/if}
+
       {#if settingsNode.type === 'tool' && toolCfg(settingsNode).toolType === 'start_process'}
         <div class="node-modal-body">
           <div class="help">
@@ -8762,6 +8872,13 @@
     gap: 10px;
     min-height: 0;
     overflow: auto;
+  }
+  .node-assistant-unsupported {
+    padding: 8px 12px;
+    border-bottom: 1px solid #e2e8f0;
+    background: #f8fafc;
+    color: #64748b;
+    font-size: 12px;
   }
   .node-modal-body label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #334155; }
   .node-modal-body input,
