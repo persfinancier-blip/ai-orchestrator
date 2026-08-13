@@ -4,19 +4,21 @@
   import ProductHome from './product/ProductHome.svelte';
   import ProductLogin from './product/ProductLogin.svelte';
   import CurrentClientCard from './product/CurrentClientCard.svelte';
+  import IntegrationAssistant from './product/IntegrationAssistant.svelte';
   import AdvertisingDashboard from './components/layout/AdvertisingDashboard.svelte';
   import AdvertisingDesk from './desk/AdvertisingDesk.svelte';
   import DataDesk from './desk/DataDesk.svelte';
   import WorkflowDesk from './desk/WorkflowDesk.svelte';
 
-  const titles = { home: 'Обзор', clients: 'Клиенты', advertising: 'Реклама', automation: 'Сценарии', integrations: 'Интеграции', data: 'Данные', space: 'Пространство' };
+  const titles = { home: 'Обзор', clients: 'Клиенты', advertising: 'Реклама', assistant: 'Ассистент', automation: 'Сценарии', integrations: 'API вручную', data: 'Данные', space: 'Пространство' };
 
   function routeState() {
     const raw = String(window.location.hash || '').replace(/^#/, '') || 'home';
     const [route, query = ''] = raw.split('?');
     const pane = String(new URLSearchParams(query).get('pane') || '').toLowerCase();
     let section = 'home';
-    if (route === 'legacy') section = 'advertising';
+    if (route === 'assistant') section = 'assistant';
+    else if (route === 'legacy') section = 'advertising';
     else if (route === 'desk') section = 'space';
     else if (route === 'desk/tables') section = 'data';
     else if (route === 'desk/data' || route === 'desk/workflow') section = pane === 'clients' ? 'clients' : pane === 'api' ? 'integrations' : 'automation';
@@ -65,6 +67,7 @@
   <ProductShell section={state.section} {title} on:logout={logout}>
     {#if state.section === 'home'}
       {#key clientEpoch}<div class="client"><CurrentClientCard /></div>{/key}<ProductHome />
+    {:else if state.section === 'assistant'}<IntegrationAssistant />
     {:else if state.section === 'advertising'}<AdvertisingDashboard />
     {:else if state.section === 'data'}<DataDesk />
     {:else if state.section === 'space'}<AdvertisingDesk />
