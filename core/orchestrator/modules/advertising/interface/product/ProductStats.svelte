@@ -3,23 +3,24 @@
 
   let clients = [];
   let runs = [];
-  let apiOk = false;
+  let ready = false;
   let loading = true;
 
   async function read(url) {
     const res = await fetch(url, { cache: 'no-store', headers: { Accept: 'application/json' } });
-    if (!res.ok) throw new Error(String(res.status));
-    return res.json();
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(String(payload?.error || res.status));
+    return payload;
   }
 
   async function refresh() {
     loading = true;
-    const [health, clientList, runList] = await Promise.allSettled([
-      read('/ai-orchestrator/api/health'),
+    const [readiness, clientList, runList] = await Promise.allSettled([
+      read('/ai-orchestrator/api/ready'),
       read('/ai-orchestrator/api/clients/module/list'),
       read('/ai-orchestrator/api/process-runs/aggregation?limit=20')
     ]);
-    apiOk = health.status === 'fulfilled' && Boolean(health.value?.ok);
+    ready = readiness.status === 'fulfilled' && Boolean(readiness.value?.ready);
     clients = clientList.status === 'fulfilled' && Array.isArray(clientList.value?.clients) ? clientList.value.clients : [];
     runs = runList.status === 'fulfilled' && Array.isArray(runList.value?.aggregation) ? runList.value.aggregation : [];
     loading = false;
@@ -37,7 +38,7 @@
   <a href="#desk/data?pane=clients"><span>Клиенты</span><strong>{loading ? '…' : activeClients}</strong><small>{clients.length} всего</small></a>
   <a href="#desk/data?pane=clients"><span>Подключения</span><strong>{loading ? '…' : accesses}</strong><small>активных кабинетов</small></a>
   <a href="#desk/data"><span>Последние процессы</span><strong>{loading ? '…' : runs.length}</strong><small>{failedRuns} с ошибками</small></a>
-  <a href="#desk/data?pane=clients" class:attention={warnings + failedRuns > 0}><span>Требует внимания</span><strong>{loading ? '…' : warnings + failedRuns}</strong><small>{apiOk ? 'API подключён' : 'проверьте API'}</small></a>
+  <a href="#desk/data?pane=clients" class:attention={warnings + failedRuns > 0 || !ready}><span>Требует внимания</span><strong>{loading ? '…' : warnings + failedRuns}</strong><small>{ready ? 'Система готова' : 'Система не готова'}</small></a>
 </div>
 
 <style>
