@@ -1,6 +1,7 @@
 import express from 'express';
 
 const COOKIE = 'ao_client_id';
+const COOKIE_ATTRS = 'Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000';
 
 export function readClientId(req) {
   const raw = String(req?.headers?.cookie || '');
@@ -14,6 +15,10 @@ export function readClientId(req) {
   return 0;
 }
 
+function setClientCookie(res, id) {
+  res.setHeader('Set-Cookie', `${COOKIE}=${id}; ${COOKIE_ATTRS}`);
+}
+
 export const clientContextRouter = express.Router();
 
 clientContextRouter.get('/context/client', (req, res) => {
@@ -23,7 +28,7 @@ clientContextRouter.get('/context/client', (req, res) => {
 clientContextRouter.post('/context/client', (req, res) => {
   const id = Math.trunc(Number(req.body?.client_id || 0));
   if (!(id > 0)) return res.status(400).json({ error: 'invalid_client_id' });
-  res.setHeader('Set-Cookie', `${COOKIE}=${id}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000`);
+  setClientCookie(res, id);
   return res.json({ ok: true, client_id: id });
 });
 
@@ -32,8 +37,12 @@ clientContextRouter.delete('/context/client', (_req, res) => {
   res.json({ ok: true });
 });
 
-export function injectClientContext(req, _res, next) {
-  const id = readClientId(req);
+export function injectClientContext(req, res, next) {
+  const detailMatch = String(req.path || '').match(/^\/clients\/module\/client\/(\d+)$/);
+  const routeId = detailMatch ? Math.trunc(Number(detailMatch[1] || 0)) : 0;
+  const id = routeId > 0 ? routeId : readClientId(req);
+
+  if (routeId > 0 && routeId !== readClientId(req)) setClientCookie(res, routeId);
   if (id > 0) {
     req.headers['x-ao-client-id'] = String(id);
     if (req.path === '/process-runs/trigger' && req.body && typeof req.body === 'object') {
