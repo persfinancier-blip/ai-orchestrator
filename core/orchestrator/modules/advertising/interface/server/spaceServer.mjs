@@ -4,12 +4,13 @@ import { bootstrapClientModule, clientModuleRouter } from './clientModuleRouter.
 import { bootstrapGoldBuilder, goldBuilderRouter } from './goldBuilderRouter.mjs';
 import { bootstrapTableBuilder, tableBuilderRouter } from './tableBuilder.mjs';
 import { bootstrapWorkflowAutomation, startWorkflowScheduler, workflowAutomationRouter } from './workflowAutomation.mjs';
+import { clientContextRouter, injectClientContext } from './clientContextRouter.mjs';
 import { createAppAuth } from './runtime/appAuth.mjs';
 
 const app = express();
 const port = Number(process.env.SPACE_API_PORT || 8787);
 const host = String(process.env.AO_API_HOST || '127.0.0.1');
-const auth = createAppAuth();
+const auth = createAppAuth({ allowInsecure: false });
 
 app.use(express.json({ limit: '4mb' }));
 
@@ -18,6 +19,8 @@ app.get('/ai-orchestrator/api/health', (_req, res) => {
 });
 app.use('/ai-orchestrator/api', auth.router);
 app.use('/ai-orchestrator/api', auth.gate);
+app.use('/ai-orchestrator/api', clientContextRouter);
+app.use('/ai-orchestrator/api', injectClientContext);
 app.use('/ai-orchestrator/api', tableBuilderRouter);
 app.use('/ai-orchestrator/api', workflowAutomationRouter);
 app.use('/ai-orchestrator/api', clientModuleRouter);
