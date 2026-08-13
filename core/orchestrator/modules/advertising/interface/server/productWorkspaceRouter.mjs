@@ -114,6 +114,22 @@ async function ensureTables(client) {
   await client.query(`CREATE INDEX IF NOT EXISTS ao_product_models_container_idx ON ${ident(SCHEMA)}.analysis_models_store (container_id, status)`);
 }
 
+async function containerScope(client, req, sourceColumns = []) {
+  const containerId = readContainerId(req);
+  if (!containerId) return { container_id: null, client_id: null, client_filter_applied: false };
+  await ensureTables(client);
+  const result = await client.query(`SELECT id,kind,client_id FROM ${ident(SCHEMA)}.containers_store WHERE id=$1 AND status <> 'archived' LIMIT 1`, [containerId]);
+  const row = result.rows?.[0] || null;
+  const clientId = positiveId(row?.client_id) || null;
+  const hasClientField = (Array.isArray(sourceColumns) ? sourceColumns : []).some((column) => String(column?.name || column?.column_name || '').trim() === 'client_id');
+  return {
+    container_id: containerId,
+    container_kind: String(row?.kind || ''),
+    client_id: clientId,
+    client_filter_applied: Boolean(clientId && hasClientField)
+  };
+}
+
 async function inspectSource(client, schema, table, limit = 80) {
   const meta = await client.query(
     `SELECT column_name AS name, data_type AS type, (is_nullable = 'YES') AS is_nullable
@@ -259,7 +275,10 @@ productWorkspaceRouter.post('/product/insights/scan', async (req, res) => {
   try {
     const source = await inspectSource(client, schema, table, Math.min(limit, 200));
     const plan = buildNormalizationPlan(source.columns, source.rows);
-    const rowsResult = await client.query(`SELECT * FROM ${tableName(schema, table)} LIMIT $1`, [limit]);
+    const scope = await containerScope(client, req, source.columns);
+    const rowsResult = scope.client_filter_applied
+      ? await client.query(`SELECT * FROM ${tableName(schema, table)} WHERE ${ident('client_id')}=$2 LIMIT $1`, [limit, scope.client_id])
+      : await client.query(`SELECT * FROM ${tableName(schema, table)} LIMIT $1`, [limit]);
     const rawRows = rowsResult.rows || [];
     const metrics = plan.fields.filter((f) => f.role === 'metric').map((f) => f.source);
     const dimensions = plan.fields.filter((f) => ['entity', 'dimension', 'scope'].includes(f.role)).map((f) => f.source);
@@ -282,7 +301,7 @@ productWorkspaceRouter.post('/product/insights/scan', async (req, res) => {
       { source: 'ao_anomaly_fields', name: 'Anomaly fields', data_type: 'text', role: 'dimension', kind: 'text', confidence: 1 }
     ];
     return res.json({
-      source: { schema, table, rows: rows.length },
+      source: { schema, table, rows: rows.length, scope },
       plan: { ...plan, fields: planFields },
       relationships,
       anomalies,
@@ -307,7 +326,7 @@ productWorkspaceRouter.post('/product/forecast/run', async (req, res) => {
     const meta = await client.query(
       `SELECT column_name, data_type
          FROM information_schema.columns
-        WHERE table_schema=$1 AND table_name=$2 AND column_name IN ($3,$4)`,
+        WHERE table_schema=$1 AND table_name=$2 AND column_name IN ($3,$4,'client_id')`,
       [schema, table, valueField, orderField]
     );
     const metricMeta = (meta.rows || []).find((row) => row.column_name === valueField);
@@ -316,21 +335,28 @@ productWorkspaceRouter.post('/product/forecast/run', async (req, res) => {
     if (!/(int|numeric|decimal|double|real|money)/i.test(String(metricMeta.data_type || ''))) return res.status(400).json({ error: 'forecast_metric_not_numeric' });
     if (!/(date|time)/i.test(String(timeMeta.data_type || ''))) return res.status(400).json({ error: 'forecast_order_not_time' });
 
+    const scope = await containerScope(client, req, (meta.rows || []).map((row) => ({ name: row.column_name })));
     const aggregation = forecastAggregationFor(valueField);
     const aggregateSql = aggregation === 'avg' ? `AVG(${ident(valueField)})` : `SUM(${ident(valueField)})`;
-    const result = await client.query(
-      `SELECT date_trunc($1, ${ident(orderField)}) AS bucket, ${aggregateSql} AS value
-         FROM ${tableName(schema, table)}
-        WHERE ${ident(valueField)} IS NOT NULL AND ${ident(orderField)} IS NOT NULL
-        GROUP BY 1
-        ORDER BY 1 ASC
-        LIMIT 5000`,
-      [period]
-    );
+    const result = scope.client_filter_applied
+      ? await client.query(
+          `SELECT date_trunc($1, ${ident(orderField)}) AS bucket, ${aggregateSql} AS value
+             FROM ${tableName(schema, table)}
+            WHERE ${ident(valueField)} IS NOT NULL AND ${ident(orderField)} IS NOT NULL AND ${ident('client_id')}=$2
+            GROUP BY 1 ORDER BY 1 ASC LIMIT 5000`,
+          [period, scope.client_id]
+        )
+      : await client.query(
+          `SELECT date_trunc($1, ${ident(orderField)}) AS bucket, ${aggregateSql} AS value
+             FROM ${tableName(schema, table)}
+            WHERE ${ident(valueField)} IS NOT NULL AND ${ident(orderField)} IS NOT NULL
+            GROUP BY 1 ORDER BY 1 ASC LIMIT 5000`,
+          [period]
+        );
     const series = (result.rows || []).map((row) => Number(row.value)).filter(Number.isFinite);
     const forecast = monteCarloForecast(series, { horizon: req.body?.horizon, simulations: req.body?.simulations, seed: req.body?.seed, target: req.body?.target });
     return res.json({
-      source: { schema, table, value_field: valueField, order_field: orderField, period, aggregation, observations: series.length },
+      source: { schema, table, value_field: valueField, order_field: orderField, period, aggregation, observations: series.length, scope },
       model_selection: { model: forecast.model, reason: `business_series_${aggregation}_${period}` },
       forecast
     });
