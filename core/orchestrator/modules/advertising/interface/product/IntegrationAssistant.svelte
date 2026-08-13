@@ -1,44 +1,26 @@
 <script lang="ts">
   import NodeAssistantPanel from '../desk/components/NodeAssistantPanel.svelte';
   import { productPost } from './productApi.js';
+  import { integrationDraftFromAssistant } from './integrationDraft.js';
 
   const nodeContext = { node_type_code: 'api_request', editor_type_code: '', node_kind: 'tool' };
   let saving = false;
   let savedId = 0;
   let message = '';
 
-  function objectValue(value: any) {
-    if (value && typeof value === 'object') return value;
-    if (typeof value !== 'string' || !value.trim()) return {};
-    try { return JSON.parse(value); } catch { return {}; }
-  }
-
   async function saveDraft(event: CustomEvent) {
-    const result = event.detail || {};
-    const values = result?.apply_patch?.by_field || {};
-    const fullUrl = String(values.url || '').trim();
-    if (!fullUrl) {
-      message = 'Ассистенту не хватило подтверждённого endpoint. Уточните задачу или приложите документацию.';
+    const draft = integrationDraftFromAssistant(event.detail || {});
+    if (!draft.ok || !draft.payload) {
+      message = draft.reason === 'missing_endpoint'
+        ? 'Ассистенту не хватило подтверждённого endpoint. Уточните задачу или приложите документацию.'
+        : 'Полученный endpoint нельзя сохранить без ручной проверки.';
       return;
     }
 
     saving = true;
     message = '';
     try {
-      const url = new URL(fullUrl);
-      const response = await productPost('/api-configs/upsert', {
-        api_name: String(result?.intent?.operation || result?.summary || 'API draft').slice(0, 120),
-        method: String(values.method || 'GET').toUpperCase(),
-        base_url: url.origin,
-        path: `${url.pathname}${url.search || ''}`,
-        headers_json: objectValue(values.headersText),
-        query_json: objectValue(values.queryText),
-        body_json: objectValue(values.bodyText),
-        pagination_json: values.paginationDataPath ? { enabled: true, dataPath: values.paginationDataPath } : {},
-        description: `Draft generated from Node Assistant. ${String(result?.summary || '')}`.trim(),
-        is_active: false,
-        updated_by: 'product_assistant'
-      });
+      const response = await productPost('/api-configs/upsert', draft.payload);
       savedId = Number(response?.id || 0);
       message = savedId ? 'Черновик сохранён. Проверьте его в конструкторе перед использованием.' : 'Черновик сохранён.';
     } catch (error) {
