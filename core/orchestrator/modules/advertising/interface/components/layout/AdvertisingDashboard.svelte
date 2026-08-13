@@ -11,6 +11,15 @@
   let target = '';
   let forecast = null;
 
+  function orderFields(fields, axes) {
+    const order = new Map((Array.isArray(axes) ? axes : []).map((name, index) => [String(name), index]));
+    return [...(Array.isArray(fields) ? fields : [])].sort((a, b) => {
+      const ar = order.has(String(a?.source || '')) ? order.get(String(a.source)) : 1000;
+      const br = order.has(String(b?.source || '')) ? order.get(String(b.source)) : 1000;
+      return ar - br;
+    });
+  }
+
   async function load() {
     loading = true; error = '';
     try {
@@ -18,8 +27,8 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.details || data?.error || `HTTP ${res.status}`);
       relationships = data?.relationships || [];
-      setShowcaseData(data?.rows || [], data?.plan?.fields || []);
-      metric = data?.fields?.metrics?.[0] || metric;
+      setShowcaseData(data?.rows || [], orderFields(data?.plan?.fields || [], data?.suggested_axes || []));
+      metric = data?.suggested_axes?.[0] || data?.fields?.metrics?.[0] || metric;
       orderField = data?.fields?.time || orderField;
     } catch (e) { error = String(e?.message || e); setShowcaseData([], []); }
     finally { loading = false; }
@@ -41,7 +50,7 @@
 <section class="page">
   <header><small>Аналитика</small><h1>Зависимости и прогноз</h1><p>Реальная Gold-витрина → автоматический поиск связей → 3D → прогноз результата.</p></header>
   {#if loading}<p>Анализируем данные…</p>{:else if error}<p class="error">{error}</p>{/if}
-  {#if relationships.length}<div class="relations">{#each relationships.slice(0,8) as item}<span><b>{item.x} ↔ {item.y}</b> r={Number(item.correlation).toFixed(2)}</span>{/each}</div>{/if}
+  {#if relationships.length}<div class="relations">{#each relationships.slice(0,8) as item}<span><b>{item.x} ↔ {item.y}</b> {item.relation_type === 'monotonic' ? 'monotonic' : 'linear'} {Number(item.correlation).toFixed(2)}</span>{/each}</div>{/if}
   <div class="graph"><GraphPanel /></div>
   <section class="forecast">
     <div><small>Что будет дальше</small><h2>Прогноз</h2><p>Модель выбирается системой. Сейчас встроен Monte Carlo по тренду и наблюдаемому разбросу.</p></div>
