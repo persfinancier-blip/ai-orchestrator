@@ -24,6 +24,7 @@ export function buildControlAuth(options = {}) {
     options.allowInsecure ?? process.env.AO_CONTROL_ALLOW_INSECURE,
     process.env.NODE_ENV !== 'production'
   );
+  const trustedRole = String(options.trustedRole || 'data_admin').trim() || 'data_admin';
 
   return function controlAuth(req, res, next) {
     if (!configuredToken) {
@@ -41,6 +42,8 @@ export function buildControlAuth(options = {}) {
     if (!safeEqual(configuredToken, supplied)) {
       return res.status(403).json({ error: 'forbidden' });
     }
+
+    req.headers['x-ao-role'] = trustedRole;
     return next();
   };
 }
