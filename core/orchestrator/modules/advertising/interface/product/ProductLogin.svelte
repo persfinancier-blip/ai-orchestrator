@@ -1,5 +1,6 @@
 <script>
   import { createEventDispatcher } from 'svelte';
+  import { productPost } from './productApi.js';
   const dispatch = createEventDispatcher();
   let token = '';
   let loading = false;
@@ -9,17 +10,11 @@
     loading = true;
     error = '';
     try {
-      const res = await fetch('/ai-orchestrator/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token })
-      });
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(payload?.error === 'auth_not_configured' ? 'На сервере не настроен AO_CONTROL_TOKEN.' : 'Неверный ключ доступа.');
+      await productPost('/auth/login', { token });
       token = '';
       dispatch('authenticated');
     } catch (e) {
-      error = String(e?.message || e || 'Ошибка входа');
+      error = e?.status === 503 ? 'На сервере не настроен AO_CONTROL_TOKEN.' : e?.status === 403 ? 'Неверный ключ доступа.' : String(e?.message || e || 'Ошибка входа');
     } finally {
       loading = false;
     }
