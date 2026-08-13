@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildNormalizationPlan, monteCarloForecast, normalizeContainerKind, pearson, rankCorrelations } from '../server/productAnalyticsCore.mjs';
+import { buildNormalizationPlan, monteCarloForecast, normalizeContainerKind, pearson, rankCorrelations, spearman } from '../server/productAnalyticsCore.mjs';
 
 test('normalization detects time, entity and metrics', () => {
   const plan = buildNormalizationPlan([
@@ -21,6 +21,19 @@ test('correlation ranks strongest metric pairs', () => {
   const ranked = rankCorrelations(rows, ['a', 'b', 'c']);
   assert.equal(ranked[0].x, 'a');
   assert.equal(ranked[0].y, 'b');
+  assert.equal(ranked[0].relation_type, 'linear');
+});
+
+test('spearman detects a strong monotonic non-linear relationship', () => {
+  const x = [1, 2, 3, 4, 5, 6, 7];
+  const y = x.map((value) => value ** 3);
+  assert.ok(Math.abs(spearman(x, y) - 1) < 1e-9);
+  const rows = x.map((value, index) => ({ x: value, nonlinear: y[index], noisy: [1, 4, 2, 7, 3, 6, 5][index] }));
+  const ranked = rankCorrelations(rows, ['x', 'nonlinear', 'noisy']);
+  const relation = ranked.find((item) => item.x === 'x' && item.y === 'nonlinear');
+  assert.ok(relation);
+  assert.equal(relation.spearman, 1);
+  assert.ok(relation.strength >= Math.abs(relation.pearson || 0));
 });
 
 test('monte carlo forecast is deterministic with a seed', () => {
