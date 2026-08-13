@@ -1,83 +1,93 @@
 <script>
+  import { onDestroy } from 'svelte';
+  import ProductHome from './product/ProductHome.svelte';
   import AdvertisingDashboard from './components/layout/AdvertisingDashboard.svelte';
   import AdvertisingDesk from './desk/AdvertisingDesk.svelte';
   import DataDesk from './desk/DataDesk.svelte';
   import WorkflowDesk from './desk/WorkflowDesk.svelte';
 
-  function hashRoute() {
-    const raw = window.location.hash.replace(/^#/, '') || 'desk/data';
-    const routeOnly = raw.split('?')[0];
-    return routeOnly || 'desk/data';
+  const nav = [
+    ['home', '#home', 'Обзор', 'Работа'],
+    ['clients', '#desk/data?pane=clients', 'Клиенты', 'Работа'],
+    ['advertising', '#legacy', 'Реклама', 'Работа'],
+    ['automation', '#desk/data', 'Сценарии', 'Автоматизация'],
+    ['integrations', '#desk/data?pane=api', 'Интеграции', 'Автоматизация'],
+    ['data', '#desk/tables', 'Данные', 'Автоматизация'],
+    ['space', '#desk', 'Пространство', 'Аналитика']
+  ];
+
+  function readState() {
+    const raw = String(window.location.hash || '').replace(/^#/, '') || 'home';
+    const [route, query = ''] = raw.split('?');
+    const pane = String(new URLSearchParams(query).get('pane') || '').toLowerCase();
+    let section = 'home';
+    if (route === 'legacy') section = 'advertising';
+    else if (route === 'desk') section = 'space';
+    else if (route === 'desk/tables') section = 'data';
+    else if (route === 'desk/data' || route === 'desk/workflow') {
+      section = pane === 'clients' ? 'clients' : pane === 'api' ? 'integrations' : 'automation';
+    }
+    return { route, pane, section };
   }
 
-  function hashPane() {
-    const raw = window.location.hash.replace(/^#/, '') || '';
-    const idx = raw.indexOf('?');
-    if (idx < 0) return '';
-    const params = new URLSearchParams(raw.slice(idx + 1));
-    return String(params.get('pane') || '').trim().toLowerCase();
-  }
-
-  let route = hashRoute();
-  let pane = hashPane();
-
-  const onHash = () => {
-    route = hashRoute();
-    pane = hashPane();
-  };
-
+  let state = readState();
+  const onHash = () => (state = readState());
   window.addEventListener('hashchange', onHash);
+  onDestroy(() => window.removeEventListener('hashchange', onHash));
+
+  $: groups = [...new Set(nav.map((item) => item[3]))];
+  $: title = nav.find((item) => item[0] === state.section)?.[2] || 'Обзор';
 </script>
 
-<nav class="top-nav">
-  <a href="#desk" class:active={route === 'desk'}>Пространство</a>
-  <a href="#desk/data" class:active={route === 'desk/data' || route === 'desk/workflow'}>Данные</a>
-  <a href="#desk/tables" class:active={route === 'desk/tables'}>Таблицы</a>
-  <a href="#legacy" class:active={route === 'legacy'}>Старый дашборд</a>
-</nav>
+<div class="shell">
+  <aside>
+    <a class="brand" href="#home"><b>AO</b><span><strong>AI Orchestrator</strong><small>Marketplace OS</small></span></a>
+    <nav>
+      {#each groups as group}
+        <section>
+          <small>{group}</small>
+          {#each nav.filter((item) => item[3] === group) as item}
+            <a href={item[1]} class:active={state.section === item[0]}>{item[2]}</a>
+          {/each}
+        </section>
+      {/each}
+    </nav>
+    <div class="status"><i></i> Self-hosted</div>
+  </aside>
 
-<div class="app">
-  {#if route === 'legacy'}
-    <AdvertisingDashboard />
-  {:else if route === 'desk/tables'}
-    <DataDesk />
-  {:else if route === 'desk'}
-    <AdvertisingDesk />
-  {:else}
-    <WorkflowDesk />
-  {/if}
+  <div class="workspace">
+    <header><span><small>Рабочее пространство</small><strong>{title}</strong></span><a href="#desk/data?pane=clients">Клиенты</a></header>
+    <main>
+      {#if state.section === 'home'}
+        <ProductHome />
+      {:else if state.section === 'advertising'}
+        <AdvertisingDashboard />
+      {:else if state.section === 'data'}
+        <DataDesk />
+      {:else if state.section === 'space'}
+        <AdvertisingDesk />
+      {:else}
+        <WorkflowDesk />
+      {/if}
+    </main>
+  </div>
 </div>
 
 <style>
-  .top-nav {
-    position: sticky;
-    top: 0;
-    z-index: 5;
-    display: flex;
-    gap: 10px;
-    padding: 10px 18px;
-    background: rgba(248, 250, 252, 0.85);
-    backdrop-filter: blur(6px);
-    border-bottom: 1px solid #e5eaf1;
-  }
-
-  .top-nav a {
-    text-decoration: none;
-    color: #64748b;
-    font-weight: 600;
-    font-size: 13px;
-    padding: 6px 10px;
-    border-radius: 999px;
-  }
-
-  .top-nav a.active {
-    background: #0f172a;
-    color: #fff;
-  }
-
-  .app {
-    height: calc(100vh - 52px);
-    min-height: 0;
-    overflow: auto;
-  }
+  :global(html), :global(body), :global(#app) { margin: 0; min-height: 100%; }
+  :global(body) { background: #f6f8fb; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  .shell { min-height: 100vh; display: grid; grid-template-columns: 218px minmax(0, 1fr); color: #172033; }
+  aside { position: sticky; top: 0; height: 100vh; padding: 18px 13px; box-sizing: border-box; background: #fff; border-right: 1px solid #e4e9f1; display: flex; flex-direction: column; }
+  .brand { display: flex; align-items: center; gap: 9px; padding: 4px 7px 20px; color: inherit; text-decoration: none; }
+  .brand > b { width: 33px; height: 33px; display: grid; place-items: center; border-radius: 10px; background: #172033; color: #fff; font-size: 11px; }
+  .brand span { display: flex; flex-direction: column; }.brand strong { font-size: 12px; }.brand small { color: #94a3b8; font-size: 9px; }
+  nav { display: flex; flex-direction: column; gap: 16px; } nav section { display: flex; flex-direction: column; gap: 3px; }
+  nav section > small { padding: 0 8px 4px; color: #a0aabc; font-size: 8px; font-weight: 800; text-transform: uppercase; letter-spacing: .12em; }
+  nav a { padding: 9px; border-radius: 9px; color: #64748b; text-decoration: none; font-size: 12px; font-weight: 650; }
+  nav a:hover { background: #f4f6f9; color: #172033; } nav a.active { background: #172033; color: #fff; }
+  .status { margin-top: auto; padding: 9px; color: #94a3b8; font-size: 9px; display: flex; gap: 7px; align-items: center; }.status i { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; }
+  .workspace { min-width: 0; min-height: 100vh; }.workspace > header { position: sticky; top: 0; z-index: 20; height: 56px; padding: 9px 17px; box-sizing: border-box; border-bottom: 1px solid #e4e9f1; background: rgba(255,255,255,.94); display: flex; align-items: center; justify-content: space-between; }
+  header span { display: flex; flex-direction: column; } header small { color: #94a3b8; font-size: 9px; } header strong { font-size: 13px; } header a { color: #475569; text-decoration: none; font-size: 11px; font-weight: 750; }
+  main { min-width: 0; min-height: calc(100vh - 56px); overflow: auto; }
+  @media (max-width: 760px) { .shell { grid-template-columns: 1fr; } aside { height: auto; z-index: 30; padding: 8px; border-right: 0; border-bottom: 1px solid #e4e9f1; } .brand, nav section > small, .status { display: none; } nav { flex-direction: row; gap: 4px; overflow-x: auto; } nav section { flex-direction: row; gap: 4px; } nav a { white-space: nowrap; padding: 7px 9px; } .workspace > header { top: 43px; } }
 </style>
