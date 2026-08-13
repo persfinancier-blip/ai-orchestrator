@@ -1,15 +1,16 @@
 <script>
   export let section = 'home';
   const groups = [
-    ['Работа', [['home','#home','Обзор'],['clients','#desk/data?pane=clients','Клиенты'],['advertising','#advertising','Реклама']]],
-    ['Автоматизация', [['assistant','#assistant','Ассистент'],['automation','#desk/data','Сценарии'],['integrations','#desk/data?pane=api','API вручную'],['data','#desk/tables','Данные']]]
+    ['Работа', [['home','#home','Обзор'],['containers','#containers','Контейнеры'],['clients','#desk/data?pane=clients','Клиенты']]],
+    ['Решение', [['scenario','#scenario','Сценарий'],['data-products','#data-products','Данные'],['insights','#insights','Инсайты 3D'],['forecasts','#forecasts','Прогнозы']]],
+    ['Экспертный режим', [['automation','#desk/data','Workflow'],['integrations','#desk/data?pane=api','API вручную'],['tables','#desk/tables','SQL / таблицы']]]
   ];
 </script>
 
 <aside>
-  <a class="brand" href="#home"><b>AO</b><span><strong>AI Orchestrator</strong><small>Marketplace OS</small></span></a>
+  <a class="brand" href="#home"><b>AO</b><span><strong>AI Orchestrator</strong><small>Container → Data → Decision</small></span></a>
   <nav>{#each groups as group}<section><small>{group[0]}</small>{#each group[1] as item}<a href={item[1]} class:active={section===item[0]}>{item[2]}</a>{/each}</section>{/each}</nav>
-  <div class="status"><i></i> Self-hosted</div>
+  <div class="status"><i></i> Self-hosted runtime</div>
 </aside>
 
 <style>
