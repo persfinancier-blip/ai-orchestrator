@@ -1,7 +1,7 @@
 <script>
   export let section = 'home';
   const groups = [
-    ['Работа', [['home','#home','Обзор'],['clients','#desk/data?pane=clients','Клиенты'],['advertising','#legacy','Реклама']]],
+    ['Работа', [['home','#home','Обзор'],['clients','#desk/data?pane=clients','Клиенты'],['advertising','#advertising','Реклама']]],
     ['Автоматизация', [['assistant','#assistant','Ассистент'],['automation','#desk/data','Сценарии'],['integrations','#desk/data?pane=api','API вручную'],['data','#desk/tables','Данные']]]
   ];
 </script>
