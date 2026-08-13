@@ -24,10 +24,12 @@
   }
 
   let state = routeState();
+  let clientEpoch = 0;
   let checking = true;
   let authenticated = false;
   let authError = '';
   const onHash = () => (state = routeState());
+  const onClient = () => (clientEpoch += 1);
 
   async function checkSession() {
     checking = true;
@@ -49,8 +51,8 @@
     authenticated = false;
   }
 
-  onMount(() => { window.addEventListener('hashchange', onHash); checkSession(); });
-  onDestroy(() => window.removeEventListener('hashchange', onHash));
+  onMount(() => { window.addEventListener('hashchange', onHash); window.addEventListener('ao:client-context-changed', onClient); checkSession(); });
+  onDestroy(() => { window.removeEventListener('hashchange', onHash); window.removeEventListener('ao:client-context-changed', onClient); });
   $: title = titles[state.section] || 'Обзор';
 </script>
 
@@ -62,7 +64,7 @@
 {:else}
   <ProductShell section={state.section} {title} on:logout={logout}>
     {#if state.section === 'home'}
-      <div class="client"><CurrentClientCard /></div><ProductHome />
+      {#key clientEpoch}<div class="client"><CurrentClientCard /></div>{/key}<ProductHome />
     {:else if state.section === 'advertising'}<AdvertisingDashboard />
     {:else if state.section === 'data'}<DataDesk />
     {:else if state.section === 'space'}<AdvertisingDesk />
