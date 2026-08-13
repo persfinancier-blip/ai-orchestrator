@@ -1,4 +1,6 @@
 <script lang="ts">
+  import ProductStats from './ProductStats.svelte';
+
   const sections = [
     { href: '#desk/data?pane=clients', title: 'Клиенты', text: 'Цели, KPI, доступы, договоры и контроль состояния.' },
     { href: '#legacy', title: 'Реклама', text: 'Кампании, ставки, действия и рекламные показатели.' },
@@ -15,6 +17,8 @@
     <h1>Управление рекламой и автоматизацией маркетплейсов</h1>
     <p>Один рабочий контур для клиентов, данных, процессов и рекламных действий.</p>
   </header>
+
+  <ProductStats />
 
   <div class="primary">
     <a href="#desk/data?pane=clients">
@@ -42,7 +46,7 @@
 
 <style>
   .home { max-width: 1180px; margin: 0 auto; padding: 40px 32px; color: #172033; box-sizing: border-box; }
-  header { max-width: 850px; margin-bottom: 32px; }
+  header { max-width: 850px; margin-bottom: 28px; }
   header > span { color: #64748b; font-size: 11px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
   h1 { margin: 10px 0; font-size: clamp(30px, 4.5vw, 52px); line-height: 1.03; letter-spacing: -.04em; }
   p { margin: 0; color: #64748b; font-size: 15px; }
