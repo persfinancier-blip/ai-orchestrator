@@ -33,6 +33,28 @@ export function readContainerId(req) {
   return positiveId(readCookie(req, COOKIE));
 }
 
+function forecastAggregationFor(metricName) {
+  const key = String(metricName || '').trim().toLowerCase();
+  return /(drr|roi|roas|ctr|cr|rate|ratio|share|position|price|avg|mean|percent|margin_pct)/.test(key) ? 'avg' : 'sum';
+}
+
+function forecastPeriod(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  return ['day', 'week', 'month'].includes(raw) ? raw : 'day';
+}
+
+function suggestedAxes(relationships = []) {
+  const out = [];
+  for (const relation of Array.isArray(relationships) ? relationships : []) {
+    for (const field of [relation?.x, relation?.y]) {
+      const key = String(field || '').trim();
+      if (key && !out.includes(key)) out.push(key);
+      if (out.length === 3) return out;
+    }
+  }
+  return out;
+}
+
 async function ensureTables(client) {
   await client.query(`CREATE SCHEMA IF NOT EXISTS ${ident(SCHEMA)}`);
   await client.query(`
@@ -241,7 +263,15 @@ productWorkspaceRouter.post('/product/insights/scan', async (req, res) => {
     const metrics = plan.fields.filter((f) => f.role === 'metric').map((f) => f.source);
     const dimensions = plan.fields.filter((f) => ['entity', 'dimension', 'scope'].includes(f.role)).map((f) => f.source);
     const time = plan.fields.find((f) => f.role === 'time')?.source || '';
-    return res.json({ source: { schema, table, rows: rows.rows?.length || 0 }, plan, relationships: rankCorrelations(rows.rows || [], metrics, 16), fields: { metrics, dimensions, time }, rows: (rows.rows || []).slice(0, 3000) });
+    const relationships = rankCorrelations(rows.rows || [], metrics, 16);
+    return res.json({
+      source: { schema, table, rows: rows.rows?.length || 0 },
+      plan,
+      relationships,
+      suggested_axes: suggestedAxes(relationships),
+      fields: { metrics, dimensions, time },
+      rows: (rows.rows || []).slice(0, 3000)
+    });
   } catch (error) {
     return res.status(500).json({ error: 'insights_scan_failed', details: String(error?.message || error) });
   } finally { client.release(); }
@@ -252,13 +282,40 @@ productWorkspaceRouter.post('/product/forecast/run', async (req, res) => {
   const table = String(req.body?.table || '').trim();
   const valueField = String(req.body?.value_field || '').trim();
   const orderField = String(req.body?.order_field || '').trim();
-  try { ident(schema); ident(table); ident(valueField); if (orderField) ident(orderField); } catch { return res.status(400).json({ error: 'invalid_forecast_source' }); }
+  const period = forecastPeriod(req.body?.period);
+  try { ident(schema); ident(table); ident(valueField); ident(orderField); } catch { return res.status(400).json({ error: 'invalid_forecast_source' }); }
   const client = await pool.connect();
   try {
-    const q = `SELECT ${ident(valueField)} AS value FROM ${tableName(schema, table)} WHERE ${ident(valueField)} IS NOT NULL ${orderField ? `ORDER BY ${ident(orderField)} ASC` : ''} LIMIT 5000`;
-    const result = await client.query(q);
-    const forecast = monteCarloForecast((result.rows || []).map((row) => row.value), { horizon: req.body?.horizon, simulations: req.body?.simulations, seed: req.body?.seed, target: req.body?.target });
-    return res.json({ source: { schema, table, value_field: valueField, order_field: orderField, observations: result.rows?.length || 0 }, forecast });
+    const meta = await client.query(
+      `SELECT column_name, data_type
+         FROM information_schema.columns
+        WHERE table_schema=$1 AND table_name=$2 AND column_name IN ($3,$4)`,
+      [schema, table, valueField, orderField]
+    );
+    const metricMeta = (meta.rows || []).find((row) => row.column_name === valueField);
+    const timeMeta = (meta.rows || []).find((row) => row.column_name === orderField);
+    if (!metricMeta || !timeMeta) return res.status(400).json({ error: 'forecast_fields_not_found' });
+    if (!/(int|numeric|decimal|double|real|money)/i.test(String(metricMeta.data_type || ''))) return res.status(400).json({ error: 'forecast_metric_not_numeric' });
+    if (!/(date|time)/i.test(String(timeMeta.data_type || ''))) return res.status(400).json({ error: 'forecast_order_not_time' });
+
+    const aggregation = forecastAggregationFor(valueField);
+    const aggregateSql = aggregation === 'avg' ? `AVG(${ident(valueField)})` : `SUM(${ident(valueField)})`;
+    const result = await client.query(
+      `SELECT date_trunc($1, ${ident(orderField)}) AS bucket, ${aggregateSql} AS value
+         FROM ${tableName(schema, table)}
+        WHERE ${ident(valueField)} IS NOT NULL AND ${ident(orderField)} IS NOT NULL
+        GROUP BY 1
+        ORDER BY 1 ASC
+        LIMIT 5000`,
+      [period]
+    );
+    const series = (result.rows || []).map((row) => Number(row.value)).filter(Number.isFinite);
+    const forecast = monteCarloForecast(series, { horizon: req.body?.horizon, simulations: req.body?.simulations, seed: req.body?.seed, target: req.body?.target });
+    return res.json({
+      source: { schema, table, value_field: valueField, order_field: orderField, period, aggregation, observations: series.length },
+      model_selection: { model: forecast.model, reason: `business_series_${aggregation}_${period}` },
+      forecast
+    });
   } catch (error) {
     const details = String(error?.message || error);
     return res.status(details === 'forecast_series_too_short' ? 400 : 500).json({ error: 'forecast_failed', details });
