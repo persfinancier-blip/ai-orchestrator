@@ -7,6 +7,7 @@ import { bootstrapTableBuilder, tableBuilderRouter } from './tableBuilder.mjs';
 import { bootstrapWorkflowAutomation, startWorkflowScheduler, workflowAutomationRouter } from './workflowAutomation.mjs';
 import { clientContextRouter, injectClientContext } from './clientContextRouter.mjs';
 import { createAppAuth } from './runtime/appAuth.mjs';
+import { bootstrapProductWorkspace, productWorkspaceRouter } from './productWorkspaceRouter.mjs';
 
 const app = express();
 const port = Number(process.env.SPACE_API_PORT || 8787);
@@ -34,6 +35,7 @@ app.use('/ai-orchestrator/api', auth.gate);
 app.use('/ai-orchestrator/api', clientContextRouter);
 app.use('/ai-orchestrator/api', injectClientContext);
 app.use('/ai-orchestrator/api', clientSecretsMiddleware);
+app.use('/ai-orchestrator/api', productWorkspaceRouter);
 app.use('/ai-orchestrator/api', tableBuilderRouter);
 app.use('/ai-orchestrator/api', workflowAutomationRouter);
 app.use('/ai-orchestrator/api', clientModuleRouter);
@@ -58,7 +60,8 @@ for (const [name, run] of [
   ['Table Builder', bootstrapTableBuilder],
   ['Workflow automation', bootstrapWorkflowAutomation],
   ['Client module', bootstrapClientModule],
-  ['Gold builder', bootstrapGoldBuilder]
+  ['Gold builder', bootstrapGoldBuilder],
+  ['Product workspace', bootstrapProductWorkspace]
 ]) {
   try {
     console.log(`${name} bootstrap:`, await run());
