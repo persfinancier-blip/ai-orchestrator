@@ -138,6 +138,50 @@ export function rankCorrelations(rows = [], metricFields = [], limit = 12) {
   return out.sort((a, b) => b.strength - a.strength).slice(0, Math.max(1, Number(limit || 12)));
 }
 
+function medianFinite(values = []) {
+  const sorted = (Array.isArray(values) ? values : []).map(finite).filter((v) => v !== null).sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+export function rankAnomalies(rows = [], metricFields = [], options = {}) {
+  const data = Array.isArray(rows) ? rows : [];
+  const fields = [...new Set((metricFields || []).map((x) => String(x || '').trim()).filter(Boolean))];
+  const threshold = Math.max(1.5, Number(options.threshold || 3.5));
+  const limit = Math.max(1, Math.min(500, Math.trunc(Number(options.limit || 50))));
+  const stats = new Map();
+  for (const field of fields) {
+    const values = data.map((row) => row?.[field]);
+    const median = medianFinite(values);
+    if (median === null) continue;
+    const mad = medianFinite(values.map((value) => {
+      const n = finite(value);
+      return n === null ? null : Math.abs(n - median);
+    }));
+    if (mad === null || mad <= 0) continue;
+    stats.set(field, { median, mad });
+  }
+  const out = [];
+  data.forEach((row, rowIndex) => {
+    const findings = [];
+    for (const [field, stat] of stats.entries()) {
+      const value = finite(row?.[field]);
+      if (value === null) continue;
+      const score = 0.6745 * (value - stat.median) / stat.mad;
+      if (Math.abs(score) >= threshold) {
+        findings.push({ field, value, score: Number(score.toFixed(3)), direction: score > 0 ? 'high' : 'low' });
+      }
+    }
+    if (!findings.length) return;
+    findings.sort((a, b) => Math.abs(b.score) - Math.abs(a.score));
+    const top = findings[0];
+    const entity = row?.sku ?? row?.nm_id ?? row?.product_id ?? row?.campaign_id ?? row?.offer_id ?? row?.id ?? null;
+    out.push({ row_index: rowIndex, entity, score: Math.abs(top.score), primary_field: top.field, findings });
+  });
+  return out.sort((a, b) => b.score - a.score).slice(0, limit);
+}
+
 function mulberry32(seed) {
   let a = seed >>> 0;
   return function random() {
@@ -230,4 +274,4 @@ export function monteCarloForecast(series = [], options = {}) {
   };
 }
 
-export const productAnalyticsTestkit = Object.freeze({ finite, quantile, mulberry32, averageRanks });
+export const productAnalyticsTestkit = Object.freeze({ finite, quantile, mulberry32, averageRanks, medianFinite });
