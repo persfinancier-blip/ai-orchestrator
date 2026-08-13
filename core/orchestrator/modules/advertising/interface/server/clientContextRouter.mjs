@@ -2,7 +2,7 @@ import express from 'express';
 
 const COOKIE = 'ao_client_id';
 
-function readClientId(req) {
+export function readClientId(req) {
   const raw = String(req?.headers?.cookie || '');
   for (const part of raw.split(';')) {
     const [name, value] = part.trim().split('=');
