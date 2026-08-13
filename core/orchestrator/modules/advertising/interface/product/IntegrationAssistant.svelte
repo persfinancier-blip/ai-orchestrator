@@ -2,6 +2,7 @@
   import NodeAssistantPanel from '../desk/components/NodeAssistantPanel.svelte';
   import { productGet, productPost } from './productApi.js';
   import { integrationDraftFromAssistant } from './integrationDraft.js';
+  import { buildSimpleApiWorkflow } from './simpleWorkflowCore.js';
 
   const nodeContext = { node_type_code: 'api_request', editor_type_code: '', node_kind: 'tool' };
   let saving = false;
@@ -25,7 +26,6 @@
           : 'Полученный endpoint нельзя сохранить без ручной проверки.';
       return;
     }
-
     saving = true; message = '';
     try {
       const response = await productPost('/api-configs/upsert', draft.payload);
@@ -36,42 +36,22 @@
     finally { saving = false; }
   }
 
-  function scenarioGraph(apiId: number) {
-    const startId = 'start_1';
-    const apiNodeId = 'api_1';
-    const endId = 'end_1';
-    return {
-      nodes: [
-        { id:startId, type:'tool', x:100, y:180, config:{ name:'Старт', toolType:'start_process', settings:{ isEnabled:false, triggerType:'manual', processCode:'', runPolicy:'single_instance', executionScopeMode:'single_global', scopeType:'global', scopeRef:'global', contextJson:'{}' } } },
-        { id:apiNodeId, type:'tool', x:390, y:180, config:{ name:savedName || 'API', toolType:'api_request', settings:{ templateId:apiId, templateStoreId:apiId } } },
-        { id:endId, type:'tool', x:680, y:180, config:{ name:'Финиш', toolType:'end_process', settings:{} } }
-      ],
-      edges: [
-        { id:'e_start_api', from:startId, to:apiNodeId, fromPort:'out', toPort:'in' },
-        { id:'e_api_end', from:apiNodeId, to:endId, fromPort:'out', toPort:'in' }
-      ],
-      viewport:{ x:0, y:0, scale:1 }, selectedNodeId:null,
-      settings:{ workflowLog:{ enabled:true, target:{ templateId:'builtin_bronze_system_workflow_log', schema:'', table:'' } } }
-    };
-  }
-
   async function buildScenario() {
     if (!savedId) return;
     building = true; message = '';
     try {
+      const context = await productGet('/context/container').catch(() => ({}));
+      const graph = buildSimpleApiWorkflow({ name:savedName || `Сценарий ${savedId}`, apiStoreId:savedId, containerId:context?.container_id || null });
       const result = await productPost('/workflow-desks/upsert', {
         desk_name: savedName || `Сценарий ${savedId}`,
         desk_type: 'data',
-        config_json: scenarioGraph(savedId),
+        config_json: graph,
         description: 'Черновик простого сценария, созданный продуктовым ассистентом.',
         is_active: true,
         updated_by: 'product_assistant'
       });
       scenarioId = Number(result?.id || 0);
-      const context = await productGet('/context/container').catch(() => ({}));
-      if (scenarioId && context?.container_id) {
-        await productPost('/product/container-workflows/link', { container_id: context.container_id, desk_id: scenarioId, role: 'collection' });
-      }
+      if (scenarioId && context?.container_id) await productPost('/product/container-workflows/link', { container_id:context.container_id, desk_id:scenarioId, role:'collection' });
       message = 'Сценарий создан как черновик. Старт выключен, публикации и запуска не было.';
     } catch (error) { message = String(error?.message || error || 'Не удалось создать сценарий'); }
     finally { building = false; }
