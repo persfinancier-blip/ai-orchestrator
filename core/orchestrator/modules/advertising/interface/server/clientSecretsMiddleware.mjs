@@ -10,6 +10,15 @@ function maskRecord(record) {
   return next;
 }
 
+export function stripMaskedClientSecrets(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return record;
+  const next = { ...record };
+  for (const field of SECRET_FIELDS) {
+    if (next[field] === MASK) delete next[field];
+  }
+  return next;
+}
+
 export function maskClientSecrets(payload) {
   if (!payload || typeof payload !== 'object') return payload;
   if (Array.isArray(payload)) return payload.map(maskClientSecrets);
@@ -24,11 +33,7 @@ export function clientSecretsMiddleware(req, res, next) {
   if (!String(req.path || '').startsWith('/clients/module/')) return next();
 
   if (req.method === 'POST' && req.path === '/clients/module/section/upsert' && req.body?.section === 'accesses' && req.body?.record) {
-    const record = { ...req.body.record };
-    for (const field of SECRET_FIELDS) {
-      if (record[field] === MASK) delete record[field];
-    }
-    req.body = { ...req.body, record };
+    req.body = { ...req.body, record: stripMaskedClientSecrets(req.body.record) };
   }
 
   const sendJson = res.json.bind(res);
