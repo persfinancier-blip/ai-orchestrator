@@ -1,31 +1,32 @@
 <script>
-  import CurrentClientCard from '../../product/CurrentClientCard.svelte';
+  import { onMount } from 'svelte';
+  import GraphPanel from '../../desk/components/GraphPanel.svelte';
+  import { setShowcaseData } from '../../desk/data/showcaseStore';
+  let loading = true;
+  let error = '';
+  let relationships = [];
+  async function load() {
+    loading = true; error = '';
+    try {
+      const res = await fetch('/ai-orchestrator/api/product/insights/scan', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ schema:'showcase', table:'advertising', limit:2500 }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.details || data?.error || `HTTP ${res.status}`);
+      relationships = data?.relationships || [];
+      setShowcaseData(data?.rows || [], data?.plan?.fields || []);
+    } catch (e) { error = String(e?.message || e); setShowcaseData([], []); }
+    finally { loading = false; }
+  }
+  onMount(load);
 </script>
 
 <section class="page">
-  <header>
-    <small>Реклама</small>
-    <h1>Управление рекламой клиента</h1>
-    <p>Рекламный контур начинается с клиентских доступов и KPI, выполняется через проверяемые сценарии и завершается контролем фактических данных.</p>
-  </header>
-
-  <CurrentClientCard />
-
-  <div class="flow">
-    <a href="#desk/data?pane=clients"><b>01</b><strong>Клиент</strong><span>Проверить кабинеты, доступы, цели и KPI.</span></a>
-    <a href="#assistant"><b>02</b><strong>Ассистент</strong><span>Подготовить безопасный API-черновик из задачи или документации.</span></a>
-    <a href="#desk/data"><b>03</b><strong>Сценарии</strong><span>Проверить, опубликовать и запустить управляемый процесс.</span></a>
-    <a href="#desk/tables"><b>04</b><strong>Данные</strong><span>Проверить таблицы, Gold-витрины и фактический результат.</span></a>
-  </div>
-
-  <aside>
-    <strong>Рабочий контур</strong>
-    <span>Старые демонстрационные кнопки удалены: здесь остались только переходы к механизмам, которые читают или изменяют реальное состояние системы.</span>
-  </aside>
+  <header><small>Аналитика</small><h1>Пространство зависимостей</h1><p>Реальная Gold-витрина → автоматический поиск связей → 3D-исследование.</p></header>
+  {#if loading}<p>Анализируем данные…</p>{:else if error}<p class="error">{error}</p>{/if}
+  {#if relationships.length}<div class="relations">{#each relationships.slice(0,8) as item}<span><b>{item.x} ↔ {item.y}</b> r={Number(item.correlation).toFixed(2)}</span>{/each}</div>{/if}
+  <div class="graph"><GraphPanel /></div>
+  <a class="forecast" href="#home">Прогнозы уже доступны в product API; отдельный экран подключается следующим шагом →</a>
 </section>
 
 <style>
-  .page { max-width: 1050px; margin: 0 auto; padding: 40px 30px; box-sizing: border-box; color: #172033; } header { max-width: 760px; margin-bottom: 20px; } header small { color: #94a3b8; font-size: 9px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; } h1 { margin: 6px 0; font-size: 32px; letter-spacing: -.04em; } p { margin: 0; color: #64748b; font-size: 12px; line-height: 1.55; }.flow { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; }.flow a { min-height: 155px; padding: 16px; border: 1px solid #e4e9f1; border-radius: 14px; background: #fff; color: inherit; text-decoration: none; display: flex; flex-direction: column; box-sizing: border-box; }.flow b { color: #94a3b8; font-size: 9px; }.flow strong { margin-top: auto; font-size: 15px; }.flow span { margin-top: 5px; color: #64748b; font-size: 10px; line-height: 1.45; } aside { margin-top: 14px; padding: 14px 16px; border-radius: 12px; background: #eef2f7; display: flex; gap: 10px; align-items: baseline; } aside strong { font-size: 10px; white-space: nowrap; } aside span { color: #64748b; font-size: 10px; line-height: 1.45; }
-  @media (max-width: 800px) { .flow { grid-template-columns: repeat(2,1fr); } }
-  @media (max-width: 520px) { .page { padding: 24px 16px; }.flow { grid-template-columns: 1fr; } aside { flex-direction: column; } }
+  .page{max-width:1380px;margin:auto;padding:28px;color:#172033}header{max-width:760px}small{color:#94a3b8;font-size:9px;text-transform:uppercase;font-weight:800}h1{margin:6px 0;font-size:32px}p{color:#64748b;font-size:10px}.error{color:#b42318}.relations{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0}.relations span{padding:7px 9px;background:#fff;border:1px solid #e4e9f1;border-radius:8px;color:#64748b;font-size:9px}.graph{min-height:560px;background:#fff;border:1px solid #e4e9f1;border-radius:14px;padding:10px}.forecast{display:inline-block;margin-top:12px;color:#172033;font-size:10px;font-weight:800;text-decoration:none}
 </style>
