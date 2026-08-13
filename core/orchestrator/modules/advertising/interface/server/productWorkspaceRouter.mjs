@@ -1,6 +1,6 @@
 import express from 'express';
 import { pool } from './db.mjs';
-import { buildNormalizationPlan, monteCarloForecast, normalizeContainerKind, rankCorrelations } from './productAnalyticsCore.mjs';
+import { buildNormalizationPlan, monteCarloForecast, normalizeContainerKind, rankAnomalies, rankCorrelations } from './productAnalyticsCore.mjs';
 
 const SCHEMA = 'ao_product';
 const COOKIE = 'ao_container_id';
@@ -259,18 +259,36 @@ productWorkspaceRouter.post('/product/insights/scan', async (req, res) => {
   try {
     const source = await inspectSource(client, schema, table, Math.min(limit, 200));
     const plan = buildNormalizationPlan(source.columns, source.rows);
-    const rows = await client.query(`SELECT * FROM ${tableName(schema, table)} LIMIT $1`, [limit]);
+    const rowsResult = await client.query(`SELECT * FROM ${tableName(schema, table)} LIMIT $1`, [limit]);
+    const rawRows = rowsResult.rows || [];
     const metrics = plan.fields.filter((f) => f.role === 'metric').map((f) => f.source);
     const dimensions = plan.fields.filter((f) => ['entity', 'dimension', 'scope'].includes(f.role)).map((f) => f.source);
     const time = plan.fields.find((f) => f.role === 'time')?.source || '';
-    const relationships = rankCorrelations(rows.rows || [], metrics, 16);
+    const relationships = rankCorrelations(rawRows, metrics, 16);
+    const anomalies = rankAnomalies(rawRows, metrics, { limit: 50, threshold: req.body?.anomaly_threshold || 3.5 });
+    const anomalyByRow = new Map(anomalies.map((item) => [item.row_index, item]));
+    const rows = rawRows.map((row, index) => {
+      const anomaly = anomalyByRow.get(index);
+      if (!anomaly) return row;
+      return {
+        ...row,
+        ao_anomaly_score: anomaly.score,
+        ao_anomaly_fields: anomaly.findings.map((item) => item.field).join(', ')
+      };
+    });
+    const planFields = [
+      ...plan.fields,
+      { source: 'ao_anomaly_score', name: 'Anomaly score', data_type: 'numeric', role: 'metric', kind: 'number', confidence: 1 },
+      { source: 'ao_anomaly_fields', name: 'Anomaly fields', data_type: 'text', role: 'dimension', kind: 'text', confidence: 1 }
+    ];
     return res.json({
-      source: { schema, table, rows: rows.rows?.length || 0 },
-      plan,
+      source: { schema, table, rows: rows.length },
+      plan: { ...plan, fields: planFields },
       relationships,
+      anomalies,
       suggested_axes: suggestedAxes(relationships),
       fields: { metrics, dimensions, time },
-      rows: (rows.rows || []).slice(0, 3000)
+      rows: rows.slice(0, 3000)
     });
   } catch (error) {
     return res.status(500).json({ error: 'insights_scan_failed', details: String(error?.message || error) });
