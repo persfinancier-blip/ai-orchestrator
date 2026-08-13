@@ -12,6 +12,10 @@
     return res.json();
   }
 
+  function notify() {
+    window.dispatchEvent(new CustomEvent('ao:client-context-changed', { detail: { client_id: clientId } }));
+  }
+
   async function load() {
     loading = true;
     error = '';
@@ -39,7 +43,10 @@
       body: JSON.stringify({ client_id: clientId })
     });
     if (!res.ok) error = `Не удалось выбрать клиента: HTTP ${res.status}`;
-    else error = '';
+    else {
+      error = '';
+      notify();
+    }
   }
 
   onMount(load);
