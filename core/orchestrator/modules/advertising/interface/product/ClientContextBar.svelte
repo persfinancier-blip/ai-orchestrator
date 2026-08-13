@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
 
   let clients: Array<Record<string, any>> = [];
   let clientId = 0;
@@ -16,7 +16,7 @@
     window.dispatchEvent(new CustomEvent('ao:client-context-changed', { detail: { client_id: clientId } }));
   }
 
-  async function load() {
+  async function load(announce = false) {
     loading = true;
     error = '';
     try {
@@ -25,9 +25,11 @@
         read('/ai-orchestrator/api/context/client')
       ]);
       clients = Array.isArray(list?.clients) ? list.clients : [];
+      const previous = clientId;
       const current = Number(context?.client_id || 0);
       clientId = clients.some((item) => Number(item.id) === current) ? current : Number(clients[0]?.id || 0);
       if (!current && clientId) await save();
+      else if (announce && clientId !== previous) notify();
     } catch (e) {
       error = String(e?.message || e || 'Контекст клиента недоступен');
     } finally {
@@ -49,7 +51,12 @@
     }
   }
 
-  onMount(load);
+  const onRefresh = () => load(true);
+  onMount(() => {
+    window.addEventListener('ao:client-context-refresh', onRefresh);
+    load();
+  });
+  onDestroy(() => window.removeEventListener('ao:client-context-refresh', onRefresh));
 </script>
 
 <label title={error || 'Рабочий контекст клиента'} class:error={Boolean(error)}>
