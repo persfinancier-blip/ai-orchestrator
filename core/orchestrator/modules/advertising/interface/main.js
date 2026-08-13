@@ -1,6 +1,5 @@
-import './space.css';
-import App from './App.svelte';
+import ProductApp from './product/ProductApp.svelte';
 
-const app = new App({ target: document.body, props: {} });
+const app = new ProductApp({ target: document.getElementById('app') });
 
 export default app;
