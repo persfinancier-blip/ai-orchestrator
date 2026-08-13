@@ -1,5 +1,5 @@
-import ProductApp from './product/ProductApp.svelte';
+import App from './App.svelte';
 
-const app = new ProductApp({ target: document.getElementById('app') });
+const app = new App({ target: document.getElementById('app') });
 
 export default app;
