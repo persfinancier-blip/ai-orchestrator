@@ -17,6 +17,17 @@ app.use(express.json({ limit: '4mb' }));
 app.get('/ai-orchestrator/api/health', (_req, res) => {
   res.json({ ok: true, product: 'ai-orchestrator', auth_configured: auth.configured, port });
 });
+
+app.get('/ai-orchestrator/api/ready', async (_req, res) => {
+  let database = false;
+  try {
+    await pool.query('SELECT 1');
+    database = true;
+  } catch {}
+  const ready = database && auth.configured;
+  res.status(ready ? 200 : 503).json({ ready, database, auth_configured: auth.configured });
+});
+
 app.use('/ai-orchestrator/api', auth.router);
 app.use('/ai-orchestrator/api', auth.gate);
 app.use('/ai-orchestrator/api', clientContextRouter);
