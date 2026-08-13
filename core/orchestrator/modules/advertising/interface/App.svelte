@@ -1,16 +1,15 @@
 <script>
   import { onDestroy, onMount } from 'svelte';
-  import ProductShell from './product/ProductShell.svelte';
+  import ProductShellV2 from './product/ProductShellV2.svelte';
   import ProductHome from './product/ProductHome.svelte';
   import ProductLogin from './product/ProductLogin.svelte';
   import CurrentClientCard from './product/CurrentClientCard.svelte';
   import IntegrationAssistant from './product/IntegrationAssistant.svelte';
   import AdvertisingDashboard from './components/layout/AdvertisingDashboard.svelte';
-  import AdvertisingDesk from './desk/AdvertisingDesk.svelte';
   import DataDesk from './desk/DataDesk.svelte';
   import WorkflowDesk from './desk/WorkflowDesk.svelte';
 
-  const titles = { home: 'Обзор', clients: 'Клиенты', advertising: 'Реклама', assistant: 'Ассистент', automation: 'Сценарии', integrations: 'API вручную', data: 'Данные', space: 'Пространство' };
+  const titles = { home: 'Обзор', clients: 'Клиенты', advertising: 'Реклама', assistant: 'Ассистент', automation: 'Сценарии', integrations: 'API вручную', data: 'Данные', space: 'Аналитика' };
 
   function routeState() {
     const raw = String(window.location.hash || '').replace(/^#/, '') || 'home';
@@ -49,6 +48,7 @@
   }
 
   async function logout() {
+    try { await fetch('/ai-orchestrator/api/context/client', { method: 'DELETE' }); } catch {}
     try { await fetch('/ai-orchestrator/api/auth/logout', { method: 'POST' }); } catch {}
     authenticated = false;
   }
@@ -64,15 +64,16 @@
   <ProductLogin on:authenticated={() => (authenticated = true)} />
   {#if authError}<div class="api-error">{authError}</div>{/if}
 {:else}
-  <ProductShell section={state.section} {title} on:logout={logout}>
+  <ProductShellV2 section={state.section} {title} on:logout={logout}>
     {#if state.section === 'home'}
       {#key clientEpoch}<div class="client"><CurrentClientCard /></div>{/key}<ProductHome />
     {:else if state.section === 'assistant'}<IntegrationAssistant />
     {:else if state.section === 'advertising'}<AdvertisingDashboard />
     {:else if state.section === 'data'}<DataDesk />
-    {:else if state.section === 'space'}<AdvertisingDesk />
+    {:else if state.section === 'space'}
+      <section class="space-off"><small>Аналитика</small><h1>Пространство отключено от production-пути</h1><p>Старый 3D-прототип использовал сгенерированные точки. Он будет возвращён только после подключения к проверенной Gold/Showcase-витрине.</p><a href="#desk/tables">Открыть данные →</a></section>
     {:else}<WorkflowDesk />{/if}
-  </ProductShell>
+  </ProductShellV2>
 {/if}
 
 <style>
@@ -80,5 +81,6 @@
   :global(body) { background: #f6f8fb; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
   .boot { min-height: 100vh; display: grid; place-items: center; color: #64748b; font: 12px system-ui; }.api-error { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); padding: 8px 12px; background: #fff1f2; color: #be123c; border-radius: 8px; font: 11px system-ui; }
   .client { max-width: 1180px; margin: 0 auto -24px; padding: 28px 32px 0; box-sizing: border-box; }
+  .space-off { max-width: 760px; margin: 0 auto; padding: 56px 30px; color: #172033; }.space-off small { color: #94a3b8; font-size: 9px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }.space-off h1 { margin: 7px 0 10px; font-size: 32px; letter-spacing: -.04em; }.space-off p { margin: 0 0 18px; color: #64748b; font-size: 12px; line-height: 1.65; }.space-off a { padding: 9px 12px; border-radius: 9px; background: #172033; color: #fff; text-decoration: none; font-size: 10px; font-weight: 800; }
   @media (max-width: 560px) { .client { padding: 20px 18px 0; margin-bottom: -12px; } }
 </style>
