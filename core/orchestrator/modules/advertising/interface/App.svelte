@@ -29,8 +29,15 @@
   let checking = true;
   let authenticated = false;
   let authError = '';
-  const onHash = () => (state = routeState());
+  const onHash = () => {
+    state = routeState();
+    window.dispatchEvent(new CustomEvent('ao:client-context-refresh'));
+  };
   const onClient = () => (clientEpoch += 1);
+  const onSessionExpired = () => {
+    authenticated = false;
+    authError = 'Сессия завершена. Войдите снова.';
+  };
 
   async function checkSession() {
     checking = true;
@@ -53,15 +60,24 @@
     authenticated = false;
   }
 
-  onMount(() => { window.addEventListener('hashchange', onHash); window.addEventListener('ao:client-context-changed', onClient); checkSession(); });
-  onDestroy(() => { window.removeEventListener('hashchange', onHash); window.removeEventListener('ao:client-context-changed', onClient); });
+  onMount(() => {
+    window.addEventListener('hashchange', onHash);
+    window.addEventListener('ao:client-context-changed', onClient);
+    window.addEventListener('ao:session-expired', onSessionExpired);
+    checkSession();
+  });
+  onDestroy(() => {
+    window.removeEventListener('hashchange', onHash);
+    window.removeEventListener('ao:client-context-changed', onClient);
+    window.removeEventListener('ao:session-expired', onSessionExpired);
+  });
   $: title = titles[state.section] || 'Обзор';
 </script>
 
 {#if checking}
   <div class="boot">AI Orchestrator · подключение…</div>
 {:else if !authenticated}
-  <ProductLogin on:authenticated={() => (authenticated = true)} />
+  <ProductLogin on:authenticated={() => { authenticated = true; authError = ''; }} />
   {#if authError}<div class="api-error">{authError}</div>{/if}
 {:else}
   <ProductShellV2 section={state.section} {title} on:logout={logout}>
