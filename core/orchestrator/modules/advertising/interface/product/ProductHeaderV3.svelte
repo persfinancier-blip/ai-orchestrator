@@ -1,0 +1,20 @@
+<script>
+  import { createEventDispatcher } from 'svelte';
+  import ContainerContextBar from './ContainerContextBar.svelte';
+  import ClientContextBar from './ClientContextBar.svelte';
+  export let title = 'Обзор';
+  const dispatch = createEventDispatcher();
+</script>
+
+<header>
+  <span><small>Рабочее пространство</small><strong>{title}</strong></span>
+  <div class="contexts"><ContainerContextBar /><ClientContextBar /><button on:click={() => dispatch('logout')}>Выйти</button></div>
+</header>
+
+<style>
+  header { position:sticky; top:0; z-index:20; min-height:56px; padding:9px 17px; box-sizing:border-box; border-bottom:1px solid #e4e9f1; background:rgba(255,255,255,.95); display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  header > span { display:flex; flex-direction:column; } small { color:#94a3b8; font-size:9px; } strong { font-size:13px; color:#172033; }
+  .contexts { display:flex; align-items:center; gap:9px; min-width:0; } button { border:1px solid #dfe5ed; border-radius:8px; padding:6px 9px; background:#fff; color:#64748b; font-size:10px; cursor:pointer; }
+  @media (max-width:900px) { .contexts { gap:5px; } }
+  @media (max-width:760px) { header { top:50px; flex-wrap:wrap; height:auto; } }
+</style>
