@@ -1,9 +1,9 @@
 <script>
   export let section = 'home';
   const groups = [
-    ['Работа', [['home','#home','Обзор'],['containers','#containers','Контейнеры'],['clients','#desk/data?pane=clients','Клиенты']]],
-    ['Решение', [['scenario','#scenario','Сценарий'],['data-products','#data-products','Данные'],['insights','#insights','Инсайты 3D'],['forecasts','#forecasts','Прогнозы']]],
-    ['Экспертный режим', [['automation','#desk/data','Workflow'],['integrations','#desk/data?pane=api','API вручную'],['tables','#desk/tables','SQL / таблицы']]]
+    ['Работа', [['home','#home','Обзор'],['clients','#desk/data?pane=clients','Клиенты']]],
+    ['Путь решения', [['assistant','#assistant','Собрать сценарий'],['data','#desk/tables','Подготовить данные'],['advertising','#legacy','Аналитика + прогноз']]],
+    ['Экспертный режим', [['automation','#desk/data','Workflow'],['integrations','#desk/data?pane=api','API вручную']]]
   ];
 </script>
 
