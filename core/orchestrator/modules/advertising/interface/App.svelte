@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import ProductHome from './product/ProductHome.svelte';
   import ProductLogin from './product/ProductLogin.svelte';
+  import ClientContextBar from './product/ClientContextBar.svelte';
   import AdvertisingDashboard from './components/layout/AdvertisingDashboard.svelte';
   import AdvertisingDesk from './desk/AdvertisingDesk.svelte';
   import DataDesk from './desk/DataDesk.svelte';
@@ -80,7 +81,10 @@
     </aside>
 
     <div class="workspace">
-      <header><span><small>Рабочее пространство</small><strong>{title}</strong></span><button on:click={logout}>Выйти</button></header>
+      <header>
+        <span><small>Рабочее пространство</small><strong>{title}</strong></span>
+        <div class="header-actions"><ClientContextBar /><button on:click={logout}>Выйти</button></div>
+      </header>
       <main>
         {#if state.section === 'home'}<ProductHome />
         {:else if state.section === 'advertising'}<AdvertisingDashboard />
@@ -101,7 +105,7 @@
   .brand { display: flex; align-items: center; gap: 9px; padding: 4px 7px 20px; color: inherit; text-decoration: none; }.brand > b { width: 33px; height: 33px; display: grid; place-items: center; border-radius: 10px; background: #172033; color: #fff; font-size: 11px; }.brand span { display: flex; flex-direction: column; }.brand strong { font-size: 12px; }.brand small { color: #94a3b8; font-size: 9px; }
   nav { display: flex; flex-direction: column; gap: 16px; } nav section { display: flex; flex-direction: column; gap: 3px; } nav section > small { padding: 0 8px 4px; color: #a0aabc; font-size: 8px; font-weight: 800; text-transform: uppercase; letter-spacing: .12em; } nav a { padding: 9px; border-radius: 9px; color: #64748b; text-decoration: none; font-size: 12px; font-weight: 650; } nav a:hover { background: #f4f6f9; color: #172033; } nav a.active { background: #172033; color: #fff; }
   .status { margin-top: auto; padding: 9px; color: #94a3b8; font-size: 9px; display: flex; gap: 7px; align-items: center; }.status i { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; }
-  .workspace { min-width: 0; min-height: 100vh; }.workspace > header { position: sticky; top: 0; z-index: 20; height: 56px; padding: 9px 17px; box-sizing: border-box; border-bottom: 1px solid #e4e9f1; background: rgba(255,255,255,.94); display: flex; align-items: center; justify-content: space-between; } header span { display: flex; flex-direction: column; } header small { color: #94a3b8; font-size: 9px; } header strong { font-size: 13px; } header button { border: 1px solid #dfe5ed; border-radius: 8px; padding: 6px 9px; background: #fff; color: #64748b; font-size: 10px; cursor: pointer; }
+  .workspace { min-width: 0; min-height: 100vh; }.workspace > header { position: sticky; top: 0; z-index: 20; height: 56px; padding: 9px 17px; box-sizing: border-box; border-bottom: 1px solid #e4e9f1; background: rgba(255,255,255,.94); display: flex; align-items: center; justify-content: space-between; gap: 12px; } header span { display: flex; flex-direction: column; } header small { color: #94a3b8; font-size: 9px; } header strong { font-size: 13px; }.header-actions { display: flex; align-items: center; gap: 9px; } header button { border: 1px solid #dfe5ed; border-radius: 8px; padding: 6px 9px; background: #fff; color: #64748b; font-size: 10px; cursor: pointer; }
   main { min-width: 0; min-height: calc(100vh - 56px); overflow: auto; }
   @media (max-width: 760px) { .shell { grid-template-columns: 1fr; } aside { height: auto; z-index: 30; padding: 8px; border-right: 0; border-bottom: 1px solid #e4e9f1; } .brand, nav section > small, .status { display: none; } nav { flex-direction: row; gap: 4px; overflow-x: auto; } nav section { flex-direction: row; gap: 4px; } nav a { white-space: nowrap; padding: 7px 9px; } .workspace > header { top: 43px; } }
 </style>
