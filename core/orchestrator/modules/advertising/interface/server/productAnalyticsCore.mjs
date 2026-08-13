@@ -80,17 +80,59 @@ export function pearson(xs = [], ys = []) {
   return num / Math.sqrt(dx * dy);
 }
 
+function averageRanks(values = []) {
+  const indexed = values.map((value, index) => ({ value, index })).sort((a, b) => a.value - b.value);
+  const ranks = new Array(values.length);
+  for (let i = 0; i < indexed.length;) {
+    let j = i + 1;
+    while (j < indexed.length && indexed[j].value === indexed[i].value) j += 1;
+    const rank = (i + 1 + j) / 2;
+    for (let k = i; k < j; k += 1) ranks[indexed[k].index] = rank;
+    i = j;
+  }
+  return ranks;
+}
+
+export function spearman(xs = [], ys = []) {
+  const pairs = [];
+  const len = Math.min(xs.length, ys.length);
+  for (let i = 0; i < len; i += 1) {
+    const x = finite(xs[i]);
+    const y = finite(ys[i]);
+    if (x !== null && y !== null) pairs.push([x, y]);
+  }
+  if (pairs.length < 3) return null;
+  const rx = averageRanks(pairs.map((pair) => pair[0]));
+  const ry = averageRanks(pairs.map((pair) => pair[1]));
+  return pearson(rx, ry);
+}
+
 export function rankCorrelations(rows = [], metricFields = [], limit = 12) {
   const data = Array.isArray(rows) ? rows : [];
   const fields = [...new Set((metricFields || []).map((x) => String(x || '').trim()).filter(Boolean))];
   const out = [];
   for (let i = 0; i < fields.length; i += 1) {
     for (let j = i + 1; j < fields.length; j += 1) {
-      const a = fields[i];
-      const b = fields[j];
-      const r = pearson(data.map((row) => row?.[a]), data.map((row) => row?.[b]));
-      if (r === null) continue;
-      out.push({ x: a, y: b, correlation: Number(r.toFixed(4)), strength: Math.abs(r) });
+      const x = fields[i];
+      const y = fields[j];
+      const xs = data.map((row) => row?.[x]);
+      const ys = data.map((row) => row?.[y]);
+      const p = pearson(xs, ys);
+      const s = spearman(xs, ys);
+      if (p === null && s === null) continue;
+      const pearsonAbs = Math.abs(p || 0);
+      const spearmanAbs = Math.abs(s || 0);
+      const useSpearman = spearmanAbs > pearsonAbs + 0.08;
+      const chosen = useSpearman ? s : p ?? s;
+      out.push({
+        x,
+        y,
+        correlation: Number(Number(chosen || 0).toFixed(4)),
+        pearson: p === null ? null : Number(p.toFixed(4)),
+        spearman: s === null ? null : Number(s.toFixed(4)),
+        strength: Math.max(pearsonAbs, spearmanAbs),
+        relation_type: useSpearman ? 'monotonic' : 'linear'
+      });
     }
   }
   return out.sort((a, b) => b.strength - a.strength).slice(0, Math.max(1, Number(limit || 12)));
@@ -188,4 +230,4 @@ export function monteCarloForecast(series = [], options = {}) {
   };
 }
 
-export const productAnalyticsTestkit = Object.freeze({ finite, quantile, mulberry32 });
+export const productAnalyticsTestkit = Object.freeze({ finite, quantile, mulberry32, averageRanks });
