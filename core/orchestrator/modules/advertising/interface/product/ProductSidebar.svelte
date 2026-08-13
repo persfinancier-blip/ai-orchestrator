@@ -2,7 +2,7 @@
   export let section = 'home';
   const groups = [
     { title: 'Работа', items: [['home', '#home', 'Обзор'], ['clients', '#desk/data?pane=clients', 'Клиенты'], ['advertising', '#legacy', 'Реклама']] },
-    { title: 'Автоматизация', items: [['automation', '#desk/data', 'Сценарии'], ['integrations', '#desk/data?pane=api', 'Интеграции'], ['data', '#desk/tables', 'Данные']] },
+    { title: 'Автоматизация', items: [['assistant', '#assistant', 'Ассистент'], ['automation', '#desk/data', 'Сценарии'], ['integrations', '#desk/data?pane=api', 'API вручную'], ['data', '#desk/tables', 'Данные']] },
     { title: 'Аналитика', items: [['space', '#desk', 'Пространство']] }
   ];
 </script>
