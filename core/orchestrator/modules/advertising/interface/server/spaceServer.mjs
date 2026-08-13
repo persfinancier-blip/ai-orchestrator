@@ -1,6 +1,7 @@
 import express from 'express';
 import { pool } from './db.mjs';
 import { bootstrapClientModule, clientModuleRouter } from './clientModuleRouter.mjs';
+import { clientSecretsMiddleware } from './clientSecretsMiddleware.mjs';
 import { bootstrapGoldBuilder, goldBuilderRouter } from './goldBuilderRouter.mjs';
 import { bootstrapTableBuilder, tableBuilderRouter } from './tableBuilder.mjs';
 import { bootstrapWorkflowAutomation, startWorkflowScheduler, workflowAutomationRouter } from './workflowAutomation.mjs';
@@ -32,6 +33,7 @@ app.use('/ai-orchestrator/api', auth.router);
 app.use('/ai-orchestrator/api', auth.gate);
 app.use('/ai-orchestrator/api', clientContextRouter);
 app.use('/ai-orchestrator/api', injectClientContext);
+app.use('/ai-orchestrator/api', clientSecretsMiddleware);
 app.use('/ai-orchestrator/api', tableBuilderRouter);
 app.use('/ai-orchestrator/api', workflowAutomationRouter);
 app.use('/ai-orchestrator/api', clientModuleRouter);
