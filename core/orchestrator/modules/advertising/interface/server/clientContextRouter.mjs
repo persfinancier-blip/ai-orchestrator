@@ -34,6 +34,12 @@ clientContextRouter.delete('/context/client', (_req, res) => {
 
 export function injectClientContext(req, _res, next) {
   const id = readClientId(req);
-  if (id > 0) req.headers['x-ao-client-id'] = String(id);
+  if (id > 0) {
+    req.headers['x-ao-client-id'] = String(id);
+    if (req.path === '/process-runs/trigger' && req.body && typeof req.body === 'object') {
+      req.body.client_id = id;
+      req.body.context_json = { ...(req.body.context_json || {}), client_id: id };
+    }
+  }
   next();
 }
