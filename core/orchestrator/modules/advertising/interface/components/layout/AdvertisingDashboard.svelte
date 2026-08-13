@@ -1,87 +1,25 @@
-<script>
-  import ControlBar from './ControlBar.svelte';
-  import PivotGroupPanel from './PivotGroupPanel.svelte';
-  import ArticlesTable from '../table/ArticlesTable.svelte';
-  import BulkActionBar from '../actions/BulkActionBar.svelte';
-  import InspectorDrawer from '../words/InspectorDrawer.svelte';
-  import DraftChangesBanner from '../status/DraftChangesBanner.svelte';
-  
-  import { articlesStore } from '../../stores/articlesStore';
-  import { uiStateStore } from '../../stores/uiStateStore';
-  
-  let articles = [];
-  let selectedArticles = [];
-  let showBulkActions = false;
-  let showInspector = false;
-  let draftChanges = [];
-  let groupSettings = {};
-  
-  // Подписка на хранилища
-  articlesStore.subscribe(value => {
-    articles = value;
-  });
-  
-  uiStateStore.subscribe(value => {
-    selectedArticles = value.selectedArticles;
-    showBulkActions = selectedArticles.length > 0;
-    showInspector = value.showInspector;
-    draftChanges = value.draftChanges;
-  });
-</script>
+<section class="page">
+  <header>
+    <small>Реклама</small>
+    <h1>Управление рекламой клиента</h1>
+    <p>Рекламный контур начинается с клиентских доступов и KPI, выполняется через проверяемые сценарии и завершается аналитикой результата.</p>
+  </header>
 
-<div class="advertising-dashboard">
-  {#if draftChanges.length > 0}
-    <DraftChangesBanner {draftChanges} />
-  {/if}
-  
-  <ControlBar 
-    on:search={(e) => console.log('Search:', e.detail)}
-    on:filter={(e) => console.log('Filter:', e.detail)}
-  />
-  
-  <PivotGroupPanel 
-    on:groupChange={(e) => console.log('Group changed:', e.detail)}
-  />
-  
-  {#if showBulkActions}
-    <BulkActionBar 
-      selectedCount={selectedArticles.length}
-      on:action={(e) => console.log('Bulk action:', e.detail)}
-    />
-  {/if}
-  
-  <div class="main-content">
-    <ArticlesTable 
-      {articles}
-      {selectedArticles}
-      {groupSettings}
-      on:select={(e) => console.log('Article selected:', e.detail)}
-      on:toggle={(e) => console.log('Toggle changed:', e.detail)}
-    />
-    
-    {#if showInspector}
-      <InspectorDrawer 
-        on:close={() => uiStateStore.update(state => ({...state, showInspector: false}))}
-        on:save={(e) => console.log('Inspector save:', e.detail)}
-      />
-    {/if}
+  <div class="flow">
+    <a href="#desk/data?pane=clients"><b>01</b><strong>Клиент</strong><span>Проверить кабинеты, доступы, цели и KPI.</span></a>
+    <a href="#desk/data?pane=api"><b>02</b><strong>Интеграции</strong><span>Настроить API и проверить получение данных.</span></a>
+    <a href="#desk/data"><b>03</b><strong>Сценарии</strong><span>Собрать и запустить управляемый процесс.</span></a>
+    <a href="#desk"><b>04</b><strong>Результат</strong><span>Анализировать товары, рекламу и эффективность.</span></a>
   </div>
-</div>
+
+  <aside>
+    <strong>Почему здесь больше нет старой таблицы</strong>
+    <span>Прежний экран был прототипом: его действия выводились в console.log и не управляли реальными кампаниями. Он заменён маршрутом к рабочим механизмам проекта.</span>
+  </aside>
+</section>
 
 <style>
-  .advertising-dashboard {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    padding: 20px;
-    background-color: #ffffff;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  }
-  
-  .main-content {
-    display: flex;
-    flex: 1;
-    gap: 20px;
-    margin-top: 20px;
-  }
+  .page { max-width: 1050px; margin: 0 auto; padding: 40px 30px; box-sizing: border-box; color: #172033; } header { max-width: 760px; margin-bottom: 24px; } header small { color: #94a3b8; font-size: 9px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; } h1 { margin: 6px 0; font-size: 32px; letter-spacing: -.04em; } p { margin: 0; color: #64748b; font-size: 12px; line-height: 1.55; }.flow { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; }.flow a { min-height: 155px; padding: 16px; border: 1px solid #e4e9f1; border-radius: 14px; background: #fff; color: inherit; text-decoration: none; display: flex; flex-direction: column; box-sizing: border-box; }.flow b { color: #94a3b8; font-size: 9px; }.flow strong { margin-top: auto; font-size: 15px; }.flow span { margin-top: 5px; color: #64748b; font-size: 10px; line-height: 1.45; } aside { margin-top: 14px; padding: 14px 16px; border-radius: 12px; background: #eef2f7; display: flex; gap: 10px; align-items: baseline; } aside strong { font-size: 10px; white-space: nowrap; } aside span { color: #64748b; font-size: 10px; line-height: 1.45; }
+  @media (max-width: 800px) { .flow { grid-template-columns: repeat(2,1fr); } }
+  @media (max-width: 520px) { .page { padding: 24px 16px; }.flow { grid-template-columns: 1fr; } aside { flex-direction: column; } }
 </style>
